@@ -57,7 +57,7 @@ export const en = {
   'settings.titlebar': 'System title bar',
   'settings.titlebar.hint': 'Turn this on to leave the title bar the colour Windows draws it, instead of matching the app background.',
   'settings.titlebar.hint.linux': 'Turn this on to let your window manager draw the title bar, with its decoration theme, its own buttons and the window icon. Smylte cannot colour a title bar it does not draw, so the app background stops reaching it — the two are not available together. Takes effect the next time Smylte starts.',
-  'settings.float.noPin': 'This is a Wayland session, where a window cannot ask to stay above others, so the floating window offers no pin. Set "Backend": "x11" in settings.json to get it back.',
+  'settings.float.noPin': 'This is a Wayland session, where a window cannot ask to stay above others, so the floating window offers no pin and will not reopen where you left it. Wayland is preferred because X11 cannot scale two monitors independently and blurs text under fractional scaling. Set "Backend": "x11" in settings.json to trade that back for the pin.',
   'settings.section.calendar': 'Calendar',
   'settings.section.tasks': 'Tasks',
   'settings.section.focus': 'Focus',

@@ -145,22 +145,31 @@ internal static class X11Window
         catch (Exception) { /* no X11, no libX11, an unmapped window */ }
     }
 
-    /// Put the window at an absolute screen position.
+    /// Put the window at an absolute screen position, in LOGICAL pixels.
+    ///
+    /// Logical, because that is what every other measurement in this client is
+    /// and a function that silently took a different unit from its neighbours
+    /// is the bug this signature exists to prevent — see FloatPlacement. Xlib
+    /// takes device pixels, so the conversion happens here, at the one boundary
+    /// where the two spaces meet, rather than at each call site.
     public static void Move(Gtk.Window window, int x, int y)
     {
         try
         {
             if (!Active) return;
             if (!Handles(window, out var display, out var xid)) return;
-            XMoveWindow(display, xid, x, y);
+            var scale = window.GetScaleFactor();
+            XMoveWindow(display, xid,
+                FloatPlacement.ToDevice(x, scale), FloatPlacement.ToDevice(y, scale));
             XFlush(display);
         }
         catch (Exception) { /* see above */ }
     }
 
-    /// Where the window currently is, or null when that cannot be answered —
-    /// which under Wayland is always, and is why the caller keeps whatever an
-    /// earlier X11 session recorded rather than overwriting it with a guess.
+    /// Where the window currently is, in LOGICAL pixels, or null when that
+    /// cannot be answered — which under Wayland is always, and is why the
+    /// caller keeps whatever an earlier X11 session recorded rather than
+    /// overwriting it with a guess.
     public static (int X, int Y)? Position(Gtk.Window window)
     {
         try
@@ -170,7 +179,8 @@ internal static class X11Window
             var root = XDefaultRootWindow(display);
             if (XTranslateCoordinates(display, xid, root, 0, 0, out var x, out var y, out _) == 0)
                 return null;
-            return (x, y);
+            var scale = window.GetScaleFactor();
+            return (FloatPlacement.ToLogical(x, scale), FloatPlacement.ToLogical(y, scale));
         }
         catch (Exception)
         {

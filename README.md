@@ -649,8 +649,12 @@ everything else while the app itself waits in the taskbar. Drag it by its body,
 resize it from its edges, pin it or let it fall behind, dock it to bring the
 app back. It is the same `/focus` page at a small size, in the same session, so
 it and the app agree to the second. Staying above other windows is the one thing
-Wayland gives an application no way to ask for, so the Linux client runs on X11
-by default and says what changes if you tell it not to.
+Wayland gives an application no way to ask for — so on a Wayland session that
+window offers no pin, and Settings → Desktop says so and names the setting that
+trades it back. The Linux client used to force X11 to have it, and stopped:
+XWayland has one scale factor for every monitor, which is a soft, wrongly-sized
+main window on a mixed-DPI desk for as long as the app is open. `desktop/README.md`
+has the table.
 
 ## Panel firmware
 

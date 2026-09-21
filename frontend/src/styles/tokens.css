@@ -179,9 +179,25 @@ body {
   font-family: var(--sans);
   font-size: calc(15px * var(--fs-scale));
   line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
 }
+
+/* `-webkit-font-smoothing: antialiased` used to sit in the rule above and is
+   deliberately gone.
+
+   It is a no-op in Chromium outside macOS, so on Windows — where the client is
+   WebView2 — it never did anything, and on the web it only ever reached Safari.
+   WebKitGTK is the exception: it implements the property fully and maps
+   `antialiased` onto `CAIRO_ANTIALIAS_GRAY`, which turns OFF subpixel rendering
+   and overrides whatever the user's fontconfig asked for. So the one platform
+   the declaration actually reached was the Linux client, where it made every
+   glyph in the app lighter and softer than the same build on Windows — worst on
+   Fraunces, whose hairlines the icon generator already documents as going
+   sub-pixel at small sizes.
+
+   The fix is to say nothing and let each platform render text the way its owner
+   configured it, which is what `auto` means and what every other declaration in
+   this file already assumes. */
 button { font-family: inherit; color: inherit; }
 /* touch-action: no 300ms double-tap-zoom delay on interactive bits */
 button, input, select, label { touch-action: manipulation; }
@@ -285,3 +301,26 @@ select.input { appearance: none; -webkit-appearance: none; cursor: pointer; }
 }
 .chip-x:hover { color: var(--fg); }
 .chip-x:disabled { cursor: default; opacity: 0.4; }
+
+/* ---- reduced motion ----------------------------------------------------
+   The app animates in three places — the `color`/`border-color` transitions on
+   `.icon-btn` and its neighbours, the settings popover, and the drag feedback —
+   and honoured `prefers-reduced-motion` in none of them. That setting is not a
+   taste: it is what someone with a vestibular disorder sets, and it is exposed
+   by GNOME, KDE, Windows and iOS alike.
+
+   Near-zero rather than `none`, which is the standard formulation and not
+   pedantry: a duration of exactly 0 can skip `transitionend` entirely, and code
+   that waits for one then waits forever. 0.01ms fires it on the next frame.
+
+   `!important` because this has to beat the inline and component-level
+   declarations it is overriding, and `scroll-behavior` because a smooth
+   programmatic scroll is the same problem arriving by a different route. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
