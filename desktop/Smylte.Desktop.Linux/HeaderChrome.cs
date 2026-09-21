@@ -37,10 +37,28 @@ namespace Smylte.Desktop;
 /// The two are exclusive, so `Settings.SystemTitleBar` makes it a choice rather
 /// than a decision baked into the build: with it on, MainWindow never calls
 /// SetTitlebar and everything below still applies — the window's own
-/// background, the float ring, the update strip — because only the `headerbar`
+/// background, the float ring, the update strip — because only the header-bar
 /// rules stop matching anything.
+///
+/// **That last clause used to be false, and the class below is why it is true
+/// now.** The rules were written against the bare `headerbar` node, which is
+/// the CSS name of every GtkHeaderBar in the tree — including the one GTK
+/// BUILDS ITSELF for a decorated window whose compositor draws no frame. That
+/// is not a corner case: it is GNOME on Wayland, the single commonest desktop
+/// this client runs on. So `SystemTitleBar: true` there stopped the app
+/// supplying a header bar and then painted GTK's replacement in the app's own
+/// colours anyway — the setting appeared to do nothing, and the one
+/// configuration it was written for was the one it silently failed in. Under
+/// X11 with a window manager that draws real frames there IS no such widget,
+/// so it worked, which is how it went unnoticed. The rules now carry the class
+/// MainWindow puts on the strip it owns, so they can only reach ours.
 internal static class HeaderChrome
 {
+    /// On the GtkHeaderBar this client sets as its own titlebar, and on nothing
+    /// else. See the note above: the bare node name also matches the one GTK
+    /// synthesises when the user has asked for the system's.
+    public const string HeaderClass = "smylte-header";
+
     /// One provider for the whole display, replaced in place. A second provider
     /// per repaint would stack: GTK keeps every one that is added, and the last
     /// wins only until something re-sorts them by priority.
@@ -51,24 +69,39 @@ internal static class HeaderChrome
 
     public static void Apply(Gdk.Display display, Color background)
     {
-        var bg = Hex(background);
-        var fg = Hex(Theme.InkFor(background));
-        var edge = Hex(Edge(background));
+        var bg = Chrome.Hex(background);
+        var fg = Chrome.Hex(Theme.InkFor(background));
 
-        // `headerbar` rather than a class, so the rule reaches the strip GTK
-        // builds for the window rather than a widget of ours. `box-shadow: none`
-        // removes Adwaita's own bottom hairline, which reads as a seam against
-        // a page that continues the same colour.
+        // TWO hairlines, not one, and which is which is the whole of Chrome.cs.
+        //
+        // `seam` is for the lines that CONTINUE the page: the bottom of the
+        // header bar and of the update strip both sit directly above
+        // `.topbar`, which draws `border-bottom: 1px solid var(--rule)` twelve
+        // pixels lower. One value served both jobs before, and on every dark
+        // theme it came out at 3.2:1 against the background where the page's
+        // own rules are 1.4:1 — a bright grey line above a barely-there one,
+        // which is what "the borders are inconsistent" looks like from the
+        // outside.
+        //
+        // `edge` is for the float window's ring, which has no page to agree
+        // with: it is a frameless window on an unknown desktop, and there
+        // contrast is the point rather than the problem.
+        var seam = Chrome.Hex(Chrome.Seam(background));
+        var edge = Chrome.Hex(Chrome.WindowEdge(background));
+
+        // `headerbar.smylte-header`, NOT the bare node: see the class note at
+        // the top of this file. `box-shadow: none` removes Adwaita's own bottom
+        // hairline, which would otherwise sit on top of the seam and double it.
         Load(display, $$"""
             window.smylte { background: {{bg}}; }
-            window.smylte headerbar {
+            window.smylte headerbar.{{HeaderClass}} {
                 background: {{bg}};
                 background-image: none;
                 box-shadow: none;
-                border-bottom: 1px solid {{edge}};
+                border-bottom: 1px solid {{seam}};
                 color: {{fg}};
             }
-            window.smylte headerbar label { color: {{fg}}; }
+            window.smylte headerbar.{{HeaderClass}} label { color: {{fg}}; }
             .float-ring {
                 background: {{bg}};
                 box-shadow: inset 0 0 0 1px {{edge}};
@@ -83,7 +116,7 @@ internal static class HeaderChrome
             .smylte-banner {
                 background: {{bg}};
                 color: {{fg}};
-                border-bottom: 1px solid {{edge}};
+                border-bottom: 1px solid {{seam}};
                 padding: 6px;
             }
             .smylte-banner label { color: {{fg}}; }
@@ -122,17 +155,9 @@ internal static class HeaderChrome
         }
     }
 
-    /// The hairline around the floating window and under the header. The
-    /// analogue of the Windows client's `ControlPaint.Light(bg, 0.35)` /
-    /// `Dark(bg, 0.15)`: a shade of the background rather than a contrasting
-    /// colour, because a contrasting border would be a second decision nobody
-    /// asked for.
-    private static Color Edge(Color c) => Theme.IsDark(c)
-        ? Color.FromArgb(Lift(c.R, 0.35), Lift(c.G, 0.35), Lift(c.B, 0.35))
-        : Color.FromArgb(Drop(c.R, 0.15), Drop(c.G, 0.15), Drop(c.B, 0.15));
-
-    private static int Lift(int v, double by) => (int)Math.Round(v + (255 - v) * by);
-    private static int Drop(int v, double by) => (int)Math.Round(v * (1 - by));
-
-    private static string Hex(Color c) => $"#{c.R:X2}{c.G:X2}{c.B:X2}";
+    // The hairline arithmetic used to live here, as one function doing two
+    // jobs. It is `Chrome.Seam` and `Chrome.WindowEdge` now — shared with the
+    // Windows client, which was deriving its float ring from a different
+    // brightness test entirely, and unit-tested, which it could never be while
+    // it sat in a file that dlopens GTK.
 }

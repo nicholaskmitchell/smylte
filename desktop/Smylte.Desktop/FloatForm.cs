@@ -156,14 +156,20 @@ public sealed class FloatForm : Form
                 saved.Width = (int)Math.Round(saved.Width * factor);
                 saved.Height = (int)Math.Round(saved.Height * factor);
             }
-            foreach (var screen in Screen.AllScreens)
+            // The same reachability test the Linux client applies, from the
+            // same tested function, rather than a second copy of the same
+            // magic 40. Working areas here and plain monitor geometry there —
+            // that difference is real and is GTK4's (it removed
+            // `gdk_monitor_get_workarea`), so it stays at the call site where
+            // it can be seen.
+            var areas = Screen.AllScreens
+                .Select(s => new ScreenRect(
+                    s.WorkingArea.X, s.WorkingArea.Y, s.WorkingArea.Width, s.WorkingArea.Height))
+                .ToList();
+            if (FloatPlacement.IsOnAScreen(saved.X, saved.Y, saved.Width, saved.Height, areas))
             {
-                var overlap = Rectangle.Intersect(saved, screen.WorkingArea);
-                if (overlap.Width >= 40 && overlap.Height >= 40)
-                {
-                    Bounds = saved;
-                    return;
-                }
+                Bounds = saved;
+                return;
             }
         }
         var area = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 800);
@@ -204,7 +210,7 @@ public sealed class FloatForm : Form
     /// the same bridge call.
     public void ApplyChrome(string? background)
     {
-        var colour = WindowChrome.ParseHex(background);
+        var colour = Theme.ParseColour(background);
         BackColor = colour ?? SystemColors.Window;
         try
         {
@@ -217,13 +223,29 @@ public sealed class FloatForm : Form
 
     /// One hairline inside the ring, a step off the background either way, so
     /// the window has an edge on a desktop the same colour as itself.
+    ///
+    /// `Chrome.WindowEdge`, where this used to be `ControlPaint.Light`/`Dark`
+    /// gated on `Color.GetBrightness()`. Two reasons, and the second is a real
+    /// defect rather than tidying:
+    ///
+    ///   * `GetBrightness()` is HSL lightness. Everything else in both clients
+    ///     asks `Theme.IsDark`, which is WCAG relative luminance, and Theme.cs
+    ///     exists precisely so "the two windows [cannot] disagree about whether
+    ///     the same --bg needs light or dark chrome". These two disagree on
+    ///     saturated mid-tones: for `#7B61FF` HSL says light — so the ring went
+    ///     DARKER — while `WindowChrome.Apply`, reading the same colour through
+    ///     `Theme.IsDark`, called it dark and put LIGHT glyphs in the caption.
+    ///     One colour, one window, two opposite conclusions.
+    ///   * The Linux client drew the same ring from its own arithmetic, so the
+    ///     two clients could differ on a colour they both agreed was dark.
+    ///
+    /// Both now come from one tested function. The visible change on Windows is
+    /// a slightly different shade of the same hairline, because `ControlPaint`
+    /// interpolates in HLS and this interpolates per channel.
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
-        var edge = BackColor.GetBrightness() < 0.5f
-            ? ControlPaint.Light(BackColor, 0.35f)
-            : ControlPaint.Dark(BackColor, 0.15f);
-        using var pen = new Pen(edge);
+        using var pen = new Pen(Chrome.WindowEdge(BackColor));
         var r = ClientRectangle;
         r.Width -= 1;
         r.Height -= 1;

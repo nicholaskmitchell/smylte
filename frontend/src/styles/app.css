@@ -1410,7 +1410,7 @@
 .dash-day-row { align-items: center; gap: 6px; }
 /* The check is the Tasks pane's, one size down: a dashboard row is 6px of
    padding where a task row is 11px, and the full control crowded it. */
-.dash-day-row .check { width: 14px; height: 14px; margin-top: 0; font-size: 10px; }
+.dash-day-row .check { width: 14px; height: 14px; margin-top: 0; font-size: calc(10px * var(--fs-scale)); }
 /* The kind mark keeps its own width from `:root`, so the left edge lines up
    with the Today tab's. Nothing else is restated. */
 .dash-day-row .today-kind-mark { font-size: calc(10px * var(--fs-scale)); }
@@ -2993,10 +2993,10 @@
 }
 .dev-panel__cap {
   display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
-  font-size: 12px; color: var(--fg-muted);
+  font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted);
 }
 .dev-panel__name { color: var(--fg); }
-.dev-panel__size, .dev-panel__bytes { font-size: 11px; }
+.dev-panel__size, .dev-panel__bytes { font-size: calc(11px * var(--fs-scale)); }
 .dev-panel__bytes::before { content: '· '; }
 
 /* ---- the focus surface (/focus) -------------------------------------------
@@ -3057,7 +3057,8 @@
    the hairlines survive, and a clock this size is the whole point of the page. */
 .focus-clock {
   font-family: var(--serif); font-weight: 500; font-variation-settings: "opsz" 144;
-  font-size: clamp(56px, 18vw, 168px); line-height: 1; letter-spacing: -0.02em;
+  font-size: clamp(calc(56px * var(--fs-scale)), calc(18vw * var(--fs-scale)), calc(168px * var(--fs-scale)));
+  line-height: 1; letter-spacing: -0.02em;
 }
 .focus[data-state="paused"] .focus-clock,
 .focus[data-phase="break"] .focus-clock,
@@ -3070,7 +3071,8 @@
 }
 .focus-now__title {
   margin: 0; font-family: var(--serif); font-weight: 500; letter-spacing: -0.01em;
-  font-size: clamp(24px, 5vw, 56px); line-height: 1.12; overflow-wrap: anywhere;
+  font-size: clamp(calc(24px * var(--fs-scale)), calc(5vw * var(--fs-scale)), calc(56px * var(--fs-scale)));
+  line-height: 1.12; overflow-wrap: anywhere;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
 }
 /* On a break the row is not being worked: it steps back a shade, and the
@@ -3108,7 +3110,7 @@
   padding: 12px var(--gutter); border-top: 1px solid var(--rule-faint);
   padding-bottom: calc(12px + env(safe-area-inset-bottom));
 }
-.focus-empty { margin: 0; font-family: var(--serif); font-size: clamp(20px, 3vw, 32px); font-weight: 500; }
+.focus-empty { margin: 0; font-family: var(--serif); font-size: clamp(calc(20px * var(--fs-scale)), calc(3vw * var(--fs-scale)), calc(32px * var(--fs-scale))); font-weight: 500; }
 .focus-hint { margin: 0; font-size: calc(13px * var(--fs-scale)); color: var(--fg-muted); line-height: 1.4; max-width: 48ch; }
 
 /* The way in, in Today's header. `flex: none; align-self: center` is declared
@@ -3175,9 +3177,9 @@
 .focus[data-float] .focus-head { padding: 6px 10px; gap: 8px; }
 .focus[data-float] .focus-head .btn { padding: 4px 8px; }
 .focus[data-float] .focus-main { padding: 6px 12px; gap: 4px; max-width: none; }
-.focus[data-float] .focus-clock { font-size: clamp(32px, 16vh, 56px); }
+.focus[data-float] .focus-clock { font-size: clamp(calc(32px * var(--fs-scale)), calc(16vh * var(--fs-scale)), calc(56px * var(--fs-scale))); }
 .focus[data-float] .focus-now { gap: 4px; }
-.focus[data-float] .focus-now__title { font-size: clamp(15px, 6.5vh, 22px); -webkit-line-clamp: 2; }
+.focus[data-float] .focus-now__title { font-size: clamp(calc(15px * var(--fs-scale)), calc(6.5vh * var(--fs-scale)), calc(22px * var(--fs-scale))); -webkit-line-clamp: 2; }
 .focus[data-float] .focus-actions { margin-top: 4px; }
 .focus[data-float] .focus-actions .btn { padding: 6px 10px; }
 .focus[data-float] .focus-next {

@@ -140,7 +140,7 @@ internal sealed class FloatWindow
         // The ring's colour follows the app's own --bg, which is the same value
         // the main window's header is painted with — the stylesheet is shared,
         // so a theme change reaches here through the same bridge call.
-        var colour = Theme.ParseHex(_settings.TitleBarColor);
+        var colour = Theme.ParseColour(_settings.TitleBarColor);
         if (colour is { } value) HeaderChrome.Apply(_window.GetDisplay(), value);
     }
 
@@ -265,41 +265,52 @@ internal sealed class FloatWindow
     private int RestoredWidth => _settings.FloatWidth > 0 ? _settings.FloatWidth : OpenWidth;
     private int RestoredHeight => _settings.FloatHeight > 0 ? _settings.FloatHeight : OpenHeight;
 
+    /// The value FloatX and FloatY carry when the window has never been placed.
+    ///
+    /// A named sentinel rather than "anything negative", which is what this
+    /// used to test. Negative is a legitimate position: a window dragged so its
+    /// left edge or its title row sits just off the screen has one, X11 reports
+    /// it faithfully, `Remember` stores it — and then `Restore` refused to put
+    /// the window back, because the guard could not tell a real -12 from the
+    /// default. `IsOnAScreen` is what actually decides whether a position is
+    /// reachable, and it handles negatives correctly.
+    private const int Unplaced = -1;
+
     /// Put it back where it was, once there is a window to move.
     private void Restore()
     {
         if (!X11Window.Active) return;                       // the compositor places it
-        if (_settings.FloatX < 0 || _settings.FloatY < 0) return;
+        if (_settings.FloatX == Unplaced && _settings.FloatY == Unplaced) return;
         if (!OnAScreen(_settings.FloatX, _settings.FloatY, RestoredWidth, RestoredHeight)) return;
 
         X11Window.Move(_window, _settings.FloatX, _settings.FloatY);
     }
 
-    /// Would a window at this rectangle be reachable? The Windows client asks
-    /// each screen's WORKING area; GTK4 removed `gdk_monitor_get_workarea`, so
-    /// this asks the monitor's geometry instead. The difference is a window
-    /// that could land under a panel rather than off the screen entirely, which
-    /// is a nuisance the user can drag out of rather than a window they cannot
-    /// reach.
+    /// Would a window at this rectangle be reachable?
+    ///
+    /// Logical pixels throughout — `Gdk.Monitor.GetGeometry` is logical, and
+    /// X11Window now converts at its own boundary so the position handed in is
+    /// too. The arithmetic itself is `FloatPlacement.IsOnAScreen`, which is
+    /// unit-tested; what is left here is reading the monitor list, which is not
+    /// something a test can stand up.
     private bool OnAScreen(int x, int y, int width, int height)
     {
         try
         {
-            var monitors = _window.GetDisplay().GetMonitors();
-            for (uint i = 0; i < monitors.GetNItems(); i++)
+            var list = _window.GetDisplay().GetMonitors();
+            var rects = new List<ScreenRect>();
+            for (uint i = 0; i < list.GetNItems(); i++)
             {
-                if (monitors.GetObject(i) is not Gdk.Monitor monitor) continue;
+                if (list.GetObject(i) is not Gdk.Monitor monitor) continue;
                 monitor.GetGeometry(out var area);
-                var overlapX = Math.Min(x + width, area.X + area.Width) - Math.Max(x, area.X);
-                var overlapY = Math.Min(y + height, area.Y + area.Height) - Math.Max(y, area.Y);
-                if (overlapX >= 40 && overlapY >= 40) return true;
+                rects.Add(new ScreenRect(area.X, area.Y, area.Width, area.Height));
             }
+            return FloatPlacement.IsOnAScreen(x, y, width, height, rects);
         }
         catch (Exception)
         {
             return false;
         }
-        return false;
     }
 
     private void Remember()
