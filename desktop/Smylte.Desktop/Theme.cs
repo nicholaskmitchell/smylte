@@ -117,15 +117,10 @@ internal static class Theme
         var name = text[..open].Trim().ToLowerInvariant();
         var inner = text[(open + 1)..^1];
 
-        // Commas and the alpha slash are both just separators once the function
-        // is known, because position is what carries the meaning in all three
-        // of these. A nested function would break that — and cannot appear,
-        // since none of the three take one.
+        // A nested function would break the position-carries-meaning rule
+        // below, and cannot appear: none of the three take one.
         if (inner.Contains('(')) return null;
-        var parts = inner
-            .Replace(',', ' ')
-            .Replace('/', ' ')
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (Fields(inner) is not { } parts) return null;
 
         // `color()` names its space first, and sRGB is the only one worth
         // taking: it is what a canvas serialises to, and every other space
@@ -174,6 +169,60 @@ internal static class Theme
         return Flatten(channels[0], channels[1], channels[2], alpha);
     }
 
+    /// Split a function's argument list into its fields, or null if the
+    /// spelling is not one CSS allows.
+    ///
+    /// **Why this is not one `Replace`-and-split.** It was, and that is a way
+    /// to produce a confident wrong colour — the exact failure this whole file
+    /// is written against. Flattening every comma and slash to a space and then
+    /// splitting with `RemoveEmptyEntries` cannot tell a SEPARATOR RUN from a
+    /// MISSING FIELD, so `rgba(255,,255,0.5)` collapsed to three tokens and
+    /// every value shifted one channel left: it came back opaque yellow, and
+    /// `rgba(0,,0,0)` came back black where the correctly spelled
+    /// `rgba(0,0,0,0)` is white. One stray comma in a hand-edited
+    /// `TitleBarColor` inverted the answer, and nothing anywhere reported it.
+    ///
+    /// The two spellings need opposite treatment, which is the whole reason
+    /// they are separated here. In the legacy comma form every comma delimits a
+    /// field, so an empty one is malformed. In the modern form fields are
+    /// separated by WHITESPACE, where a run of spaces is one separator and
+    /// collapsing is correct. CSS does not let the two be mixed, so a value
+    /// carrying both is refused rather than guessed at.
+    private static string[]? Fields(string inner)
+    {
+        var hasComma = inner.Contains(',');
+        var hasSlash = inner.Contains('/');
+        if (hasComma && hasSlash) return null;
+
+        if (hasComma)
+        {
+            var parts = inner.Split(',', StringSplitOptions.TrimEntries);
+            // Deliberately NOT RemoveEmptyEntries — see above. An empty field
+            // is the thing being caught, and this is where it is caught.
+            foreach (var part in parts)
+                if (part.Length == 0) return null;
+            return parts;
+        }
+
+        // The modern form: components, then optionally `/ alpha`.
+        var bySlash = inner.Split('/');
+        if (bySlash.Length > 2) return null;
+
+        var fields = new List<string>(
+            bySlash[0].Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        if (fields.Count == 0) return null;
+
+        if (bySlash.Length == 2)
+        {
+            // Exactly one token after the slash, and it has to be there: `rgb(1
+            // 2 3 /)` is not an alpha, it is a truncated value.
+            var alpha = bySlash[1].Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (alpha.Length != 1) return null;
+            fields.Add(alpha[0]);
+        }
+        return fields.ToArray();
+    }
+
     /// One colour channel, as a 0-255 value.
     ///
     /// `unitIsOne` is the `color(srgb …)` convention, where a bare number runs
@@ -192,10 +241,19 @@ internal static class Theme
     private static double? Number(string token)
     {
         var text = token.EndsWith("%", StringComparison.Ordinal) ? token[..^1] : token;
-        return double.TryParse(text, System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture, out var value)
-            ? value
-            : null;
+        if (!double.TryParse(text, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var value))
+            return null;
+
+        // `NumberStyles.Float` accepts the literals "NaN", "Infinity" and
+        // "-Infinity", and none of them is a CSS number. Left through, they do
+        // not fail loudly: `NaN >= 1.0` and `NaN <= 0.0` are both FALSE, so a
+        // NaN alpha slipped past every range check into the blend, where
+        // `(int)Math.Round(NaN)` is int.MinValue and the clamp turned it into
+        // 0 — so `rgba(255, 255, 255, NaN)` reported a white page to the host
+        // as BLACK, and the header bar came out near-black with near-white text
+        // above a white page. Infinity does the same through the channels.
+        return double.IsFinite(value) ? value : null;
     }
 
     /// What an opaque backdrop means here: CSS says the canvas beneath the root

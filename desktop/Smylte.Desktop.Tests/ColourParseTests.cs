@@ -140,6 +140,56 @@ public sealed class ColourParseTests
         }
     }
 
+    [Theory]
+    // A missing field, in the LEGACY comma spelling. This is the one that made
+    // the tokeniser worth rewriting: flattening commas to spaces and splitting
+    // with RemoveEmptyEntries cannot tell a separator run from an absent value,
+    // so `rgba(255,,255,0.5)` collapsed to three tokens, every value shifted a
+    // channel left, and it came back opaque YELLOW. `rgba(0,,0,0)` came back
+    // black where the correct spelling is white — one stray comma inverting the
+    // answer, with nothing anywhere reporting it.
+    [InlineData("rgba(255,,255,0.5)")]
+    [InlineData("rgba(0,,0,0)")]
+    [InlineData("rgb(,12,16)")]
+    [InlineData("rgb(12, 12, 16,)")]
+    [InlineData("rgb(12, 12, 16, )")]
+    [InlineData(",,,")]
+    // The modern spelling's own truncations.
+    [InlineData("rgb(1 2 3 /)")]
+    [InlineData("rgb(/ 0.5)")]
+    [InlineData("rgb(1 2 3 / 0.5 / 0.5)")]
+    // CSS does not let the two spellings mix, so a value carrying both is
+    // refused rather than guessed at.
+    [InlineData("rgb(1, 2, 3 / 0.5)")]
+    public void A_malformed_field_list_is_refused_rather_than_shifted(string value) =>
+        Assert.Null(Theme.ParseColour(value));
+
+    [Theory]
+    // `NumberStyles.Float` accepts all three of these literals, and none is a
+    // CSS number. They did not fail loudly: `NaN >= 1.0` and `NaN <= 0.0` are
+    // BOTH false, so a NaN alpha slipped past every range check into the blend,
+    // where `(int)Math.Round(NaN)` is int.MinValue and the clamp made it 0 — so
+    // a WHITE page was reported to the host as BLACK, and the header bar came
+    // out near-black with near-white text above it.
+    [InlineData("rgba(255, 255, 255, NaN)")]
+    [InlineData("rgba(255, 255, 255, Infinity)")]
+    [InlineData("rgb(NaN, 0, 0)")]
+    [InlineData("rgb(Infinity, 0, 0)")]
+    [InlineData("rgb(-Infinity, 0, 0)")]
+    [InlineData("color(srgb NaN 1 1)")]
+    public void A_non_finite_number_is_refused(string value) =>
+        Assert.Null(Theme.ParseColour(value));
+
+    [Theory]
+    // Whitespace runs ARE one separator in the modern spelling, so collapsing
+    // is correct there and must not have been broken by the fix above.
+    [InlineData("rgb(12   12   16)", 12, 12, 16)]
+    [InlineData("rgb( 12 12 16 )", 12, 12, 16)]
+    [InlineData("rgb(12 12 16  /  0.5)", 134, 134, 136)]   // composited over white
+    [InlineData("color(srgb  0  0  0 )", 0, 0, 0)]
+    public void Whitespace_runs_are_still_one_separator(string value, int r, int g, int b) =>
+        Reads(value, r, g, b);
+
     [Fact]
     public void ParseHex_is_unchanged_and_still_narrow()
     {
