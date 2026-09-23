@@ -1193,9 +1193,49 @@ def test_the_renderer_draws_in_the_apps_three_type_slots():
     """
     faces = {role: R._font(role, 20).path for role in ("serif", "sans", "mono")}
     assert len(set(faces.values())) == 3
-    assert "Fraunces" in faces["serif"]
-    assert "Inter" in faces["sans"]
+    assert "Newsreader" in faces["serif"]
+    assert "HankenGrotesk" in faces["sans"]
     assert "JetBrainsMono" in faces["mono"]
+
+
+def test_the_bitmap_and_the_page_pin_the_serif_to_the_same_optical_size():
+    """One design, two rasterizers, and this is the number they could split on.
+
+    The eink page draws Newsreader at the optical size display.css names; the
+    renderer draws the static instance `dev/build_display_fonts.py` built at
+    `OPSZ`. Neither errors when the two differ — the panel simply stops
+    matching the app, which is the drift the build script exists to prevent.
+    The build refuses to run on a mismatch; this is the same check for the
+    commit that edits one number and not the other.
+
+    Imported without fontTools, which the app does not install: the build
+    script keeps those imports inside the functions that use them for this.
+    """
+    from dev import build_display_fonts as B
+
+    assert B.css_opsz() == B.OPSZ
+    serif = [axes for name, _, axes in B.FACES if R._FACES["serif"].endswith(name)]
+    assert serif and serif[0]["opsz"] == B.OPSZ
+
+
+def test_the_optical_size_pin_is_read_from_the_eink_rule_only(tmp_path):
+    """The colour palette deliberately leaves optical sizing to the browser, so
+    an `opsz` anywhere but the bare eink rule is not the pin — and a commented
+    -out one is not a pin at all. Without this, the check above could agree
+    with a number no browser ever applies."""
+    from dev import build_display_fonts as B
+
+    css = tmp_path / "display.css"
+    css.write_text(
+        '/* .display--eink { font-variation-settings: "opsz" 9; } */\n'
+        '.display--color { font-variation-settings: "opsz" 30; }\n'
+        '.display--eink .display-cal__cell { font-variation-settings: "opsz" 7; }\n'
+        '.display--eink { font-optical-sizing: none; }\n', encoding="utf-8")
+    assert B.css_opsz(str(css)) is None
+    css.write_text(
+        '.display--eink {\n  font-optical-sizing: none;\n'
+        '  font-variation-settings: "opsz" 12;\n}\n', encoding="utf-8")
+    assert B.css_opsz(str(css)) == 12
 
 
 def test_a_micro_label_is_tracked_and_right_aligns_to_its_edge():

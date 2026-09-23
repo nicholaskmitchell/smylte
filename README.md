@@ -389,21 +389,27 @@ keeping only while it records what was actually intended, and a panel in a
 hallway intends nothing.
 
 **It is the app's own design, not a second one.** A display is set in the same
-three typefaces everything else is: Fraunces at 500 for the month, the day
+three typefaces everything else is: Newsreader at 500 for the month, the day
 numbers and a screen's name, tracked uppercase JetBrains Mono for every
-micro-label and every clock, Inter for the things that are read rather than
-scanned — the same slots, at the same weights, as `.cal-title` and `.task-meta
-.due` in the app. The server-side renderer draws in them too, from static
-instances of the very woff2 the frontend ships, so a bitmap panel and a browser
-panel are one design rather than two that agree about the content.
+micro-label and every clock, Hanken Grotesk for the things that are read rather
+than scanned — the same slots, at the same weights, as `.cal-title` and
+`.task-meta .due` in the app. It is always the shipped design: a display
+follows neither the account's Appearance theme nor the Classic preset, since a
+choice made for a laptop is not one to inherit onto a screen read across a
+room. The server-side renderer draws in the same three, from static instances
+of the very woff2 the frontend ships, so a bitmap panel and a browser panel are
+one design rather than two that agree about the content.
 
 Two type decisions are the eink constraint rather than taste, and both were
-measured against a thresholded render. Fraunces is pinned to the **bottom** of
-its optical-size axis: its display cut is high-contrast with fine hairlines,
-which is precisely what one bit deep destroys — at the top of the axis "August
-2026" loses its stems and a day number turns to mush. And the mono micro-labels
-sit one weight step above the app's, because a label read at arm's length and a
-label read at three metres are not the same label.
+measured against a thresholded render. On eink, Newsreader is pinned to
+**optical size 12**, below its own default of 18 — the one place the app pins an
+optical size at all. The default is the text cut, and its hairlines are
+precisely what one bit deep destroys: at 18, "August 2026" loses the thins of
+its 2s and a small day number's 1 loses its flag and reads as an l ("10" came
+out "I0" on a 4.2" panel), while 12 keeps every stroke and sets at the width
+the layout was tuned against. And the mono micro-labels sit one weight step
+above the app's, because a label read at arm's length and a label read at three
+metres are not the same label.
 
 **And it works on eink, where every pixel is binary.** That is a design under a
 constraint, not a dark theme inverted. There is no grey, because an intermediate
