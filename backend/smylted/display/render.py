@@ -84,8 +84,8 @@ _FONT_DIR = os.path.join(os.path.dirname(__file__), "fonts")
 # micro-label" survives a change of typeface; "this is JetBrainsMono-Medium"
 # does not.
 _FACES = {
-    "serif": os.path.join(_FONT_DIR, "Fraunces-Medium.ttf"),
-    "sans": os.path.join(_FONT_DIR, "Inter-Regular.ttf"),
+    "serif": os.path.join(_FONT_DIR, "Newsreader-Medium.ttf"),
+    "sans": os.path.join(_FONT_DIR, "HankenGrotesk-Regular.ttf"),
     "mono": os.path.join(_FONT_DIR, "JetBrainsMono-Medium.ttf"),
 }
 
@@ -373,9 +373,10 @@ def _marker(
 def _check(draw: ImageDraw.ImageDraw, x: int, y: int, size: int, colors) -> None:
     """A tick, drawn as two strokes rather than set as the character ✓.
 
-    Inter has no ✓ — it is not in the Latin subsets this app ships — so setting
-    it would render a box. Drawing it also puts its weight under our control:
-    a hairline tick disappears on a panel read from three metres away.
+    Hanken Grotesk has no ✓, and neither do the other two faces — it is not in
+    the Latin subsets this app ships — so setting it would render a box.
+    Drawing it also puts its weight under our control: a hairline tick
+    disappears on a panel read from three metres away.
     """
     weight = max(2, size // 5)
     draw.line([(x + size * 0.10, y + size * 0.55),
@@ -399,6 +400,13 @@ def _habit_glyph(
     A filled disc has no such second meaning, and it keeps the two marks on this
     screen distinct at a glance: a solid dot is a habit kept, a ticked box is a
     row finished.
+
+    A true circle, and a deliberate exception to the design's "no perfect
+    circles" rule. One bit deep, the SHAPE is the only thing telling a habit
+    from a task — there is no colour, no tint and no icon to do it — and a ring
+    beside a box is the one difference that survives thresholding and distance
+    at once; a softened square would read as a second box. `.display-row__ring`
+    in display.css makes the same exception for the same reason.
     """
     weight = max(2, size // 6)
     if done:

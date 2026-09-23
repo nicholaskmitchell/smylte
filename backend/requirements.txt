@@ -13,12 +13,13 @@ recurring-ical-events>=3.3,<4
 tzdata
 # Server-side rendering for passive displays (smylted/display/render.py): the
 # 1-bit and colour images a wall panel with no browser fetches instead of running
-# the page. Pillow IS FreeType here — it is what rasterizes the vendored Inter
-# (smylted/display/fonts/), which no pure-Python path can do; a bitmap font would
-# have avoided the dependency at the cost of a third typeface and worse output on
-# a colour panel. Nothing else in the app imports it, so a deployment that never
-# hangs a browserless panel still carries it — the alternative, an optional
-# import, would make the image route exist or not depending on what pip did.
+# the page. Pillow IS FreeType here — it is what rasterizes the vendored
+# Newsreader, Hanken Grotesk and JetBrains Mono (smylted/display/fonts/), which
+# no pure-Python path can do; a bitmap font would have avoided the dependency at
+# the cost of a fourth typeface and worse output on a colour panel. Nothing else
+# in the app imports it, so a deployment that never hangs a browserless panel
+# still carries it — the alternative, an optional import, would make the image
+# route exist or not depending on what pip did.
 Pillow>=10.0
 # Phase 1 web layer.
 fastapi>=0.115

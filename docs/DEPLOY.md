@@ -619,11 +619,15 @@ plane, and no second plane for the tri-colour (black/white/red) panels.
 
 The server-side renderer needs **Pillow** (`requirements.txt`), which is what
 rasterizes the three typefaces vendored under `backend/smylted/display/fonts/` —
-Fraunces, Inter and JetBrains Mono, the app's own, converted from the woff2 the
-frontend already ships so a bitmap panel is set in the same type as the browser
-page. Rebuild them with `python -m dev.build_display_fonts` if the frontend's
-fonts are ever replaced; nothing does it automatically, and a stale instance
-here shows up as a panel drifting from the app rather than as an error. No
+Newsreader, Hanken Grotesk and JetBrains Mono, the app's own, converted from the
+woff2 the frontend already ships so a bitmap panel is set in the same type as the
+browser page. Rebuild them with `python -m dev.build_display_fonts` (it needs
+`fonttools` and `brotli`, which the app itself does not) if the frontend's fonts
+are ever replaced; nothing does it automatically, and a stale instance here
+shows up as a panel drifting from the app rather than as an error. The build
+does refuse one kind of drift outright: the eink page's serif is pinned to an
+optical size in `display.css`, and it will not build the bitmap's at a different
+one. No
 outbound network is involved either way, so `IPAddressDeny=any` in
 `deploy/smylte.service` does not have to be relaxed for any of this.
 
