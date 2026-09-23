@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { clientId } from '../api'
 import { useEscape } from '../hooks'
 import { useT } from '../i18n'
@@ -276,12 +276,15 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
 
         {/* ---- which mode am I editing ---- */}
         <div className="appear-modes" role="group" aria-label={tr('appear.editingMode')}>
-          {(['light', 'dark'] as Mode[]).map((m) => (
-            <button key={m} className={`view-tab ${mode === m ? 'active' : ''}`}
-              aria-pressed={mode === m} onClick={() => onMode(m)}>
-              {m === 'light' ? tr('appear.light') : tr('appear.dark')}
-            </button>
-          ))}
+          {/* A segmented pair; --n and --i place its sliding thumb. */}
+          <div className="view-tabs" style={{ '--n': 2, '--i': mode === 'light' ? 0 : 1 } as CSSProperties}>
+            {(['light', 'dark'] as Mode[]).map((m) => (
+              <button key={m} className={`view-tab ${mode === m ? 'active' : ''}`}
+                aria-pressed={mode === m} onClick={() => onMode(m)}>
+                {m === 'light' ? tr('appear.light') : tr('appear.dark')}
+              </button>
+            ))}
+          </div>
           <span className="spacer" />
           <span className="hintline">
             {isPreset

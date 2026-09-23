@@ -617,7 +617,12 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
             </div>
           )}
           {!completedOnly && !parkedOnly && (
-            <div className="view-tabs" role="tablist" aria-label={tr('tasks.viewTabs')}>
+            // --n and --i place the sliding thumb under the active segment.
+            <div className="view-tabs" role="tablist" aria-label={tr('tasks.viewTabs')}
+              style={{
+                '--n': VIEWS.length,
+                '--i': Math.max(0, VIEWS.findIndex(([v]) => v === view)),
+              } as CSSProperties}>
               {VIEWS.map(([v, label]) => (
                 <button key={v} role="tab" aria-selected={view === v}
                   className={`view-tab ${view === v ? 'active' : ''}`}

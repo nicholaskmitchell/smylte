@@ -606,15 +606,23 @@ describe('2026-09-03 — a <select class="menu-toggle"> clears the iOS 16px floo
     }
     expect(under, `${under.join(', ')} — Safari zooms on focus below 16px`).toEqual([])
     // Control: the BUTTON toggles beside it are not form controls iOS zooms
-    // for, and keep the sheet's 11px label size.
-    expect(parseFloat(getComputedStyle(host.querySelector('#btn')!).fontSize)).toBe(11)
+    // for, and keep the control size every other toggle in the sheet has.
+    expect(parseFloat(getComputedStyle(host.querySelector('#btn')!).fontSize)).toBe(controlPx())
   })
 
-  it('and keeps the desktop size where there is no zoom to arm', async () => {
-    await viewport(1200)
-    const host = await mount('<div class="shell"><select class="menu-toggle"><option>x</option></select></div>')
-    expect(parseFloat(getComputedStyle(host.querySelector('select')!).fontSize)).toBe(11)
-  })
+  // The control size is a token (14px; Classic's 11px), so the pin reads it
+  // rather than restating it — and pins the two shipped values once, here.
+  const controlPx = () =>
+    parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--fs-control'))
+
+  it.each([[undefined, 14], ['classic', 11]] as const)(
+    'and keeps the desktop size where there is no zoom to arm (preset=%s)', async (preset, px) => {
+      await viewport(1200)
+      if (preset) document.documentElement.dataset.preset = preset
+      const host = await mount('<div class="shell"><select class="menu-toggle"><option>x</option></select></div>')
+      expect(controlPx()).toBe(px)
+      expect(parseFloat(getComputedStyle(host.querySelector('select')!).fontSize)).toBe(px)
+    })
 })
 
 // ── AUDIT: App.tsx:1089 — the tab strip and the settings gear keep ~29px tap

@@ -39,6 +39,7 @@
   --fs-meta: 11px;
   --fs-micro: 10px;
   --font-note: var(--mono);
+  --fs-note-step: 0px;
   --fvs-display: "opsz" 144;
   --wght-wordmark: 400;
 
@@ -51,6 +52,8 @@
   --row-inset: 0px;
   --row-divider: var(--rule-faint);
   --row-hover: var(--bg-elev);
+  --habits-close: transparent;
+  --habits-close-row: var(--rule);
   --chip-bg: none;
   --chip-edge: var(--rule);
   --chip-pad: 2px 6px;
@@ -79,3 +82,31 @@
   --enter-toast: none;
   --enter-sheet: sheet-up 0.18s ease-out;
 }
+
+/* The segmented control (F5) — the one component whose refined form is a
+   different STRUCTURE rather than different values: a track, a sliding
+   thumb, borderless segments. Classic's is a row of bordered buttons with the
+   active one inverted. It is self-contained (no variant or mobile rule
+   touches it), so it is restored whole, at full specificity. The Appearance
+   mode pair wraps its buttons in a track the old markup did not have;
+   `display: contents` gives them back to the row they sat in. */
+:root[data-preset="classic"] .view-tabs {
+  display: flex; gap: 2px; padding: 0; background: none; border-radius: 0;
+}
+:root[data-preset="classic"] .appear-modes .view-tabs { display: contents; }
+:root[data-preset="classic"] .view-tabs::before { content: none; }
+:root[data-preset="classic"] .view-tabs > .view-tab {
+  border-color: var(--rule); border-radius: 0; padding: 5px 9px;
+}
+:root[data-preset="classic"] .view-tab.active {
+  color: var(--bg); background: var(--fg); border-color: var(--fg);
+}
+@media (hover: hover) {
+  :root[data-preset="classic"] .view-tabs > .view-tab:not(.active):hover {
+    color: var(--accent); border-color: var(--accent);
+  }
+}
+
+/* F1 · Classic keeps the browser's own focus ring. :where() adds nothing to
+   the specificity, so the rules that set their own ring still win. */
+:where(:root[data-preset="classic"]) :focus-visible { outline: revert; outline-offset: revert; }
