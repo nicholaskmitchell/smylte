@@ -21,6 +21,9 @@ import '@testing-library/jest-dom/vitest'
 import '../styles/fonts.css'
 import '../styles/tokens.css'
 import '../styles/app.css'
+// Classic's lever block, after app.css: `:root[data-preset="classic"]` ties the
+// dark block's specificity and has to win on source order.
+import '../styles/classic.css'
 // The display page's own sheet, last, as main.tsx loads it. It is here because
 // what it asserts cannot be asserted anywhere else: a display is drawn in the
 // app's three typefaces, and "which face won" is a question about the cascade

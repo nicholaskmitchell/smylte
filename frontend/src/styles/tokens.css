@@ -1,8 +1,15 @@
-/* Design system — ported from Søren's UI (~/soren/.../static/index.html).
-   Same OKLCH color system and Fraunces / Inter / JetBrains Mono type tiers, the
-   rule "serif for reading, sans/mono for interaction", sharp corners, hairline
-   rules, uppercase mono micro-labels. Utility layout, not broadsheet.
-   Accent is the site's orange (nicholaskmitchell.com), not Søren's blue. */
+/* Design system — the N.K.M. system nicholaskmitchell.com, Smylte and Søren
+   share, as refined in September 2026. Same OKLCH colour system as before (no
+   colour changed in the refinement), and three type roles: Newsreader for
+   anything read, Hanken Grotesk for chrome and every control, JetBrains Mono
+   for anything that labels or counts. "Straight on the page, soft at the
+   hand": hairline rules and square grids stay; the things you touch take a
+   radius scale, soft shadows where they float, and eased motion. Utility
+   layout, not broadsheet. Accent is the site's orange, not Søren's blue.
+
+   The design before the refinement — Fraunces and Inter, square corners, mono
+   caps on every control — ships as the Classic preset: its 23 tokens are a
+   preset block below, and everything else it restores is classic.css. */
 
 :root {
   --bg: #FBFAF7;
@@ -27,19 +34,24 @@
   --pri-med: oklch(0.68 0.15 70);
   --pri-low: oklch(0.60 0.10 240);
 
-  --serif: "Fraunces", Georgia, "Times New Roman", serif;
-  --sans: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --serif: "Newsreader", Georgia, "Times New Roman", serif;
+  --sans: "Hanken Grotesk", -apple-system, BlinkMacSystemFont, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
 
-  /* ---- customizable shape / rhythm / elevation ----
-     Every value below is the literal this file and app.css used before they
-     were tokenized, so the shipped look is unchanged. The Appearance editor
-     (see appearance.ts) overrides these as inline properties on <html>, which
-     outranks :root without editing it — so "reset" is just dropping the
-     overrides and the default theme is always recoverable. */
+  /* ---- customizable shape / rhythm ----
+     This block holds exactly the 23 tokens the Appearance editor can change,
+     and nothing else: appearance.ts mirrors it (SHARED_DEFAULTS, DEFAULTS) and
+     appearance.test.ts parses it, so the non-customizable tokens live in their
+     own :root block after the presets. The editor overrides these as inline
+     properties on <html>, which outranks :root without editing it — so "reset"
+     is just dropping the overrides and the default is always recoverable. */
 
-  /* Corner radius. Sharp corners are the design's rule, hence 0. */
-  --radius: 0px;
+  /* Corner radius — the base of the whole radius scale. It is --r-sm itself,
+     and --r-xs, --r-md, --r-lg, --r-pill and --r-dot are derived from it
+     below, so the editor's one slider (and a preset's one value) moves every
+     rounded thing in proportion: 8px gives the system's 4/8/12/18 scale, and
+     Classic's 0px squares everything, pills and dots included. */
+  --radius: 8px;
 
   /* Global type multiplier. Every font-size in the app is
      `calc(<literal> * var(--fs-scale))`, so one number scales the whole UI
@@ -50,21 +62,18 @@
      padding of a task row — the two levers that actually set the app's
      breathing room. */
   --gutter: 26px;
-  --row-y: 9px;
+  --row-y: 10px;
 
-  /* The micro-label signature: uppercase mono with wide tracking, on buttons,
-     .label, .chip, column heads and the rest. It is the loudest editorial
-     marker in the app, so it is a lever rather than 24 hardcoded declarations
-     — a theme that wants sentence case sets --label-case: none, and --tracking
-     scales every one of those letter-spacings at once (each is authored as
-     `calc(<literal> * var(--tracking))`, so the relative tiers survive). The
-     three negative tracking values on display type are not label tracking and
-     are deliberately left alone. */
-  --label-case: uppercase;   /* uppercase | none */
-  --tracking: 1;
-
-  --shadow: 0 10px 30px rgba(0, 0, 0, 0.20);
-  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.25);
+  /* The label lever: whether mono micro-labels and control labels are set in
+     caps, and how far they track. Every one of those letter-spacings is
+     authored as `calc(<literal> * var(--tracking))`, so the relative tiers
+     survive any value. The app sets them in natural case with no tracking —
+     mono caps are the editorial eyebrow's mark, and a button should read as a
+     word, not a code — while Classic keeps the uppercase-and-tracked look it
+     was built on. The negative tracking on display type is not label tracking
+     and is deliberately left alone. */
+  --label-case: none;   /* uppercase | none */
+  --tracking: 0;
 }
 
 :root[data-theme="dark"] {
@@ -102,10 +111,13 @@
    seed from it. appearance.test.ts parses these two blocks and fails the build
    if the copies drift, exactly as it does for :root.
 
+   Two ship: Workspace, a restrained system-font design, and Classic, the
+   design Smylte shipped before the September 2026 refinement.
+
    Order matters. `:root[data-preset=…]` has the same specificity as the dark
-   block above, so it must come after it to win in light mode; the dark variant
-   below carries one more attribute and so wins over both in dark mode. The
-   user's own overrides are inline properties on <html> and outrank all four. */
+   block above, so it must come after it to win in light mode; each dark
+   variant carries one more attribute and so wins over both in dark mode. The
+   user's own overrides are inline properties on <html> and outrank them all. */
 
 :root[data-preset="workspace"] {
   --bg: #FBFBFC;
@@ -169,6 +181,183 @@
   --row-y: 11px;
   --label-case: none;
   --tracking: 0;
+}
+
+/* Classic: the design Smylte shipped until September 2026, kept whole. These
+   two blocks are its 23 Appearance tokens — the colours are the default's own
+   (the refinement changed none), the type is Fraunces and Inter, the corners
+   are square and the labels are uppercase and tracked. What the tokens cannot
+   say — mono controls, hard shadows, rules between rows, no motion — is the
+   lever block in classic.css, which the same attribute selects. */
+
+:root[data-preset="classic"] {
+  --bg: #FBFAF7;
+  --bg-elev: #FFFFFF;
+  --paper: #F2F0EA;
+  --fg: #14131A;
+  --fg-muted: rgba(20, 19, 26, 0.60);
+  --fg-faint: rgba(20, 19, 26, 0.48);
+  --rule: rgba(20, 19, 26, 0.13);
+  --rule-faint: rgba(20, 19, 26, 0.07);
+  --accent: oklch(0.60 0.19 42);
+  --warn: oklch(0.58 0.20 27);
+  --ok: oklch(0.58 0.13 150);
+  --pri-high: oklch(0.60 0.19 25);
+  --pri-med: oklch(0.68 0.15 70);
+  --pri-low: oklch(0.60 0.10 240);
+
+  --serif: "Fraunces", Georgia, "Times New Roman", serif;
+  --sans: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+
+  --radius: 0px;
+  --fs-scale: 1;
+  --gutter: 26px;
+  --row-y: 9px;
+  --label-case: uppercase;
+  --tracking: 1;
+}
+
+:root[data-preset="classic"][data-theme="dark"] {
+  --bg: #0C0C10;
+  --bg-elev: #16161C;
+  --paper: #1A1A22;
+  --fg: #ECEAF2;
+  --fg-muted: rgba(236, 234, 242, 0.60);
+  --fg-faint: rgba(236, 234, 242, 0.38);
+  --rule: rgba(236, 234, 242, 0.14);
+  --rule-faint: rgba(236, 234, 242, 0.07);
+  --accent: oklch(0.72 0.16 45);
+  --warn: oklch(0.70 0.18 28);
+  --ok: oklch(0.70 0.14 155);
+  --pri-high: oklch(0.70 0.18 30);
+  --pri-med: oklch(0.80 0.14 75);
+  --pri-low: oklch(0.72 0.11 245);
+
+  --serif: "Fraunces", Georgia, "Times New Roman", serif;
+  --sans: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+
+  --radius: 0px;
+  --fs-scale: 1;
+  --gutter: 26px;
+  --row-y: 9px;
+  --label-case: uppercase;
+  --tracking: 1;
+}
+
+/* ---- the refinement's fixed tokens -------------------------------------
+   Not customizable, so not in the Appearance editor and not mirrored in
+   appearance.ts. Two kinds live here.
+
+   The SCALES — radius, type, elevation, motion — are the design system's own
+   tokens (its CHANGES.md IDs are in the comments), adapted to this app.
+
+   The LEVERS are the values the refinement changed that Classic has to put
+   back. Each is read where the old value used to be written, so a design is
+   a set of lever values rather than a second copy of the stylesheet, and the
+   cascade is exactly what it was: a variant or mobile rule that beat its base
+   rule before still does. classic.css restates every lever in this block
+   with its pre-refinement value; design-tokens.test.ts keeps the two lists
+   identical. */
+:root {
+  /* S1 · radius scale, derived from --radius (8px → 4 / 8 / 12 / 18). A
+     nested corner is its container's radius minus the padding between them,
+     never below --r-xs (S2). No perfect circles (S3): --r-pill is only for
+     things wider than they are tall, and dots take --r-dot. */
+  --r-xs: calc(var(--radius) / 2);          /* checkbox, today badge, swatch */
+  --r-sm: var(--radius);                    /* button, input, row, menu item */
+  --r-md: calc(var(--radius) * 1.5);        /* card, popover, menu, toast */
+  --r-lg: calc(var(--radius) * 2.25);       /* modal, sheet */
+  --r-pill: calc(var(--radius) * 999);      /* chip, tag, pill */
+  --r-dot: min(2px, var(--radius));         /* list dot, swatch, marker */
+  --r-thumb: max(var(--r-xs), calc(var(--r-sm) - 3px));       /* in a 3px track */
+  --r-menu-item: max(var(--r-xs), calc(var(--r-md) - 4px));   /* in a 4px menu */
+  --r-swatch-all: var(--r-dot);             /* the "all lists" swatch */
+
+  /* T6–T7 · type. Controls are Hanken Grotesk 500 in sentence case, sized in
+     three tiers by the size the control had before; mono labels stay mono,
+     one pixel larger now they are no longer shouted in caps. */
+  --font-control: var(--sans);
+  --wght-control: 500;
+  --lh-control: 1.2;
+  --fs-control: 14px;          /* buttons, tabs, toggles — was 11px mono */
+  --fs-control-sm: 13px;       /* segmented tabs, add-rows — was 10px */
+  --fs-control-compact: 13px;  /* small buttons in dense rows — was 11px */
+  --fs-chip: 12.5px;
+  --fs-meta: 12px;             /* mono label — was 11px */
+  --fs-micro: 11px;            /* mono micro-label — was 10px */
+  --font-note: var(--sans);    /* toasts and error notes */
+  --fvs-display: normal;       /* T1: opsz follows font-size, never pinned */
+  --wght-wordmark: 500;        /* the italic "Smylte." wordmark */
+
+  /* F4 · control sizing. 38px is the minimum height of a button, an input
+     and a toggle; dense rows opt out by setting --control-h: 0px on their
+     container. Touch targets are not grown here: the app already gives every
+     small control a 44px invisible tap area. */
+  --control-h: 38px;
+  --btn-pad: 10px 16px;
+  --input-pad: 10px 14px;
+
+  /* C1–C3 · surfaces. Floating and contained surfaces take the faint rule;
+     rows in interactive lists drop their dividers and show a rounded fill,
+     inset from the pane edge, under the pointer. */
+  --edge: var(--rule-faint);
+  --card-hover-edge: var(--rule);
+  --row-inset: 6px;
+  --row-divider: transparent;
+  --row-hover: var(--paper);
+  --chip-bg: var(--paper);
+  --chip-edge: transparent;
+  --chip-pad: 3px 10px;
+
+  /* F3 · hover on an outlined control (ghost button, icon button, toggle):
+     a --paper fill, the border unchanged. */
+  --ghost-hover-bg: var(--paper);
+  --ghost-hover-fg: var(--fg);
+  --ghost-hover-edge: var(--rule);
+
+  /* E1 · elevation. Two layers, contact plus ambient, in this app's own ink
+     rather than black, so a shadow is the same temperature as the page. Only
+     things that float take one. */
+  --shadow: 0 1px 2px rgba(20, 19, 26, 0.06), 0 8px 24px rgba(20, 19, 26, 0.08);
+  --shadow-lg: 0 2px 6px rgba(20, 19, 26, 0.06), 0 24px 64px rgba(20, 19, 26, 0.14);
+  --shadow-sheet: 0 -8px 40px rgba(20, 19, 26, 0.14);
+  --sheet-modal-shadow: var(--shadow-sheet);
+
+  /* F1 · the focus halo: the accent at 22%, the one tint the system allows. */
+  --ring: 0 0 0 3px color-mix(in oklch, var(--accent) 22%, transparent);
+
+  /* M1–M2 · motion. Fast out, long settle; things that travel both ways
+     (thumbs, carets) ease in and out. Colour 0.12s, state 0.2s, enter/exit
+     and sliding 0.32s. */
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-fast: 0.12s;
+  --dur: 0.2s;
+  --dur-slow: 0.32s;
+  --press-scale: 0.98;         /* F2 */
+  --enter-y: 6px;              /* M4 */
+  --enter-float: float-in var(--dur) var(--ease);
+  --enter-modal: modal-in var(--dur-slow) var(--ease);
+  --enter-scrim: scrim-in var(--dur-slow) var(--ease);
+  --enter-toast: toast-in var(--dur) var(--ease);
+  --enter-sheet: sheet-in var(--dur-slow) var(--ease);
+}
+
+/* Dark grounds: a shadow in ink at these alphas does not read, so the dark
+   theme uses black, and more of it. */
+:root[data-theme="dark"] {
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.30), 0 24px 64px rgba(0, 0, 0, 0.50);
+  --shadow-sheet: 0 -8px 40px rgba(0, 0, 0, 0.40);
+}
+
+/* M5 · reduced motion keeps the fades and drops the travel. The blanket rule
+   at the end of this file already collapses every duration; these are the
+   values that make a press and an entrance still in the first place. */
+@media (prefers-reduced-motion: reduce) {
+  :root { --press-scale: 1; --enter-y: 0px; --dur-slow: 0.01s; }
 }
 
 * { box-sizing: border-box; }
