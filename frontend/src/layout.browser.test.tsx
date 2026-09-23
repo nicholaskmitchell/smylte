@@ -314,16 +314,25 @@ describe('the Today tab has one left edge on a phone', () => {
       <div class="today-more">3 more</div>
     </div></div>`
 
-  it.each([undefined, 'workspace'])('under preset=%s', async (preset) => {
+  // The edge is where the TEXT starts — the box's own offset in the pane plus
+  // its padding — rather than the padding alone. A Today row is inset from the
+  // pane (C3: its hover fill is a rounded shape that stops short of the edge)
+  // and takes the inset back out of its padding, so its padding is smaller than
+  // its neighbours' by exactly the margin it gained, and the text lines up. The
+  // agenda row's 2px calendar rule is a border, not part of either, as before.
+  it.each([undefined, 'workspace', 'classic'])('under preset=%s', async (preset) => {
     await viewport(390)
     if (preset) document.documentElement.dataset.preset = preset
     const host = await mount(TODAY_TAB)
+    const origin = host.getBoundingClientRect().left
 
     const edges = new Map<string, number>()
     for (const sel of ['.content-head', '.quickadd', '.today-load', '.section-label',
       '.today-row', '.empty', '.today-quiet', '.today-committed-over',
       '.today-reflection-text', '.today-agenda .agenda-ev', '.today-more']) {
-      edges.set(sel, parseFloat(getComputedStyle(host.querySelector(sel)!).paddingLeft))
+      const el = host.querySelector(sel)!
+      edges.set(sel, +(el.getBoundingClientRect().left - origin
+        + parseFloat(getComputedStyle(el).paddingLeft)).toFixed(1))
     }
     expect([...new Set(edges.values())], 'the Today tab renders as a staircase: '
       + `${[...edges].map(([s, px]) => `${s} ${px}px`).join(', ')}`)

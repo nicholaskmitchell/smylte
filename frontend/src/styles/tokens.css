@@ -288,6 +288,7 @@
   --fs-meta: 12px;             /* mono label — was 11px */
   --fs-micro: 11px;            /* mono micro-label — was 10px */
   --font-note: var(--sans);    /* toasts and error notes */
+  --fs-note-step: 1px;         /* …a pixel up from the mono they were set in */
   --fvs-display: normal;       /* T1: opsz follows font-size, never pinned */
   --wght-wordmark: 500;        /* the italic "Smylte." wordmark */
 
@@ -307,6 +308,8 @@
   --row-inset: 6px;
   --row-divider: transparent;
   --row-hover: var(--paper);
+  --habits-close: var(--rule);        /* the Today habits band's closing line… */
+  --habits-close-row: transparent;    /* …drawn on the band, not its last row */
   --chip-bg: var(--paper);
   --chip-edge: transparent;
   --chip-pad: 3px 10px;
@@ -393,9 +396,14 @@ button, input, select, label { touch-action: manipulation; }
 input, select, textarea { font-family: inherit; }
 ::selection { background: color-mix(in oklch, var(--accent) 30%, transparent); }
 
+/* F1 · focus. A keyboard focus is a 2px accent outline standing 2px clear of
+   the control. Controls with a border of their own (inputs) carry it as an
+   accent border plus the --ring halo instead, and set their own rule. */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 /* ---- primitives ---- */
 .label {
-  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case);
+  font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.1em * var(--tracking)); color: var(--fg-faint);
 }
 .mono { font-family: var(--mono); }
@@ -420,18 +428,29 @@ input, select, textarea { font-family: inherit; }
    nothing, so Settings -> Account's Disconnect — the only control that revokes a
    live MCP OAuth grant — rendered as bare red text with no outline and no
    background in a row of bordered controls. */
+/* T7 · a button reads as a word, not a code: the control face at 14px, 500,
+   in sentence case. F4 · at least --control-h tall. F2 · it presses in to
+   --press-scale — the individual `scale` property, never `transform`, which
+   several rules below already use for positioning and would be clobbered. */
 .btn {
-  background: var(--fg); color: var(--bg); border: 1px solid transparent; border-radius: var(--radius);
-  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); font-weight: 500; text-transform: var(--label-case);
-  letter-spacing: calc(0.06em * var(--tracking)); padding: 9px 13px; cursor: pointer;
+  background: var(--fg); color: var(--bg); border: 1px solid transparent; border-radius: var(--r-sm);
+  font-family: var(--font-control); font-size: calc(var(--fs-control) * var(--fs-scale)); font-weight: 500; text-transform: var(--label-case);
+  letter-spacing: calc(0.06em * var(--tracking)); line-height: var(--lh-control);
+  padding: var(--btn-pad); min-height: var(--control-h); cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease), scale var(--dur) var(--ease);
 }
 .btn:disabled { opacity: 0.5; cursor: default; }
 .btn.ghost { background: none; color: var(--fg-muted); border: 1px solid var(--rule); }
 
+/* Compact on purpose: an icon button is a toolbar glyph, and the phone gives
+   each one a 44px invisible tap area (app.css) rather than a 44px box. */
 .icon-btn {
-  background: none; color: var(--fg-muted); border: 1px solid var(--rule); border-radius: var(--radius);
+  background: none; color: var(--fg-muted); border: 1px solid var(--rule); border-radius: var(--r-sm);
   padding: 7px; display: inline-flex; align-items: center; justify-content: center;
-  cursor: pointer; transition: color 0.15s, border-color 0.15s;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    background var(--dur) var(--ease), scale var(--dur) var(--ease);
 }
 .icon-btn.active { color: var(--bg); background: var(--accent); border-color: var(--accent); }
 
@@ -441,60 +460,74 @@ input, select, textarea { font-family: inherit; }
    something else is tapped — a solid accent-filled button that stays filled
    reads as stuck, or as a button that swallowed the tap. :active gives touch
    the same affordance and releases it. Disabled controls never go :active,
-   so they need no guard. */
+   so they need no guard.
+
+   F3 · a filled button swaps to the accent; an outlined one (ghost, icon)
+   takes a --paper fill with its border unchanged, rather than an accent
+   outline on every control the pointer crosses. An ACTIVE icon button is
+   already filled, and keeps its fill: hovering it used to paint its glyph in
+   the accent on an accent ground, which is to say not at all. */
 @media (hover: hover) {
   .btn:hover { background: var(--accent); }
-  .btn.ghost:hover { color: var(--accent); border-color: var(--accent); background: none; }
-  .icon-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .btn.ghost:hover { color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg); }
+  .icon-btn:not(.active):hover { color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg); }
 }
-.btn:active { background: var(--accent); }
-.btn.ghost:active { color: var(--accent); border-color: var(--accent); background: none; }
-.icon-btn:active { color: var(--accent); border-color: var(--accent); }
+.btn:active { background: var(--accent); scale: var(--press-scale); }
+.btn.ghost:active { color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg); }
+.icon-btn:not(.active):active { color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg); }
+.icon-btn:active { scale: var(--press-scale); }
 
 .input {
-  background: var(--bg); color: var(--fg); border: 1px solid var(--rule); border-radius: var(--radius);
-  padding: 8px 10px; font-size: calc(14px * var(--fs-scale)); width: 100%;
+  background: var(--bg); color: var(--fg); border: 1px solid var(--rule); border-radius: var(--r-sm);
+  padding: var(--input-pad); min-height: var(--control-h); font-size: calc(14px * var(--fs-scale)); width: 100%;
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur) var(--ease);
 }
-.input:focus { outline: none; border-color: var(--accent); }
+.input:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
 
 select.input { appearance: none; -webkit-appearance: none; cursor: pointer; }
 
+/* A chip is a --paper pill with no border, in the control face (C, T7). */
 .chip {
   display: inline-flex; align-items: center; gap: 4px;
-  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); letter-spacing: calc(0.04em * var(--tracking));
-  color: var(--fg-muted); border: 1px solid var(--rule); padding: 2px 6px;
+  font-family: var(--font-control); font-weight: var(--wght-control);
+  font-size: calc(var(--fs-chip) * var(--fs-scale)); letter-spacing: calc(0.04em * var(--tracking));
+  color: var(--fg-muted); border: 1px solid var(--chip-edge); padding: var(--chip-pad);
+  border-radius: var(--r-pill);
   /* A chip is sometimes a <button> (the display picker), and a button with no
      background declared wears the user agent's ButtonFace — a light grey box
      under the dark theme, measured at 1.01:1 against its own faint text. */
-  background: none;
+  background: var(--chip-bg);
 }
+button.chip { transition: background var(--dur) var(--ease), color var(--dur-fast) var(--ease), scale var(--dur) var(--ease); }
+button.chip:active { scale: var(--press-scale); }
 
 /* Tags as chips. A category may contain a comma, so it cannot be edited as one
    delimited string — each one is held whole, with its own remove control. */
 .tag-input {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
-  background: var(--bg); border: 1px solid var(--rule); border-radius: var(--radius);
-  padding: 5px 6px;
+  background: var(--bg); border: 1px solid var(--rule); border-radius: var(--r-sm);
+  padding: 5px 6px; min-height: var(--control-h);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur) var(--ease);
 }
-.tag-input:focus-within { border-color: var(--accent); }
+.tag-input:focus-within { border-color: var(--accent); box-shadow: var(--ring); }
 /* The text box is the flexible tail, and shrinks onto a new row once the chips
    fill the line rather than pushing the field wider. */
 .tag-input .input {
-  flex: 1 1 8ch; min-width: 8ch; width: auto;
+  flex: 1 1 8ch; min-width: 8ch; width: auto; min-height: 0;
   border: none; background: none; padding: 2px 0;
 }
-.tag-input .input:focus { outline: none; }
+.tag-input .input:focus { outline: none; box-shadow: none; }
 .chip-x {
   border: none; background: none; cursor: pointer; padding: 0 0 0 2px;
   color: inherit; font-size: inherit; line-height: 1;
 }
-.chip-x:hover { color: var(--fg); }
+@media (hover: hover) { .chip-x:hover { color: var(--fg); } }
 .chip-x:disabled { cursor: default; opacity: 0.4; }
 
 /* ---- reduced motion ----------------------------------------------------
-   The app animates in three places — the `color`/`border-color` transitions on
-   `.icon-btn` and its neighbours, the settings popover, and the drag feedback —
-   and honoured `prefers-reduced-motion` in none of them. That setting is not a
+   The app animates colour and fill changes, a press, carets, sliding tab
+   thumbs, and the entrance of every popover, menu, modal, sheet and toast —
+   and for a long time honoured `prefers-reduced-motion` in none of it. That setting is not a
    taste: it is what someone with a vestibular disorder sets, and it is exposed
    by GNOME, KDE, Windows and iOS alike.
 
