@@ -23,11 +23,15 @@
          latin-ext faces are deliberately left to be discovered normally, since
          preloading a file that never gets used is worse than not preloading.
          `crossorigin` is required on font preloads even same-origin — omit it
-         and the fetch is made twice. -->
+         and the fetch is made twice.
+
+         These are the shipped design's faces. The Classic preset's Fraunces and
+         Inter are discovered the ordinary way instead: preloading them here
+         would make every account pay for a design most never select. -->
     <link rel="preload" as="font" type="font/woff2" crossorigin
-      href="/fonts/inter-latin.woff2?v=1" />
+      href="/fonts/hanken-grotesk-latin.woff2?v=1" />
     <link rel="preload" as="font" type="font/woff2" crossorigin
-      href="/fonts/fraunces-latin.woff2?v=1" />
+      href="/fonts/newsreader-latin.woff2?v=1" />
     <script>
       // Apply persisted theme + appearance overrides before paint (no flash) —
       // Søren's pattern, extended for custom themes.
