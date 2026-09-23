@@ -1052,7 +1052,10 @@
      is (0,2,0) — MORE specific than a bare `:root`, so a plain re-declaration
      here would have lost to it and left every preset user on 24px. Matching its
      specificity and winning on source order (app.css is imported after
-     tokens.css) is what makes this cover them.
+     tokens.css) is what makes this cover them. A preset's DARK block carries one
+     more attribute, (0,3,0), so it needs the third selector: without it every
+     preset in the dark theme kept its desktop gutter on a phone — Workspace at
+     24px, and Classic at 26px where the design it restores had 14px.
 
      A gutter the user set THEMSELVES still wins, and deliberately: `applyTokens`
      writes a saved theme's tokens as inline properties on <html>, which beat any
@@ -1062,7 +1065,7 @@
      the stair-step again, pointing the other way. (`--check-size` is re-declared
      just below with a bare `:root` because it is deliberately NOT themeable — see
      its note beside the base value.) */
-  :root, :root[data-preset] { --gutter: 14px; }
+  :root, :root[data-preset], :root[data-preset][data-theme="dark"] { --gutter: 14px; }
   /* On :root, so `.check` and `.today-check-gap` move together — see the note
      beside the base value. */
   :root { --check-size: 21px; }

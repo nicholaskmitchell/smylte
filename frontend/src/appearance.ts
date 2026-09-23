@@ -180,15 +180,15 @@ export const DEFAULTS: Record<Mode, ThemeTokens> = {
 
 /** Shipped values for the tokens that are shared across both modes. */
 export const SHARED_DEFAULTS: ThemeTokens = {
-  '--serif': '"Fraunces", Georgia, "Times New Roman", serif',
-  '--sans': '"Inter", -apple-system, BlinkMacSystemFont, sans-serif',
+  '--serif': '"Newsreader", Georgia, "Times New Roman", serif',
+  '--sans': '"Hanken Grotesk", -apple-system, BlinkMacSystemFont, sans-serif',
   '--mono': '"JetBrains Mono", ui-monospace, Menlo, monospace',
-  '--radius': '0px',
+  '--radius': '8px',
   '--fs-scale': '1',
   '--gutter': '26px',
-  '--row-y': '9px',
-  '--label-case': 'uppercase',
-  '--tracking': '1',
+  '--row-y': '10px',
+  '--label-case': 'none',
+  '--tracking': '0',
 }
 
 /** The effective shipped value of `token` in `mode`, whatever kind it is. */
@@ -214,6 +214,28 @@ export const PRESET_PREFIX = 'preset:'
 // and mono tiers too — a preset that puts one family in every slot has to land
 // on a named option in each, not on "Custom (…)".
 const SYSTEM_SANS = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+
+// Classic's two families: the reading and chrome faces Smylte shipped before
+// the September 2026 refinement. Self-hosted in fonts.css — a preset's fonts
+// are never fetched by ensureFonts, because a preset is not in `themes` — and
+// offered in FONT_CHOICES by these same strings, so forking Classic lands on a
+// named option rather than "Custom (…)".
+const FRAUNCES = '"Fraunces", Georgia, "Times New Roman", serif'
+const INTER = '"Inter", -apple-system, BlinkMacSystemFont, sans-serif'
+
+/** Classic's shared tokens. Its colours are the default's own: the refinement
+ *  changed no colour, so Classic spreads DEFAULTS rather than restating it. */
+const CLASSIC_SHARED: ThemeTokens = {
+  '--serif': FRAUNCES,
+  '--sans': INTER,
+  '--mono': SHARED_DEFAULTS['--mono'],
+  '--radius': '0px',
+  '--fs-scale': '1',
+  '--gutter': '26px',
+  '--row-y': '9px',
+  '--label-case': 'uppercase',
+  '--tracking': '1',
+}
 
 /** Both maps are dense — a preset restates the whole design, unlike a theme. */
 export const PRESETS: readonly CustomTheme[] = [
@@ -271,6 +293,20 @@ export const PRESETS: readonly CustomTheme[] = [
       '--label-case': 'none',
       '--tracking': '0',
     },
+  },
+  {
+    // The design before the September 2026 refinement. Its 23 tokens restore
+    // the type, the square corners and the tracked caps; everything else it
+    // puts back (mono controls, hard shadows, rules between rows, no motion)
+    // is classic.css, keyed on the same `data-preset` attribute. That is also
+    // why a FORK of Classic is not Classic: a saved theme carries these 23
+    // tokens and nothing else, so it keeps the faces and the corners and takes
+    // the current controls.
+    id: 'preset:classic',
+    name: 'Classic',
+    base: 'light',
+    light: { ...DEFAULTS.light, ...CLASSIC_SHARED },
+    dark: { ...DEFAULTS.dark, ...CLASSIC_SHARED },
   },
 ]
 
@@ -694,7 +730,8 @@ export interface FontChoice {
 
 export const FONT_CHOICES: Record<'serif' | 'sans' | 'mono', FontChoice[]> = {
   serif: [
-    { label: 'Fraunces (default)', stack: SHARED_DEFAULTS['--serif'] },
+    { label: 'Newsreader (default)', stack: SHARED_DEFAULTS['--serif'] },
+    { label: 'Fraunces (Classic)', stack: FRAUNCES },
     { label: 'Georgia', stack: 'Georgia, "Times New Roman", serif' },
     { label: 'System serif', stack: 'ui-serif, Iowan Old Style, Palatino, serif' },
     // Also in the sans tier. A theme that wants one family in every slot — the
@@ -707,8 +744,9 @@ export const FONT_CHOICES: Record<'serif' | 'sans' | 'mono', FontChoice[]> = {
     { label: 'Source Serif 4', stack: '"Source Serif 4", Georgia, serif', google: 'Source+Serif+4:wght@400;500;600' },
   ],
   sans: [
-    { label: 'Inter (default)', stack: SHARED_DEFAULTS['--sans'] },
+    { label: 'Hanken Grotesk (default)', stack: SHARED_DEFAULTS['--sans'] },
     { label: 'System sans', stack: SYSTEM_SANS },
+    { label: 'Inter (Classic)', stack: INTER },
     { label: 'IBM Plex Sans', stack: '"IBM Plex Sans", sans-serif', google: 'IBM+Plex+Sans:wght@400;500;600' },
     { label: 'Work Sans', stack: '"Work Sans", sans-serif', google: 'Work+Sans:wght@400;500;600' },
     { label: 'Public Sans', stack: '"Public Sans", sans-serif', google: 'Public+Sans:wght@400;500;600' },

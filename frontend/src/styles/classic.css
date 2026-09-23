@@ -1,0 +1,81 @@
+/* Classic — the design Smylte shipped until September 2026.
+
+   The refinement changed the default design without changing a colour, and
+   this file is how the one before it stays selectable. Classic's 23 Appearance
+   tokens (Fraunces and Inter, square corners, uppercase tracked labels) are a
+   preset block in tokens.css, mirrored in appearance.ts like Workspace's. What
+   those tokens cannot express is here: every LEVER in tokens.css's fixed-token
+   block, set back to the value the stylesheet used to write in its place.
+
+   A lever block rather than a copy of the old rules, for the reason the levers
+   exist: app.css reads each one where the old literal stood, so the cascade is
+   the one it always was — a small-button padding, a mobile font floor or a
+   float-window size that beat its base rule before still beats it under
+   Classic. Two things follow, and design-tokens.test.ts holds both:
+
+   - this block restates EVERY lever, and nothing but levers. A lever it forgot
+     would leak the refined value into Classic; one it invented would do
+     nothing. It must never set one of the 23 Appearance tokens (the preset
+     block owns them) or --gutter, which the mobile block re-declares and which
+     a rule here, loaded after app.css, would override on a phone.
+   - rules that are not lever values stay few, and each is either fully
+     self-contained or written with :where() so it adds no specificity.
+
+   Loaded after app.css (main.tsx; test/browser-setup.ts mirrors the order),
+   so `:root[data-preset="classic"]` — (0,2,0), the same as the dark block —
+   wins on source order in both themes. That is right for the shadows, which
+   were the same black in light and dark. */
+
+:root[data-preset="classic"] {
+  --r-swatch-all: 50%;
+
+  --font-control: var(--mono);
+  --wght-control: 400;
+  --lh-control: normal;
+  --fs-control: 11px;
+  --fs-control-sm: 10px;
+  --fs-control-compact: 11px;
+  --fs-chip: 10px;
+  --fs-meta: 11px;
+  --fs-micro: 10px;
+  --font-note: var(--mono);
+  --fvs-display: "opsz" 144;
+  --wght-wordmark: 400;
+
+  --control-h: 0px;
+  --btn-pad: 9px 13px;
+  --input-pad: 8px 10px;
+
+  --edge: var(--rule);
+  --card-hover-edge: var(--accent);
+  --row-inset: 0px;
+  --row-divider: var(--rule-faint);
+  --row-hover: var(--bg-elev);
+  --chip-bg: none;
+  --chip-edge: var(--rule);
+  --chip-pad: 2px 6px;
+
+  --ghost-hover-bg: none;
+  --ghost-hover-fg: var(--accent);
+  --ghost-hover-edge: var(--accent);
+
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.20);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.25);
+  --shadow-sheet: 0 -12px 40px rgba(0, 0, 0, 0.28);
+  --sheet-modal-shadow: var(--shadow-lg);
+
+  --ring: 0 0 0 0 transparent;
+
+  --ease: ease;
+  --ease-in-out: ease;
+  --dur-fast: 0.12s;
+  --dur: 0.15s;
+  --dur-slow: 0.12s;
+  --press-scale: 1;
+  --enter-y: 0px;
+  --enter-float: none;
+  --enter-modal: none;
+  --enter-scrim: none;
+  --enter-toast: none;
+  --enter-sheet: sheet-up 0.18s ease-out;
+}
