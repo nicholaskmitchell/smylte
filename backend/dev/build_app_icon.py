@@ -41,13 +41,64 @@ unattended, plus three alternates the app can switch between at runtime.
 Explorer, a desktop shortcut and a pinned taskbar entry get, and none of those
 can follow the theme — so it has to be the plated option that passes on both.
 
+**Why the S is Newsreader at opsz 16.**
+
+The mark is the "Smylte." wordmark's first letter and its period, set the way
+the wordmark is: Newsreader Medium Italic, wght 500, outlined from
+`frontend/public/fonts/newsreader-italic-latin.woff2`. The S keeps the height and
+the top the Fraunces S before it had (y 13.38-46.43 on the 64 canvas), and the
+period is the font's own rather than an enlarged one: Newsreader's period glyph,
+placed after the S's advance (the font has no S-period kern), on the baseline,
+and drawn as the circle its 282x275-unit bounds describe. The pair is centred
+horizontally on x 32, as the Fraunces pair was.
+
+The optical size was chosen, not defaulted. Newsreader's axis runs 6-72, and
+going up it trades stroke for contrast; what that costs here is plate margin,
+because a thinner hairline needs a bigger mark to survive 16px. Measured on the
+S outlined and placed as below at each optical size, with the tightest plated
+scale that holds all four floors:
+
+    opsz   thinnest stroke   tightest plated scale   plate margin
+      12        2.615               5.65                 13.5%
+      16        2.118               6.1                  10.6%
+      18        1.867               6.45                  8.4%   the font's default
+      28        1.709               6.6                   7.4%   the 28px wordmark
+      48        1.386               6.95                  5.1%
+      72        1.025               7.4                   2.2%
+
+28 is what the wordmark itself renders at (28px under `font-optical-sizing:
+auto`), and the Fraunces mark used a display cut, opsz 46. Either would leave
+the plate a sliver. 16 is picked for a surface the tiers below cannot reach:
+`favicon.svg` is drawn by the browser directly, with no offset and no hinting,
+at 16 CSS px, which is 32 device px on a 2x display. In the SVG's own framing a
+hairline clears one device pixel from 64 / thinnest-stroke px up: 30px at opsz
+16, 34px at the default 18, 37px at 28. So 16 is the highest whole optical size
+whose hairline holds in a 2x tab: 17 measures 1.998, which clears a pixel only
+from 32.03px up. At 256px it is still plainly the wordmark's S, about 3% wider
+than the opsz 28 cut and a little lower in contrast.
+
+The outline is merged before it is written. A variable font keeps the S's two
+wedge serifs as overlaps inside its single contour. Nonzero fill paints those
+solid, and that is what a browser does with the SVG. `ImageDraw.polygon` fills
+even-odd, though, and there every overlap becomes a hole: a white sliver where
+each wedge meets its bowl, and a distance transform that reports a 0.05-unit
+"stroke". fontTools' `removeOverlaps` merges them the way a static instance
+would, and the result is one simple contour of 40 quadratic and line segments
+that fills identically under either rule. The recipe, for whoever redraws
+it: `instancer.instantiateVariableFont(font, {"wght": 500, "opsz": 16})`, then
+`removeOverlaps`, then draw "S" through a y-flipping `TransformPen` into a pen
+that writes only absolute M/L/Q/Z (`SVGPathPen` writes H and V, which
+`flatten` refuses), with every coordinate rounded to two decimals.
+
 **Why three tiers per icon, and why the plated ones differ.**
 
-Fraunces Medium Italic at opsz 46 is a display cut. Its thinnest stroke is
-1.904 units on the 64 canvas, so below roughly 34px that hairline falls under
-one device pixel and renders as a grey ghost — which is why the icon this
-replaced decoded to five ink pixels at 16x16. The same fact is recorded in
-`build_display_fonts.py`, where Fraunces is pinned to opsz 9 for the eink panel.
+The S's thinnest stroke is 2.118 units on the 64 canvas, across the top of the
+upper bowl. That is sturdier than the Fraunces opsz 46 cut it replaced, whose
+1.904 is why the icon before this generator decoded to five ink pixels at
+16x16. The same Fraunces fact is recorded in `build_display_fonts.py`, where
+Fraunces is pinned to opsz 9 for the eink panel. Newsreader's hairline still
+drops under one device pixel below roughly 20px at the plated scale, where it
+renders as a grey ghost.
 
 The fix is a uniform outward offset, and `solve_offset` sizes it per tier so the
 thinnest stroke lands just over one device pixel at the SMALLEST size in that
@@ -55,9 +106,13 @@ tier. It is solved rather than tabulated because it depends on the mark's
 scale, and the plated icons cannot use the same scale as the bare one: a plate
 needs a margin, so its mark is smaller, so its strokes need a heavier offset to
 survive — which in turn eats the interior apertures and the gap between letter
-and period. `MARK_SCALE_PLATED = 5.4` is the tightest value where all four
+and period. `MARK_SCALE_PLATED = 6.1` is the tightest value where all four
 floors still hold; below it the letter and its period start to merge at 16px,
-and that failure is silent.
+and that failure is silent. At 6.05 the 16px gap is 1.49px against a floor of
+1.50. It is larger than the 5.4 the Fraunces mark held at because the period is
+now the font's own. It is 6.4 units across where the old favicon drew an
+enlarged 9.0, and it stands 4.27 from the S where that one stood 5.15 off, so
+the gap binds sooner.
 
 **Why the corners are rounded, at 12%.**
 
@@ -117,10 +172,17 @@ INK = (0x1A, 0x18, 0x14)      # the favicon's own letter
 # path. This is the centre of S-UNION-PERIOD, not of the S: the favicon sits the
 # S left of centre to make room for the period, and centring on the S alone
 # would undo that.
-MARK_CENTRE = (31.998, 30.940)
+MARK_CENTRE = (32.005, 29.905)
 
-MARK_SCALE_BARE = 6.4     # 87.5% of the canvas — no plate, so no margin needed
-MARK_SCALE_PLATED = 5.4   # 73.8%, leaving a 13% plate margin. See the docstring.
+# The mark's larger side in the same space, which is what the percentages below
+# are of. It is the height, and it is the S's alone: Newsreader's period sits on
+# the baseline inside the S's own extent, so the pair is 33.050 tall and only
+# 30.210 wide. (The Fraunces pair was square, 35.004 by 35.120, because its
+# enlarged period hung below the S.)
+MARK_EXTENT = 33.050
+
+MARK_SCALE_BARE = 6.78    # 87.5% of the canvas — no plate, so no margin needed
+MARK_SCALE_PLATED = 6.1   # 78.8%, leaving a 10.6% plate margin. See the docstring.
 RADIUS_PCT = 12.0
 
 # (file, plate, letter, period, mark scale). plate=None means no plate.
@@ -155,11 +217,14 @@ TIERS = (
     ("C", (20, 16), 1.05),
 )
 
-# Source measurements in 64-unit space, from the flattened path: thinnest stroke
-# and narrowest interior aperture by exact distance transform, gap by the nearest
-# S point to the period's centre.
-THIN_U, APERTURE_U, GAP_U = 1.904, 7.870, 5.153
-PERIOD_U = 9.0   # the period's diameter, r=4.5
+# Source measurements in 64-unit space, from the flattened path. Thinnest stroke
+# by exact distance transform: the narrowest interior point of the medial axis,
+# across the top of the upper bowl. Narrowest interior aperture as the shortest
+# chord across a counter's mouth: the upper one, from the foot of the wedge
+# serif to the spine. Gap as the distance from the period's centre to the
+# nearest S point, less the radius.
+THIN_U, APERTURE_U, GAP_U = 2.118, 6.579, 4.273
+PERIOD_U = 6.4   # the period's diameter, r=3.2: Newsreader's own, not enlarged
 
 FLOORS = {"thin": 1.00, "aperture": 2.00, "period": 3.00, "gap": 1.50}
 
@@ -256,10 +321,12 @@ def square_period(scale: float) -> float:
     """Side of the hard-cornered period used below 24px, in canvas units.
 
     Sized so its reach along the S-to-period separation axis (unit vector
-    -0.9350, -0.3546) matches the disc's, which is what preserves the gap: a
-    square merely inscribed in the disc's bounding box would eat it.
+    -0.9141, -0.4056) matches the disc's, which is what preserves the gap: a
+    square merely inscribed in the disc's bounding box would eat it. The factor
+    is that vector's larger component, because a ray along it leaves an
+    axis-aligned square through a side, at half the side over that component.
     """
-    return 0.9375 * PERIOD_U * scale
+    return 0.9141 * PERIOD_U * scale
 
 
 def floors(scale: float, offset: float, size: int, *, squared: bool) -> dict[str, float]:
@@ -528,7 +595,7 @@ def main() -> None:
     bad = 0
     for name, stem, plate, letter, dot, scale in VARIANTS:
         report, path = build_variant(s_path, period, name, plate, letter, dot, scale)
-        fill = 35.004 * scale / CANVAS * 100
+        fill = MARK_EXTENT * scale / CANVAS * 100
         print(f"{os.path.relpath(path, ROOT)}  {len(STAGED[path]) / 1024:.1f} KB, "
               f"{len(report)} entries, mark {fill:.1f}% of canvas")
         print(f"  {'size':>5} {'tier':>4} {'thin':>7} {'aperture':>9} {'period':>7} {'gap':>7}")

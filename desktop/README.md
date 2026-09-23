@@ -251,6 +251,11 @@ floors, so the art cannot drift between them. CI never runs it; the binaries are
 committed, and what CI does instead is assert they are correct
 (`AppIconTests.cs` and `LinuxIconTests.cs`).
 
+The monogram is the wordmark's S and its period: Newsreader Medium Italic at
+optical size 16, outlined, with the period where the font's own spacing puts
+it. The generator's docstring records how it was outlined and why 16 rather
+than the 28 the wordmark renders at.
+
 Linux takes seven sizes where Windows takes fifteen, and the eight that do not
 come along are all workarounds for Win32 lookup rules — a byte-wide width field
 that cannot encode 256, three request bands to satisfy at once — that an icon
@@ -370,12 +375,13 @@ to force it is to unrealize the window — which would destroy the WebKitGTK
 surface the app is running on.
 
 **Fifteen sizes, and three of them are drawn differently.** Windows asks for 14
-distinct sizes across its three request bands, and Fraunces' hairlines go
-sub-pixel below about 34px — so 16, 20 and 24 are not downscales of the 256, and
-below 24 the period becomes a whole-pixel square. The generator prints the four
-floors (stroke, aperture, period, the gap between letter and period) at every
-size and refuses to write a file that misses one. The Linux rasters are held to
-the same floors by the same call, at the seven sizes hicolor names.
+distinct sizes across its three request bands, and the S's hairline goes
+sub-pixel below about 20px at the icon's scale — so 16 and 20, and 24 on the
+plated icons, are not downscales of the 256, and below 24 the period becomes a
+whole-pixel square. The generator prints the four floors (stroke, aperture,
+period, the gap between letter and period) at every size and refuses to write a
+file that misses one. The Linux rasters are held to the same floors by the same
+call, at the seven sizes hicolor names.
 
 ## Tests
 
