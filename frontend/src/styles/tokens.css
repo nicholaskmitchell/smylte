@@ -299,15 +299,22 @@
      rows of it read small, light and loose. Rather than move a size token, the
      sans is x-height-normalised: `font-size-adjust` renders it with an x-height
      of 0.516em of the declared size, 4.7% up on Hanken's own, which leaves
-     every size and line-height (both computed from font-size, which the adjust
-     does not touch) where it was. Content text then takes 460 and 14–15px of
-     it tightens by 0.006em; supporting UI text takes 450. Controls keep 500.
+     every size and every numeric line-height (both computed from font-size,
+     which the adjust does not touch) where it was. Content text then takes 460
+     and 14–15px of it tightens by 0.006em; supporting UI text takes 450.
 
-     Only the sans is adjusted. The property is INHERITED, and an adjust tuned
-     for Hanken would shrink Newsreader and JetBrains Mono, so every rule that
-     sets a family sets the adjust that goes with it: `var(--sans-adjust)`
-     beside the sans, `none` beside the serif and the mono (design-tokens.test.ts
-     holds that pairing across the stylesheets). */
+     Only the sans TEXT is adjusted. The control face keeps the sizes T6–T7 set
+     for Hanken itself, and controls keep 500: buttons, tabs, chips, segments
+     and form fields are not adjusted. They also sit on the user agent's
+     `line-height: normal`, which IS drawn from the adjusted size, so adjusting
+     them grew every field and glyph button by a pixel.
+
+     The property is INHERITED, and an adjust tuned for Hanken would shrink
+     Newsreader and JetBrains Mono, so every rule that sets a family sets the
+     adjust that goes with it: `var(--sans-adjust)` beside the sans and the
+     note face, `none` beside the serif, the mono, the glyph face and the
+     control face (design-tokens.test.ts holds that pairing across the
+     stylesheets). */
   --sans-adjust: ex-height 0.516;
   --wght-ui: 450;              /* body UI text: notes, event titles, inputs, descriptions, empty states */
   --wght-content: 460;         /* task titles, collection names */
@@ -449,18 +456,18 @@ body {
    The fix is to say nothing and let each platform render text the way its owner
    configured it, which is what `auto` means and what every other declaration in
    this file already assumes. */
-/* T9 · `font-size-adjust` is inherited, but not into a form control: the user
-   agent sets the `font` shorthand on each, and that resets the adjust along
-   with the rest. Measured in Chromium: under an adjusted <body>, a <button>,
-   <input>, <select> and <textarea> all computed `none`, which would leave every
-   control and every field in unadjusted Hanken beside adjusted text of the
-   same size. So each takes its parent's, the way it already takes the family. */
-button { font-family: inherit; font-size-adjust: inherit; color: inherit; }
+/* T9 · a form control takes the family but not the adjust: the user agent sets
+   the `font` shorthand on a <button>, <input>, <select> and <textarea>, which
+   resets `font-size-adjust` to none, and that is what the control face wants
+   (see --sans-adjust). A button that carries TEXT rather than a control label
+   (the Parked pane's title, the link-like buttons) takes `font: inherit` and
+   with it the adjust and a numeric line-height. */
+button { font-family: inherit; color: inherit; }
 /* touch-action: no 300ms double-tap-zoom delay on interactive bits */
 button, input, select, label { touch-action: manipulation; }
-input, select, textarea { font-family: inherit; font-size-adjust: inherit; }
-/* …and the reverse for the elements the user agent sets in a monospace, which
-   do inherit the adjust (they take the family, not the shorthand). The
+input, select, textarea { font-family: inherit; }
+/* The elements the user agent sets in a monospace inherit the adjust (they
+   take the family, not the shorthand), so they put it back. The
    attribute selectors are a backstop for a family written inline; no component
    does that today, and a rule that sets the serif or the mono pairs it with
    `font-size-adjust: none` itself. */
@@ -517,7 +524,7 @@ input, select, textarea { font-family: inherit; font-size-adjust: inherit; }
    several rules below already use for positioning and would be clobbered. */
 .btn {
   background: var(--fg); color: var(--bg); border: 1px solid transparent; border-radius: var(--r-sm);
-  font-family: var(--font-control); font-size-adjust: var(--sans-adjust); font-size: calc(var(--fs-control) * var(--fs-scale)); font-weight: 500; text-transform: var(--label-case);
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control) * var(--fs-scale)); font-weight: 500; text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); line-height: var(--lh-control);
   padding: var(--btn-pad); min-height: var(--control-h); cursor: pointer;
   transition: background var(--dur) var(--ease), color var(--dur-fast) var(--ease),
@@ -564,7 +571,7 @@ input, select, textarea { font-family: inherit; font-size-adjust: inherit; }
 .input {
   background: var(--bg); color: var(--fg); border: 1px solid var(--rule); border-radius: var(--r-sm);
   padding: var(--input-pad); min-height: var(--control-h); font-size: calc(14px * var(--fs-scale)); width: 100%;
-  font-weight: var(--wght-ui);   /* T9 · the value, and the placeholder, which inherits it */
+  font-weight: var(--wght-ui);   /* T9 · the value, and the placeholder, which inherits it; not adjusted (see button {}) */
   transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur) var(--ease);
 }
 .input:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
@@ -576,7 +583,7 @@ select.input { appearance: none; -webkit-appearance: none; cursor: pointer; }
 /* A chip is a --paper pill with no border, in the control face (C, T7). */
 .chip {
   display: inline-flex; align-items: center; gap: 4px;
-  font-family: var(--font-control); font-size-adjust: var(--sans-adjust); font-weight: var(--wght-control);
+  font-family: var(--font-control); font-size-adjust: none; font-weight: var(--wght-control);
   font-size: calc(var(--fs-chip) * var(--fs-scale)); letter-spacing: calc(0.04em * var(--tracking));
   color: var(--fg-muted); border: 1px solid var(--chip-edge); padding: var(--chip-pad);
   border-radius: var(--r-pill);
