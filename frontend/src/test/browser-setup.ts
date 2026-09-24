@@ -40,6 +40,7 @@ afterEach(() => {
   const root = document.documentElement
   delete root.dataset.theme
   delete root.dataset.preset
+  delete root.dataset.sans
   root.removeAttribute('style')
   try { localStorage.clear() } catch { /* private mode */ }
 })

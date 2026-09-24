@@ -218,15 +218,19 @@ describe('T9 · the sans is fitted, and only the sans', () => {
     expect(rule('input, select, textarea')).not.toMatch(/font-size-adjust/)
   })
 
-  it('gives Workspace the neutral values Classic restates', () => {
-    // T9 is a fit for Hanken Grotesk, and Workspace sets the system face in
-    // all three slots. Its preset block is the 23 Appearance tokens and only
-    // those, so the neutral values are a second block of the same selector.
+  it('gives Workspace, and a theme in another sans, the neutral values Classic restates', () => {
+    // T9 is a fit for Hanken Grotesk. Workspace sets the system face in all
+    // three slots, and a saved theme can set any sans (appearance.ts marks it
+    // `data-sans="other"`). Workspace's preset block is the 23 Appearance
+    // tokens and only those, so the neutral values are a second block, which
+    // the saved themes share.
     const T9 = ['--sans-adjust', '--wght-ui', '--wght-content', '--ls-content']
     const values = (body: string) => Object.fromEntries(
       [...body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].filter((d) => T9.includes(d[1])).map((d) => [d[1], d[2].trim()]))
-    const workspace = [...tokensCss.matchAll(/:root\[data-preset="workspace"\]\s*\{([^}]*)\}/g)]
-      .map((m) => values(m[1])).find((v) => Object.keys(v).length > 0)
+    const neutral = [...tokensCss.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+      .filter((m) => m[1].includes(':root[data-preset="workspace"]') && m[1].includes(':root[data-sans="other"]'))
+    expect(neutral, 'one block holds both selectors').toHaveLength(1)
+    const workspace = values(neutral[0][2])
     const classic = values(/:root\[data-preset="classic"\]\s*\{([^}]*)\}/.exec(classicCss)![1])
     expect(Object.keys(classic).sort()).toEqual([...T9].sort())
     expect(workspace).toEqual(classic)
