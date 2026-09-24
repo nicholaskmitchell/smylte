@@ -161,28 +161,39 @@ describe('T9 · the sans is fitted, and only the sans', () => {
         adjust: /font-size-adjust\s*:\s*([^;]+?)\s*(;|$)/.exec(m[2])?.[1],
       }))
 
-  // The sans, and the two tokens that ARE the sans in this design (they are
-  // the mono under Classic, whose --sans-adjust is `none`, so the pairing
-  // holds in both). The glyph face is the mono here and the sans under
-  // Classic, and needs no adjust in either.
+  // The sans TEXT is adjusted: the sans, and the note face, which is the sans
+  // here and the mono under Classic (whose --sans-adjust is `none`, so the
+  // pairing holds in both). The CONTROL face is not: it keeps the sizes T6–T7
+  // set for Hanken, and a control sits on the user agent's `line-height:
+  // normal`, which an adjust would grow. The glyph face is the mono here and
+  // the sans under Classic, and needs no adjust in either.
   const APP: Record<string, string> = {
     'var(--sans)': 'var(--sans-adjust)',
-    'var(--font-control)': 'var(--sans-adjust)',
     'var(--font-note)': 'var(--sans-adjust)',
+    'var(--font-control)': 'none',
     'var(--serif)': 'none',
     'var(--mono)': 'none',
     'var(--font-glyph)': 'none',
-    inherit: 'inherit',
   }
+  // Controls that name the sans itself rather than the control face, and so
+  // are unadjusted for the control face's reason.
+  const SANS_CONTROLS = new Set(['.set-sheet .set-nav-item'])
+  // `inherit` is the form controls' own rule, which takes the family and
+  // leaves the adjust to the user agent (see the next test), so it pairs with
+  // nothing.
+  const expected = (f: { rule: string, family: string }) =>
+    SANS_CONTROLS.has(f.rule) ? 'none' : f.family === 'inherit' ? undefined : APP[f.family]
 
   it.each([['tokens.css', tokensCss, 5], ['app.css', appCss, 80]] as const)(
     'pairs every family in %s with its adjust', (_, css, floor) => {
       const found = families(css)
       expect(found.length, 'vacuity: the families were found').toBeGreaterThanOrEqual(floor)
       const bad = found
-        .filter((f) => f.adjust !== APP[f.family])
+        .filter((f) => f.adjust !== expected(f))
         .map((f) => `${f.rule}: ${f.family} with ${f.adjust ?? 'no adjust'}`)
       expect(bad).toEqual([])
+      expect(found.filter((f) => SANS_CONTROLS.has(f.rule)).length, 'vacuity: the sans controls are there')
+        .toBe(css === appCss ? SANS_CONTROLS.size : 0)
     })
 
   it('leaves the display unadjusted, every face of it', () => {
@@ -193,17 +204,18 @@ describe('T9 · the sans is fitted, and only the sans', () => {
     expect(found.filter((f) => f.adjust !== 'none').map((f) => f.rule)).toEqual([])
   })
 
-  it('sets the adjust on <body>, and hands it back to the form controls', () => {
-    // The user agent's `font` shorthand on a control resets the adjust, so
-    // they inherit it explicitly, as they already did the family.
+  it('sets the adjust on <body>, and leaves the form controls to the user agent', () => {
+    // The user agent's `font` shorthand on a control resets the adjust to
+    // none, which is what the control face wants; a rule that handed it back
+    // would grow every field and glyph button by a pixel of `normal` line.
     const rule = (sel: string) => {
       const m = new RegExp(`(^|\\n)${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`).exec(tokensCss)
       if (!m) throw new Error(`no ${sel} rule`)
       return m[2]
     }
     expect(rule('body')).toMatch(/font-size-adjust:\s*var\(--sans-adjust\)/)
-    expect(rule('button')).toMatch(/font-size-adjust:\s*inherit/)
-    expect(rule('input, select, textarea')).toMatch(/font-size-adjust:\s*inherit/)
+    expect(rule('button')).not.toMatch(/font-size-adjust/)
+    expect(rule('input, select, textarea')).not.toMatch(/font-size-adjust/)
   })
 
   it('gives Workspace the neutral values Classic restates', () => {

@@ -168,7 +168,8 @@ describe('T9 · Hanken Grotesk, fitted to dense rows', () => {
   // renders it at a 0.516em x-height of the size it is declared at, so every
   // size token and every line-height (both computed from font-size) is where
   // it was. Content text takes 460 and 14–15px of it tightens; UI text takes
-  // 450; controls keep 500. The serif and the mono are never adjusted.
+  // 450. Controls keep 500 and are not adjusted: the control face was sized
+  // for Hanken in T7. The serif and the mono are never adjusted.
   const ROWS = `
     <div class="shell">
       <header class="topbar"><span class="brand">Smylte<span class="dot">.</span></span>
@@ -199,16 +200,18 @@ describe('T9 · Hanken Grotesk, fitted to dense rows', () => {
       </div>
     </div>`
 
-  const SANS = ['.task-title', '.side-item .name', '.btn', '.tab', '.input', '.chip', '.empty', '.hintline', '.cal-ev bdi']
+  const SANS = ['.task-title', '.side-item .name', '.empty', '.hintline', '.cal-ev bdi']
+  const CONTROLS = ['.btn', '.tab', '.input', '.chip']
   const serifOrMono = () => [...document.querySelectorAll('*')]
     .filter((e) => /Newsreader|JetBrains/.test(getComputedStyle(e).fontFamily))
   const weight = (host: HTMLElement, sel: string, pseudo?: string) => cs(host, sel, pseudo).fontWeight
   const tracking = (host: HTMLElement, sel: string) => parseFloat(cs(host, sel).letterSpacing) || 0
 
-  it('adjusts the sans, every control included, and never the serif or the mono', async () => {
+  it('adjusts the sans text, and never a control, the serif or the mono', async () => {
     await viewport(1200)
     const host = await mount(ROWS)
     for (const sel of SANS) expect(cs(host, sel).fontSizeAdjust, sel).toMatch(/0\.516/)
+    for (const sel of CONTROLS) expect(cs(host, sel).fontSizeAdjust, sel).toBe('none')
     // The check the brief asks for, over the whole document: nothing set in
     // Newsreader or JetBrains Mono carries an adjust.
     const faces = serifOrMono()
@@ -236,6 +239,22 @@ describe('T9 · Hanken Grotesk, fitted to dense rows', () => {
     expect(Math.abs(x('raw') - 15 * 0.493), `unadjusted, ${x('raw').toFixed(3)}px`).toBeLessThan(0.05)
   })
 
+  it('leaves a field and a glyph button the height they were', async () => {
+    // Both sit on the user agent's `line-height: normal`, which is drawn from
+    // the size the face is DRAWN at, so an adjusted control grew a pixel (the
+    // settings gear, 37px to 38px in WebKit). Compared against the same markup
+    // with the adjust switched off on <html>.
+    await viewport(390)
+    const host = await mount(`<div>
+      <input class="input" value="Plan a trip" /><textarea class="input" rows="3">Notes</textarea>
+      <button class="icon-btn" aria-label="Settings">&#9881;</button><button class="icon-btn">&#8249;</button></div>`)
+    const heights = () => [...host.querySelectorAll('input, textarea, button')]
+      .map((e) => e.getBoundingClientRect().height)
+    const fitted = heights()
+    document.documentElement.style.setProperty('--sans-adjust', 'none')
+    expect(fitted).toEqual(heights())
+  })
+
   it('sets content at 460, tightened; UI text at 450; controls at 500', async () => {
     await viewport(1200)
     const host = await mount(ROWS)
@@ -258,7 +277,7 @@ describe('T9 · Hanken Grotesk, fitted to dense rows', () => {
     await viewport(1200)
     document.documentElement.dataset.preset = preset
     const host = await mount(ROWS)
-    for (const sel of SANS) expect(cs(host, sel).fontSizeAdjust, sel).toBe('none')
+    for (const sel of [...SANS, ...CONTROLS]) expect(cs(host, sel).fontSizeAdjust, sel).toBe('none')
     for (const sel of ['.task-title', '.side-item:not(.all-row) .name', '.input', '.empty', '.hintline', '.cal-ev bdi']) {
       expect(weight(host, sel), sel).toBe('400')
       expect(tracking(host, sel), sel).toBe(0)

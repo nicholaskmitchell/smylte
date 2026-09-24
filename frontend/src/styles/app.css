@@ -28,7 +28,7 @@
 .tabs { display: flex; gap: 2px; }
 .tab {
   background: none; border: 0; border-bottom: 2px solid transparent;
-  font-family: var(--font-control); font-size-adjust: var(--sans-adjust); font-size: calc(var(--fs-control) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control) * var(--fs-scale));
   font-weight: var(--wght-control); line-height: var(--lh-control); text-transform: var(--label-case);
   letter-spacing: calc(0.08em * var(--tracking)); color: var(--fg-muted); padding: 6px 10px 8px; cursor: pointer;
   transition: color var(--dur-fast) var(--ease), border-color var(--dur) var(--ease);
@@ -69,7 +69,7 @@
   border-right: 1px solid var(--rule); padding-right: 8px;
 }
 .set-nav-item {
-  font-family: var(--font-control); font-size-adjust: var(--sans-adjust); font-size: calc(var(--fs-control-compact) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control-compact) * var(--fs-scale));
   font-weight: var(--wght-control); line-height: var(--lh-control);
   text-transform: var(--label-case); letter-spacing: calc(0.07em * var(--tracking));
   background: none; border: 0; border-left: 2px solid transparent; color: var(--fg-muted);
@@ -117,7 +117,7 @@
    control like any other (T7): the control face, a soft corner, a --paper
    fill under the pointer. There is no switch component to turn it into. */
 .menu-toggle {
-  font-family: var(--font-control); font-size-adjust: var(--sans-adjust); font-size: calc(var(--fs-control) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control) * var(--fs-scale));
   font-weight: var(--wght-control); line-height: var(--lh-control);
   text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking));
   background: none; color: var(--fg-muted); border: 1px solid var(--rule); border-radius: var(--r-sm);
@@ -131,8 +131,8 @@
 button.menu-toggle:active { scale: var(--press-scale); }
 .hintline { font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); line-height: 1.4;
   font-weight: var(--wght-ui); }   /* T9 · a row's description */
-/* …which a figure inside it does not take: the mono keeps its 400. */
-.hintline .mono { font-weight: 400; }
+/* …which a figure inside a description does not take: the mono keeps its 400. */
+.hintline .mono, .plan-hint .mono { font-weight: 400; }
 .menu-actions { display: flex; justify-content: flex-end; margin-top: 2px; }
 
 /* ---- work area ---- */
@@ -206,7 +206,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .side-completed {
   display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%;
   padding: 10px 12px; border: 0; border-top: 1px solid var(--rule); background: none;
-  cursor: pointer; font-family: var(--font-control); font-size-adjust: var(--sans-adjust); font-size: calc(var(--fs-control-compact) * var(--fs-scale));
+  cursor: pointer; font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control-compact) * var(--fs-scale));
   font-weight: var(--wght-control); line-height: var(--lh-control); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); color: var(--fg-muted);
   transition: color var(--dur-fast) var(--ease), background var(--dur) var(--ease);
@@ -288,7 +288,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
   font-size: calc(12px * var(--fs-scale)); line-height: 1; padding: 0 3px;
 }
 .group-btn:hover { color: var(--accent); }
-.group-btn.danger { color: var(--warn); font-family: var(--font-control); font-size-adjust: var(--sans-adjust); font-size: calc(var(--fs-control-sm) * var(--fs-scale));
+.group-btn.danger { color: var(--warn); font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control-sm) * var(--fs-scale));
   font-weight: var(--wght-control); }
 .group-empty {
   padding: 3px 16px 6px 34px; font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); font-style: italic;
@@ -304,7 +304,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .cal-tasks-done {
   display: block; width: 100%; text-align: left; background: none; border: 0;
   padding: 6px 16px 10px 34px; cursor: pointer;
-  font-family: var(--font-control); font-size-adjust: var(--sans-adjust); font-size: calc(var(--fs-control-sm) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control-sm) * var(--fs-scale));
   font-weight: var(--wght-control); line-height: var(--lh-control);
   text-transform: var(--label-case); letter-spacing: calc(0.1em * var(--tracking));
   color: var(--fg-faint); transition: color var(--dur-fast) var(--ease);
@@ -498,7 +498,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .task-actions { display: flex; gap: 4px; opacity: 0; transition: opacity var(--dur-fast) var(--ease); }
 .task:hover .task-actions { opacity: 1; }
 .task-actions button { background: none; border: 0; color: var(--fg-faint); cursor: pointer;
-  font-family: var(--font-control); font-size-adjust: var(--sans-adjust); font-size: calc(var(--fs-control-compact) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control-compact) * var(--fs-scale));
   font-weight: var(--wght-control); padding: 2px 4px; }
 .task-actions button:hover { color: var(--accent); }
 .task-actions button.danger:hover { color: var(--warn); }
@@ -570,7 +570,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
    inverted buttons in classic.css. */
 .view-tab {
   background: none; border: 1px solid var(--rule); border-radius: var(--r-sm); cursor: pointer;
-  font-family: var(--font-control); font-size-adjust: var(--sans-adjust); font-size: calc(var(--fs-control-sm) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control-sm) * var(--fs-scale));
   font-weight: var(--wght-control); line-height: var(--lh-control); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); color: var(--fg-muted); padding: 5px 9px;
   transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
@@ -687,7 +687,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .day-card.done .day-card-title { color: var(--fg-faint); text-decoration: line-through; }
 .col-add {
   background: none; border: 1px dashed var(--rule); border-radius: var(--r-sm); color: var(--fg-faint); cursor: pointer;
-  font-family: var(--font-control); font-size-adjust: var(--sans-adjust); font-size: calc(var(--fs-control-sm) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control-sm) * var(--fs-scale));
   font-weight: var(--wght-control); line-height: var(--lh-control); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); padding: 6px; margin-top: 2px;
   transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
@@ -806,7 +806,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 
 .cal-more {
   background: none; border: 0; padding: 0 5px; text-align: left; cursor: pointer;
-  font-family: var(--font-control); font-size-adjust: var(--sans-adjust); font-size: calc(var(--fs-control-sm) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control-sm) * var(--fs-scale));
   font-weight: var(--wght-control); line-height: var(--lh-control); color: var(--fg-faint);
 }
 .cal-more:hover { color: var(--accent); }
@@ -1083,7 +1083,8 @@ button.menu-toggle:active { scale: var(--press-scale); }
   }
   /* Full-width rows with a chevron — a list you tap, not a tab you pick. */
   .set-sheet .set-nav-item {
-    font-family: var(--sans); font-size-adjust: var(--sans-adjust); font-size: calc(15px * var(--fs-scale)); font-weight: 400;
+    /* A control set in the sans: unadjusted, like the control face (T9). */
+    font-family: var(--sans); font-size-adjust: none; font-size: calc(15px * var(--fs-scale)); font-weight: 400;
     text-transform: none; letter-spacing: 0; color: var(--fg);
     border-left: 0; border-bottom: 1px solid color-mix(in oklab, var(--rule) 55%, transparent);
     padding: 14px 4px; display: flex; align-items: center; justify-content: space-between;
@@ -1454,7 +1455,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
    signature. Shared with the bulk composer's row-adder. */
 .sched-add-range, .bulk-add-row {
   background: none; border: 1px dashed var(--rule); border-radius: var(--r-sm); color: var(--fg-faint); cursor: pointer;
-  font-family: var(--font-control); font-size-adjust: var(--sans-adjust); font-size: calc(var(--fs-control-sm) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control-sm) * var(--fs-scale));
   font-weight: var(--wght-control); line-height: var(--lh-control); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); padding: 5px 8px;
   transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
@@ -2771,7 +2772,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .today-more {
   display: block; background: none; border: 0; cursor: pointer; text-align: left;
   padding: 6px var(--gutter);
-  font-family: var(--font-control); font-size-adjust: var(--sans-adjust); font-size: calc(var(--fs-control-compact) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control-compact) * var(--fs-scale));
   font-weight: var(--wght-control); line-height: var(--lh-control);
   color: var(--fg-faint); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); transition: color var(--dur-fast) var(--ease);
@@ -3119,7 +3120,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
   background: none; border: 0; border-radius: var(--r-menu-item); cursor: pointer;
   display: flex; align-items: center; gap: 7px;
   padding: 9px 11px; min-height: 44px; text-align: left; white-space: nowrap;
-  font-family: var(--font-control); font-size-adjust: var(--sans-adjust); font-size: calc(var(--fs-control) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control) * var(--fs-scale));
   line-height: var(--lh-control);
   text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking));
   color: var(--fg-muted);
