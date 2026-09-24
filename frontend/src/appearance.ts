@@ -581,15 +581,38 @@ export function isSharedToken(token: string): boolean {
   return token in SHARED_DEFAULTS
 }
 
+/** The face T9 fits to dense rows (tokens.css, `--sans-adjust` and the two
+ *  weights). Its numbers were measured on this face, so a theme set in another
+ *  runs with T9's neutral values. index.html's pre-paint script restates it. */
+export const FITTED_SANS = 'Hanken Grotesk'
+
+/** Does a `--sans` stack lead with the fitted face? No stack means the shipped
+ *  one, which does. Only the first family counts: the rest is fallback. */
+export function fitsSans(stack: string | undefined): boolean {
+  if (!stack) return true
+  const first = /^\s*(?:"([^"]*)"|'([^']*)'|([^,]*))/.exec(stack)
+  const name = (first?.[1] ?? first?.[2] ?? first?.[3] ?? '').trim()
+  return name.toLowerCase() === FITTED_SANS.toLowerCase()
+}
+
 /**
  * Write `tokens` onto `el` as inline custom properties, clearing any previously
  * applied override first. Passing `{}` restores the shipped theme exactly.
+ *
+ * Also marks a theme set in a sans other than the fitted face with
+ * `data-sans="other"`, which gives it T9's neutral values (tokens.css). An
+ * attribute rather than four more inline properties, so the values live in the
+ * stylesheet beside Classic's and Workspace's, and the 23-token allowlist stays
+ * the 23 a person can edit.
  */
 export function applyTokens(el: HTMLElement, tokens: ThemeTokens): void {
   for (const name of TOKEN_NAMES) el.style.removeProperty(name)
-  for (const [name, value] of Object.entries(sanitizeTokens(tokens))) {
+  const clean = sanitizeTokens(tokens)
+  for (const [name, value] of Object.entries(clean)) {
     el.style.setProperty(name, value)
   }
+  if (fitsSans(clean['--sans'])) delete el.dataset.sans
+  else el.dataset.sans = 'other'
 }
 
 const hexCache = new Map<string, string>()

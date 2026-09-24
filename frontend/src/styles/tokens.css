@@ -398,8 +398,16 @@
    the adjust. So Workspace takes the neutral values, the ones Classic's lever
    block restates, and renders as it did before T9. A block of its own, after
    the preset's: that block holds exactly the 23 Appearance tokens, and
-   appearance.ts mirrors it. */
-:root[data-preset="workspace"] {
+   appearance.ts mirrors it.
+
+   The same goes for a saved theme set in another sans, which runs on this
+   design's levers rather than a preset's. The adjust would draw Inter (a fork
+   of Classic) 5.4% smaller, and a face the editor loads from Google at 400,
+   500 and 600 only would draw 450 and 460 as its 500. `applyTokens`
+   (appearance.ts) and the pre-paint script in index.html mark such a theme
+   with `data-sans="other"`. */
+:root[data-preset="workspace"],
+:root[data-sans="other"] {
   --sans-adjust: none;
   --wght-ui: 400;
   --wght-content: 400;

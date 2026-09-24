@@ -273,9 +273,16 @@ describe('T9 · Hanken Grotesk, fitted to dense rows', () => {
     for (const sel of ['.btn', '.tab', '.chip']) expect(weight(host, sel), sel).toBe('500')
   })
 
-  it.each(['classic', 'workspace'])('leaves %s exactly as it was', async (preset) => {
+  it.each(['classic', 'workspace', 'a theme in another sans'])('leaves %s exactly as it was', async (which) => {
     await viewport(1200)
-    document.documentElement.dataset.preset = preset
+    // A saved theme is inline tokens, not a preset; applyTokens marks one set
+    // in a face other than Hanken Grotesk.
+    if (which.startsWith('a theme')) {
+      document.documentElement.style.setProperty('--sans', '"Inter", -apple-system, BlinkMacSystemFont, sans-serif')
+      document.documentElement.dataset.sans = 'other'
+    } else {
+      document.documentElement.dataset.preset = which
+    }
     const host = await mount(ROWS)
     for (const sel of [...SANS, ...CONTROLS]) expect(cs(host, sel).fontSizeAdjust, sel).toBe('none')
     for (const sel of ['.task-title', '.side-item:not(.all-row) .name', '.input', '.empty', '.hintline', '.cal-ev bdi']) {
