@@ -42,6 +42,10 @@
   --fs-note-step: 0px;
   --fvs-display: "opsz" 144;
   --wght-wordmark: 400;
+  --sans-adjust: none;
+  --wght-ui: 400;
+  --wght-content: 400;
+  --ls-content: 0;
 
   --control-h: 0px;
   --btn-pad: 9px 13px;
