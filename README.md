@@ -492,26 +492,42 @@ account.
 
 **Appearance.** Settings → Appearance opens a live editor over the design
 system: every color token (with a picker and a raw OKLCH/hex field), corner
-radius, text scale, gutter and row density, the serif / sans / mono families,
-and whether micro-labels are uppercase and how far they track. Save named
+radius (the base of a scale, so every rounded thing moves in proportion), text
+scale, gutter and row density, the serif / sans / mono families, and whether
+micro-labels are uppercase and how far they track. Save named
 themes, export and import them as JSON, reset a single token, one mode, or
 everything. A theme carries separate light and dark maps.
 
-Two designs ship. **Smylte** is the default and the editorial one — warm
-off-white, orange accent, Fraunces headlines, sharp corners, uppercase mono
-micro-labels. **Workspace** is the restrained alternative: neutral greys, a
-blue accent, one system sans in every type slot, 6px corners and sentence-case
-labels.
+Three designs ship. **Smylte** is the default and the editorial one: the
+N.K.M. system as refined in September 2026 — warm off-white, one orange accent,
+Newsreader for anything read, Hanken Grotesk for chrome and every control,
+JetBrains Mono for labels and figures. Straight on the page, soft at the hand:
+hairline rules and square grids, and on the things you touch a radius scale,
+soft shadows where they float, and eased motion. **Classic** is the design
+Smylte shipped before that refinement, kept whole rather than approximated —
+Fraunces headlines, Inter, sharp corners, uppercase mono on every label and
+control, hard shadows, no motion. **Workspace** is the restrained alternative:
+neutral greys, a blue accent, one system sans in every type slot, and
+sentence-case labels.
 
-**Neither shipped design is ever edited.** Customization is a sparse override
+The refinement changed no colour, so Classic's palette is the default's. What
+it restores beyond its tokens — mono controls, rules between list rows, the
+old shadows — lives in `styles/classic.css` as the pre-refinement value of
+each "lever" `app.css` reads, which is what keeps the cascade the one the old
+design had and Classic pixel-identical to it.
+
+**No shipped design is ever edited.** Customization is a sparse override
 layer written as inline custom properties on `<html>`, so `styles/tokens.css`
 stays the product's design and "Reset to Smylte" is simply dropping the
 overrides. A preset is not a stored theme either — it lives in `tokens.css`
 under `:root[data-preset=…]` and is selected by an attribute, which is what
 keeps it un-editable and lets a palette fix reach everyone on the next deploy.
-Editing while either is active forks a new theme rather than modifying it; a
-fork of a preset is seeded with that preset's values, so it starts out
-identical. Overrides are validated against a token allowlist on both sides of
+Editing while one is active forks a new theme rather than modifying it; a
+fork of a preset is seeded with that preset's values, so it starts out with
+the same tokens. For Workspace that is identical. For Classic it is not quite:
+a saved theme carries tokens only, so a fork of Classic keeps its faces, its
+square corners and its capitals and takes the current design's controls,
+shadows and motion — and the editor says so while Classic is selected. Overrides are validated against a token allowlist on both sides of
 the wire — the blob is re-read by a pre-paint script that writes straight into
 the CSSOM, so a `url()` beacon or a property break-out must never survive
 storage. `appearance.test.ts` asserts the defaults *and* the presets still
@@ -780,7 +796,8 @@ driver, which the example imports and this repo deliberately does not vendor, is
 GPL-3.0, so what runs on the board is a GPL-3.0 combined work either way. What
 MIT buys is lifting those sixty lines somewhere that driver is not.
 
-The three bundled typefaces are separate works and keep their own terms:
-Fraunces, Inter and JetBrains Mono are each under the SIL Open Font License 1.1,
-whose text ships beside them in `frontend/public/fonts/` and
-`backend/smylted/display/fonts/`.
+The bundled typefaces are separate works and keep their own terms. Newsreader,
+Hanken Grotesk and JetBrains Mono, and Classic's Fraunces and Inter, are each
+under the SIL Open Font License 1.1, whose text ships beside them in
+`frontend/public/fonts/`; the three the display renderer rasterizes carry it
+again in `backend/smylted/display/fonts/`.

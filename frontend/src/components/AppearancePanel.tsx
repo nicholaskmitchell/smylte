@@ -273,6 +273,10 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
               ? tr('appear.editingHint')
               : tr('appear.shippedHint')}
         </p>
+        {/* Classic is more than its 23 tokens — the rest is classic.css, keyed
+            on the preset attribute a fork does not carry — so a fork of it is
+            not a copy of it, and the panel says so before anyone finds out. */}
+        {active?.id === 'preset:classic' && <p className="hintline">{tr('appear.classicHint')}</p>}
 
         {/* ---- which mode am I editing ---- */}
         <div className="appear-modes" role="group" aria-label={tr('appear.editingMode')}>

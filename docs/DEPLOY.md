@@ -363,7 +363,7 @@ What it allows, and why:
 |---|---|
 | `script-src 'self' 'sha256-…'` | The hash is the SPA's inline pre-paint script (it applies your theme before first paint, so it cannot be a module). Derived from the served `dist/index.html` at startup — see the warning in §0. |
 | `style-src … 'unsafe-inline' fonts.googleapis.com` | Every calendar and list color is an inline style, and the MCP consent screen is a `<style>` block, so `'unsafe-inline'` is unavoidable. The Google host is there because 13 of the Appearance font choices load a stylesheet from it. |
-| `font-src 'self' fonts.gstatic.com` | Where that Google stylesheet then fetches its woff2. The shipped defaults (Fraunces/Inter/JetBrains Mono) are local and need neither host. |
+| `font-src 'self' fonts.gstatic.com` | Where that Google stylesheet then fetches its woff2. The shipped faces (Newsreader/Hanken Grotesk/JetBrains Mono, and the Classic preset's Fraunces/Inter) are local and need neither host. |
 
 Everything else is `'self'` or `'none'`. Note the privacy consequence of the two
 Google entries: picking one of those font families means every page load — the
