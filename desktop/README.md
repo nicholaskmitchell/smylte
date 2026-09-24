@@ -272,7 +272,8 @@ themes at once — 1.05:1 against the light one, 13.98:1 against the dark. A
 Win32 `.ico` holds exactly one image per size and has no light/dark variant
 mechanism, and burnt orange is the only brand colour that clears 3:1 on both —
 so the icon compiled into the exe is an accent plate, and it is rounded, which
-the editorial system's `border-radius: 0` otherwise forbids. Both are deliberate
+the square editorial system it was drawn for otherwise forbade (the 12% plate
+is the icon's own choice, not a step of the app's radius scale). Both are deliberate
 departures: that file is what Explorer, a pinned entry and a desktop shortcut
 get, and none of them can follow the theme.
 
@@ -374,10 +375,11 @@ on a window that is already on screen warns and does nothing, and the only way
 to force it is to unrealize the window — which would destroy the WebKitGTK
 surface the app is running on.
 
-**Fifteen sizes, and three of them are drawn differently.** Windows asks for 14
+**Fifteen sizes, and the small ones are drawn differently.** Windows asks for 14
 distinct sizes across its three request bands, and the S's hairline goes
-sub-pixel below about 20px at the icon's scale — so 16 and 20, and 24 on the
-plated icons, are not downscales of the 256, and below 24 the period becomes a
+sub-pixel below about 20px at the icon's scale — so 16 and 20 on every variant, and
+24–40 on the three plated ones, are drawn from stroke-offset masters rather
+than downscaled from the 256, and below 24 the period becomes a
 whole-pixel square. The generator prints the four floors (stroke, aperture,
 period, the gap between letter and period) at every size and refuses to write a
 file that misses one. The Linux rasters are held to the same floors by the same

@@ -1580,7 +1580,7 @@ describe('<TodayView> the week behind the day', () => {
   it('wears the same micro-label class the date and the count do', async () => {
     // A CLASS assertion in a suite that computes no layout, and it is the only
     // place this can be caught. `.content-sub` is what makes a header figure
-    // 11px mono in the label case; `.today-week` only colours it. The span
+    // --fs-meta mono in the label case; `.today-week` only colours it. The span
     // shipped as `today-week mono` alone, so it took the page's 15px body type
     // and this one figure read half again as large as the two facts either side
     // of it — and the browser fixtures in `layout.browser.test.tsx` had always

@@ -297,7 +297,8 @@ export const PRESETS: readonly CustomTheme[] = [
   {
     // The design before the September 2026 refinement. Its 23 tokens restore
     // the type, the square corners and the tracked caps; everything else it
-    // puts back (mono controls, hard shadows, rules between rows, no motion)
+    // puts back (mono controls, hard shadows, rules between rows, no presses or
+    // popover entrances)
     // is classic.css, keyed on the same `data-preset` attribute. That is also
     // why a FORK of Classic is not Classic: a saved theme carries these 23
     // tokens and nothing else, so it keeps the faces and the corners and takes
@@ -716,7 +717,8 @@ export function parseTheme(text: string, id: string,
 }
 
 // ── fonts ───────────────────────────────────────────────────────────────────
-// The three shipped families are self-hosted (styles/fonts.css). Anything else
+// The three shipped families, and Classic's Fraunces and Inter, are self-hosted
+// (styles/fonts.css). Anything else
 // is fetched from Google on first use rather than up front, so choosing a font
 // costs a request only for the person who chose it — and the default install
 // makes no third-party request at all.
@@ -724,7 +726,7 @@ export function parseTheme(text: string, id: string,
 export interface FontChoice {
   label: string
   stack: string
-  /** Google Fonts `family=` spec. Absent for system stacks, which need no request. */
+  /** Google Fonts `family=` spec. Absent for system stacks and self-hosted families, which need no request. */
   google?: string
 }
 

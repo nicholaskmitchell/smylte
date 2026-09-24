@@ -91,10 +91,11 @@ DISPLAY_CSS = os.path.normpath(
 # the same number or the bitmap and the page quietly draw different letterforms
 # — nothing would error, the panel would just stop matching the app. So `main`
 # reads the stylesheet's number and refuses to build if it differs, and
-# tests/test_displays.py asserts the same thing on every CI run. What neither
-# can see is a TTF that was never rebuilt after this number moved — that takes
-# fontTools, which CI does not install — so change it here, in display.css and
-# in the committed fonts together.
+# tests/test_displays.py asserts the same thing on every CI run. A TTF that was
+# never rebuilt after this number moved is caught there too, without fontTools:
+# Pillow pins the woff2 source to the same axes and the committed instance has
+# to set a line to the same advance. Change it here, in display.css and in the
+# committed fonts together.
 OPSZ = 12
 
 # (output name, subset prefix, axis pins). See the module docstring for why each

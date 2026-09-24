@@ -3,7 +3,8 @@
 // design-tokens.test.ts holds the lever arrangement as TEXT; this holds what it
 // is for, as computed style: the shipped design is the September 2026
 // refinement, and Classic is the design before it — not an approximation of it.
-// Each pin names the change it guards by the design system's CHANGES.md ID.
+// The pins for the IDs that apply here name the change they guard by the
+// design system's CHANGES.md ID; the ones about Classic name what they restore.
 import { afterEach, describe, expect, it } from 'vitest'
 import { mount, viewport } from './test/browser-measure'
 

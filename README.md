@@ -402,8 +402,9 @@ one design rather than two that agree about the content.
 
 Two type decisions are the eink constraint rather than taste, and both were
 measured against a thresholded render. On eink, Newsreader is pinned to
-**optical size 12**, below its own default of 18 — the one place the app pins an
-optical size at all. The default is the text cut, and its hairlines are
+**optical size 12**, below its own default of 18 — the one place the shipped design pins an
+optical size (Classic's focus clock keeps Fraunces pinned at 144, as it always
+did). The default is the text cut, and its hairlines are
 precisely what one bit deep destroys: at 18, "August 2026" loses the thins of
 its 2s and a small day number's 1 loses its flag and reads as an l ("10" came
 out "I0" on a 4.2" panel), while 12 keeps every stroke and sets at the width
@@ -506,7 +507,8 @@ hairline rules and square grids, and on the things you touch a radius scale,
 soft shadows where they float, and eased motion. **Classic** is the design
 Smylte shipped before that refinement, kept whole rather than approximated —
 Fraunces headlines, Inter, sharp corners, uppercase mono on every label and
-control, hard shadows, no motion. **Workspace** is the restrained alternative:
+control, hard shadows, no presses and no popover or modal entrances.
+**Workspace** is the restrained alternative:
 neutral greys, a blue accent, one system sans in every type slot, and
 sentence-case labels.
 

@@ -672,7 +672,7 @@ describe('2026-09-03 — the tab strip and the settings gear on a phone', () => 
     // Three assertions, not one number, and the number this replaced was wrong
     // twice over. It read `box(bar).h < 64`, raised from 56 to absorb an engine
     // divergence — and BOTH halves of the comment justifying it were false.
-    // The divergence is not `.brand`: Fraunces measures 19px in Chromium and in
+    // The divergence is not `.brand`: the serif wordmark measures the same in Chromium and in
     // WebKit alike. It is the GEAR — `.icon-btn` declares no `font-size`, so it
     // inherits each engine's UA button default (13.33px against 16px) and comes
     // out 32 against 36. And `min-height: 44px`, the regression the comment
@@ -685,7 +685,7 @@ describe('2026-09-03 — the tab strip and the settings gear on a phone', () => 
     // padding raised to 10px (59/63), `.topbar` mobile padding to 14px (61/65).
     //
     // So: say the box model instead. The bar IS its tallest control plus its own
-    // 20px of mobile padding and 1px border — 32+21=53 in Chromium, 36+21=57 in
+    // 20px of mobile padding and 1px border — 33+21=54 in Chromium under the shipped design (32+21=53 under Classic), 36+21=57 in
     // WebKit, exactly, which is why the relation needs no per-engine number.
     // Anything that grows the bar WITHOUT growing a control (the `.tabs`
     // padding/margin pair, the bar's own padding) breaks it in both engines.

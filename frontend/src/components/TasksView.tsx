@@ -9,7 +9,7 @@ import {
 import { fmtClock, fmtDue, inputLang } from '../time'
 import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
-import { useToday } from '../hooks'
+import { useSegmentThumb, useToday } from '../hooks'
 import { AddMultipleModal } from './AddMultipleModal'
 import { WasDue } from './WasDue'
 import { dateOut, TaskModal } from './TaskModal'
@@ -121,6 +121,9 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // One at a time. Both on would leave two headings and two counts describing
   // one list, and the pane below can only be one of them.
   const showCompletedPane = completedOnly && !parkedOnly
+  const viewTabsRef = useRef<HTMLDivElement>(null)
+  useSegmentThumb(viewTabsRef, Math.max(0, VIEWS.findIndex(([v]) => v === view)),
+    !completedOnly && !parkedOnly)
   // Multi-day views window from here: day3 starts on the anchor day itself,
   // week snaps to the anchor's Sunday (same week start as the calendar grid).
   const [anchor, setAnchor] = useState(() => new Date())
@@ -617,8 +620,10 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
             </div>
           )}
           {!completedOnly && !parkedOnly && (
-            // --n and --i place the sliding thumb under the active segment.
+            // --n and --i place the sliding thumb under the active segment;
+            // useSegmentThumb corrects it from the measured segment.
             <div className="view-tabs" role="tablist" aria-label={tr('tasks.viewTabs')}
+              ref={viewTabsRef}
               style={{
                 '--n': VIEWS.length,
                 '--i': Math.max(0, VIEWS.findIndex(([v]) => v === view)),
