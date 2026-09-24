@@ -962,6 +962,7 @@ export const en = {
   'appear.import': 'Import',
   'appear.themeName': 'Theme name',
   'appear.presetHint': '{name} is a built-in theme. Change anything below and it forks into a theme of your own.',
+  'appear.classicHint': 'Classic is the design Smylte shipped until September 2026. A theme forked from it keeps its type, square corners and capitals; its controls, shadows and motion follow the current design.',
   'appear.editingHint': 'Editing this theme. Smylte’s own design is never modified — switch back to it any time.',
   'appear.shippedHint': 'Smylte’s shipped design. Change anything below and it forks into a theme of your own.',
   'appear.editingMode': 'Editing mode',

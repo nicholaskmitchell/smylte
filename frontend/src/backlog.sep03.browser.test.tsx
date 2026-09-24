@@ -207,6 +207,7 @@ describe('2026-09-03 — a dimmed subtree still clears 3:1 where it is a control
   ]
   const THEMES: { theme?: string; preset?: string }[] = [
     {}, { theme: 'dark' }, { preset: 'workspace' }, { preset: 'workspace', theme: 'dark' },
+    { preset: 'classic' }, { preset: 'classic', theme: 'dark' },
   ]
 
   it('every dimmed control composites to at least 3:1 in every theme', async () => {

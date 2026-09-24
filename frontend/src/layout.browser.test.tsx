@@ -72,8 +72,12 @@ describe('every text input on a phone clears the 16px iOS floor', () => {
     '<select class="input"><option>x</option></select>',
   ]
 
-  it('computes to at least 16px at 390px', async () => {
+  // Under every shipped design: a preset re-declares tokens and Classic loads a
+  // sheet of its own after app.css, and either could put a size back above the
+  // floor's rule without anything here noticing if only the default ran.
+  it.each([undefined, 'workspace', 'classic'])('computes to at least 16px at 390px (preset=%s)', async (preset) => {
     await viewport(390)
+    if (preset) document.documentElement.dataset.preset = preset
     const host = await mount(`<div class="shell">${FIELDS.join('')}</div>`)
     const under: string[] = []
     for (const el of host.querySelectorAll<HTMLElement>('.input')) {
@@ -371,8 +375,8 @@ describe("a Today row's cells sit on the title's first line", () => {
   // `25m  Aug 28` floating at the middle of the block touching nothing.
   //
   // Measured with the REAL faces, which is not a detail: `.list-dot` is placed
-  // by `vertical-align: middle`, so where it lands is a fact about Inter's
-  // x-height. A rig that failed to load the self-hosted woff2 put it a whole
+  // by `vertical-align: middle`, so where it lands is a fact about the sans's
+  // x-height (Hanken Grotesk; it was Inter's, and still is under Classic). A rig that failed to load the self-hosted woff2 put it a whole
   // pixel off and made the coloured square look like the defect when the tick
   // was the thing out of place. The harness waits on `document.fonts` for
   // exactly this reason.
@@ -435,7 +439,7 @@ describe("a Today row's cells sit on the title's first line", () => {
     // …and the Tasks tab, which is the thing the report actually asked for.
     // A comparison rather than a pinned number, and a loose one: the two tabs
     // reach the first line by different routes — `.list-dot` rides it inline on
-    // Inter's x-height, the Today mark is placed on it — so they agree to about
+    // the sans's x-height, the Today mark is placed on it — so they agree to about
     // half a pixel, not exactly.
     const tasksTitle = host.querySelector('.task-title')!
     expect(getComputedStyle(today).fontSize).toBe(getComputedStyle(tasksTitle).fontSize)

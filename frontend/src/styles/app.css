@@ -1985,14 +1985,16 @@ button.menu-toggle:active { scale: var(--press-scale); }
      24px  the tab title (`.content-title`, serif)
      15px  reading: a row's title, and the reflection read back on the look-back
      13px  secondary prose: an empty state, an agenda row, a parse chip
-     11px  meta, always mono: figures, dates, estimates, counts, buttons
-     10px  the micro-label (`.label`, `.chip`)
+     11px  meta, always mono: figures, dates, estimates, counts
+     11px  the micro-label (`.label`) — --fs-micro, 10px under Classic
 
    It was eight, with 12, 13 and 14 all doing "secondary" — three sizes for one
-   job, chosen a rule at a time. There is no scale token behind these: this file
-   writes `calc(<literal>px * var(--fs-scale))` everywhere and one new idiom for
-   one tab would be worse than the literals, so the tiers are held by this
-   comment and by anyone reading it.
+   job, chosen a rule at a time. The literals are held by this comment and by
+   anyone reading it. The two exceptions are the September 2026 refinement's
+   tokens and not this tab's own: controls (buttons, chips, the "more" row)
+   take the control tiers, --fs-control and its smaller steps, and the
+   micro-label takes --fs-micro, so a design that moves them — Classic puts
+   both back to mono at 11px and 10px — moves them here too.
 
    The DIALOGS in this fence — `.plan-*`, `.shut-*`, `.habit-*` — are
    deliberately outside that list and keep 12px and 14px. They are a different

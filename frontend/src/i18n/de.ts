@@ -1036,6 +1036,7 @@ export const de: Catalogue = {
   'appear.import': 'Importieren',
   'appear.themeName': 'Theme-Name',
   'appear.presetHint': '{name} ist ein mitgeliefertes Theme. Änder unten irgendetwas, und es zweigt in ein eigenes Theme ab.',
+  'appear.classicHint': 'Classic ist das Design, das Smylte bis September 2026 hatte. Ein davon abgezweigtes Theme behält Schrift, rechtwinklige Ecken und Großbuchstaben; Bedienelemente, Schatten und Bewegung folgen dem aktuellen Design.',
   'appear.editingHint': 'Du bearbeitest dieses Theme. Smyltes eigenes Design wird nie verändert — du kannst jederzeit zurückwechseln.',
   'appear.shippedHint': 'Smyltes mitgeliefertes Design. Änder unten irgendetwas, und es zweigt in ein eigenes Theme ab.',
   'appear.editingMode': 'Bearbeitungsmodus',

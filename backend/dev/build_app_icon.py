@@ -95,8 +95,10 @@ that writes only absolute M/L/Q/Z (`SVGPathPen` writes H and V, which
 The S's thinnest stroke is 2.118 units on the 64 canvas, across the top of the
 upper bowl. That is sturdier than the Fraunces opsz 46 cut it replaced, whose
 1.904 is why the icon before this generator decoded to five ink pixels at
-16x16. The same Fraunces fact is recorded in `build_display_fonts.py`, where
-Fraunces is pinned to opsz 9 for the eink panel. Newsreader's hairline still
+16x16. The display renderer meets the same fact from the other side:
+`build_display_fonts.py` pins Newsreader to opsz 12 for the eink panel, because
+at its default optical size the hairlines break apart when thresholded to one
+bit. Newsreader's hairline still
 drops under one device pixel below roughly 20px at the plated scale, where it
 renders as a grey ghost.
 
