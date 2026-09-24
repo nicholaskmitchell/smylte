@@ -504,6 +504,42 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .task-actions button.danger:hover { color: var(--warn); }
 .child-progress { font-family: var(--mono); font-size-adjust: none; font-size: calc(10px * var(--fs-scale)); color: var(--fg-faint); }
 
+/* The Parked pane's row, which had no rule at all. Its title is a <button> (the
+   press that opens the editor), and a button nothing styles wears the user
+   agent's own face: a light grey slab that stays light under the dark theme,
+   with the page's near-white ink inherited onto it. The row itself sat flush
+   against the pane edge, its date and its one control wrapping under the title
+   as loose inline boxes.
+
+   It is a Tasks row now, built from that row's pieces rather than a restatement
+   of them: the C3 inset and hover fill, the list dot, `.task-title` for the
+   title and `.task-meta` for the line under it. A grid rather than `.task`'s
+   flex because the markup is flat (dot, title, date, control) and the date
+   belongs UNDER the title, where `.task-meta` sits in every other row, with the
+   control centred on the pair. */
+.task-row {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start;
+  column-gap: 10px;
+  margin-inline: var(--row-inset); padding: var(--row-y) calc(var(--gutter) - var(--row-inset));
+  border-bottom: 1px solid var(--row-divider); border-radius: var(--r-sm);
+  transition: background var(--dur) var(--ease);
+}
+@media (hover: hover) { .task-row:hover { background: var(--row-hover); } }
+/* No tick here to centre on, so the dot centres on the title's first line: a
+   line of `.task-title` is 15px at the body's 1.5. The gap does the spacing. */
+.task-row > .list-dot {
+  grid-row: 1; margin: calc((15px * var(--fs-scale) * 1.5 - 7px) / 2) 0 0; top: 0;
+}
+/* `font: inherit`, not just the family `button` already takes: the user agent
+   sets the whole `font` shorthand on a button, line-height included, and the
+   title has to sit on the same line the dot is centred on. */
+.task-main {
+  grid-row: 1; grid-column: 2; min-width: 0; text-align: left; cursor: pointer;
+  font: inherit; color: inherit; background: none; border: 0; padding: 0;
+}
+.task-row > .task-meta { grid-row: 2; grid-column: 2; }
+.task-row > .btn { grid-row: 1 / span 2; grid-column: 3; align-self: center; }
+
 .empty { padding: 40px var(--gutter); color: var(--fg-faint); font-size: calc(14px * var(--fs-scale));
   font-weight: var(--wght-ui); }   /* T9 */
 

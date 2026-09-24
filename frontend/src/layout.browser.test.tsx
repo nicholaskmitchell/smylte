@@ -525,6 +525,46 @@ describe("a list's coloured square sits on the tick beside it", () => {
   })
 })
 
+describe('the Parked pane lays out as rows', () => {
+  // It had no rule at all: the title is a <button>, and an unstyled one wore
+  // the user agent's ButtonFace, a light grey slab under the dark theme with
+  // the page's near-white ink on it. The row sat flush with the pane edge and
+  // its date and control wrapped under it as loose inline boxes.
+  const PANE = (title: string) => `
+    <div class="shell"><div class="work"><main class="content">
+      <div class="content-head"><span class="content-title">Parked</span><span class="content-sub">1 parked</span></div>
+      <div class="scroll"><div class="task-row">
+        <span class="list-dot" style="background: oklch(0.6 0.15 250)"></span>
+        <button class="task-main"><span class="task-title">${title}</span></button>
+        <span class="task-meta"><span class="due mono">since Sep 13</span></span>
+        <button class="btn ghost">Bring it back</button>
+      </div></div></main></div></div>`
+
+  it.each([[1200, 'Color Run Photos'], [390, 'Color Run Photos from the whole of last summer, sorted by date']] as const)(
+    'at %ipx, in the dark', async (w, title) => {
+      await viewport(w)
+      document.documentElement.dataset.theme = 'dark'
+      const host = await mount(PANE(title))
+      const main = host.querySelector('.task-main')!
+      // No ButtonFace: the title is the page's ink on the page.
+      expect(getComputedStyle(main).backgroundColor).toBe('rgba(0, 0, 0, 0)')
+      expect(getComputedStyle(main).borderTopWidth).toBe('0px')
+      // On the gutter, where the pane's title starts.
+      expect(Math.abs(box(host.querySelector('.task-row > .list-dot')!).left
+        - box(host.querySelector('.content-title')!).left)).toBeLessThanOrEqual(0.5)
+      // The dot on the title's first line, the date under the title, and the
+      // control on the right, clear of both.
+      const line = parseFloat(getComputedStyle(main).lineHeight)
+      const dot = host.querySelector('.task-row > .list-dot')!.getBoundingClientRect()
+      expect(Math.abs((dot.top + dot.bottom) / 2 - (main.getBoundingClientRect().top + line / 2)))
+        .toBeLessThanOrEqual(0.5)
+      const meta = box(host.querySelector('.task-row > .task-meta')!)
+      expect(meta.top).toBeGreaterThanOrEqual(box(main).bottom)
+      expect(meta.left).toBe(box(main).left)
+      expect(box(host.querySelector('.task-row > .btn')!).left).toBeGreaterThan(Math.max(box(main).right, meta.right))
+    })
+})
+
 describe("a habit's week count never crowds out its own title", () => {
   // `.today-habit-count` was `flex: none` and `.today-title` is `flex: 1 1 0%`.
   // A zero-basis item lives on leftover space, and an item that refuses to
