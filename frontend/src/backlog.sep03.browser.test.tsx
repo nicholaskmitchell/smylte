@@ -207,6 +207,7 @@ describe('2026-09-03 — a dimmed subtree still clears 3:1 where it is a control
   ]
   const THEMES: { theme?: string; preset?: string }[] = [
     {}, { theme: 'dark' }, { preset: 'workspace' }, { preset: 'workspace', theme: 'dark' },
+    { preset: 'classic' }, { preset: 'classic', theme: 'dark' },
   ]
 
   it('every dimmed control composites to at least 3:1 in every theme', async () => {
@@ -606,15 +607,23 @@ describe('2026-09-03 — a <select class="menu-toggle"> clears the iOS 16px floo
     }
     expect(under, `${under.join(', ')} — Safari zooms on focus below 16px`).toEqual([])
     // Control: the BUTTON toggles beside it are not form controls iOS zooms
-    // for, and keep the sheet's 11px label size.
-    expect(parseFloat(getComputedStyle(host.querySelector('#btn')!).fontSize)).toBe(11)
+    // for, and keep the control size every other toggle in the sheet has.
+    expect(parseFloat(getComputedStyle(host.querySelector('#btn')!).fontSize)).toBe(controlPx())
   })
 
-  it('and keeps the desktop size where there is no zoom to arm', async () => {
-    await viewport(1200)
-    const host = await mount('<div class="shell"><select class="menu-toggle"><option>x</option></select></div>')
-    expect(parseFloat(getComputedStyle(host.querySelector('select')!).fontSize)).toBe(11)
-  })
+  // The control size is a token (14px; Classic's 11px), so the pin reads it
+  // rather than restating it — and pins the two shipped values once, here.
+  const controlPx = () =>
+    parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--fs-control'))
+
+  it.each([[undefined, 14], ['classic', 11]] as const)(
+    'and keeps the desktop size where there is no zoom to arm (preset=%s)', async (preset, px) => {
+      await viewport(1200)
+      if (preset) document.documentElement.dataset.preset = preset
+      const host = await mount('<div class="shell"><select class="menu-toggle"><option>x</option></select></div>')
+      expect(controlPx()).toBe(px)
+      expect(parseFloat(getComputedStyle(host.querySelector('select')!).fontSize)).toBe(px)
+    })
 })
 
 // ── AUDIT: App.tsx:1089 — the tab strip and the settings gear keep ~29px tap
@@ -663,7 +672,7 @@ describe('2026-09-03 — the tab strip and the settings gear on a phone', () => 
     // Three assertions, not one number, and the number this replaced was wrong
     // twice over. It read `box(bar).h < 64`, raised from 56 to absorb an engine
     // divergence — and BOTH halves of the comment justifying it were false.
-    // The divergence is not `.brand`: Fraunces measures 19px in Chromium and in
+    // The divergence is not `.brand`: the serif wordmark measures the same in Chromium and in
     // WebKit alike. It is the GEAR — `.icon-btn` declares no `font-size`, so it
     // inherits each engine's UA button default (13.33px against 16px) and comes
     // out 32 against 36. And `min-height: 44px`, the regression the comment
@@ -676,7 +685,7 @@ describe('2026-09-03 — the tab strip and the settings gear on a phone', () => 
     // padding raised to 10px (59/63), `.topbar` mobile padding to 14px (61/65).
     //
     // So: say the box model instead. The bar IS its tallest control plus its own
-    // 20px of mobile padding and 1px border — 32+21=53 in Chromium, 36+21=57 in
+    // 20px of mobile padding and 1px border — 33+21=54 in Chromium under the shipped design (32+21=53 under Classic), 36+21=57 in
     // WebKit, exactly, which is why the relation needs no per-engine number.
     // Anything that grows the bar WITHOUT growing a control (the `.tabs`
     // padding/margin pair, the bar's own padding) breaks it in both engines.

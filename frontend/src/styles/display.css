@@ -25,13 +25,18 @@
  * `var(--fg)` would pick up whatever the account customized.
  *
  * The TYPE is borrowed the same way, and it is the whole editorial system
- * rather than one family: Fraunces at 500 for headlines and day numbers,
- * uppercase tracked JetBrains Mono for micro-labels and every clock, Inter for
- * the things that are read rather than scanned. `fonts.css` is imported for the
- * whole app in main.tsx, so these faces cost this page no extra request beyond
- * the ones it actually sets — and `smylted/display/render.py` draws the server
- * -rendered version in the same three, at the same weights, so a browser panel
- * and a bitmap panel are the same design rather than two that agree on content.
+ * rather than one family: Newsreader at 500 for headlines and day numbers,
+ * uppercase tracked JetBrains Mono for micro-labels and every clock, Hanken
+ * Grotesk for the things that are read rather than scanned. It is the shipped
+ * design's type and only that — a display follows neither the account's
+ * Appearance theme nor the Classic preset, for the same reason it follows none
+ * of the colours. `fonts.css` is imported for the whole app in main.tsx, so
+ * these faces cost this page no extra request beyond the ones it actually sets
+ * — and `smylted/display/render.py` draws the server-rendered version in the
+ * same three, at the same weights — and, on eink, the same optical size, which
+ * display.css pins below; the colour page leaves optical size to the browser
+ * while the bitmap keeps that one instance — so a browser panel and a bitmap
+ * panel are the same design rather than two that agree on content.
  */
 
 .display {
@@ -45,11 +50,11 @@
 
   /* The three type slots, spelled out rather than taken from `--serif` /
      `--sans` / `--mono`. Same reason the colours are: those tokens carry the
-     account's Appearance overrides, and a font choice made for a laptop is not
-     one to inherit onto a screen read across a room. The stacks and the
-     fallbacks are tokens.css's own. */
-  --d-serif: "Fraunces", Georgia, "Times New Roman", serif;
-  --d-sans: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+     account's Appearance overrides and the Classic preset, and a font choice
+     made for a laptop is not one to inherit onto a screen read across a room.
+     The stacks and the fallbacks are tokens.css's own. */
+  --d-serif: "Newsreader", Georgia, "Times New Roman", serif;
+  --d-sans: "Hanken Grotesk", -apple-system, BlinkMacSystemFont, sans-serif;
   --d-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
 
   position: fixed;
@@ -81,17 +86,28 @@
      the intermediate values this palette exists to avoid. */
   -webkit-font-smoothing: none;
   font-smooth: never;
-  /* Fraunces carries an optical-size axis, and `auto` — the default the app
-     relies on — picks a DISPLAY cut at headline sizes: fine hairlines and high
-     contrast, which is precisely what one bit deep destroys. Measured against a
-     thresholded render: at the top of the axis "August 2026" loses its stems
-     and a day number turns to mush, while the bottom of it stays solid from
-     15px to 44px and still reads unmistakably as Fraunces. `none` pins the
-     font's own default (opsz 9) — the same instance the server-side renderer
-     is built at, so the two draw the same letterforms rather than merely the
-     same family. The colour palette keeps `auto`: an LCD has no threshold to
-     survive, and the display cut is better there. */
+  /* Newsreader carries an optical-size axis (6–72), and `auto` — the default
+     the app relies on — picks a finer cut the bigger the type: at headline
+     sizes, hairlines and high contrast, which is precisely what one bit deep
+     destroys. `none` stops that and falls back to the font's own default,
+     opsz 18 — and that is still too fine here. It is the TEXT cut, and
+     measured against a thresholded render it loses the hairlines of the 2s in
+     "August 2026" at 30px and turns a small day number's 1 into an l ("10"
+     read "I0" on a 4.2" panel).
+
+     So this palette names the size outright: opsz 12, where the hairlines are
+     half as heavy again and every one of those survives. The rule everywhere
+     else is never to pin optical size, because the browser's choice is the
+     better one on a screen that can show grey; this is the one device that
+     cannot, and the exception is fenced to exactly it. `none` stays, so that
+     losing this line falls back to the text cut rather than to `auto`. The
+     colour palette pins nothing, since an LCD has no threshold to survive. And
+     12 is the instance `smylted/display/render.py` is built at:
+     `dev/build_display_fonts.py` reads the number below, refuses to build a
+     different one, and carries the measurements. Hanken Grotesk and JetBrains
+     Mono have no `opsz` axis and ignore it. */
   font-optical-sizing: none;
+  font-variation-settings: "opsz" 12;
 }
 
 /* The micro-label: uppercase mono, tracked, quiet. The loudest editorial marker
@@ -370,6 +386,12 @@
   flex: none; width: 0.72em; height: 0.72em;
   box-shadow: inset 0 0 0 2px var(--d-ink);
 }
+/* A true circle, and a deliberate exception to the design's "no perfect
+   circles" rule. On a panel one bit deep the SHAPE is the only thing telling a
+   habit from a task — there is no colour, no tint and no icon to do it — and a
+   ring beside a box is the one difference that survives thresholding and
+   distance at once. A softened square would read as a second box.
+   `render.py::_habit_glyph` draws the same ring for the same reason. */
 .display-row__ring { border-radius: 50%; }
 
 /* Done. Filled rather than ticked for the ring — a diagonal through a circle

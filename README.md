@@ -389,21 +389,28 @@ keeping only while it records what was actually intended, and a panel in a
 hallway intends nothing.
 
 **It is the app's own design, not a second one.** A display is set in the same
-three typefaces everything else is: Fraunces at 500 for the month, the day
+three typefaces everything else is: Newsreader at 500 for the month, the day
 numbers and a screen's name, tracked uppercase JetBrains Mono for every
-micro-label and every clock, Inter for the things that are read rather than
-scanned — the same slots, at the same weights, as `.cal-title` and `.task-meta
-.due` in the app. The server-side renderer draws in them too, from static
-instances of the very woff2 the frontend ships, so a bitmap panel and a browser
-panel are one design rather than two that agree about the content.
+micro-label and every clock, Hanken Grotesk for the things that are read rather
+than scanned — the same slots, at the same weights, as `.cal-title` and
+`.task-meta .due` in the app. It is always the shipped design: a display
+follows neither the account's Appearance theme nor the Classic preset, since a
+choice made for a laptop is not one to inherit onto a screen read across a
+room. The server-side renderer draws in the same three, from static instances
+of the very woff2 the frontend ships, so a bitmap panel and a browser panel are
+one design rather than two that agree about the content.
 
 Two type decisions are the eink constraint rather than taste, and both were
-measured against a thresholded render. Fraunces is pinned to the **bottom** of
-its optical-size axis: its display cut is high-contrast with fine hairlines,
-which is precisely what one bit deep destroys — at the top of the axis "August
-2026" loses its stems and a day number turns to mush. And the mono micro-labels
-sit one weight step above the app's, because a label read at arm's length and a
-label read at three metres are not the same label.
+measured against a thresholded render. On eink, Newsreader is pinned to
+**optical size 12**, below its own default of 18 — the one place the shipped design pins an
+optical size (Classic's focus clock keeps Fraunces pinned at 144, as it always
+did). The default is the text cut, and its hairlines are
+precisely what one bit deep destroys: at 18, "August 2026" loses the thins of
+its 2s and a small day number's 1 loses its flag and reads as an l ("10" came
+out "I0" on a 4.2" panel), while 12 keeps every stroke and sets at the width
+the layout was tuned against. And the mono micro-labels sit one weight step
+above the app's, because a label read at arm's length and a label read at three
+metres are not the same label.
 
 **And it works on eink, where every pixel is binary.** That is a design under a
 constraint, not a dark theme inverted. There is no grey, because an intermediate
@@ -486,26 +493,43 @@ account.
 
 **Appearance.** Settings → Appearance opens a live editor over the design
 system: every color token (with a picker and a raw OKLCH/hex field), corner
-radius, text scale, gutter and row density, the serif / sans / mono families,
-and whether micro-labels are uppercase and how far they track. Save named
+radius (the base of a scale, so every rounded thing moves in proportion), text
+scale, gutter and row density, the serif / sans / mono families, and whether
+micro-labels are uppercase and how far they track. Save named
 themes, export and import them as JSON, reset a single token, one mode, or
 everything. A theme carries separate light and dark maps.
 
-Two designs ship. **Smylte** is the default and the editorial one — warm
-off-white, orange accent, Fraunces headlines, sharp corners, uppercase mono
-micro-labels. **Workspace** is the restrained alternative: neutral greys, a
-blue accent, one system sans in every type slot, 6px corners and sentence-case
-labels.
+Three designs ship. **Smylte** is the default and the editorial one: the
+N.K.M. system as refined in September 2026 — warm off-white, one orange accent,
+Newsreader for anything read, Hanken Grotesk for chrome and every control,
+JetBrains Mono for labels and figures. Straight on the page, soft at the hand:
+hairline rules and square grids, and on the things you touch a radius scale,
+soft shadows where they float, and eased motion. **Classic** is the design
+Smylte shipped before that refinement, kept whole rather than approximated —
+Fraunces headlines, Inter, sharp corners, uppercase mono on every label and
+control, hard shadows, no presses and no popover or modal entrances.
+**Workspace** is the restrained alternative:
+neutral greys, a blue accent, one system sans in every type slot, and
+sentence-case labels.
 
-**Neither shipped design is ever edited.** Customization is a sparse override
+The refinement changed no colour, so Classic's palette is the default's. What
+it restores beyond its tokens — mono controls, rules between list rows, the
+old shadows — lives in `styles/classic.css` as the pre-refinement value of
+each "lever" `app.css` reads, which is what keeps the cascade the one the old
+design had and Classic pixel-identical to it.
+
+**No shipped design is ever edited.** Customization is a sparse override
 layer written as inline custom properties on `<html>`, so `styles/tokens.css`
 stays the product's design and "Reset to Smylte" is simply dropping the
 overrides. A preset is not a stored theme either — it lives in `tokens.css`
 under `:root[data-preset=…]` and is selected by an attribute, which is what
 keeps it un-editable and lets a palette fix reach everyone on the next deploy.
-Editing while either is active forks a new theme rather than modifying it; a
-fork of a preset is seeded with that preset's values, so it starts out
-identical. Overrides are validated against a token allowlist on both sides of
+Editing while one is active forks a new theme rather than modifying it; a
+fork of a preset is seeded with that preset's values, so it starts out with
+the same tokens. For Workspace that is identical. For Classic it is not quite:
+a saved theme carries tokens only, so a fork of Classic keeps its faces, its
+square corners and its capitals and takes the current design's controls,
+shadows and motion — and the editor says so while Classic is selected. Overrides are validated against a token allowlist on both sides of
 the wire — the blob is re-read by a pre-paint script that writes straight into
 the CSSOM, so a `url()` beacon or a property break-out must never survive
 storage. `appearance.test.ts` asserts the defaults *and* the presets still
@@ -774,7 +798,8 @@ driver, which the example imports and this repo deliberately does not vendor, is
 GPL-3.0, so what runs on the board is a GPL-3.0 combined work either way. What
 MIT buys is lifting those sixty lines somewhere that driver is not.
 
-The three bundled typefaces are separate works and keep their own terms:
-Fraunces, Inter and JetBrains Mono are each under the SIL Open Font License 1.1,
-whose text ships beside them in `frontend/public/fonts/` and
-`backend/smylted/display/fonts/`.
+The bundled typefaces are separate works and keep their own terms. Newsreader,
+Hanken Grotesk and JetBrains Mono, and Classic's Fraunces and Inter, are each
+under the SIL Open Font License 1.1, whose text ships beside them in
+`frontend/public/fonts/`; the three the display renderer rasterizes carry it
+again in `backend/smylted/display/fonts/`.

@@ -28,22 +28,26 @@
 .tabs { display: flex; gap: 2px; }
 .tab {
   background: none; border: 0; border-bottom: 2px solid transparent;
-  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); text-transform: var(--label-case);
+  font-family: var(--font-control); font-size: calc(var(--fs-control) * var(--fs-scale));
+  font-weight: var(--wght-control); line-height: var(--lh-control); text-transform: var(--label-case);
   letter-spacing: calc(0.08em * var(--tracking)); color: var(--fg-muted); padding: 6px 10px 8px; cursor: pointer;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur) var(--ease);
 }
-.tab:hover { color: var(--fg); }
+@media (hover: hover) { .tab:hover { color: var(--fg); } }
 .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
 .spacer { flex: 1; }
-.topbar-meta { font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); color: var(--fg-faint);
+.topbar-meta { font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); color: var(--fg-faint);
   text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking)); }
 
 /* ---- settings menu — popover anchored under the gear (Søren's layout) ---- */
 .menu {
   position: absolute; top: calc(100% + 6px); right: 24px; z-index: 50;
   width: 300px; max-width: calc(100vw - 36px);
-  background: var(--bg-elev); border: 1px solid var(--rule);
+  background: var(--bg-elev); border: 1px solid var(--edge); border-radius: var(--r-md);
   box-shadow: var(--shadow);
   padding: 14px; display: flex; flex-direction: column; gap: 8px;
+  /* M4 · it opens from the gear: a short rise and fade, anchored top right. */
+  transform-origin: top right; animation: var(--enter-float);
 }
 /* A left nav beside a panel, not one flat list of rows — see SettingsMenu.tsx.
    The nav column extends downward for free, so the number of sections stops
@@ -65,17 +69,25 @@
   border-right: 1px solid var(--rule); padding-right: 8px;
 }
 .set-nav-item {
-  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  font-family: var(--font-control); font-size: calc(var(--fs-control-compact) * var(--fs-scale));
+  font-weight: var(--wght-control); line-height: var(--lh-control);
   text-transform: var(--label-case); letter-spacing: calc(0.07em * var(--tracking));
   background: none; border: 0; border-left: 2px solid transparent; color: var(--fg-muted);
-  padding: 8px 10px; cursor: pointer; transition: color 0.15s, border-color 0.15s;
+  padding: 8px 10px; cursor: pointer;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur) var(--ease);
   flex: none; white-space: nowrap; text-align: left;
 }
-.set-nav-item:hover { color: var(--accent); }
+@media (hover: hover) { .set-nav-item:hover { color: var(--accent); } }
 .set-nav-item.active { color: var(--fg); border-left-color: var(--accent); }
 /* The panel column is the one scroller on this surface. A capped list nested
    inside it would only clip itself mid-row. */
 .set-panels { flex: 1 1 auto; min-width: 0; overflow-y: auto; padding-right: 2px; }
+/* Scrollers and clipping panes whose controls sit flush with an edge draw
+   keyboard focus INSIDE each control (tokens.css, F1): the 4px the ring
+   stands out is 2px more than any of them has, and the clipped side is the
+   one a right-aligned toggle or a full-width row most needs. */
+.set-panels, .side, .side-mobilebar, .tabs, .arch-list, .conn-list, .habit-list,
+.dash-mod-body { --focus-offset: -2px; }
 .set-panel { display: flex; flex-direction: column; gap: 9px; }
 /* A subhead introducing the next block, not the first line of the panel. */
 .set-panel .menu-head:not(:first-child) { margin-top: 14px; }
@@ -92,21 +104,31 @@
 .settings-menu .arch-row, .settings-menu .conn,
 .settings-menu .notif-rule .menu-row { flex-wrap: wrap; row-gap: 6px; }
 .menu-head {
-  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case);
+  font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.1em * var(--tracking)); color: var(--fg-faint);
 }
 .menu-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .menu-row label {
-  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); text-transform: var(--label-case);
+  font-family: var(--mono); font-size: calc(var(--fs-meta) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); color: var(--fg-muted);
 }
 .menu-value { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg); }
+/* A settings toggle is a button whose label is its current value, so it is a
+   control like any other (T7): the control face, a soft corner, a --paper
+   fill under the pointer. There is no switch component to turn it into. */
 .menu-toggle {
-  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking));
-  background: none; color: var(--fg-muted); border: 1px solid var(--rule);
-  padding: 6px 11px; cursor: pointer; transition: color 0.15s, border-color 0.15s, background 0.15s;
+  font-family: var(--font-control); font-size: calc(var(--fs-control) * var(--fs-scale));
+  font-weight: var(--wght-control); line-height: var(--lh-control);
+  text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking));
+  background: none; color: var(--fg-muted); border: 1px solid var(--rule); border-radius: var(--r-sm);
+  padding: 6px 11px; min-height: var(--control-h); cursor: pointer;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    background var(--dur) var(--ease), scale var(--dur) var(--ease);
 }
-.menu-toggle:hover { color: var(--accent); border-color: var(--accent); }
+@media (hover: hover) {
+  .menu-toggle:hover { color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg); }
+}
+button.menu-toggle:active { scale: var(--press-scale); }
 .hintline { font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); line-height: 1.4; }
 .menu-actions { display: flex; justify-content: flex-end; margin-top: 2px; }
 
@@ -122,8 +144,14 @@
   padding: 14px 16px 8px; display: flex; align-items: center; justify-content: space-between;
 }
 .side-list { flex: 1; overflow-y: auto; padding-bottom: 12px; }
+/* C3 · an interactive list row: no rule between rows, and under the pointer
+   a rounded fill inset from the pane edge. The inset comes out of the
+   padding, so the text does not move. The sidebar is --paper, so the fill is
+   one step up from it, --bg-elev, in every design. */
 .side-item {
-  display: flex; align-items: center; gap: 8px; padding: 8px 16px;
+  display: flex; align-items: center; gap: 8px;
+  margin-inline: var(--row-inset); padding: 8px calc(16px - var(--row-inset));
+  border-radius: var(--r-sm); transition: background var(--dur) var(--ease);
   cursor: pointer; border-left: 2px solid transparent; color: var(--fg);
 }
 /* Guarded for the same reason as `.side-mobile-*` in the phone block: this
@@ -137,21 +165,26 @@
   .side-item:hover { background: var(--bg-elev); }
 }
 .side-item.active { border-left-color: var(--accent); background: var(--bg-elev); }
-.side-item .swatch { width: 8px; height: 8px; flex: none; background: var(--fg-faint); }
-/* the pinned "All" row's swatch — a ring of the preset collection colors. The
+/* An outlined control on the --paper sidebar steps its hover up to --bg-elev
+   (see --ghost-hover-bg-on-paper). Not the drawer, which is --bg-elev itself. */
+.side:not(.drawer), .disp-url { --ghost-hover-bg: var(--ghost-hover-bg-on-paper); }
+.side-item .swatch { width: 8px; height: 8px; flex: none; background: var(--fg-faint); border-radius: var(--r-dot); }
+/* the pinned "All" row's swatch — a wheel of the preset collection colors. The
    gradient itself is an inline style built from SWATCHES in Sidebar.tsx (one
-   definition of the palette); only the circle shape belongs here. */
-.swatch.swatch-all { border-radius: 50%; }
+   definition of the palette); only the shape belongs here. S3 has no perfect
+   circles, so it is a rounded square like every other swatch — except under
+   Classic, which set it round. */
+.swatch.swatch-all { border-radius: var(--r-swatch-all); }
 .side-item .name { flex: 1; min-width: 0; font-size: calc(14px * var(--fs-scale));
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .side-item .count { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
 .side-item .side-edit {
   background: none; border: 0; color: var(--fg-faint); cursor: pointer;
-  font-size: calc(13px * var(--fs-scale)); line-height: 1; padding: 0 2px; opacity: 0; transition: opacity 0.12s;
+  font-size: calc(13px * var(--fs-scale)); line-height: 1; padding: 0 2px; opacity: 0; transition: opacity var(--dur-fast) var(--ease);
 }
 .side-item:hover .side-edit { opacity: 1; }
 .side-item .side-edit:hover { color: var(--accent); }
-.side-item.drag-over { box-shadow: inset 0 2px 0 var(--accent); }
+.side-item.drag-over { box-shadow: inset 0 2px 0 var(--accent); border-radius: 0; }
 /* visibility mode: a hidden calendar mutes its label; the swatch (inline)
    hollows. The row IS the checkbox that shows the calendar again, so it dims
    by token: an `opacity: .45` on the name and count put them at 2.9:1 and
@@ -169,11 +202,13 @@
 .side-completed {
   display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%;
   padding: 10px 12px; border: 0; border-top: 1px solid var(--rule); background: none;
-  cursor: pointer; font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); text-transform: var(--label-case);
-  letter-spacing: calc(0.06em * var(--tracking)); color: var(--fg-muted); transition: color 0.15s, background 0.15s;
+  cursor: pointer; font-family: var(--font-control); font-size: calc(var(--fs-control-compact) * var(--fs-scale));
+  font-weight: var(--wght-control); line-height: var(--lh-control); text-transform: var(--label-case);
+  letter-spacing: calc(0.06em * var(--tracking)); color: var(--fg-muted);
+  transition: color var(--dur-fast) var(--ease), background var(--dur) var(--ease);
 }
-.side-completed:hover,
 .side-completed.active { color: var(--accent); background: var(--bg-elev); }
+@media (hover: hover) { .side-completed:hover { color: var(--accent); background: var(--bg-elev); } }
 
 /* collapsed sidebar — a thin rail of collection dots (desktop only) */
 .side.collapsed { width: 44px; align-items: center; padding-top: 10px; gap: 10px; }
@@ -189,15 +224,23 @@
 .rail-dot:hover { background: var(--bg-elev); }
 /* collapsed-rail twin of .side-completed — keeps the pane reachable when the
    sidebar is a thin rail */
+/* Square: it is a full-width footer under a hairline, and a corner radius
+   there only bends the rule. */
 .side-completed-rail {
-  width: 100%; border: 0; border-radius: var(--radius); border-top: 1px solid var(--rule);
+  width: 100%; border: 0; border-radius: 0; border-top: 1px solid var(--rule);
   padding: 10px 0; color: var(--fg-muted);
 }
-.side-completed-rail:hover,
+/* `.icon-btn` in the markup, and the icon button's own hover and press are
+   (0,3,0) — so the rail's are stated at (0,4,0), or the generic --paper fill
+   (invisible on the --paper rail) and its --fg text win instead. */
 .side-completed-rail.active { color: var(--accent); background: var(--bg-elev); }
+@media (hover: hover) {
+  .icon-btn.side-completed-rail:not(.active):hover { color: var(--accent); background: var(--bg-elev); }
+}
+.icon-btn.side-completed-rail:not(.active):active { color: var(--accent); background: var(--bg-elev); }
 .rail-dot.active { border-left-color: var(--accent); background: var(--bg-elev); }
 .rail-dot.cal-hidden { opacity: .55; }
-.rail-dot .swatch { width: 9px; height: 9px; flex: none; background: var(--fg-faint); }
+.rail-dot .swatch { width: 9px; height: 9px; flex: none; background: var(--fg-faint); border-radius: var(--r-dot); }
 
 /* pinned "All lists / All calendars" combined row — a touch of extra weight */
 .side-item.all-row .name { font-weight: 500; }
@@ -217,11 +260,11 @@
   background: none; border: 0; padding: 0; cursor: pointer; color: var(--fg-faint);
   display: flex; align-items: center;
 }
-.group-caret .caret { font-size: calc(9px * var(--fs-scale)); transition: transform 0.12s; display: inline-block; }
+.group-caret .caret { font-size: calc(9px * var(--fs-scale)); transition: transform var(--dur-slow) var(--ease-in-out); display: inline-block; }
 .group-caret .caret.open { transform: rotate(90deg); }
 .group-name {
   flex: 1; min-width: 0; text-align: left; background: none; border: 0; cursor: pointer;
-  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case); letter-spacing: calc(0.1em * var(--tracking));
+  font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case); letter-spacing: calc(0.1em * var(--tracking));
   color: var(--fg-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0;
 }
 .group-head:hover .group-name { color: var(--fg-muted); }
@@ -232,7 +275,7 @@
 }
 .group-eye:hover { color: var(--accent); }
 .group-eye[aria-pressed="false"] { opacity: 0.5; }
-.group-actions { display: flex; gap: 1px; opacity: 0; transition: opacity 0.12s; }
+.group-actions { display: flex; gap: 1px; opacity: 0; transition: opacity var(--dur-fast) var(--ease); }
 .group-head:hover .group-actions,
 .group-head:focus-within .group-actions { opacity: 1; }
 .group-btn {
@@ -240,7 +283,8 @@
   font-size: calc(12px * var(--fs-scale)); line-height: 1; padding: 0 3px;
 }
 .group-btn:hover { color: var(--accent); }
-.group-btn.danger { color: var(--warn); font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); }
+.group-btn.danger { color: var(--warn); font-family: var(--font-control); font-size: calc(var(--fs-control-sm) * var(--fs-scale));
+  font-weight: var(--wght-control); }
 .group-empty {
   padding: 3px 16px 6px 34px; font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); font-style: italic;
 }
@@ -254,11 +298,12 @@
 .cal-tasks-done {
   display: block; width: 100%; text-align: left; background: none; border: 0;
   padding: 6px 16px 10px 34px; cursor: pointer;
-  font-family: var(--mono); font-size: calc(10px * var(--fs-scale));
+  font-family: var(--font-control); font-size: calc(var(--fs-control-sm) * var(--fs-scale));
+  font-weight: var(--wght-control); line-height: var(--lh-control);
   text-transform: var(--label-case); letter-spacing: calc(0.1em * var(--tracking));
-  color: var(--fg-faint);
+  color: var(--fg-faint); transition: color var(--dur-fast) var(--ease);
 }
-.cal-tasks-done:hover { color: var(--accent); }
+@media (hover: hover) { .cal-tasks-done:hover { color: var(--accent); } }
 
 /* per-list color dot shown on tasks in the combined "All lists" view.
    vertical-align: middle centers on the text's x-height; the -1px lift raises it
@@ -268,6 +313,7 @@
 .list-dot {
   display: inline-block; width: 7px; height: 7px; flex: none; margin-right: 6px;
   vertical-align: middle; position: relative; top: -1px; background: var(--fg-faint);
+  border-radius: var(--r-dot);
 }
 .day-card-title .list-dot { margin-right: 5px; }
 
@@ -278,10 +324,12 @@
 /* color picker (collection edit modal) */
 .color-row { display: flex; gap: 7px; flex-wrap: wrap; }
 .color-dot {
-  width: 22px; height: 22px; border: 1px solid var(--rule); border-radius: var(--radius);
+  width: 22px; height: 22px; border: 1px solid var(--rule); border-radius: var(--r-xs);
   cursor: pointer; padding: 0; flex: none;
 }
 .color-dot.on { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Selection is the accent ring at 1px; keyboard focus is --fg, 3px out. */
+.color-dot { --focus-color: var(--fg); --focus-offset: 3px; }
 .color-dot.none { background: none; color: var(--fg-faint); font-size: calc(11px * var(--fs-scale)); line-height: 1; }
 /* the ninth square: the way past the eight presets. The label is the swatch —
    a spectrum until it is the chosen colour, so the one square that is not a
@@ -306,8 +354,8 @@
   border-bottom: 1px solid var(--rule-faint);
 }
 .content-title { font-family: var(--serif); font-size: calc(24px * var(--fs-scale)); font-weight: 500; letter-spacing: -0.01em; }
-.title-dot { width: 10px; height: 10px; flex: none; align-self: center; }
-.content-sub { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint);
+.title-dot { width: 10px; height: 10px; flex: none; align-self: center; border-radius: var(--r-dot); }
+.content-sub { font-family: var(--mono); font-size: calc(var(--fs-meta) * var(--fs-scale)); color: var(--fg-faint);
   text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking)); }
 .scroll { flex: 1; overflow-y: auto; padding: 6px 0 40px; }
 
@@ -316,11 +364,16 @@
 .quickadd .input { flex: 1; min-width: 0; }
 
 /* ---- task rows ---- */
+/* C3 · an interactive list row. No rule between rows; the pointer lights a
+   rounded --paper fill inset from the pane edge, and the inset comes out of
+   the padding so every title keeps its column. */
 .task {
-  display: flex; align-items: flex-start; gap: 11px; padding: var(--row-y) var(--gutter);
-  border-bottom: 1px solid var(--rule-faint);
+  display: flex; align-items: flex-start; gap: 11px;
+  margin-inline: var(--row-inset); padding: var(--row-y) calc(var(--gutter) - var(--row-inset));
+  border-bottom: 1px solid var(--row-divider); border-radius: var(--r-sm);
+  transition: background var(--dur) var(--ease);
 }
-.task:hover { background: var(--bg-elev); }
+@media (hover: hover) { .task:hover { background: var(--row-hover); } }
 /* Manual reorder (list view). The drop marker sits on the wrapper, which holds
    the whole subtree — a parent drags its subtasks with it — and reads as a rule
    above the row it would land on, matching the sidebar's list drag. */
@@ -329,12 +382,14 @@
 /* The line goes on the side the row will actually land. A downward drag inserts
    AFTER the target (reorder reads the target index before removing the dragged
    row), so drawing on top pointed one row away from where the drop went. */
-.task-drag.drag-over > .task { box-shadow: inset 0 2px 0 var(--accent); }
+/* Square while it is a target: the marker is a straight rule, and on a
+   rounded row an inset shadow bends down both corners. */
+.task-drag.drag-over > .task { box-shadow: inset 0 2px 0 var(--accent); border-radius: 0; }
 .task-drag.drag-over.drag-below > .task { box-shadow: inset 0 -2px 0 var(--accent); }
 /* Nesting is arbitrarily deep, so the indent is a step per level rather than
    one fixed inset. Capped in TasksView (MAX_INDENT) so a deep tree still leaves
    the titles somewhere to go. */
-.task.sub { padding-left: calc(var(--gutter) + var(--task-depth, 1) * 26px); }
+.task.sub { padding-left: calc(var(--gutter) - var(--row-inset) + var(--task-depth, 1) * 26px); }
 .task.done .task-title { color: var(--fg-faint); text-decoration: line-through; }
 /* The disclosure sits in its own column, present either way, so a run of mixed
    rows keeps one straight edge down the left. */
@@ -342,7 +397,7 @@
 .twisty {
   background: none; border: 0; padding: 0; cursor: pointer; color: var(--fg-faint);
   font-size: calc(13px * var(--fs-scale)); line-height: 17px; text-align: center;
-  transition: transform 0.12s, color 0.12s;
+  transition: transform var(--dur-slow) var(--ease-in-out), color var(--dur-fast) var(--ease);
 }
 .twisty:hover { color: var(--accent); }
 .twisty.open { transform: rotate(90deg); }
@@ -386,8 +441,9 @@
 .check {
   width: var(--check-size); height: var(--check-size);
   flex: none; margin-top: 2px; border: 1px solid var(--fg-faint);
-  border-radius: var(--radius); background: none; cursor: pointer; display: inline-flex;
+  border-radius: var(--r-xs); background: none; cursor: pointer; display: inline-flex;
   align-items: center; justify-content: center; color: transparent;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease), color var(--dur) var(--ease);
 }
 .check:hover { border-color: var(--accent); }
 .check.on { background: var(--accent); border-color: var(--accent); color: var(--bg); }
@@ -409,10 +465,11 @@
 .task-meta .due { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); }
 .task-meta .due.overdue { color: var(--warn); }
 .task-notes { font-size: calc(13px * var(--fs-scale)); color: var(--fg-muted); margin-top: 2px; white-space: pre-wrap; }
-.task-actions { display: flex; gap: 4px; opacity: 0; transition: opacity 0.12s; }
+.task-actions { display: flex; gap: 4px; opacity: 0; transition: opacity var(--dur-fast) var(--ease); }
 .task:hover .task-actions { opacity: 1; }
 .task-actions button { background: none; border: 0; color: var(--fg-faint); cursor: pointer;
-  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); padding: 2px 4px; }
+  font-family: var(--font-control); font-size: calc(var(--fs-control-compact) * var(--fs-scale));
+  font-weight: var(--wght-control); padding: 2px 4px; }
 .task-actions button:hover { color: var(--accent); }
 .task-actions button.danger:hover { color: var(--warn); }
 .child-progress { font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); color: var(--fg-faint); }
@@ -436,15 +493,59 @@
 }
 .section-label { padding: 14px var(--gutter) 4px; }
 
-/* ---- tasks view switcher (List / 3-Day / Week) ---- */
-.view-tabs { display: flex; gap: 2px; align-self: center; }
+/* ---- tasks view switcher (List / 3-Day / Week) ----
+   A lone `.view-tab` is a toggle (Home's Arrange): outlined, and filled with
+   --paper while it is on. Inside `.view-tabs` it is one segment of a
+   segmented control (F5): a --paper track, borderless segments of equal
+   width, and one --bg-elev thumb that SLIDES under the active segment. The
+   JSX sets --n (segments) and --i (the active index) on the track, which is
+   all the thumb needs to know where to go. Classic restores the bordered,
+   inverted buttons in classic.css. */
 .view-tab {
-  background: none; border: 1px solid var(--rule); cursor: pointer;
-  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case);
+  background: none; border: 1px solid var(--rule); border-radius: var(--r-sm); cursor: pointer;
+  font-family: var(--font-control); font-size: calc(var(--fs-control-sm) * var(--fs-scale));
+  font-weight: var(--wght-control); line-height: var(--lh-control); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); color: var(--fg-muted); padding: 5px 9px;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    background var(--dur) var(--ease), scale var(--dur) var(--ease);
 }
-.view-tab:hover { color: var(--accent); border-color: var(--accent); }
-.view-tab.active { color: var(--bg); background: var(--fg); border-color: var(--fg); }
+@media (hover: hover) {
+  .view-tab:hover { color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg); }
+}
+.view-tab:active { scale: var(--press-scale); }
+.view-tab.active { color: var(--fg); background: var(--paper); border-color: var(--rule); }
+
+.view-tabs {
+  position: relative; display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+  align-self: center; padding: 3px; background: var(--paper); border-radius: var(--r-sm);
+}
+.view-tabs::before {
+  content: ""; position: absolute; top: 3px; bottom: 3px; left: 3px;
+  /* Placed from the MEASURED active segment when the JSX has measured it
+     (--thumb-x/--thumb-w, useSegmentThumb) — a squeezed track sizes its
+     columns unequally, and arithmetic on --i and --n then puts the thumb
+     beside the segment rather than under it — and from that arithmetic
+     until then. */
+  left: 0;
+  width: var(--thumb-w, calc((100% - 6px) / var(--n, 1)));
+  background: var(--bg-elev); border-radius: var(--r-thumb);
+  /* A hairline, because the step from --paper to --bg-elev is a clear one in
+     the light theme and next to nothing in the dark (#1A1A22 against
+     #16161C): without it the thumb all but vanished there, and the active
+     segment was carried by its text colour alone. A border drawn with a
+     spread, not a shadow — it neither blurs nor takes layout. */
+  box-shadow: 0 0 0 1px var(--thumb-edge);
+  translate: var(--thumb-x, calc(3px + 100% * var(--i, 0))) 0;
+  transition: translate var(--dur-slow) var(--ease-in-out);
+}
+.view-tabs > .view-tab {
+  position: relative; border-color: transparent; border-radius: var(--r-thumb);
+  background: none; padding: 5px 12px;
+}
+.view-tabs > .view-tab.active { color: var(--fg); background: none; border-color: transparent; }
+@media (hover: hover) {
+  .view-tabs > .view-tab:not(.active):hover { color: var(--fg); background: none; border-color: transparent; }
+}
 .range-nav { display: flex; gap: 6px; align-items: center; align-self: center; }
 .undated-hint { font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); padding: 8px var(--gutter) 0; }
 .undated-hint button {
@@ -491,7 +592,7 @@
   padding: 8px 10px; background: var(--paper); border-bottom: 1px solid var(--rule-faint);
 }
 .day-col-head .dow {
-  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case);
+  font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.08em * var(--tracking)); color: var(--fg-faint);
 }
 .day-col-head .dnum { font-family: var(--serif); font-size: calc(16px * var(--fs-scale)); font-weight: 500; }
@@ -507,20 +608,26 @@
 .day-col.drag-over { box-shadow: inset 0 0 0 1px var(--accent); }
 .day-card {
   display: flex; align-items: flex-start; gap: 8px; padding: 7px 8px 7px 6px;
-  background: var(--bg-elev); border: 1px solid var(--rule-faint);
-  cursor: grab;
+  background: var(--bg-elev); border: 1px solid var(--rule-faint); border-radius: var(--r-sm);
+  cursor: grab; transition: border-color var(--dur-fast) var(--ease);
 }
-.day-card:hover { border-color: var(--rule); }
+@media (hover: hover) { .day-card:hover { border-color: var(--rule); } }
 .day-card .check { margin-top: 1px; }
 .day-card-body { flex: 1; min-width: 0; cursor: pointer; }
 .day-card-title { font-size: calc(13px * var(--fs-scale)); line-height: 1.35; overflow-wrap: break-word; }
 .day-card.done .day-card-title { color: var(--fg-faint); text-decoration: line-through; }
 .col-add {
-  background: none; border: 1px dashed var(--rule); color: var(--fg-faint); cursor: pointer;
-  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case);
+  background: none; border: 1px dashed var(--rule); border-radius: var(--r-sm); color: var(--fg-faint); cursor: pointer;
+  font-family: var(--font-control); font-size: calc(var(--fs-control-sm) * var(--fs-scale));
+  font-weight: var(--wght-control); line-height: var(--lh-control); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); padding: 6px; margin-top: 2px;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    background var(--dur) var(--ease), scale var(--dur) var(--ease);
 }
-.col-add:hover { color: var(--accent); border-color: var(--accent); }
+@media (hover: hover) {
+  .col-add:hover { color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg); }
+}
+.col-add:active { color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg); scale: var(--press-scale); }
 
 /* ---- calendar ---- */
 .cal-head { display: flex; align-items: center; gap: 12px; padding: 14px var(--gutter); }
@@ -541,7 +648,7 @@
    (146.9 against 157.7 at 1280px). */
 .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
   border-top: 1px solid var(--rule); border-left: 1px solid var(--rule); }
-.cal-dow { font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case);
+.cal-dow { font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.08em * var(--tracking)); color: var(--fg-faint); padding: 6px 8px; text-align: right;
   border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule); background: var(--paper); }
 .cal-cell {
@@ -570,7 +677,7 @@
 .cal-scroll.fixed .cal-cell { min-height: 0; overflow: hidden; }
 .cal-cell:hover { background: var(--bg-elev); }
 .cal-cell.dim { background: var(--paper); }
-.cal-cell.today .daynum { color: var(--bg); background: var(--accent); }
+.cal-cell.today .daynum { color: var(--bg); background: var(--accent); border-radius: var(--r-xs); }
 .daynum { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); align-self: flex-end;
   padding: 1px 5px; }
 /* Events tint from the calendar's own color (--ev-c, set on .cal-scroll);
@@ -587,7 +694,7 @@
   background: color-mix(in oklch, var(--ev-c, var(--accent)) 16%, transparent);
   border-inline-start: 2px solid var(--ev-c, var(--accent));
   padding: 1px 5px; white-space: nowrap; overflow: hidden;
-  text-overflow: ellipsis; cursor: grab;
+  text-overflow: ellipsis; cursor: grab; border-radius: var(--r-xs);
   position: relative;
 }
 /* resize grip on an event's last visible day — surfaces on hover */
@@ -610,45 +717,56 @@
   font-size: calc(11px * var(--fs-scale)); color: var(--fg);
   border-inline-start: 2px solid var(--ev-c, var(--accent));
   padding: 1px 5px; white-space: nowrap; overflow: hidden;
-  text-overflow: ellipsis; cursor: pointer;
+  text-overflow: ellipsis; cursor: pointer; border-radius: var(--r-xs);
 }
 .cal-task:hover { background: color-mix(in oklch, var(--ev-c, var(--accent)) 10%, transparent); }
 .cal-task .tick { color: var(--ev-c, var(--accent)); margin-inline-end: 3px; }
 .cal-task .t { font-family: var(--mono); color: var(--fg-muted); margin-inline-end: 4px; }
 .cal-task.done { color: var(--fg-faint); text-decoration: line-through; }
-/* Square, so a task mark is distinguishable from an event's at 5px without
-   relying on colour. Selected on the DATA ATTRIBUTE and not on a `.task` class:
-   `.task` is a global rule (the Tasks pane's row, line ~293) carrying padding,
+/* Square, so a task mark is distinguishable from an event's (which takes the
+   --r-dot corner every dot does) at 5px without relying on colour. Selected on the DATA ATTRIBUTE and not on a `.task` class:
+   `.task` is a global rule (the Tasks pane's row, "task rows" above) carrying padding,
    display and a border, and a 5px dot given that class as a modifier inherits
    all of it and renders as a 28x23 slab. */
 .ev-dot[data-kind="task"] { border-radius: 0; }
 
 .cal-more {
   background: none; border: 0; padding: 0 5px; text-align: left; cursor: pointer;
-  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); color: var(--fg-faint);
+  font-family: var(--font-control); font-size: calc(var(--fs-control-sm) * var(--fs-scale));
+  font-weight: var(--wght-control); line-height: var(--lh-control); color: var(--fg-faint);
 }
 .cal-more:hover { color: var(--accent); }
 /* "+N more" day popover — fixed so .cal-scroll can't clip it */
 .pop-backdrop { position: fixed; inset: 0; z-index: 60; }
 .day-pop {
   position: fixed; width: 260px; max-height: 320px; overflow-y: auto;
-  background: var(--bg-elev); border: 1px solid var(--rule);
+  background: var(--bg-elev); border: 1px solid var(--edge); border-radius: var(--r-md);
   box-shadow: var(--shadow); padding-bottom: 4px;
+  transform-origin: top; animation: var(--enter-float);
 }
 .day-pop-head {
-  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case);
+  font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.08em * var(--tracking)); color: var(--fg-faint); padding: 10px 14px 4px;
 }
 .day-pop .agenda-ev { padding: 8px 14px; font-size: calc(13px * var(--fs-scale)); }
+/* C3 · the popover's rows and the phone's day list are menus of things to
+   open, so they lose their dividers and take the inset, rounded hover fill.
+   The static agendas elsewhere are ledgers, read rather than clicked, and
+   keep their rules. */
+.day-pop .agenda-ev, .day-agenda .agenda-ev:not(.static) {
+  width: calc(100% - 2 * var(--row-inset)); margin-inline: var(--row-inset);
+  padding-inline: calc(14px - var(--row-inset));
+  border-bottom-color: var(--row-divider); border-radius: var(--r-sm);
+}
 
-/* mobile calendar: cells carry square event dots, a tap focuses the day and its
+/* mobile calendar: cells carry small rounded (--r-dot) event dots, a tap focuses the day and its
    events list in the agenda below the grid (only rendered on small screens) */
 /* `[data-focus]`, not `.focus`: the bare class is the full-screen focus session
    at the foot of this file (`position: fixed; inset: 0`), and a day cell given
    it as a modifier took that rule and painted itself over the whole app. */
 .cal-cell[data-focus] { box-shadow: inset 0 0 0 2px var(--accent); }
 .ev-dots { display: flex; flex-wrap: wrap; gap: 3px; justify-content: flex-end; padding: 0 2px; }
-.ev-dot { width: 5px; height: 5px; flex: none; background: var(--ev-c, var(--accent)); }
+.ev-dot { width: 5px; height: 5px; flex: none; background: var(--ev-c, var(--accent)); border-radius: var(--r-dot); }
 .ev-dot.allday { background: var(--ev-c, var(--ok)); }
 .day-agenda { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
 .agenda-head {
@@ -664,8 +782,9 @@
      unclassed span holding it is a flex item whose default `min-width: auto`
      resolves to min-content, i.e. the longest word. */
   overflow-wrap: anywhere; min-width: 0;
+  transition: background var(--dur) var(--ease);
 }
-.agenda-ev:hover { background: var(--bg-elev); }
+@media (hover: hover) { .agenda-ev:hover { background: var(--row-hover); } }
 /* A task agenda row: same frame as an event, marked by its checkbox. */
 .agenda-task .tick { color: var(--ev-c, var(--accent)); }
 .agenda-task.done { color: var(--fg-faint); text-decoration: line-through; }
@@ -678,16 +797,19 @@
 
 /* ---- modal / panel ---- */
 .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.32);
-  display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+  display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px;
+  animation: var(--enter-scrim); }
 /* Height-bound at every width, not only under the phone breakpoint. The
    breakpoint is a WIDTH, and a phone on its side is 844px wide by 390 tall:
    it takes these desktop rules, and a centred 700px form in a 390px viewport
    put the title above the screen and Save below it with nothing that scrolls
    (`.overlay` is fixed). The 40px is the overlay's padding on both sides; the
    phone block below re-caps this at 92dvh for the sheet. */
-.modal { background: var(--bg-elev); border: 1px solid var(--rule); width: 520px; max-width: 100%;
+.modal { background: var(--bg-elev); border: 1px solid var(--edge); border-radius: var(--r-lg);
+  width: 520px; max-width: 100%;
   max-height: calc(100dvh - 40px); overflow-y: auto;
-  box-shadow: var(--shadow-lg); padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+  box-shadow: var(--shadow-lg); padding: 18px; display: flex; flex-direction: column; gap: 12px;
+  animation: var(--enter-modal); }
 .modal-head { display: flex; align-items: baseline; justify-content: space-between; }
 .modal-title { font-family: var(--serif); font-size: calc(18px * var(--fs-scale)); font-weight: 500; }
 .field { display: flex; flex-direction: column; gap: 5px; }
@@ -720,7 +842,7 @@
   display: flex; align-items: center; gap: 10px;
   padding: 10px 2px; border-bottom: 1px solid var(--rule-faint);
 }
-.arch-row .swatch { width: 8px; height: 8px; flex: none; background: var(--fg-faint); }
+.arch-row .swatch { width: 8px; height: 8px; flex: none; background: var(--fg-faint); border-radius: var(--r-dot); }
 .arch-row .name {
   flex: 1; min-width: 0; font-size: calc(14px * var(--fs-scale));
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -761,7 +883,7 @@
    only place it was ever right. */
 .modal .arch-events { --arch-bleed: 18px; --arch-inset: 18px; }
 .arch-day-head {
-  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case);
+  font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.08em * var(--tracking)); color: var(--fg-faint);
   padding: 12px var(--arch-inset) 4px; position: sticky; top: 0; background: var(--bg-elev);
 }
@@ -771,13 +893,18 @@
 
 /* ---- login ---- */
 .login-wrap { height: 100dvh; display: flex; align-items: center; justify-content: center; padding: 20px; }
-.login-card { width: 340px; max-width: 100%; border: 1px solid var(--rule); background: var(--bg-elev);
+.login-card { width: 340px; max-width: 100%; border: 1px solid var(--edge); border-radius: var(--r-md);
+  background: var(--bg-elev);
   padding: 28px; display: flex; flex-direction: column; gap: 14px; }
-.login-brand { font-family: var(--serif); font-style: italic; font-size: calc(30px * var(--fs-scale)); text-align: center; }
+/* The wordmark: Newsreader italic 500, accent period. */
+.login-brand { font-family: var(--serif); font-style: italic; font-weight: var(--wght-wordmark);
+  font-size: calc(30px * var(--fs-scale)); text-align: center; }
 .login-brand .dot { color: var(--accent); font-style: normal; }
-.login-err { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--warn); }
+/* Error and warning notes are sentences, so they are set in the chrome face
+   now, a step larger than the mono they replaced (--fs-note-step). */
+.login-err { font-family: var(--font-note); font-size: calc((11px + var(--fs-note-step)) * var(--fs-scale)); color: var(--warn); }
 
-.banner { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--warn);
+.banner { font-family: var(--font-note); font-size: calc((11px + var(--fs-note-step)) * var(--fs-scale)); color: var(--warn);
   padding: 6px var(--gutter); border-bottom: 1px solid var(--rule); background: color-mix(in oklch, var(--warn) 10%, transparent); }
 
 /* ---- touch devices: hover-revealed controls must always be visible ---- */
@@ -821,7 +948,7 @@
   }
   .tabs::-webkit-scrollbar { display: none; }
   /* A 44px hit area on the strip's tabs and the settings gear WITHOUT growing
-     the bar: the tab's own box stays ~29px so the topbar's height is unchanged,
+     the bar: the tab's own box stays ~33px (~29px under Classic) so the topbar's height is unchanged,
      and the same centred `::after` the Today row controls use catches the
      touch. Tabs are wider than 44px and 2px apart, so the areas never overlap;
      the gear is the one `.icon-btn` in the bar. `aria-current` is set by App. */
@@ -844,10 +971,11 @@
   .settings-menu.set-sheet {
     width: 100%; max-width: none; max-height: 88dvh;
     display: flex; flex-direction: column;
-    background: var(--bg-elev); border: 0; border-top: 1px solid var(--rule);
-    box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.28);
+    background: var(--bg-elev); border: 0; border-top: 1px solid var(--edge);
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    box-shadow: var(--shadow-sheet);
     padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
-    animation: sheet-up 0.18s ease-out;
+    animation: var(--enter-sheet);
   }
   .set-sheet .set-head {
     font-size: calc(12px * var(--fs-scale)); letter-spacing: calc(0.08em * var(--tracking));
@@ -876,7 +1004,7 @@
   }
   /* Full-width rows with a chevron — a list you tap, not a tab you pick. */
   .set-sheet .set-nav-item {
-    font-family: var(--sans); font-size: calc(15px * var(--fs-scale));
+    font-family: var(--sans); font-size: calc(15px * var(--fs-scale)); font-weight: 400;
     text-transform: none; letter-spacing: 0; color: var(--fg);
     border-left: 0; border-bottom: 1px solid color-mix(in oklab, var(--rule) 55%, transparent);
     padding: 14px 4px; display: flex; align-items: center; justify-content: space-between;
@@ -908,7 +1036,7 @@
   }
   .side-mobiletrigger svg { flex: none; color: var(--fg-muted); }
   .side-mobiletrigger .mb-title {
-    font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); text-transform: var(--label-case);
+    font-family: var(--mono); font-size: calc(var(--fs-meta) * var(--fs-scale)); text-transform: var(--label-case);
     letter-spacing: calc(0.08em * var(--tracking)); color: var(--fg-muted); flex: none;
   }
   .side-mobiletrigger .mb-summary {
@@ -938,11 +1066,14 @@
   .drawer-overlay { align-items: flex-end; padding: 0; }
   .side.drawer {
     width: 100%; max-height: 88dvh; flex-direction: column; overflow: hidden;
-    background: var(--bg-elev); border: 0; border-top: 1px solid var(--rule);
-    box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.28);
+    background: var(--bg-elev); border: 0; border-top: 1px solid var(--edge);
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    box-shadow: var(--shadow-sheet);
     padding-bottom: env(safe-area-inset-bottom);
-    animation: sheet-up 0.18s ease-out;
+    animation: var(--enter-sheet);
   }
+  /* Classic's entrance; the current design's is `sheet-in`, at the foot of
+     the file with the other entrances. */
   @keyframes sheet-up {
     from { transform: translateY(16px); opacity: 0.5; }
     to { transform: none; opacity: 1; }
@@ -953,7 +1084,14 @@
   }
   .side.drawer .side-list { flex: 1 1 auto; overflow-y: auto; padding-bottom: 8px; }
   /* full-width, touch-sized rows with an always-visible edit affordance */
-  .side.drawer .side-item { padding: 13px 16px; gap: 11px; }
+  .side.drawer .side-item { padding: 13px calc(16px - var(--row-inset)); gap: 11px; }
+  /* The drawer is --bg-elev, the fill the rail's rows use on --paper — so here
+     the active and hovered row step the other way, to --paper, or the fill
+     is invisible and only the accent edge is left (C3). */
+  .side.drawer .side-item.active { background: var(--row-hover-on-elev); }
+  @media (hover: hover) {
+    .side.drawer .side-item:hover { background: var(--row-hover-on-elev); }
+  }
   .side.drawer .side-item .name { flex: 1; max-width: none; font-size: calc(15px * var(--fs-scale)); }
   .side.drawer .side-item .swatch { width: 10px; height: 10px; }
   .side.drawer .side-item .side-edit {
@@ -991,11 +1129,13 @@
      124px over three after. */
   .today-head .spacer { display: none; }
 
-  /* …and the header's buttons keep the size they SHIPPED at on a phone,
-     undoing the compact `7px 11px` the fence gives them for the desktop. The
-     compact size measures 30px tall and the shipped one 34px; neither reaches
-     the 44px touch guideline this block enforces elsewhere, and that gap is
-     older than this rule — what it must not do is widen it.
+  /* …and the header's buttons take a button's own padding back on a phone,
+     undoing the compact `7px 11px` the fence gives them for the desktop.
+     --btn-pad, not a literal: 10px 16px in the shipped design (whose 38px
+     control floor sets their height either way) and Classic's 9px 13px, where
+     they measure 34px against the compact 30px. Neither reaches the 44px touch
+     guideline this block enforces elsewhere, and that gap is older than this
+     rule — what it must not do is widen it.
 
      They are not swept into the 44px `::after` treatment below either, and
      that is deliberate rather than an omission. It works for `.today-row`'s
@@ -1010,7 +1150,7 @@
      BELOW this block and declares these at (0,1,0), so the bare form of this
      rule would lose on source order and silently never apply. That mistake has
      shipped four times in this file. */
-  .btn.today-review, .btn.today-focus, .btn.today-menu-btn { padding: 9px 13px; }
+  .btn.today-review, .btn.today-focus, .btn.today-menu-btn { padding: var(--btn-pad); }
 
   /* The header's own gap, down from `.content-head`'s 12px. On a phone this
      header carries a title, a two-button nav, a date, the week's total, the
@@ -1034,7 +1174,7 @@
   }
   .day-col-body { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
   .task { padding-top: 11px; padding-bottom: 11px; }
-  .task.sub { padding-left: calc(var(--gutter) + var(--task-depth, 1) * 18px); }
+  .task.sub { padding-left: calc(var(--gutter) - var(--row-inset) + var(--task-depth, 1) * 18px); }
   /* The density token, re-declared rather than narrowed selector by selector.
      What this replaced was a hand-maintained list — `.task, .quickadd,
      .content-head, .cal-head, .empty, .banner` plus `.section-label` — and the
@@ -1052,7 +1192,10 @@
      is (0,2,0) — MORE specific than a bare `:root`, so a plain re-declaration
      here would have lost to it and left every preset user on 24px. Matching its
      specificity and winning on source order (app.css is imported after
-     tokens.css) is what makes this cover them.
+     tokens.css) is what makes this cover them. A preset's DARK block carries one
+     more attribute, (0,3,0), so it needs the third selector: without it every
+     preset in the dark theme kept its desktop gutter on a phone — Workspace at
+     24px, and Classic at 26px where the design it restores had 14px.
 
      A gutter the user set THEMSELVES still wins, and deliberately: `applyTokens`
      writes a saved theme's tokens as inline properties on <html>, which beat any
@@ -1062,12 +1205,12 @@
      the stair-step again, pointing the other way. (`--check-size` is re-declared
      just below with a bare `:root` because it is deliberately NOT themeable — see
      its note beside the base value.) */
-  :root, :root[data-preset] { --gutter: 14px; }
+  :root, :root[data-preset], :root[data-preset][data-theme="dark"] { --gutter: 14px; }
   /* On :root, so `.check` and `.today-check-gap` move together — see the note
      beside the base value. */
   :root { --check-size: 21px; }
   .task-actions { gap: 8px; }
-  .task-actions button { font-size: calc(12px * var(--fs-scale)); padding: 5px 6px; }
+  .task-actions button { font-size: calc((var(--fs-control-compact) + 1px) * var(--fs-scale)); padding: 5px 6px; }
   .scroll { padding-bottom: calc(40px + env(safe-area-inset-bottom)); }
 
   /* inputs at 16px so iOS Safari doesn't zoom the page on focus. The floor is
@@ -1077,7 +1220,7 @@
   /* The same floor for the two pickers that are a <select> without `.input`:
      the Language picker (SettingsMenu) and the reminder field (ReminderField,
      in the task and event modals). iOS applies the zoom heuristic to a select
-     exactly as to an input, and `.menu-toggle` is 11px. Qualified by element
+     exactly as to an input, and `.menu-toggle` is 14px (11px under Classic). Qualified by element
      — (0,1,1) against `.menu-toggle`'s (0,1,0) — so it wins wherever the next
      `.menu-toggle` fence lands, which is how the three floors before it were
      lost. The BUTTON toggles beside these keep their size: nothing zooms for a
@@ -1099,6 +1242,7 @@
   .modal {
     width: 100%; max-height: 92dvh; overflow-y: auto;
     border-left: 0; border-right: 0; border-bottom: 0;
+    border-radius: var(--r-lg) var(--r-lg) 0 0; box-shadow: var(--sheet-modal-shadow);
     padding-bottom: calc(18px + env(safe-area-inset-bottom));
   }
   .field-row { flex-direction: column; gap: 12px; }
@@ -1120,9 +1264,12 @@
   display: flex; align-items: center; gap: 10px;
   max-width: min(480px, calc(100vw - 32px));
   padding: 10px 12px;
-  background: var(--bg-elev); border: 1px solid var(--warn);
+  background: var(--bg-elev); border: 1px solid var(--warn); border-radius: var(--r-md);
   box-shadow: var(--shadow);
-  font-family: var(--mono); font-size: calc(12px * var(--fs-scale)); color: var(--warn);
+  font-family: var(--font-note); font-size: calc((12px + var(--fs-note-step)) * var(--fs-scale)); color: var(--warn);
+  /* M4 · rises into place — on `translate`, which composes with the
+     centring `transform` above instead of replacing it. */
+  animation: var(--enter-toast);
 }
 .toast span { min-width: 0; overflow-wrap: break-word; }
 .toast .icon-btn { flex: none; }
@@ -1143,7 +1290,7 @@
 /* ---- client scheduling: owner view ---- */
 .sched-list { display: flex; flex-wrap: wrap; gap: 12px; padding: 6px var(--gutter); }
 .sched-card {
-  width: 340px; max-width: 100%; border: 1px solid var(--rule); background: var(--bg-elev);
+  width: 340px; max-width: 100%; border: 1px solid var(--edge); border-radius: var(--r-md); background: var(--bg-elev);
   padding: 14px 16px; display: flex; flex-direction: column; gap: 6px;
 }
 /* An off link steps back by TOKEN, not by an opacity on the card. The card is
@@ -1159,7 +1306,7 @@
   overflow-wrap: break-word; }
 .sched-toggle {
   display: inline-flex; align-items: center; gap: 5px; cursor: pointer; flex: none;
-  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case);
+  font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); color: var(--fg-muted);
 }
 .sched-card.off .sched-toggle { color: var(--fg-faint); }
@@ -1183,7 +1330,7 @@
    `.scroll` it becomes sideways scrolling of the whole pane. */
 .sched-booking .who { font-size: calc(14px * var(--fs-scale)); min-width: 0; overflow-wrap: anywhere; }
 .sched-booking .who .email { color: var(--fg-muted); font-size: calc(12px * var(--fs-scale)); margin-left: 6px; }
-.sched-booking .via { font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case);
+.sched-booking .via { font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); color: var(--fg-faint); }
 .sched-booking .notes { flex-basis: 100%; font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted);
   white-space: pre-wrap; min-width: 0; overflow-wrap: anywhere; }
@@ -1198,7 +1345,7 @@
 .sched-day-name {
   display: inline-flex; align-items: center; gap: 7px; cursor: pointer; flex: none;
   width: 64px; padding-top: 6px;
-  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking));
+  font-family: var(--mono); font-size: calc(var(--fs-meta) * var(--fs-scale)); text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking));
 }
 .sched-day.off .sched-day-name { color: var(--fg-faint); }
 .sched-ranges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
@@ -1208,7 +1355,7 @@
    from a label. Same shape as `.login-err`, which is the app's other inline
    field-level error. */
 .sched-err {
-  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--warn);
+  font-family: var(--font-note); font-size: calc((11px + var(--fs-note-step)) * var(--fs-scale)); color: var(--warn);
 }
 
 /* `min-width: 0` on both, so a range can give way instead of pushing the sheet
@@ -1220,17 +1367,28 @@
    inputs shrinking 130 -> 96 / 116 and the 16px floor untouched. */
 .sched-range { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-faint);
   min-width: 0; }
-.sched-range .input { width: auto; min-width: 0; padding: 5px 6px;
+.sched-range .input { width: auto; min-width: 0; min-height: 0; padding: 5px 6px;
   font-size: calc(13px * var(--fs-scale)); }
 .sched-range .icon-btn { padding: 4px 6px; font-size: calc(10px * var(--fs-scale)); }
 /* The app's "add another one of these" control: a dashed outline is the
    signature. Shared with the bulk composer's row-adder. */
 .sched-add-range, .bulk-add-row {
-  background: none; border: 1px dashed var(--rule); color: var(--fg-faint); cursor: pointer;
-  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case);
+  background: none; border: 1px dashed var(--rule); border-radius: var(--r-sm); color: var(--fg-faint); cursor: pointer;
+  font-family: var(--font-control); font-size: calc(var(--fs-control-sm) * var(--fs-scale));
+  font-weight: var(--wght-control); line-height: var(--lh-control); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); padding: 5px 8px;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    background var(--dur) var(--ease), scale var(--dur) var(--ease);
 }
-.sched-add-range:hover, .bulk-add-row:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+@media (hover: hover) {
+  .sched-add-range:hover, .bulk-add-row:hover:not(:disabled) {
+    color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg);
+  }
+}
+.sched-add-range:active, .bulk-add-row:active:not(:disabled) {
+  color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg);
+  scale: var(--press-scale);
+}
 .bulk-add-row:disabled { opacity: 0.4; cursor: default; }
 .sched-unavail { font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); padding-top: 7px; }
 .sched-check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: calc(14px * var(--fs-scale)); }
@@ -1243,7 +1401,7 @@
 }
 .booking-card {
   width: 640px; max-width: 100%; height: fit-content;
-  border: 1px solid var(--rule); background: var(--bg-elev);
+  border: 1px solid var(--edge); border-radius: var(--r-md); background: var(--bg-elev);
   padding: 28px; display: flex; flex-direction: column; gap: 14px;
 }
 .booking-title { font-family: var(--serif); font-size: calc(28px * var(--fs-scale)); font-weight: 500; margin: 0;
@@ -1252,14 +1410,14 @@
   overflow-wrap: anywhere; }
 .booking-lead { margin: 0; font-family: var(--serif); font-size: calc(17px * var(--fs-scale)); }
 .booking-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.booking-tz { font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); color: var(--fg-faint);
+.booking-tz { font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); color: var(--fg-faint);
   text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking)); }
 /* Inline failure notice — the one place an error is reported in place rather
    than through the toast. Shared with the bulk composer's partial-failure
    banner. */
 .booking-err, .bulk-fail {
-  font-family: var(--mono); font-size: calc(12px * var(--fs-scale)); color: var(--warn);
-  border: 1px solid var(--warn); padding: 8px 10px;
+  font-family: var(--font-note); font-size: calc((12px + var(--fs-note-step)) * var(--fs-scale)); color: var(--warn);
+  border: 1px solid var(--warn); border-radius: var(--r-sm); padding: 8px 10px;
   background: color-mix(in oklch, var(--warn) 8%, transparent);
 }
 
@@ -1267,31 +1425,41 @@
   scrollbar-width: thin; }
 .booking-day {
   flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px;
-  background: none; border: 1px solid var(--rule); cursor: pointer; padding: 8px 12px;
+  background: none; border: 1px solid var(--rule); border-radius: var(--r-sm); cursor: pointer; padding: 8px 12px;
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur) var(--ease),
+    scale var(--dur) var(--ease);
 }
-.booking-day:hover { border-color: var(--accent); }
+@media (hover: hover) {
+  .booking-day:hover { border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg); }
+}
+.booking-day:active { scale: var(--press-scale); }
 .booking-day.active { border-color: var(--accent); background: color-mix(in oklch, var(--accent) 10%, transparent); }
-.booking-day .dow { font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); text-transform: var(--label-case);
+.booking-day .dow { font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.08em * var(--tracking)); color: var(--fg-faint); }
 .booking-day .dnum { font-family: var(--serif); font-size: calc(14px * var(--fs-scale)); font-weight: 500; }
 
 .booking-daytitle { font-family: var(--serif); font-size: calc(16px * var(--fs-scale)); font-weight: 500; margin-top: 2px; }
 .booking-busy { display: flex; flex-wrap: wrap; gap: 6px; }
 .busy-chip {
-  font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); letter-spacing: calc(0.04em * var(--tracking));
-  color: var(--fg-faint); border: 1px solid var(--rule-faint);
+  font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); letter-spacing: calc(0.04em * var(--tracking));
+  color: var(--fg-faint); border: 1px solid var(--rule-faint); border-radius: var(--r-pill);
   background: var(--paper); padding: 3px 7px;
 }
 .booking-slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 7px; }
 .slot-btn {
-  background: none; border: 1px solid var(--rule); cursor: pointer;
+  background: none; border: 1px solid var(--rule); border-radius: var(--r-sm); cursor: pointer;
   font-family: var(--mono); font-size: calc(12px * var(--fs-scale)); padding: 9px 6px; color: var(--fg);
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    background var(--dur) var(--ease), scale var(--dur) var(--ease);
 }
-.slot-btn:hover { border-color: var(--accent); color: var(--accent); }
+@media (hover: hover) {
+  .slot-btn:hover { border-color: var(--ghost-hover-edge); color: var(--ghost-hover-fg); background: var(--ghost-hover-bg); }
+}
+.slot-btn:active { scale: var(--press-scale); }
 
 .booking-picked {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  border: 1px solid var(--accent); padding: 10px 12px;
+  border: 1px solid var(--accent); border-radius: var(--r-sm); padding: 10px 12px;
   background: color-mix(in oklch, var(--accent) 8%, transparent);
   font-family: var(--serif); font-size: calc(15px * var(--fs-scale));
 }
@@ -1317,7 +1485,7 @@
     repeating-linear-gradient(to bottom, var(--rule-faint) 0 1px, transparent 1px 56px); }
 .dash-mod {
   position: absolute; display: flex; flex-direction: column; overflow: hidden;
-  background: var(--bg-elev); border: 1px solid var(--rule-faint);
+  background: var(--bg-elev); border: 1px solid var(--rule-faint); border-radius: var(--r-md);
 }
 .dash-grid.arranging .dash-mod { border-color: var(--rule); }
 .dash-mod-head {
@@ -1359,10 +1527,13 @@
 }
 .dash-pick {
   width: 220px; text-align: left; cursor: pointer; padding: 9px 11px;
-  background: var(--bg-elev); border: 1px solid var(--rule);
+  background: var(--bg-elev); border: 1px solid var(--edge); border-radius: var(--r-md);
   display: flex; flex-direction: column; gap: 3px;
+  transition: border-color var(--dur-fast) var(--ease);
 }
-.dash-pick:hover { border-color: var(--accent); }
+/* C1 · an interactive card answers the pointer with its border, and only its
+   border: no lift, no shadow. */
+@media (hover: hover) { .dash-pick:hover { border-color: var(--card-hover-edge); } }
 .dash-pick-name { font-size: calc(14px * var(--fs-scale)); color: var(--fg); }
 .dash-pick-blurb { font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted); line-height: 1.35; }
 
@@ -1436,7 +1607,7 @@
    and the extra `opacity: 0.5` the contrast fix for these cells prescribed
    dropping had stayed behind, halving the raised token back to 1.7:1. */
 .mini-day.dim { color: var(--fg-faint); }
-.mini-day.today { color: var(--bg); background: var(--accent); }
+.mini-day.today { color: var(--bg); background: var(--accent); border-radius: var(--r-xs); }
 /* a busy day carries its calendars' colors beneath the number, so "has events"
    survives the today highlight instead of competing with it */
 .mini-dots {
@@ -1479,6 +1650,7 @@
 }
 .tab-order-row .num { color: var(--fg-faint); font-size: calc(11px * var(--fs-scale)); }
 .tab-order-row .name { flex: 1; font-size: calc(14px * var(--fs-scale)); }
+.tab-order-row .icon-btn { font-family: var(--font-glyph); }
 
 /* ---- appearance editor ------------------------------------------------- */
 .appearance-modal { width: 640px; max-height: 88vh; overflow-y: auto; }
@@ -1497,7 +1669,7 @@
 .appear-control .input { width: auto; flex: 1; min-width: 0; }
 .appear-swatch {
   flex: none; width: 30px; height: 30px; padding: 0; cursor: pointer;
-  background: none; border: 1px solid var(--rule);
+  background: none; border: 1px solid var(--rule); border-radius: var(--r-xs);
 }
 .appear-text { font-size: calc(12px * var(--fs-scale)); }
 /* a value that will not validate is refused, not silently applied — say so */
@@ -1505,10 +1677,15 @@
 .appear-range { flex: 1; min-width: 0; accent-color: var(--accent); }
 .appear-num { flex: none; width: 52px; text-align: right; font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); }
 .appear-clear {
-  flex: none; background: none; border: 1px solid var(--rule); cursor: pointer;
+  flex: none; background: none; border: 1px solid var(--rule); border-radius: var(--r-sm); cursor: pointer;
   color: var(--fg-muted); padding: 5px 7px; font-size: calc(12px * var(--fs-scale)); line-height: 1;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
+    background var(--dur) var(--ease), scale var(--dur) var(--ease);
 }
-.appear-clear:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+@media (hover: hover) {
+  .appear-clear:hover:not(:disabled) { color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg); }
+}
+.appear-clear:active:not(:disabled) { color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg); scale: var(--press-scale); }
 .appear-clear:disabled { opacity: 0.25; cursor: default; }
 
 @media (max-width: 720px) {
@@ -1535,7 +1712,7 @@
    weekday toggles in the availability editor */
 .bulk-toggle {
   display: inline-flex; align-items: center; gap: 7px; cursor: pointer; white-space: nowrap;
-  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  font-family: var(--mono); font-size: calc(var(--fs-meta) * var(--fs-scale));
   text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking)); color: var(--fg-faint);
 }
 
@@ -1549,7 +1726,7 @@
 .bulk-head { padding: 0 2px 3px; }
 .bulk-row { padding: 5px 2px; border-bottom: 1px solid var(--rule-faint); }
 /* dense sizing for controls in a row, as in the availability editor's ranges */
-.bulk-row .input { padding: 5px 6px; font-size: calc(13px * var(--fs-scale)); }
+.bulk-row .input { padding: 5px 6px; min-height: 0; font-size: calc(13px * var(--fs-scale)); }
 .bulk-row .icon-btn { padding: 4px 6px; font-size: calc(10px * var(--fs-scale)); }
 .bulk-cell { display: flex; gap: 4px; min-width: 0; }
 .bulk-cell .input { flex: 1; min-width: 0; }
@@ -1619,7 +1796,7 @@
   .bulk-rows { max-height: none; overflow: visible; gap: 10px; }
   .bulk-head { display: none; }
   .bulk-row { flex-wrap: wrap; align-items: center;
-    border: 1px solid var(--rule-faint); padding: 9px 10px; }
+    border: 1px solid var(--rule-faint); border-radius: var(--r-md); padding: 9px 10px; }
   /* each property wraps onto its own line under its label; due keeps its date
      and time side by side because they share a cell */
   .bulk-cell { flex: 1 1 100%; flex-wrap: wrap; }
@@ -1714,18 +1891,18 @@
 }
 
 /* ---- corner radius ----------------------------------------------------
-   Smylte ships square (--radius: 0px), and every rule below is a no-op at
-   that default. They live together at the end of the file, rather than
-   scattered through it, so the set of things the Appearance editor's corner
-   slider actually reaches is auditable in one place — and so this whole
-   block can be read as "the rounding opt-in" instead of hunting for stray
-   border-radius declarations. The micro indicators (.swatch, .list-dot,
-   .ev-dot, .pri-bar) are deliberately excluded: they are 3-9px marks, and
-   rounding them just turns them into dots regardless of the chosen radius. */
-.menu, .day-pop, .modal, .toast, .login-card, .booking-card, .sched-card,
-.day-card, .cal-ev, .view-tab, .col-add, .sched-add-range, .booking-day,
-.slot-btn, .busy-chip, .booking-err, .booking-picked, .side.drawer,
-.dash-mod, .bulk-add-row, .bulk-fail, .chip { border-radius: var(--radius); }
+   There used to be an opt-in list here: Smylte shipped square, and the
+   handful of things the Appearance editor's corner slider could round were
+   gathered in one rule so the set was auditable. The refinement rounds every
+   control and container, each to its step of the scale (S1: --r-xs checks
+   and badges, --r-sm controls and rows, --r-md cards and popovers, --r-lg
+   modals and sheets, --r-pill chips, --r-dot dots), so the radius now sits in
+   each component's own rule. The scale is derived from --radius, so the
+   slider still reaches all of it, and Classic's 0px squares all of it but the
+   "all lists" swatch, which Classic always drew round.
+   design-tokens.test.ts holds the rule this block used to: no corner in
+   these sheets is anything but 0 or a --r-* step. What stays square is the
+   page — section rules, grids, the calendar's hairlines. */
 
 /* ── notifications ─────────────────────────────────────────────────────────── */
 /* One block per rule: the row that toggles it, then the hintline that says what
@@ -1738,8 +1915,10 @@
 /* Whether a rule buzzes is fixed in the backend and cannot be configured, so
    this is a LABEL, not a control: no pointer cursor, no hover, nothing that
    invites a click that would do nothing. */
+/* A chip in the markup, so it takes the chip's face and size (the control
+   face; Classic's levers make that 10px mono again) and only the casing, the
+   tracking and the colour are its own. */
 .notif-volume {
-  font-family: var(--mono); font-size: calc(10px * var(--fs-scale));
   text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking));
   color: var(--fg-faint); margin-left: auto;
 }
@@ -1821,16 +2000,21 @@
    than an opacity: the off chips are the list of what can still be added,
    each an enabled `aria-pressed` button, and `opacity: 0.45` over the muted
    token put their names at 1.8:1. */
-.disp-picks .chip { background: none; cursor: pointer; color: var(--fg-faint); }
+.disp-picks .chip { background: none; border-color: var(--rule); cursor: pointer; color: var(--fg-faint); }
 .disp-picks .chip.is-on { background: var(--accent); border-color: var(--accent); color: var(--bg); }
 .disp-url {
   display: flex; align-items: center; gap: 8px; margin: 4px 0;
   padding: 8px 10px; background: var(--paper); border: 1px solid var(--rule);
-  border-radius: var(--radius);
+  border-radius: var(--r-sm);
 }
 /* The URL wraps rather than scrolling: it is meant to be READ off the screen
    and typed into a device, and a token cut off at the panel's edge is a token
    that gets typed in wrong. */
+.disp-url .btn, .booking-picked .btn, .toast .icon-btn, .tag-input .chip {
+  /* S2 · inside a padded rounded box, a corner is the box's minus the padding,
+     and every one of these works out below the floor, which is --r-xs. */
+  border-radius: var(--r-xs);
+}
 .disp-url code {
   flex: 1; min-width: 0; word-break: break-all;
   font-size: calc(12px * var(--fs-scale));
@@ -1858,14 +2042,16 @@
      24px  the tab title (`.content-title`, serif)
      15px  reading: a row's title, and the reflection read back on the look-back
      13px  secondary prose: an empty state, an agenda row, a parse chip
-     11px  meta, always mono: figures, dates, estimates, counts, buttons
-     10px  the micro-label (`.label`, `.chip`)
+     11px  meta, always mono: figures, dates, estimates, counts
+     11px  the micro-label (`.label`) — --fs-micro, 10px under Classic
 
    It was eight, with 12, 13 and 14 all doing "secondary" — three sizes for one
-   job, chosen a rule at a time. There is no scale token behind these: this file
-   writes `calc(<literal>px * var(--fs-scale))` everywhere and one new idiom for
-   one tab would be worse than the literals, so the tiers are held by this
-   comment and by anyone reading it.
+   job, chosen a rule at a time. The literals are held by this comment and by
+   anyone reading it. The two exceptions are the September 2026 refinement's
+   tokens and not this tab's own: controls (buttons, chips, the "more" row)
+   take the control tiers, --fs-control and its smaller steps, and the
+   micro-label takes --fs-micro, so a design that moves them — Classic puts
+   both back to mono at 11px and 10px — moves them here too.
 
    The DIALOGS in this fence — `.plan-*`, `.shut-*`, `.habit-*` — are
    deliberately outside that list and keep 12px and 14px. They are a different
@@ -1875,7 +2061,7 @@
 
 /* ---- the tab's own rhythm ----------------------------------------------
    Everything full-width on this screen sits on one vertical step, and the step
-   is `--row-y` — the same 9px a task row is padded by. That is the point: the
+   is `--row-y` — the same 10px a task row is padded by (9px under Classic). That is the point: the
    chrome and the rows breathe alike, and a density preset that moves one moves
    both. Before this the tab used ELEVEN different vertical values (4, 5, 6, 8,
    9, 10, 11, 12, 14, 16 and 40), which is what "riddled with inconsistent
@@ -1936,7 +2122,7 @@
 
 /* A HAIRLINE BEFORE EACH FIGURE, and it is not decoration. This header carries
    three `.content-sub` spans in a row — the date, the week's total and the
-   day's count — at identical 11px mono, identical tracking, identical
+   day's count — at identical --fs-meta mono (12px; 11px caps under Classic), identical tracking, identical
    --fg-faint. At the container's gap they read as one run of text:
    "FRIDAY, AUGUST 28 12 THIS WEEK 3 OPEN · 5 ON THE DAY".
 
@@ -2001,7 +2187,7 @@
 .today-add-opts .btn, .today-add-opts .input { flex: none; }
 /* Sized down from `.btn.ghost`: this sits under a caption, not beside the
    input, and at full button size it competes with Add for the eye. */
-.today-swap { font-size: calc(11px * var(--fs-scale)); padding: 3px 8px; }
+.today-swap { font-size: calc(var(--fs-control-compact) * var(--fs-scale)); padding: 3px 8px; min-height: 0; }
 
 /* ---- the planning ritual -----------------------------------------------
    `.modal` supplies the frame, the elevation and the corner radius, and under
@@ -2074,7 +2260,7 @@
 .shut-row .today-title { flex: 1 1 100%; }
 .shut-arms { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .shut-act {
-  flex: none; padding: 3px 8px; font-size: calc(11px * var(--fs-scale));
+  flex: none; padding: 3px 8px; min-height: 0; font-size: calc(var(--fs-control-compact) * var(--fs-scale));
 }
 /* A fixed width because a date input sizes itself to its own placeholder, which
    differs by browser and by locale — left alone, this arm's width would move
@@ -2083,7 +2269,7 @@
    at full contrast is the heaviest thing in a row while being the least-reached
    -for of the three answers. */
 .shut-date {
-  flex: none; width: 132px; padding: 2px 6px; color: var(--fg-muted);
+  flex: none; width: 132px; padding: 2px 6px; min-height: 0; color: var(--fg-muted);
   font-size: calc(11px * var(--fs-scale));
 }
 /* `resize: vertical` and not both: a horizontal drag would push it past the
@@ -2152,7 +2338,7 @@
    merged into this strip — renamed rather than left, because a class named for
    a deleted element is a false trail for whoever greps it next. */
 .today-load-x { color: var(--fg-faint); }
-/* GHOST, and sized down from `.btn`'s own `9px 13px`.
+/* GHOST, and sized down from `.btn`'s own padding (--btn-pad).
 
    It was solid — inherited from the nudge band, where it was right: the band
    was an elevated surface with its own border, and a solid button inside a
@@ -2164,7 +2350,7 @@
    Ghost keeps it a button and lets the day win. The strip is read at a glance
    besides, unlike the add box above it, so it does not need the weight a
    control beside an input does. */
-.today-load-plan { padding: 5px 10px; }
+.today-load-plan { padding: 5px 10px; min-height: 0; }
 
 /* A 3px rule rather than a chart. The figure above already says it in words;
    this is only the shape of it, for the glance that does not stop to read.
@@ -2172,7 +2358,12 @@
 .today-load-bar {
   height: 3px; background: var(--rule-faint); overflow: hidden;
 }
-.today-load-fill { height: 100%; background: var(--accent); transition: width 0.15s; }
+/* Drawn full width and SCALED to the fraction (the inline `scale`), because a
+   transition on `width` animates layout, which M3 does not allow. */
+.today-load-fill {
+  height: 100%; width: 100%; background: var(--accent);
+  transform-origin: left; transition: scale var(--dur) var(--ease);
+}
 
 /* OVER CAPACITY IS --warn, and that is not a contradiction of the habit count's
    "never coloured as failure" three hundred lines below. That figure is a
@@ -2197,10 +2388,15 @@
      before. */
   --today-row-gap: 10px;
   display: flex; align-items: flex-start; gap: var(--today-row-gap);
-  padding: var(--row-y) var(--gutter);
-  border-bottom: 1px solid var(--rule-faint);
+  /* C3 · the Tasks pane's row model: no rule between rows, a rounded fill
+     under the pointer, inset from the pane edge by --row-inset — taken out of
+     the padding, so the page gutter every row is read down does not move. */
+  margin-inline: var(--row-inset);
+  padding: var(--row-y) calc(var(--gutter) - var(--row-inset));
+  border-bottom: 1px solid var(--row-divider); border-radius: var(--r-sm);
+  transition: background var(--dur) var(--ease);
 }
-.today-row:hover { background: var(--bg-elev); }
+@media (hover: hover) { .today-row:hover { background: var(--row-hover); } }
 
 /* EVERY CELL ON THE TITLE'S FIRST LINE, however many lines the title turns out
    to be.
@@ -2238,7 +2434,7 @@
    go on contributing their height or the row falls under what their 44px tap
    boxes need between them. Measured: the translate changes no row height at
    either width, single-line or wrapped; the only height this change costs is the
-   1.75px the phone rule below adds, and it says why.
+   0.75px (1.75px under Classic) the phone rule below adds, and it says why.
 
    THE COST, stated rather than buried, and it is on a phone only. That 11.5px of
    slack used to be split evenly around the title by the centring; anchored to
@@ -2267,8 +2463,8 @@
    On a phone every control in this row wears a 44x44 `::after` CENTRED ON
    ITSELF (see the mobile block). While the row centred, that box was centred in
    the row too and fitted inside it. On the first line it is centred at
-   `--row-y + --today-line / 2` = 20.25px down the row, so 22px of it wants to be
-   above that — 1.75px more than the row has. The overhang lands on the row
+   `--row-y + --today-line / 2` = 21.25px down the row (20.25px under Classic), so 22px of it wants to be
+   above that — 0.75px more than the row has (1.75px under Classic). The overhang lands on the row
    ABOVE, which owns those pixels, so the guideline is quietly not met: the hit
    walk in `backlog.aug25.stage4.browser.test.tsx` measures the tick, the
    estimate and the ✕ at 42px tall instead of 44, in BOTH engines, and at 40 once
@@ -2277,7 +2473,7 @@
    Structural for ANY fix that puts these controls on the first line, so it is
    answered here beside the rule that causes it rather than left to whoever next
    runs that suite. `max()` so a preset that already clears the bar is never
-   shrunk. The cost is 1.75px on a phone row, which also returns some of the
+   shrunk. The cost is 0.75px (Classic: 1.75px) on a phone row, which also returns some of the
    air the change takes off the top of a single-line row.
 
    Inside the fence and written as its own media block: the mobile block sits
@@ -2353,7 +2549,7 @@
    this way, and the bounds are re-applied in JS there for the same reason —
    min/max do not stop a typed value. */
 .today-est-input {
-  flex: none; width: 62px; padding: 2px 4px;
+  flex: none; width: 62px; padding: 2px 4px; min-height: 0;
   font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
 }
 
@@ -2410,7 +2606,7 @@
   font-family: var(--mono); font-size: calc(13px * var(--fs-scale));
   color: var(--fg-faint); padding: 2px 4px;
 }
-.today-drop { opacity: 0; transition: opacity 0.12s; }
+.today-drop { opacity: 0; transition: opacity var(--dur-fast) var(--ease); }
 .today-row:hover .today-drop,
 .today-drop:focus-visible { opacity: 1; }
 .today-drop:hover { color: var(--warn); }
@@ -2437,10 +2633,10 @@
    strip reads down. */
 .today-plus-empty { color: var(--warn); text-align: center; }
 .today-triage-actions { display: flex; gap: 6px; align-items: center; flex: none; }
-.today-triage-actions .btn { padding: 3px 8px; font-size: calc(11px * var(--fs-scale)); }
+.today-triage-actions .btn { padding: 3px 8px; min-height: 0; font-size: calc(var(--fs-control-compact) * var(--fs-scale)); }
 /* Narrow, because it holds one date and sits at the end of a row that already
    has three controls on it. */
-.today-triage-date { width: auto; max-width: 9.5rem; padding: 2px 6px;
+.today-triage-date { width: auto; max-width: 9.5rem; padding: 2px 6px; min-height: 0;
   font-size: calc(11px * var(--fs-scale)); }
 /* The row wraps rather than squeezing its controls off-screen on a phone: three
    answers at the end of a title that can be any length is more than one line
@@ -2464,7 +2660,7 @@
    Today tab's own, drawn with the same 2px accent rule they all use, which is
    what makes a drop target on this screen read as the same idea it does on
    every other. */
-.today-row.drag-over { box-shadow: inset 0 2px 0 var(--accent); }
+.today-row.drag-over { box-shadow: inset 0 2px 0 var(--accent); border-radius: 0; }
 /* …and the BOTTOM edge when the drop lands below, which `moveRow` makes it do
    for every downward drag. Without this the line was always on the top edge, so
    dragging down aimed the owner at the gap ABOVE where the row would go. Same
@@ -2482,16 +2678,17 @@
 }
 
 /* The way past a capped group. Shaped like `.cal-more`, the calendar's "+N
-   more", because it is the same idea in the same voice — a quiet way past a
+   more", because it is the same idea in the same voice (both the control face) — a quiet way past a
    deliberate bound, not a control competing with the rows above it. It takes
    the page gutter so it lines up under the titles rather than under the row's
    left edge, which would read as a sixth row. */
 .today-more {
   display: block; background: none; border: 0; cursor: pointer; text-align: left;
   padding: 6px var(--gutter);
-  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  font-family: var(--font-control); font-size: calc(var(--fs-control-compact) * var(--fs-scale));
+  font-weight: var(--wght-control); line-height: var(--lh-control);
   color: var(--fg-faint); text-transform: var(--label-case);
-  letter-spacing: calc(0.06em * var(--tracking));
+  letter-spacing: calc(0.06em * var(--tracking)); transition: color var(--dur-fast) var(--ease);
 }
 @media (hover: hover) { .today-more:hover { color: var(--accent); } }
 
@@ -2577,8 +2774,13 @@
    will happily set it to --bg and flatten this to nothing. The ↻ on every row
    and the headings above and below both survive that, and both survive a
    greyscale screenshot. */
-.today-habits { background: var(--paper); }
-.today-habits .today-row:last-child { border-bottom-color: var(--rule); }
+.today-habits { background: var(--paper); box-shadow: inset 0 -1px 0 var(--habits-close); }
+/* The line that closes the band. It was the last habit row's own bottom rule,
+   which is right while rows are square and full-width (Classic) and wrong once
+   they are inset and rounded — it would be a short curved line floating inside
+   the band. So the current design draws it on the band itself, full width, and
+   the two levers hand the job to whichever element is straight. */
+.today-habits .today-row:last-child { border-bottom-color: var(--habits-close-row); }
 /* Hover, computed FROM the band rather than inherited from `.today-row:hover`.
    That rule paints --bg-elev, which is a step LIGHTER than --bg in the light
    themes and — because --paper is lighter than --bg-elev in the dark ones — a
@@ -2618,7 +2820,7 @@
    never through a bare `.task` / `.note` class — see the note in TodayRow.
    `.task` is the Tasks pane's row rule in this same global stylesheet, and a
    mark wearing it inherited that row's padding and grew into a 52px slab. */
-.today-kind-box { width: 7px; height: 7px; flex: none; box-sizing: border-box; }
+.today-kind-box { width: 7px; height: 7px; flex: none; box-sizing: border-box; border-radius: var(--r-dot); }
 /* ONE TITLE LINE TALL, on this row only — which is what lets `flex-start` and
    the column's own centring put all three faces on the first line without either
    of them knowing how tall a face is. A task's 7px square, a note's bordered one
@@ -2814,23 +3016,28 @@
 .today-menu {
   position: absolute; top: calc(100% - 4px); right: var(--gutter); z-index: 50;
   min-width: 168px; max-width: calc(100vw - 2 * var(--gutter));
-  background: var(--bg-elev); border: 1px solid var(--rule);
-  border-radius: var(--radius); box-shadow: var(--shadow);
+  background: var(--bg-elev); border: 1px solid var(--edge);
+  border-radius: var(--r-md); box-shadow: var(--shadow);
   padding: 4px; display: flex; flex-direction: column;
+  transform-origin: top right; animation: var(--enter-float);
 }
 /* A row in the popover, not a button in a row of buttons: full width, left
-   aligned, no border of its own. The type is the header's own mono micro-label
+   aligned, no border of its own. The type is the control face at the reading
+   weight, 400, because this is a menu ROW (C3), not a button in a row; under
+   Classic that face is the header's mono micro-label
    so the menu reads as part of this tab rather than as a system menu.
    `min-height` is the touch guideline, and it is met by the ROW rather than by
    a 44px tap box the way `.today-row`'s controls are — a full-width row has the
    height to spare, and two 44px boxes centred on adjacent rows would overlap. */
 .today-menu-item {
-  background: none; border: 0; border-radius: var(--radius); cursor: pointer;
+  background: none; border: 0; border-radius: var(--r-menu-item); cursor: pointer;
   display: flex; align-items: center; gap: 7px;
   padding: 9px 11px; min-height: 44px; text-align: left; white-space: nowrap;
-  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  font-family: var(--font-control); font-size: calc(var(--fs-control) * var(--fs-scale));
+  line-height: var(--lh-control);
   text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking));
-  color: var(--fg-muted); transition: color 0.15s, background 0.15s;
+  color: var(--fg-muted);
+  transition: color var(--dur-fast) var(--ease), background var(--dur) var(--ease);
 }
 /* The leading column, one width for every item whatever it puts in it — an
    empty span on Shut down, a ↻ on Habits. Fixed rather than left to the
@@ -2872,9 +3079,8 @@
 .today-habits-hint { max-width: 62ch; line-height: 1.45; }
 
 /* ---- the habits sheet --------------------------------------------------
-   `.modal` supplies the frame, the elevation and the corner radius (it is in
-   the rounding opt-in list at the top of this file); everything below is only
-   what a list of RULES needs on top of that. */
+   `.modal` supplies the frame, the elevation and the corner radius;
+   everything below is only what a list of RULES needs on top of that. */
 .habit-sheet { gap: 10px; }
 .habit-blurb {
   margin: 0; font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted);
@@ -2909,24 +3115,27 @@
 .habit-edit-top .btn { flex: none; }
 
 .habit-days { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-/* `.chip` (tokens.css) carries the whole of a chip's look — the mono face, the
-   10px size and its tracking, the muted colour, the rule and the radius — and
-   these ARE chips, so they wear it rather than restating it and drifting from
-   every other chip in the app the next time one of those values moves. What is
-   left here is only what a PRESSABLE chip needs on top: a button brings its own
-   background and arrow cursor, the target is a little larger than a static
-   chip's, and the day names take the label casing. */
+/* `.chip` (tokens.css) carries the whole of a chip's look — the control face,
+   its size and tracking, the muted colour and the pill — and these ARE chips,
+   so they wear it rather than restating it and drifting from every other chip
+   in the app the next time one of those values moves. What is left here is
+   only what a PRESSABLE chip needs on top: a button brings its own background
+   and arrow cursor, the target is a little larger than a static chip's, the
+   day names take the label casing, and "off" is an OUTLINE — a static chip is
+   a --paper fill with no border, and a pressable one that looked like it
+   would read as already on. */
 .habit-day {
-  background: none; cursor: pointer; padding: 3px 7px;
+  background: none; border-color: var(--rule); cursor: pointer; padding: 3px 7px;
   text-transform: var(--label-case);
 }
 .habit-day.on { background: var(--accent); border-color: var(--accent); color: var(--bg); }
 /* Hover-guarded like every other control in this app — on a touchscreen there
    is no pointer to leave, so a tapped chip would keep its hover styling until
-   something else was tapped and read as stuck. See tokens.css. */
+   something else was tapped and read as stuck. See tokens.css. An ON chip keeps
+   its accent fill under the pointer; only the off one takes the hover. */
 @media (hover: hover) {
-  .habit-day:hover { border-color: var(--accent); color: var(--accent); }
-  .habit-day.on:hover { color: var(--bg); }
+  .habit-day:hover { border-color: var(--ghost-hover-edge); color: var(--ghost-hover-fg); background: var(--ghost-hover-bg); }
+  .habit-day.on:hover { color: var(--bg); background: var(--accent); border-color: var(--accent); }
 }
 .habit-every, .habit-paused { margin-left: 4px; }
 
@@ -2956,7 +3165,7 @@
    with the width of "Wed" against "Thu". Matches `.sched-day-name`'s job. */
 .cap-day-name {
   width: 42px; flex: none;
-  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  font-family: var(--mono); font-size: calc(var(--fs-meta) * var(--fs-scale));
   color: var(--fg-muted); text-transform: var(--label-case);
 }
 .cap-input { flex: 1; min-width: 0; max-width: 160px; }
@@ -3047,14 +3256,17 @@
   max-width: 880px; width: 100%; margin: 0 auto; box-sizing: border-box;
 }
 .focus-phase {
-  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  font-family: var(--mono); font-size: calc(var(--fs-meta) * var(--fs-scale));
   text-transform: var(--label-case); letter-spacing: calc(0.1em * var(--tracking));
   color: var(--fg-faint);
 }
 .focus[data-state="over"] .focus-phase, .focus[data-state="away"] .focus-phase { color: var(--accent); }
-/* The one number on the screen. Fraunces at its display cut — the reverse of
+/* The one number on the screen, in the serif's display cut — the reverse of
    the eink rule in display.css, and for the reverse reason: this is a laptop,
-   the hairlines survive, and a clock this size is the whole point of the page. */
+   the hairlines survive, and a clock this size is the whole point of the page.
+   The optical size follows the font-size on its own (T1: Newsreader's axis
+   tops out at 72, which a clock this size reaches); --fvs-display is Classic's
+   lever, which pins Fraunces to the top of its own axis as it always did. */
 /* These were bare literals, which meant the focus surface ignored --fs-scale
    outright — every other font-size in the app is `calc(<literal> *
    var(--fs-scale))` and these were the hole in it.
@@ -3075,7 +3287,7 @@
    the page's to grow. `layout.browser.test.tsx` pins that the float face fits
    across the whole 0.8-1.4 range, which is only true because of this. */
 .focus-clock {
-  font-family: var(--serif); font-weight: 500; font-variation-settings: "opsz" 144;
+  font-family: var(--serif); font-weight: 500; font-variation-settings: var(--fvs-display);
   font-size: clamp(calc(56px * var(--fs-scale)), 18vw, calc(168px * var(--fs-scale)));
   line-height: 1; letter-spacing: -0.02em;
 }
@@ -3084,7 +3296,7 @@
 .focus[data-phase="long_break"] .focus-clock { color: var(--fg-muted); }
 .focus-now { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .focus-now__eyebrow {
-  font-family: var(--mono); font-size: calc(10px * var(--fs-scale));
+  font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale));
   text-transform: var(--label-case); letter-spacing: calc(0.1em * var(--tracking));
   color: var(--fg-faint);
 }
@@ -3188,19 +3400,22 @@
 .focus[data-float] {
   user-select: none; -webkit-user-select: none;
   -webkit-app-region: drag; app-region: drag;
+  /* The window's size is the host's, and its face is fitted to it to the
+     pixel (see above): no 38px control floor in here. */
+  --control-h: 0px;
 }
 .focus[data-float] button, .focus[data-float] a, .focus[data-float] input,
 .focus[data-float] select, .focus[data-float] textarea {
   -webkit-app-region: no-drag; app-region: no-drag;
 }
 .focus[data-float] .focus-head { padding: 6px 10px; gap: 8px; }
-.focus[data-float] .focus-head .btn { padding: 4px 8px; }
+.focus[data-float] .focus-head .btn { padding: 4px 8px; font-size: calc(var(--fs-control-compact) * var(--fs-scale)); }
 .focus[data-float] .focus-main { padding: 6px 12px; gap: 4px; max-width: none; }
 .focus[data-float] .focus-clock { font-size: clamp(32px, 16vh, 56px); }
 .focus[data-float] .focus-now { gap: 4px; }
 .focus[data-float] .focus-now__title { font-size: clamp(15px, 6.5vh, 22px); -webkit-line-clamp: 2; }
 .focus[data-float] .focus-actions { margin-top: 4px; }
-.focus[data-float] .focus-actions .btn { padding: 6px 10px; }
+.focus[data-float] .focus-actions .btn { padding: 6px 10px; font-size: calc(var(--fs-control-compact) * var(--fs-scale)); }
 .focus[data-float] .focus-next {
   flex-direction: row; align-items: baseline; gap: 8px; padding-top: 6px;
 }
@@ -3225,5 +3440,36 @@
 }
 @media (max-width: 359px) {
   .focus[data-float] .focus-head__tally { display: none; }
-  .focus[data-float] .focus-actions .btn { padding: 5px 8px; font-size: calc(10px * var(--fs-scale)); }
+  .focus[data-float] .focus-actions .btn { padding: 5px 8px; font-size: calc((var(--fs-control-compact) - 1px) * var(--fs-scale)); }
+}
+
+/* ---- entrances (M4) -----------------------------------------------------
+   What floats arrives rather than appears: a popover or menu fades in with a
+   short rise and a 2% grow from its trigger, a modal and a toast fade and
+   rise, a bottom sheet rises further, and the scrim behind a modal fades with
+   it. Each element names its entrance through a token (--enter-float and the
+   rest, tokens.css), so a design that has none — Classic — sets the token to
+   `none` rather than overriding a rule. Enter only: the exits would need the
+   JSX to hold an element mounted while it leaves, and none of these do.
+
+   On the individual `translate` and `scale` properties, never `transform`,
+   because several of these elements already position themselves with a
+   transform (the toast centres on one) and a keyframe on `transform` would
+   replace it for the length of the animation. The distances are multiples of
+   --enter-y, so reduced motion (which zeroes it) keeps the fade and drops the
+   travel, which is M5 exactly. */
+@keyframes float-in {
+  from { opacity: 0; translate: 0 var(--enter-y); scale: var(--enter-scale); }
+}
+@keyframes modal-in {
+  from { opacity: 0; translate: 0 calc(var(--enter-y) * 4 / 3); }
+}
+@keyframes toast-in {
+  from { opacity: 0; translate: 0 calc(var(--enter-y) * 4 / 3); }
+}
+@keyframes sheet-in {
+  from { opacity: 0; translate: 0 calc(var(--enter-y) * 4 / 3); }
+}
+@keyframes scrim-in {
+  from { opacity: 0; }
 }

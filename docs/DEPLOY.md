@@ -363,7 +363,7 @@ What it allows, and why:
 |---|---|
 | `script-src 'self' 'sha256-…'` | The hash is the SPA's inline pre-paint script (it applies your theme before first paint, so it cannot be a module). Derived from the served `dist/index.html` at startup — see the warning in §0. |
 | `style-src … 'unsafe-inline' fonts.googleapis.com` | Every calendar and list color is an inline style, and the MCP consent screen is a `<style>` block, so `'unsafe-inline'` is unavoidable. The Google host is there because 13 of the Appearance font choices load a stylesheet from it. |
-| `font-src 'self' fonts.gstatic.com` | Where that Google stylesheet then fetches its woff2. The shipped defaults (Fraunces/Inter/JetBrains Mono) are local and need neither host. |
+| `font-src 'self' fonts.gstatic.com` | Where that Google stylesheet then fetches its woff2. The shipped faces (Newsreader/Hanken Grotesk/JetBrains Mono, and the Classic preset's Fraunces/Inter) are local and need neither host. |
 
 Everything else is `'self'` or `'none'`. Note the privacy consequence of the two
 Google entries: picking one of those font families means every page load — the
@@ -619,11 +619,15 @@ plane, and no second plane for the tri-colour (black/white/red) panels.
 
 The server-side renderer needs **Pillow** (`requirements.txt`), which is what
 rasterizes the three typefaces vendored under `backend/smylted/display/fonts/` —
-Fraunces, Inter and JetBrains Mono, the app's own, converted from the woff2 the
-frontend already ships so a bitmap panel is set in the same type as the browser
-page. Rebuild them with `python -m dev.build_display_fonts` if the frontend's
-fonts are ever replaced; nothing does it automatically, and a stale instance
-here shows up as a panel drifting from the app rather than as an error. No
+Newsreader, Hanken Grotesk and JetBrains Mono, the app's own, converted from the
+woff2 the frontend already ships so a bitmap panel is set in the same type as the
+browser page. Rebuild them with `python -m dev.build_display_fonts` (it needs
+`fonttools` and `brotli`, which the app itself does not) if the frontend's fonts
+are ever replaced; nothing does it automatically, and a stale instance here
+shows up as a panel drifting from the app rather than as an error. The build
+does refuse one kind of drift outright: the eink page's serif is pinned to an
+optical size in `display.css`, and it will not build the bitmap's at a different
+one. No
 outbound network is involved either way, so `IPAddressDeny=any` in
 `deploy/smylte.service` does not have to be relaxed for any of this.
 

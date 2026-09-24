@@ -101,6 +101,8 @@ describe('shipped contrast', () => {
     ['dark', ':root[data-theme="dark"]'],
     ['workspace light', ':root[data-preset="workspace"]'],
     ['workspace dark', ':root[data-preset="workspace"][data-theme="dark"]'],
+    ['classic light', ':root[data-preset="classic"]'],
+    ['classic dark', ':root[data-preset="classic"][data-theme="dark"]'],
   ]
   const BACKGROUNDS = ['--bg', '--bg-elev', '--paper']
 

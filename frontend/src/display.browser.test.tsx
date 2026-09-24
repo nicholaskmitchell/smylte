@@ -1,9 +1,9 @@
 // The display's typography, measured in a real browser.
 //
-// A display is drawn in the app's own three typefaces — Fraunces for the things
-// that are looked at, tracked uppercase JetBrains Mono for micro-labels and
-// every clock, Inter for the things that are read — and `render.py` draws the
-// server-side version in the same three. That is what makes a panel on a wall
+// A display is drawn in the app's own three typefaces — Newsreader for the
+// things that are looked at, tracked uppercase JetBrains Mono for micro-labels
+// and every clock, Hanken Grotesk for the things that are read — and
+// `render.py` draws the server-side version in the same three. That is what makes a panel on a wall
 // read as Smylte rather than as a dashboard that happens to hold the same data,
 // and it is exactly the kind of thing that rots silently: a refactor drops a
 // class, everything still renders, and the page quietly becomes system-sans.
@@ -84,7 +84,7 @@ describe('the display is drawn in the app’s own type', () => {
     // family assertion below would pass against three missing fonts and a page
     // rendering entirely in Times. `mount` awaits `document.fonts.ready` after
     // inserting the markup, so by now these have either loaded or failed.
-    for (const family of ['Fraunces', 'Inter', 'JetBrains Mono']) {
+    for (const family of ['Newsreader', 'Hanken Grotesk', 'JetBrains Mono']) {
       expect(document.fonts.check(`12px "${family}"`), `${family} did not load`)
         .toBe(true)
     }
@@ -94,8 +94,8 @@ describe('the display is drawn in the app’s own type', () => {
     async () => {
       await viewport(800, 480)
       const host = await mount(CAL('color'))
-      expect(face(host.querySelector('.display-cal__title')!)).toBe('Fraunces')
-      expect(face(host.querySelector('#inside')!)).toBe('Fraunces')
+      expect(face(host.querySelector('.display-cal__title')!)).toBe('Newsreader')
+      expect(face(host.querySelector('#inside')!)).toBe('Newsreader')
       // 500, the weight `.cal-title` and `.day-col-head .dnum` use in app.css.
       // The display borrows the product's headline rather than inventing one.
       expect(getComputedStyle(host.querySelector('.display-cal__title')!).fontWeight)
@@ -121,7 +121,7 @@ describe('the display is drawn in the app’s own type', () => {
     // `.task-meta .due` is mono in app.css and so is this; it also buys tabular
     // figures, which is what lets times line up down a column.
     expect(face(host.querySelector('.display-chip__time')!)).toBe('JetBrains Mono')
-    expect(face(host.querySelector('.display-chip__text')!)).toBe('Inter')
+    expect(face(host.querySelector('.display-chip__text')!)).toBe('Hanken Grotesk')
   })
 
   it('counts are mono but NOT tracked — a number to read, not a label to scan',
@@ -133,22 +133,48 @@ describe('the display is drawn in the app’s own type', () => {
       expect(getComputedStyle(more).letterSpacing).toBe('normal')
     })
 
-  it('pins Fraunces to its sturdy optical size on eink, and lets it breathe on colour',
+  it('pins Newsreader to its sturdy optical size on eink, and lets it breathe on colour',
     async () => {
       await viewport(800, 480)
-      // Fraunces' high optical sizes are a display cut with fine hairlines,
-      // which is exactly what one bit deep destroys — measured against a
-      // thresholded render, the top of the axis loses the stems of "August".
-      // `none` pins the font's own default, which is the instance the
-      // server-side renderer is built at.
+      // Newsreader's optical sizes get finer as they go up, and even its
+      // default (18, the text cut) is too fine for one bit — measured against a
+      // thresholded render, "August 2026" loses the hairlines of its 2s and a
+      // small day number's 1 reads as an l. So the eink palette stops the
+      // browser choosing (`none`) AND names the instance: opsz 12, the one
+      // `dev/build_display_fonts.py` builds the server-side renderer at.
       const ink = await mount(CAL('eink'))
-      expect(getComputedStyle(ink.querySelector('.display')!).fontOpticalSizing)
-        .toBe('none')
+      const display = getComputedStyle(ink.querySelector('.display')!)
+      expect(display.fontOpticalSizing).toBe('none')
+      expect(display.fontVariationSettings).toBe('"opsz" 12')
+      // And it reaches the headline — inherited, not overridden on the way down.
+      const title = ink.querySelector('.display-cal__title') as HTMLElement
+      expect(getComputedStyle(title).fontVariationSettings).toBe('"opsz" 12')
+
+      // The computed value is the DECLARED one, true whether or not the face
+      // that painted has the axis — so it is checked against the glyphs too.
+      // Newsreader's lower optical sizes set wider (the caption cut is the
+      // sturdy one), so the pinned title is measurably wider than the same
+      // title at the text cut. If this pin stopped reaching the font, the two
+      // would be the same width to the pixel.
+      const inked = () => {
+        const range = document.createRange()
+        range.selectNodeContents(title)
+        return range.getBoundingClientRect().width
+      }
+      const pinned = inked()
+      title.style.fontVariationSettings = 'normal'
+      const textCut = inked()
+      title.style.fontVariationSettings = ''
+      expect(pinned / textCut, 'the opsz pin is not reaching the font')
+        .toBeGreaterThan(1.05)
+
       document.body.innerHTML = ''
       const colour = await mount(CAL('color'))
-      // An LCD has no threshold to survive and the display cut is better there.
-      expect(getComputedStyle(colour.querySelector('.display')!).fontOpticalSizing)
-        .toBe('auto')
+      // An LCD has no threshold to survive, and the browser's own choice is the
+      // better one there: nothing pinned, optical sizing left to follow the size.
+      const lcd = getComputedStyle(colour.querySelector('.display')!)
+      expect(lcd.fontOpticalSizing).toBe('auto')
+      expect(lcd.fontVariationSettings).toBe('normal')
     })
 
   it('tells a day outside the month apart by SIZE, not by colour alone',
@@ -489,10 +515,10 @@ describe('the rolling face fits its headline to the panel', () => {
   it('is set in the app’s own three typefaces, like every other face', async () => {
     await viewport(800, 480)
     const host = await mount(NOW('Stretch'))
-    expect(face(host.querySelector('.display-now__title')!)).toBe('Fraunces')
-    expect(face(host.querySelector('.display-now__name')!)).toBe('Fraunces')
+    expect(face(host.querySelector('.display-now__title')!)).toBe('Newsreader')
+    expect(face(host.querySelector('.display-now__name')!)).toBe('Newsreader')
     expect(face(host.querySelector('.display-now__eyebrow')!)).toBe('JetBrains Mono')
-    expect(face(host.querySelector('.display-now__next-text')!)).toBe('Inter')
+    expect(face(host.querySelector('.display-now__next-text')!)).toBe('Hanken Grotesk')
     // The count is mono and UNTRACKED — a number to be read, not a label to be
     // scanned, the same rule `.display-day__more` follows.
     const more = host.querySelector('.display-now__more')!

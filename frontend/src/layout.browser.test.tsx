@@ -72,8 +72,12 @@ describe('every text input on a phone clears the 16px iOS floor', () => {
     '<select class="input"><option>x</option></select>',
   ]
 
-  it('computes to at least 16px at 390px', async () => {
+  // Under every shipped design: a preset re-declares tokens and Classic loads a
+  // sheet of its own after app.css, and either could put a size back above the
+  // floor's rule without anything here noticing if only the default ran.
+  it.each([undefined, 'workspace', 'classic'])('computes to at least 16px at 390px (preset=%s)', async (preset) => {
     await viewport(390)
+    if (preset) document.documentElement.dataset.preset = preset
     const host = await mount(`<div class="shell">${FIELDS.join('')}</div>`)
     const under: string[] = []
     for (const el of host.querySelectorAll<HTMLElement>('.input')) {
@@ -195,7 +199,7 @@ describe("the Today header's buttons sit on one line", () => {
 
   it('and the three figures are one size, not two', async () => {
     // `.today-week` colours the week's total and nothing else; `.content-sub`
-    // is what makes a header figure 11px mono in the label case. The component
+    // is what makes a header figure --fs-meta mono in the label case (12px; 11px caps under Classic). The component
     // shipped the span as `today-week mono` alone, so it inherited the page's
     // 15px body type and read half again as large as the date and the count
     // either side of it.
@@ -314,16 +318,25 @@ describe('the Today tab has one left edge on a phone', () => {
       <div class="today-more">3 more</div>
     </div></div>`
 
-  it.each([undefined, 'workspace'])('under preset=%s', async (preset) => {
+  // The edge is where the TEXT starts — the box's own offset in the pane plus
+  // its padding — rather than the padding alone. A Today row is inset from the
+  // pane (C3: its hover fill is a rounded shape that stops short of the edge)
+  // and takes the inset back out of its padding, so its padding is smaller than
+  // its neighbours' by exactly the margin it gained, and the text lines up. The
+  // agenda row's 2px calendar rule is a border, not part of either, as before.
+  it.each([undefined, 'workspace', 'classic'])('under preset=%s', async (preset) => {
     await viewport(390)
     if (preset) document.documentElement.dataset.preset = preset
     const host = await mount(TODAY_TAB)
+    const origin = host.getBoundingClientRect().left
 
     const edges = new Map<string, number>()
     for (const sel of ['.content-head', '.quickadd', '.today-load', '.section-label',
       '.today-row', '.empty', '.today-quiet', '.today-committed-over',
       '.today-reflection-text', '.today-agenda .agenda-ev', '.today-more']) {
-      edges.set(sel, parseFloat(getComputedStyle(host.querySelector(sel)!).paddingLeft))
+      const el = host.querySelector(sel)!
+      edges.set(sel, +(el.getBoundingClientRect().left - origin
+        + parseFloat(getComputedStyle(el).paddingLeft)).toFixed(1))
     }
     expect([...new Set(edges.values())], 'the Today tab renders as a staircase: '
       + `${[...edges].map(([s, px]) => `${s} ${px}px`).join(', ')}`)
@@ -362,8 +375,8 @@ describe("a Today row's cells sit on the title's first line", () => {
   // `25m  Aug 28` floating at the middle of the block touching nothing.
   //
   // Measured with the REAL faces, which is not a detail: `.list-dot` is placed
-  // by `vertical-align: middle`, so where it lands is a fact about Inter's
-  // x-height. A rig that failed to load the self-hosted woff2 put it a whole
+  // by `vertical-align: middle`, so where it lands is a fact about the sans's
+  // x-height (Hanken Grotesk; it was Inter's, and still is under Classic). A rig that failed to load the self-hosted woff2 put it a whole
   // pixel off and made the coloured square look like the defect when the tick
   // was the thing out of place. The harness waits on `document.fonts` for
   // exactly this reason.
@@ -426,7 +439,7 @@ describe("a Today row's cells sit on the title's first line", () => {
     // …and the Tasks tab, which is the thing the report actually asked for.
     // A comparison rather than a pinned number, and a loose one: the two tabs
     // reach the first line by different routes — `.list-dot` rides it inline on
-    // Inter's x-height, the Today mark is placed on it — so they agree to about
+    // the sans's x-height, the Today mark is placed on it — so they agree to about
     // half a pixel, not exactly.
     const tasksTitle = host.querySelector('.task-title')!
     expect(getComputedStyle(today).fontSize).toBe(getComputedStyle(tasksTitle).fontSize)
@@ -718,7 +731,7 @@ describe('the Today header keeps its actions together on a phone', () => {
 
   it('and does not eat the screen doing it', async () => {
     // Measured in this harness against this exact markup, at 390x844:
-    // 172px over four rows before, 124px over three after. Not a target so
+    // 172px over four rows before, 124px over three after — in the Classic type; the shipped design comes to about 103px over two. Not a target so
     // much as a ratchet — this is the one tab opened every morning, and a
     // header that grows back a row is a regression whether or not it wraps
     // tidily.
@@ -737,7 +750,7 @@ describe('the Today header keeps its actions together on a phone', () => {
     // was about: how many rows the header takes. Four at every width before.
     //
     // Two numbers because the answer honestly differs, and the split is at 430
-    // rather than at 390 on purpose. Measured widths at 390 inside a 362px
+    // rather than at 390 on purpose. Measured widths (in the Classic type, Fraunces/Inter/11px mono; the shipped design sets narrower and fits two rows) at 390 inside a 362px
     // content box: title 69, nav 46, date 130, week 101, count 161, actions
     // 161, at an 8px gap. Title+nav+date+week comes to 361 — it FITS, by one
     // pixel, and an earlier draft of this pinned 2 rows at 390 on the strength

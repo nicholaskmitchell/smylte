@@ -49,6 +49,14 @@ export async function mount(html: string): Promise<HTMLElement> {
     await new Promise(requestAnimationFrame)
     await document.fonts.ready
   }
+  // AT REST. Popovers, menus, modals, sheets, toasts and the scrim all enter
+  // with a fade and a short rise (app.css, "entrances"), so for a few hundred
+  // milliseconds after one mounts its box is displaced and its opacity is
+  // under 1 — a contrast measured then composites against a half-faded
+  // surface, and an edge measured then is a few pixels low. What every test in
+  // this project pins is the layout the user reads, which is the one after the
+  // entrance, so the entrances are finished before anything is measured.
+  for (const a of document.getAnimations()) a.finish()
   await new Promise(requestAnimationFrame)
   return host
 }
