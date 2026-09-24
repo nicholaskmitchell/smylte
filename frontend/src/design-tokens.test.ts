@@ -138,3 +138,101 @@ describe('every self-hosted family is actually hosted', () => {
     expect(hosted.filter((f) => !faces.has(f))).toEqual([])
   })
 })
+
+describe('T9 · the sans is fitted, and only the sans', () => {
+  // `font-size-adjust` is INHERITED, and the value on <body> is tuned for one
+  // face: Hanken Grotesk's 0.493em x-height, taken to 0.516em. Anything set in
+  // the serif or the mono underneath it would be rescaled by that face's own
+  // x-height instead (Newsreader's 0.426em would grow a fifth), so the rule is
+  // that a family never travels without its adjust. Every declaration of a
+  // family in the three sheets is checked here, because nothing in a unit test
+  // renders the difference, and the browser suite only sees what it mounts.
+  const displayCss = strip(read('./styles/display.css'))
+
+  /** Every rule body (selector included) that declares a family, with the
+   *  family and the adjust it declares. Nested @media bodies are reached
+   *  because the pattern cannot span a brace. */
+  const families = (css: string) =>
+    [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter((m) => /font-family\s*:/.test(m[2]))
+      .map((m) => ({
+        rule: m[1].trim(),
+        family: /font-family\s*:\s*([^;]+?)\s*(;|$)/.exec(m[2])![1],
+        adjust: /font-size-adjust\s*:\s*([^;]+?)\s*(;|$)/.exec(m[2])?.[1],
+      }))
+
+  // The sans TEXT is adjusted: the sans, and the note face, which is the sans
+  // here and the mono under Classic (whose --sans-adjust is `none`, so the
+  // pairing holds in both). The CONTROL face is not: it keeps the sizes T6–T7
+  // set for Hanken, and a control sits on the user agent's `line-height:
+  // normal`, which an adjust would grow. The glyph face is the mono here and
+  // the sans under Classic, and needs no adjust in either.
+  const APP: Record<string, string> = {
+    'var(--sans)': 'var(--sans-adjust)',
+    'var(--font-note)': 'var(--sans-adjust)',
+    'var(--font-control)': 'none',
+    'var(--serif)': 'none',
+    'var(--mono)': 'none',
+    'var(--font-glyph)': 'none',
+  }
+  // Controls that name the sans itself rather than the control face, and so
+  // are unadjusted for the control face's reason.
+  const SANS_CONTROLS = new Set(['.set-sheet .set-nav-item'])
+  // `inherit` is the form controls' own rule, which takes the family and
+  // leaves the adjust to the user agent (see the next test), so it pairs with
+  // nothing.
+  const expected = (f: { rule: string, family: string }) =>
+    SANS_CONTROLS.has(f.rule) ? 'none' : f.family === 'inherit' ? undefined : APP[f.family]
+
+  it.each([['tokens.css', tokensCss, 5], ['app.css', appCss, 80]] as const)(
+    'pairs every family in %s with its adjust', (_, css, floor) => {
+      const found = families(css)
+      expect(found.length, 'vacuity: the families were found').toBeGreaterThanOrEqual(floor)
+      const bad = found
+        .filter((f) => f.adjust !== expected(f))
+        .map((f) => `${f.rule}: ${f.family} with ${f.adjust ?? 'no adjust'}`)
+      expect(bad).toEqual([])
+      expect(found.filter((f) => SANS_CONTROLS.has(f.rule)).length, 'vacuity: the sans controls are there')
+        .toBe(css === appCss ? SANS_CONTROLS.size : 0)
+    })
+
+  it('leaves the display unadjusted, every face of it', () => {
+    // A display is a poster, drawn under the app's <body> but in its own
+    // faces, and render.py draws the same design without any adjust.
+    const found = families(displayCss)
+    expect(found.length).toBeGreaterThanOrEqual(5)
+    expect(found.filter((f) => f.adjust !== 'none').map((f) => f.rule)).toEqual([])
+  })
+
+  it('sets the adjust on <body>, and leaves the form controls to the user agent', () => {
+    // The user agent's `font` shorthand on a control resets the adjust to
+    // none, which is what the control face wants; a rule that handed it back
+    // would grow every field and glyph button by a pixel of `normal` line.
+    const rule = (sel: string) => {
+      const m = new RegExp(`(^|\\n)${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`).exec(tokensCss)
+      if (!m) throw new Error(`no ${sel} rule`)
+      return m[2]
+    }
+    expect(rule('body')).toMatch(/font-size-adjust:\s*var\(--sans-adjust\)/)
+    expect(rule('button')).not.toMatch(/font-size-adjust/)
+    expect(rule('input, select, textarea')).not.toMatch(/font-size-adjust/)
+  })
+
+  it('gives Workspace, and a theme in another sans, the neutral values Classic restates', () => {
+    // T9 is a fit for Hanken Grotesk. Workspace sets the system face in all
+    // three slots, and a saved theme can set any sans (appearance.ts marks it
+    // `data-sans="other"`). Workspace's preset block is the 23 Appearance
+    // tokens and only those, so the neutral values are a second block, which
+    // the saved themes share.
+    const T9 = ['--sans-adjust', '--wght-ui', '--wght-content', '--ls-content']
+    const values = (body: string) => Object.fromEntries(
+      [...body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].filter((d) => T9.includes(d[1])).map((d) => [d[1], d[2].trim()]))
+    const neutral = [...tokensCss.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+      .filter((m) => m[1].includes(':root[data-preset="workspace"]') && m[1].includes(':root[data-sans="other"]'))
+    expect(neutral, 'one block holds both selectors').toHaveLength(1)
+    const workspace = values(neutral[0][2])
+    const classic = values(/:root\[data-preset="classic"\]\s*\{([^}]*)\}/.exec(classicCss)![1])
+    expect(Object.keys(classic).sort()).toEqual([...T9].sort())
+    expect(workspace).toEqual(classic)
+  })
+})

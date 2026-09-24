@@ -64,6 +64,13 @@
           'workspace': { 'light': '#FBFBFC', 'dark': '#191919' },
           'classic': { 'light': '#FBFAF7', 'dark': '#0C0C10' }
         }
+        // The face T9 is fitted to (FITTED_SANS in appearance.ts).
+        var FITTED_SANS = 'Hanken Grotesk'
+        function fitsSans(stack) {
+          var m = /^\s*(?:"([^"]*)"|'([^']*)'|([^,]*))/.exec(stack)
+          var name = m ? (m[1] || m[2] || m[3] || '') : ''
+          return name.replace(/^\s+|\s+$/g, '').toLowerCase() === FITTED_SANS.toLowerCase()
+        }
         var root = document.documentElement
         var mode = 'light'
         try {
@@ -123,6 +130,10 @@
                   if (typeof v === 'string' && v && v.length <= 120 && !BAD.test(v)) {
                     root.style.setProperty(TOKENS[k], v)
                     if (TOKENS[k] === '--bg') bg = v
+                    // T9 is fitted to one face; a theme painted in another
+                    // takes its neutral values, as fitsSans() in
+                    // appearance.ts decides once the bundle is up.
+                    if (TOKENS[k] === '--sans' && !fitsSans(v)) root.dataset.sans = 'other'
                   }
                 }
                 break

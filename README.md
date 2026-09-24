@@ -504,7 +504,15 @@ N.K.M. system as refined in September 2026 — warm off-white, one orange accent
 Newsreader for anything read, Hanken Grotesk for chrome and every control,
 JetBrains Mono for labels and figures. Straight on the page, soft at the hand:
 hairline rules and square grids, and on the things you touch a radius scale,
-soft shadows where they float, and eased motion. **Classic** is the design
+soft shadows where they float, and eased motion. The app's sizes were set for
+Inter, and Hanken Grotesk sets smaller and lighter at the same size, so
+text in the sans is x-height-normalised (`font-size-adjust`, `--sans-adjust`)
+rather than resized, and content text sits a little heavier (460) and tighter
+than UI text (450). Controls keep the sizes the refinement set for Hanken, and
+the serif and the mono always reset `font-size-adjust: none`. The fit is
+Hanken's alone: Classic, Workspace and any saved theme set in another sans
+take none of it.
+**Classic** is the design
 Smylte shipped before that refinement, kept whole rather than approximated —
 Fraunces headlines, Inter, sharp corners, uppercase mono on every label and
 control, hard shadows, no presses and no popover or modal entrances.

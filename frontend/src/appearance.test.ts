@@ -13,8 +13,8 @@ const tokensCss = read('./styles/tokens.css')
 const indexHtml = read('../index.html')
 import {
   APPEARANCE_KEY, APPEARANCE_KEY_LEGACY, DEFAULTS, FONT_CHOICES, GROUPS, MAX_THEMES, PRESETS, PRESET_PREFIX,
-  SHARED_DEFAULTS, TOKENS, TOKEN_NAMES,
-  applyTokens, cacheAppearance, defaultValue, findPreset, isValidToken, isValidValue,
+  FITTED_SANS, SHARED_DEFAULTS, TOKENS, TOKEN_NAMES,
+  applyTokens, cacheAppearance, defaultValue, findPreset, fitsSans, isValidToken, isValidValue,
   parseTheme, presetSlug, readCachedAppearance, resolve, sanitizeAppearance,
   sanitizeTokens, serializeTheme, type CustomTheme, type Mode,
 } from './appearance'
@@ -265,6 +265,40 @@ describe('pre-paint script in index.html', () => {
     expect(APPEARANCE_KEY_LEGACY).not.toBe(APPEARANCE_KEY)
   })
 
+  it('knows the fitted sans by the same name as the module', () => {
+    expect(html).toContain(`var FITTED_SANS = '${FITTED_SANS}'`)
+  })
+
+  it('marks a cached theme set in another sans before the first paint', () => {
+    // Run the script itself, the way the page does, against a cached blob.
+    const code = html.match(/<script>\s*([\s\S]*?)<\/script>/)![1]
+    const root = document.documentElement
+    const paint = (appearance: unknown) => {
+      delete root.dataset.sans
+      delete root.dataset.preset
+      root.removeAttribute('style')
+      localStorage.setItem(APPEARANCE_KEY, JSON.stringify(appearance))
+      new Function(code)()
+      return root.dataset.sans
+    }
+    const theme = (sans: string) => ({
+      active: 't', themes: [{ id: 't', name: 'T', light: { '--sans': sans }, dark: { '--sans': sans } }],
+    })
+    try {
+      expect(paint(theme('"Inter", -apple-system, BlinkMacSystemFont, sans-serif'))).toBe('other')
+      expect(root.style.getPropertyValue('--sans'), 'vacuity: the theme was painted').toContain('Inter')
+      expect(paint(theme(SHARED_DEFAULTS['--sans']))).toBeUndefined()
+      expect(paint({ active: 'preset:classic', themes: [] })).toBeUndefined()
+      expect(root.dataset.preset).toBe('classic')
+    } finally {
+      delete root.dataset.sans
+      delete root.dataset.preset
+      delete root.dataset.theme
+      root.removeAttribute('style')
+      localStorage.clear()
+    }
+  })
+
   it('knows every preset slug, and its background in both modes', () => {
     // This copy is what stops a preset flashing Smylte on every load, and it
     // doubles as the allowlist of attribute values the script will write — so a
@@ -494,6 +528,42 @@ describe('applyTokens', () => {
     const el = document.createElement('html')
     applyTokens(el, { '--bg': 'url(//evil)', '--nope': 'red' })
     expect(el.getAttribute('style')).toBeFalsy()
+  })
+
+  it('marks a theme set in another sans, and clears the mark with it', () => {
+    // T9's x-height and weights were measured on Hanken Grotesk. Under a theme
+    // in Inter they drew it 5.4% smaller, and under a Google face loaded at
+    // 400/500/600 they drew 450 and 460 as 500; `data-sans="other"` gives such
+    // a theme the neutral values instead (tokens.css).
+    const el = document.createElement('html')
+    applyTokens(el, { '--sans': '"Inter", -apple-system, BlinkMacSystemFont, sans-serif' })
+    expect(el.dataset.sans).toBe('other')
+    applyTokens(el, { '--sans': SHARED_DEFAULTS['--sans'] })
+    expect(el.dataset.sans).toBeUndefined()
+    applyTokens(el, { '--sans': '"Work Sans", sans-serif' })
+    applyTokens(el, {})
+    expect(el.dataset.sans, 'resetting to the shipped design keeps the mark').toBeUndefined()
+    // A value that fails validation is never applied, so it cannot mark either.
+    applyTokens(el, { '--sans': 'url(//evil)' })
+    expect(el.dataset.sans).toBeUndefined()
+  })
+})
+
+describe('fitsSans', () => {
+  it('fits the shipped stack, and a stack that leads with the same face', () => {
+    expect(fitsSans(SHARED_DEFAULTS['--sans'])).toBe(true)
+    expect(fitsSans(undefined)).toBe(true)
+    expect(fitsSans('')).toBe(true)
+    expect(fitsSans(`'${FITTED_SANS}', sans-serif`)).toBe(true)
+    expect(fitsSans(`  ${FITTED_SANS} , sans-serif`)).toBe(true)
+    expect(fitsSans('"hanken grotesk", sans-serif')).toBe(true)
+  })
+
+  it('fits no other face the editor offers, and no fallback that merely names it', () => {
+    const others = FONT_CHOICES.sans.filter((c) => c.stack !== SHARED_DEFAULTS['--sans'])
+    expect(others.length, 'vacuity: the editor offers other faces').toBeGreaterThan(3)
+    for (const c of others) expect(fitsSans(c.stack), c.label).toBe(false)
+    expect(fitsSans(`"Inter", "${FITTED_SANS}", sans-serif`)).toBe(false)
   })
 })
 
