@@ -118,8 +118,9 @@ the gap binds sooner.
 
 **Why the corners are rounded, at 12%.**
 
-They are a departure from the editorial system's `border-radius: 0`, taken
-deliberately: a hard-cornered full-bleed rectangle is the shape no other icon
+They were a departure from the square editorial system the mark was drawn
+for, and remain the icon's own choice rather than a step of the app's radius
+scale, taken deliberately: a hard-cornered full-bleed rectangle is the shape no other icon
 on a Windows 11 taskbar has. Microsoft's own guidance specifies rounding (2px
 at 48px, i.e. 4.2%), which measured too subtle to read at all; 12% is where the
 tile stops looking like a screenshot. Worth knowing before tuning it: the radius

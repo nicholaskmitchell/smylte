@@ -58,9 +58,14 @@
   --chip-edge: var(--rule);
   --chip-pad: 2px 6px;
 
+  --ghost-fg: var(--fg-muted);
   --ghost-hover-bg: none;
   --ghost-hover-fg: var(--accent);
   --ghost-hover-edge: var(--accent);
+  --ghost-hover-bg-on-paper: none;
+  --row-hover-on-elev: var(--bg-elev);
+  --thumb-edge: var(--rule-faint);
+  --font-glyph: var(--sans);
 
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.20);
   --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.25);
@@ -76,6 +81,7 @@
   --dur-slow: 0.12s;
   --press-scale: 1;
   --enter-y: 0px;
+  --enter-scale: 1;
   --enter-float: none;
   --enter-modal: none;
   --enter-scrim: none;

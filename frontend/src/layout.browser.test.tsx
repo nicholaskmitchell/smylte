@@ -199,7 +199,7 @@ describe("the Today header's buttons sit on one line", () => {
 
   it('and the three figures are one size, not two', async () => {
     // `.today-week` colours the week's total and nothing else; `.content-sub`
-    // is what makes a header figure 11px mono in the label case. The component
+    // is what makes a header figure --fs-meta mono in the label case (12px; 11px caps under Classic). The component
     // shipped the span as `today-week mono` alone, so it inherited the page's
     // 15px body type and read half again as large as the date and the count
     // either side of it.
@@ -731,7 +731,7 @@ describe('the Today header keeps its actions together on a phone', () => {
 
   it('and does not eat the screen doing it', async () => {
     // Measured in this harness against this exact markup, at 390x844:
-    // 172px over four rows before, 124px over three after. Not a target so
+    // 172px over four rows before, 124px over three after — in the Classic type; the shipped design comes to about 103px over two. Not a target so
     // much as a ratchet — this is the one tab opened every morning, and a
     // header that grows back a row is a regression whether or not it wraps
     // tidily.
@@ -750,7 +750,7 @@ describe('the Today header keeps its actions together on a phone', () => {
     // was about: how many rows the header takes. Four at every width before.
     //
     // Two numbers because the answer honestly differs, and the split is at 430
-    // rather than at 390 on purpose. Measured widths at 390 inside a 362px
+    // rather than at 390 on purpose. Measured widths (in the Classic type, Fraunces/Inter/11px mono; the shipped design sets narrower and fits two rows) at 390 inside a 362px
     // content box: title 69, nav 46, date 130, week 101, count 161, actions
     // 161, at an 8px gap. Title+nav+date+week comes to 361 — it FITS, by one
     // pixel, and an earlier draft of this pinned 2 rows at 390 on the strength

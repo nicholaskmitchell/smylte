@@ -272,8 +272,8 @@ public sealed class LinuxIconTests
         //
         // Stated as COVERAGE, not as "has a transparent pixel". The plated
         // variants have transparent pixels too — the plate's corners are
-        // rounded, which is a deliberate departure from the editorial system's
-        // `border-radius: 0` and is why the naive test is wrong. Measured, the
+        // rounded, the icon's own deliberate choice rather than the app's radius
+        // scale, and that is why the naive test is wrong. Measured, the
         // plates run 95-99% opaque and the bare mark 10-20%, so the thresholds
         // below have most of that gap between them and are not tuned to the
         // current art.

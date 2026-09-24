@@ -33,9 +33,10 @@
  * of the colours. `fonts.css` is imported for the whole app in main.tsx, so
  * these faces cost this page no extra request beyond the ones it actually sets
  * — and `smylted/display/render.py` draws the server-rendered version in the
- * same three, at the same weights and the same optical size, so a browser
- * panel and a bitmap panel are the same design rather than two that agree on
- * content.
+ * same three, at the same weights — and, on eink, the same optical size, which
+ * display.css pins below; the colour page leaves optical size to the browser
+ * while the bitmap keeps that one instance — so a browser panel and a bitmap
+ * panel are the same design rather than two that agree on content.
  */
 
 .display {
