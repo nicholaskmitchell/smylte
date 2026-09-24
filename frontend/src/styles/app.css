@@ -20,7 +20,7 @@
   position: relative;  /* anchor for the settings menu popover */
 }
 .brand {
-  font-family: var(--serif); font-style: italic; font-weight: 500;
+  font-family: var(--serif); font-size-adjust: none; font-style: italic; font-weight: 500;
   font-size: calc(22px * var(--fs-scale)); line-height: 1; letter-spacing: -0.01em; color: var(--fg);
   user-select: none;
 }
@@ -28,7 +28,7 @@
 .tabs { display: flex; gap: 2px; }
 .tab {
   background: none; border: 0; border-bottom: 2px solid transparent;
-  font-family: var(--font-control); font-size: calc(var(--fs-control) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control) * var(--fs-scale));
   font-weight: var(--wght-control); line-height: var(--lh-control); text-transform: var(--label-case);
   letter-spacing: calc(0.08em * var(--tracking)); color: var(--fg-muted); padding: 6px 10px 8px; cursor: pointer;
   transition: color var(--dur-fast) var(--ease), border-color var(--dur) var(--ease);
@@ -36,7 +36,7 @@
 @media (hover: hover) { .tab:hover { color: var(--fg); } }
 .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
 .spacer { flex: 1; }
-.topbar-meta { font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); color: var(--fg-faint);
+.topbar-meta { font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale)); color: var(--fg-faint);
   text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking)); }
 
 /* ---- settings menu — popover anchored under the gear (Søren's layout) ---- */
@@ -69,7 +69,7 @@
   border-right: 1px solid var(--rule); padding-right: 8px;
 }
 .set-nav-item {
-  font-family: var(--font-control); font-size: calc(var(--fs-control-compact) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control-compact) * var(--fs-scale));
   font-weight: var(--wght-control); line-height: var(--lh-control);
   text-transform: var(--label-case); letter-spacing: calc(0.07em * var(--tracking));
   background: none; border: 0; border-left: 2px solid transparent; color: var(--fg-muted);
@@ -104,20 +104,20 @@
 .settings-menu .arch-row, .settings-menu .conn,
 .settings-menu .notif-rule .menu-row { flex-wrap: wrap; row-gap: 6px; }
 .menu-head {
-  font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.1em * var(--tracking)); color: var(--fg-faint);
 }
 .menu-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .menu-row label {
-  font-family: var(--mono); font-size: calc(var(--fs-meta) * var(--fs-scale)); text-transform: var(--label-case);
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-meta) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); color: var(--fg-muted);
 }
-.menu-value { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg); }
+.menu-value { font-family: var(--mono); font-size-adjust: none; font-size: calc(11px * var(--fs-scale)); color: var(--fg); }
 /* A settings toggle is a button whose label is its current value, so it is a
    control like any other (T7): the control face, a soft corner, a --paper
    fill under the pointer. There is no switch component to turn it into. */
 .menu-toggle {
-  font-family: var(--font-control); font-size: calc(var(--fs-control) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control) * var(--fs-scale));
   font-weight: var(--wght-control); line-height: var(--lh-control);
   text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking));
   background: none; color: var(--fg-muted); border: 1px solid var(--rule); border-radius: var(--r-sm);
@@ -129,7 +129,10 @@
   .menu-toggle:hover { color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg); }
 }
 button.menu-toggle:active { scale: var(--press-scale); }
-.hintline { font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); line-height: 1.4; }
+.hintline { font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); line-height: 1.4;
+  font-weight: var(--wght-ui); }   /* T9 · a row's description */
+/* …which a figure inside a description does not take: the mono keeps its 400. */
+.hintline .mono, .plan-hint .mono { font-weight: 400; }
 .menu-actions { display: flex; justify-content: flex-end; margin-top: 2px; }
 
 /* ---- work area ---- */
@@ -176,8 +179,9 @@ button.menu-toggle:active { scale: var(--press-scale); }
    Classic, which set it round. */
 .swatch.swatch-all { border-radius: var(--r-swatch-all); }
 .side-item .name { flex: 1; min-width: 0; font-size: calc(14px * var(--fs-scale));
+  font-weight: var(--wght-content); letter-spacing: var(--ls-content);   /* T9 */
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.side-item .count { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
+.side-item .count { font-family: var(--mono); font-size-adjust: none; font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
 .side-item .side-edit {
   background: none; border: 0; color: var(--fg-faint); cursor: pointer;
   font-size: calc(13px * var(--fs-scale)); line-height: 1; padding: 0 2px; opacity: 0; transition: opacity var(--dur-fast) var(--ease);
@@ -202,7 +206,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .side-completed {
   display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%;
   padding: 10px 12px; border: 0; border-top: 1px solid var(--rule); background: none;
-  cursor: pointer; font-family: var(--font-control); font-size: calc(var(--fs-control-compact) * var(--fs-scale));
+  cursor: pointer; font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control-compact) * var(--fs-scale));
   font-weight: var(--wght-control); line-height: var(--lh-control); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); color: var(--fg-muted);
   transition: color var(--dur-fast) var(--ease), background var(--dur) var(--ease);
@@ -242,8 +246,9 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .rail-dot.cal-hidden { opacity: .55; }
 .rail-dot .swatch { width: 9px; height: 9px; flex: none; background: var(--fg-faint); border-radius: var(--r-dot); }
 
-/* pinned "All lists / All calendars" combined row — a touch of extra weight */
-.side-item.all-row .name { font-weight: 500; }
+/* pinned "All lists / All calendars" combined row — a touch of extra weight.
+   T9 leaves it as it was: 500, and none of the content tracking. */
+.side-item.all-row .name { font-weight: 500; letter-spacing: normal; }
 
 /* task-list groups — collapsible headers that lists sit under */
 .side-group.drag-over,
@@ -264,11 +269,11 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .group-caret .caret.open { transform: rotate(90deg); }
 .group-name {
   flex: 1; min-width: 0; text-align: left; background: none; border: 0; cursor: pointer;
-  font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case); letter-spacing: calc(0.1em * var(--tracking));
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case); letter-spacing: calc(0.1em * var(--tracking));
   color: var(--fg-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0;
 }
 .group-head:hover .group-name { color: var(--fg-muted); }
-.group-head .count { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
+.group-head .count { font-family: var(--mono); font-size-adjust: none; font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
 .group-eye {
   background: none; border: 0; cursor: pointer; color: var(--fg-faint);
   font-size: calc(12px * var(--fs-scale)); line-height: 1; padding: 0 1px;
@@ -283,10 +288,11 @@ button.menu-toggle:active { scale: var(--press-scale); }
   font-size: calc(12px * var(--fs-scale)); line-height: 1; padding: 0 3px;
 }
 .group-btn:hover { color: var(--accent); }
-.group-btn.danger { color: var(--warn); font-family: var(--font-control); font-size: calc(var(--fs-control-sm) * var(--fs-scale));
+.group-btn.danger { color: var(--warn); font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control-sm) * var(--fs-scale));
   font-weight: var(--wght-control); }
 .group-empty {
   padding: 3px 16px 6px 34px; font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); font-style: italic;
+  font-weight: var(--wght-ui);   /* T9 · an empty state */
 }
 .group-rename { padding-top: 4px; padding-bottom: 4px; }
 
@@ -298,7 +304,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .cal-tasks-done {
   display: block; width: 100%; text-align: left; background: none; border: 0;
   padding: 6px 16px 10px 34px; cursor: pointer;
-  font-family: var(--font-control); font-size: calc(var(--fs-control-sm) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control-sm) * var(--fs-scale));
   font-weight: var(--wght-control); line-height: var(--lh-control);
   text-transform: var(--label-case); letter-spacing: calc(0.1em * var(--tracking));
   color: var(--fg-faint); transition: color var(--dur-fast) var(--ease);
@@ -307,15 +313,30 @@ button.menu-toggle:active { scale: var(--press-scale); }
 
 /* per-list color dot shown on tasks in the combined "All lists" view.
    vertical-align: middle centers on the text's x-height; the -1px lift raises it
-   to the capital-letter optical center, so it lines up with the completion
-   checkbox to its left instead of sitting low. (top: shifts it visually without
-   affecting layout.) */
+   to the capital-letter optical center. (top: shifts it visually without
+   affecting layout.) That is where it sits in a row of text; in a row with a
+   tick, the two rules below place it from the tick instead. */
 .list-dot {
   display: inline-block; width: 7px; height: 7px; flex: none; margin-right: 6px;
   vertical-align: middle; position: relative; top: -1px; background: var(--fg-faint);
   border-radius: var(--r-dot);
 }
 .day-card-title .list-dot { margin-right: 5px; }
+/* Beside a tick, the dot is centred on the TICK. The lift above was tuned for
+   one face at one tick size, and an offset read off the text cannot follow a
+   control that is sized on its own: measured in Chromium, the dot sat 0.8px
+   below the tick's centre in a Tasks row, 1.2px above it on a phone (where
+   `--check-size` grows to 21px and the text does not), and 0.7px and 2.7px
+   above it on a day card. So it hangs from the top of the title's first line,
+   which is the top of the row's content box (both rows are
+   `align-items: flex-start`), by the same arithmetic that places the tick.
+   In a Tasks row both are centred on that first line (see `.task > .check`);
+   on a day card the tick keeps its 1px and the dot takes half the difference
+   between the two boxes from there. The centres then coincide at any tick
+   size, in either design, at any text scale. `top` rather than a margin, so
+   the line box is left alone. */
+.task-title .list-dot { vertical-align: top; top: calc(15px * var(--fs-scale) * 0.75 - 7px / 2); }
+.day-card-title .list-dot { vertical-align: top; top: calc(1px + (var(--check-size) - 7px) / 2); }
 
 /* combined quick-add: the compact target-list picker beside the input. Allowed
    to shrink so the input + picker + button row never overflows a phone. */
@@ -353,9 +374,9 @@ button.menu-toggle:active { scale: var(--press-scale); }
   padding: 16px var(--gutter) 10px; display: flex; align-items: baseline; gap: 12px;
   border-bottom: 1px solid var(--rule-faint);
 }
-.content-title { font-family: var(--serif); font-size: calc(24px * var(--fs-scale)); font-weight: 500; letter-spacing: -0.01em; }
+.content-title { font-family: var(--serif); font-size-adjust: none; font-size: calc(24px * var(--fs-scale)); font-weight: 500; letter-spacing: -0.01em; }
 .title-dot { width: 10px; height: 10px; flex: none; align-self: center; border-radius: var(--r-dot); }
-.content-sub { font-family: var(--mono); font-size: calc(var(--fs-meta) * var(--fs-scale)); color: var(--fg-faint);
+.content-sub { font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-meta) * var(--fs-scale)); color: var(--fg-faint);
   text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking)); }
 .scroll { flex: 1; overflow-y: auto; padding: 6px 0 40px; }
 
@@ -447,6 +468,14 @@ button.menu-toggle:active { scale: var(--press-scale); }
 }
 .check:hover { border-color: var(--accent); }
 .check.on { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+/* A Tasks row's tick, centred on its title's first line (15px at the body's
+   1.5) the way `.today-row .check` is on its own. The 2px `.check` carries
+   was written for this row, and it only centres an 18.5px box: it put the tick
+   0.75px above that line at the desktop's 17px and 1.25px below it at the
+   phone's 21px, and took the list dot beside it off the Today tab's mark by
+   as much. Here rather than on `.check`, which every borrower re-tunes
+   locally (see `.today-row .check`). */
+.task > .check { margin-top: calc(15px * var(--fs-scale) * 0.75 - var(--check-size) / 2); }
 .pri-bar { width: 3px; align-self: stretch; flex: none; background: transparent; }
 .pri-high { background: var(--pri-high); }
 .pri-med { background: var(--pri-med); }
@@ -460,21 +489,59 @@ button.menu-toggle:active { scale: var(--press-scale); }
    it. The stylesheet already applies this guard to `.day-card-title`,
    `.sched-card-title`, `.toast span` and the Today chips for the same reason. */
 .task-title { font-size: calc(15px * var(--fs-scale)); color: var(--fg);
+  font-weight: var(--wght-content); letter-spacing: var(--ls-content);   /* T9 */
   min-width: 0; overflow-wrap: anywhere; }
 .task-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 3px; align-items: center; }
-.task-meta .due { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); }
+.task-meta .due { font-family: var(--mono); font-size-adjust: none; font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); }
 .task-meta .due.overdue { color: var(--warn); }
 .task-notes { font-size: calc(13px * var(--fs-scale)); color: var(--fg-muted); margin-top: 2px; white-space: pre-wrap; }
 .task-actions { display: flex; gap: 4px; opacity: 0; transition: opacity var(--dur-fast) var(--ease); }
 .task:hover .task-actions { opacity: 1; }
 .task-actions button { background: none; border: 0; color: var(--fg-faint); cursor: pointer;
-  font-family: var(--font-control); font-size: calc(var(--fs-control-compact) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control-compact) * var(--fs-scale));
   font-weight: var(--wght-control); padding: 2px 4px; }
 .task-actions button:hover { color: var(--accent); }
 .task-actions button.danger:hover { color: var(--warn); }
-.child-progress { font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); color: var(--fg-faint); }
+.child-progress { font-family: var(--mono); font-size-adjust: none; font-size: calc(10px * var(--fs-scale)); color: var(--fg-faint); }
 
-.empty { padding: 40px var(--gutter); color: var(--fg-faint); font-size: calc(14px * var(--fs-scale)); }
+/* The Parked pane's row, which had no rule at all. Its title is a <button> (the
+   press that opens the editor), and a button nothing styles wears the user
+   agent's own face: a light grey slab that stays light under the dark theme,
+   with the page's near-white ink inherited onto it. The row itself sat flush
+   against the pane edge, its date and its one control wrapping under the title
+   as loose inline boxes.
+
+   It is a Tasks row now, built from that row's pieces rather than a restatement
+   of them: the C3 inset and hover fill, the list dot, `.task-title` for the
+   title and `.task-meta` for the line under it. A grid rather than `.task`'s
+   flex because the markup is flat (dot, title, date, control) and the date
+   belongs UNDER the title, where `.task-meta` sits in every other row, with the
+   control centred on the pair. */
+.task-row {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start;
+  column-gap: 10px;
+  margin-inline: var(--row-inset); padding: var(--row-y) calc(var(--gutter) - var(--row-inset));
+  border-bottom: 1px solid var(--row-divider); border-radius: var(--r-sm);
+  transition: background var(--dur) var(--ease);
+}
+@media (hover: hover) { .task-row:hover { background: var(--row-hover); } }
+/* No tick here to centre on, so the dot centres on the title's first line: a
+   line of `.task-title` is 15px at the body's 1.5. The gap does the spacing. */
+.task-row > .list-dot {
+  grid-row: 1; margin: calc((15px * var(--fs-scale) * 1.5 - 7px) / 2) 0 0; top: 0;
+}
+/* `font: inherit`, not just the family `button` already takes: the user agent
+   sets the whole `font` shorthand on a button, line-height included, and the
+   title has to sit on the same line the dot is centred on. */
+.task-main {
+  grid-row: 1; grid-column: 2; min-width: 0; text-align: left; cursor: pointer;
+  font: inherit; color: inherit; background: none; border: 0; padding: 0;
+}
+.task-row > .task-meta { grid-row: 2; grid-column: 2; }
+.task-row > .btn { grid-row: 1 / span 2; grid-column: 3; align-self: center; }
+
+.empty { padding: 40px var(--gutter); color: var(--fg-faint); font-size: calc(14px * var(--fs-scale));
+  font-weight: var(--wght-ui); }   /* T9 */
 
 /* A month that could not load every calendar. Sits above the grid rather than
    replacing it: the events that DID load are still worth showing, and the
@@ -503,7 +570,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
    inverted buttons in classic.css. */
 .view-tab {
   background: none; border: 1px solid var(--rule); border-radius: var(--r-sm); cursor: pointer;
-  font-family: var(--font-control); font-size: calc(var(--fs-control-sm) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control-sm) * var(--fs-scale));
   font-weight: var(--wght-control); line-height: var(--lh-control); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); color: var(--fg-muted); padding: 5px 9px;
   transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
@@ -592,19 +659,20 @@ button.menu-toggle:active { scale: var(--press-scale); }
   padding: 8px 10px; background: var(--paper); border-bottom: 1px solid var(--rule-faint);
 }
 .day-col-head .dow {
-  font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.08em * var(--tracking)); color: var(--fg-faint);
 }
-.day-col-head .dnum { font-family: var(--serif); font-size: calc(16px * var(--fs-scale)); font-weight: 500; }
+.day-col-head .dnum { font-family: var(--serif); font-size-adjust: none; font-size: calc(16px * var(--fs-scale)); font-weight: 500; }
 .day-col.today .day-col-head .dow, .day-col.today .day-col-head .dnum { color: var(--accent); }
-.day-col-head .count { font-family: var(--mono); font-size: calc(10px * var(--fs-scale)); color: var(--fg-faint); margin-left: auto; }
+.day-col-head .count { font-family: var(--mono); font-size-adjust: none; font-size: calc(10px * var(--fs-scale)); color: var(--fg-faint); margin-left: auto; }
 .day-col-body {
   flex: 1; overflow-y: auto; padding: 8px 7px 16px;
   display: flex; flex-direction: column; gap: 5px;
 }
 .col-label { padding: 6px 2px 1px; }
 .col-label.overdue { color: var(--warn); }
-.col-empty { color: var(--fg-faint); font-size: calc(13px * var(--fs-scale)); padding: 4px 2px; }
+.col-empty { color: var(--fg-faint); font-size: calc(13px * var(--fs-scale)); padding: 4px 2px;
+  font-weight: var(--wght-ui); }   /* T9 */
 .day-col.drag-over { box-shadow: inset 0 0 0 1px var(--accent); }
 .day-card {
   display: flex; align-items: flex-start; gap: 8px; padding: 7px 8px 7px 6px;
@@ -614,11 +682,12 @@ button.menu-toggle:active { scale: var(--press-scale); }
 @media (hover: hover) { .day-card:hover { border-color: var(--rule); } }
 .day-card .check { margin-top: 1px; }
 .day-card-body { flex: 1; min-width: 0; cursor: pointer; }
-.day-card-title { font-size: calc(13px * var(--fs-scale)); line-height: 1.35; overflow-wrap: break-word; }
+.day-card-title { font-size: calc(13px * var(--fs-scale)); line-height: 1.35; overflow-wrap: break-word;
+  font-weight: var(--wght-content); }   /* T9 · a task title; 13px, so untracked */
 .day-card.done .day-card-title { color: var(--fg-faint); text-decoration: line-through; }
 .col-add {
   background: none; border: 1px dashed var(--rule); border-radius: var(--r-sm); color: var(--fg-faint); cursor: pointer;
-  font-family: var(--font-control); font-size: calc(var(--fs-control-sm) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control-sm) * var(--fs-scale));
   font-weight: var(--wght-control); line-height: var(--lh-control); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); padding: 6px; margin-top: 2px;
   transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
@@ -631,7 +700,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 
 /* ---- calendar ---- */
 .cal-head { display: flex; align-items: center; gap: 12px; padding: 14px var(--gutter); }
-.cal-title { font-family: var(--serif); font-size: calc(22px * var(--fs-scale)); font-weight: 500; min-width: 220px; }
+.cal-title { font-family: var(--serif); font-size-adjust: none; font-size: calc(22px * var(--fs-scale)); font-weight: 500; min-width: 220px; }
 .cal-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 /* `minmax(0, 1fr)` and not a bare `1fr`. This is the rule `.cal-scroll.fixed`
    below already carried, and the reasoning written above it there applies to
@@ -648,7 +717,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
    (146.9 against 157.7 at 1280px). */
 .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
   border-top: 1px solid var(--rule); border-left: 1px solid var(--rule); }
-.cal-dow { font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
+.cal-dow { font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.08em * var(--tracking)); color: var(--fg-faint); padding: 6px 8px; text-align: right;
   border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule); background: var(--paper); }
 .cal-cell {
@@ -678,7 +747,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .cal-cell:hover { background: var(--bg-elev); }
 .cal-cell.dim { background: var(--paper); }
 .cal-cell.today .daynum { color: var(--bg); background: var(--accent); border-radius: var(--r-xs); }
-.daynum { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); align-self: flex-end;
+.daynum { font-family: var(--mono); font-size-adjust: none; font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); align-self: flex-end;
   padding: 1px 5px; }
 /* Events tint from the calendar's own color (--ev-c, set on .cal-scroll);
    uncolored calendars fall back to the accent / ok tints. */
@@ -706,7 +775,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 }
 /* continuation day of a multi-day span — same tint, softened lead edge */
 .cal-ev.cont { border-inline-start-style: dotted; }
-.cal-ev .t { font-family: var(--mono); color: var(--fg-muted); margin-inline-end: 4px; }
+.cal-ev .t { font-family: var(--mono); font-size-adjust: none; color: var(--fg-muted); margin-inline-end: 4px; }
 .cal-ev .recur { color: var(--fg-muted); font-weight: 600; }
 
 /* A task on the grid. Deliberately not a .cal-ev: an event holds a span and can
@@ -721,8 +790,13 @@ button.menu-toggle:active { scale: var(--press-scale); }
 }
 .cal-task:hover { background: color-mix(in oklch, var(--ev-c, var(--accent)) 10%, transparent); }
 .cal-task .tick { color: var(--ev-c, var(--accent)); margin-inline-end: 3px; }
-.cal-task .t { font-family: var(--mono); color: var(--fg-muted); margin-inline-end: 4px; }
+.cal-task .t { font-family: var(--mono); font-size-adjust: none; color: var(--fg-muted); margin-inline-end: 4px; }
 .cal-task.done { color: var(--fg-faint); text-decoration: line-through; }
+/* T9 · a calendar entry's title, in a grid chip and in an agenda row. Set on
+   the title rather than on the chip or the row, so the mono time beside it
+   keeps its 400: JetBrains Mono is variable too, and would take the 450. A
+   done task keeps the weight; only its colour and strike change. */
+.cal-ev > bdi, .cal-task > bdi, .agenda-ev > .t + span { font-weight: var(--wght-ui); }
 /* Square, so a task mark is distinguishable from an event's (which takes the
    --r-dot corner every dot does) at 5px without relying on colour. Selected on the DATA ATTRIBUTE and not on a `.task` class:
    `.task` is a global rule (the Tasks pane's row, "task rows" above) carrying padding,
@@ -732,7 +806,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 
 .cal-more {
   background: none; border: 0; padding: 0 5px; text-align: left; cursor: pointer;
-  font-family: var(--font-control); font-size: calc(var(--fs-control-sm) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control-sm) * var(--fs-scale));
   font-weight: var(--wght-control); line-height: var(--lh-control); color: var(--fg-faint);
 }
 .cal-more:hover { color: var(--accent); }
@@ -745,7 +819,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
   transform-origin: top; animation: var(--enter-float);
 }
 .day-pop-head {
-  font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.08em * var(--tracking)); color: var(--fg-faint); padding: 10px 14px 4px;
 }
 .day-pop .agenda-ev { padding: 8px 14px; font-size: calc(13px * var(--fs-scale)); }
@@ -791,9 +865,10 @@ button.menu-toggle:active { scale: var(--press-scale); }
 /* a read-only row (no editor behind it, as on the Home dashboard) */
 .agenda-ev.static { cursor: default; }
 .agenda-ev.static:hover { background: none; }
-.agenda-ev .t { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); min-width: 58px; flex: none; }
+.agenda-ev .t { font-family: var(--mono); font-size-adjust: none; font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); min-width: 58px; flex: none; }
 .agenda-ev .recur { color: var(--fg-muted); font-weight: 600; }
-.agenda-empty { padding: 12px 14px; color: var(--fg-faint); font-size: calc(14px * var(--fs-scale)); }
+.agenda-empty { padding: 12px 14px; color: var(--fg-faint); font-size: calc(14px * var(--fs-scale));
+  font-weight: var(--wght-ui); }   /* T9 */
 
 /* ---- modal / panel ---- */
 .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.32);
@@ -811,7 +886,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
   box-shadow: var(--shadow-lg); padding: 18px; display: flex; flex-direction: column; gap: 12px;
   animation: var(--enter-modal); }
 .modal-head { display: flex; align-items: baseline; justify-content: space-between; }
-.modal-title { font-family: var(--serif); font-size: calc(18px * var(--fs-scale)); font-weight: 500; }
+.modal-title { font-family: var(--serif); font-size-adjust: none; font-size: calc(18px * var(--fs-scale)); font-weight: 500; }
 .field { display: flex; flex-direction: column; gap: 5px; }
 .field-row { display: flex; gap: 10px; }
 /* min-width: 0 lets the fields shrink below the native datetime picker's
@@ -828,13 +903,15 @@ button.menu-toggle:active { scale: var(--press-scale); }
 
 /* recurring-event scope chooser (this / this & following / all) */
 .scope-choose { display: flex; flex-direction: column; gap: 8px; }
-.scope-q { font-family: var(--serif); font-size: calc(15px * var(--fs-scale)); margin: 2px 0 4px; }
-.scope-hint { font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted); margin: -2px 0 2px; line-height: 1.35; }
+.scope-q { font-family: var(--serif); font-size-adjust: none; font-size: calc(15px * var(--fs-scale)); margin: 2px 0 4px; }
+.scope-hint { font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted); margin: -2px 0 2px; line-height: 1.35;
+  font-weight: var(--wght-ui); }   /* T9 */
 /* A line under one field, explaining what its current value will do. Inside a
    `.field`, which already supplies the 5px gap, so this carries no margin of
    its own — the same weight and colour as `.scope-hint` above and `.plan-hint`,
    which are the modal's other two ways of saying a consequence. */
-.field-hint { margin: 0; font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted); line-height: 1.35; }
+.field-hint { margin: 0; font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted); line-height: 1.35;
+  font-weight: var(--wght-ui); }   /* T9 */
 
 /* ---- archived calendars (settings modal) ---- */
 .arch-list { display: flex; flex-direction: column; max-height: 60vh; overflow-y: auto; }
@@ -845,10 +922,12 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .arch-row .swatch { width: 8px; height: 8px; flex: none; background: var(--fg-faint); border-radius: var(--r-dot); }
 .arch-row .name {
   flex: 1; min-width: 0; font-size: calc(14px * var(--fs-scale));
+  font-weight: var(--wght-content); letter-spacing: var(--ls-content);   /* T9 · a collection's name */
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.arch-row .count { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
-.arch-empty { padding: 22px 2px; color: var(--fg-faint); font-size: calc(14px * var(--fs-scale)); text-align: center; }
+.arch-row .count { font-family: var(--mono); font-size-adjust: none; font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
+.arch-empty { padding: 22px 2px; color: var(--fg-faint); font-size: calc(14px * var(--fs-scale)); text-align: center;
+  font-weight: var(--wght-ui); }   /* T9 */
 .arch-caption {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted);
@@ -883,7 +962,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
    only place it was ever right. */
 .modal .arch-events { --arch-bleed: 18px; --arch-inset: 18px; }
 .arch-day-head {
-  font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.08em * var(--tracking)); color: var(--fg-faint);
   padding: 12px var(--arch-inset) 4px; position: sticky; top: 0; background: var(--bg-elev);
 }
@@ -897,14 +976,14 @@ button.menu-toggle:active { scale: var(--press-scale); }
   background: var(--bg-elev);
   padding: 28px; display: flex; flex-direction: column; gap: 14px; }
 /* The wordmark: Newsreader italic 500, accent period. */
-.login-brand { font-family: var(--serif); font-style: italic; font-weight: var(--wght-wordmark);
+.login-brand { font-family: var(--serif); font-size-adjust: none; font-style: italic; font-weight: var(--wght-wordmark);
   font-size: calc(30px * var(--fs-scale)); text-align: center; }
 .login-brand .dot { color: var(--accent); font-style: normal; }
 /* Error and warning notes are sentences, so they are set in the chrome face
    now, a step larger than the mono they replaced (--fs-note-step). */
-.login-err { font-family: var(--font-note); font-size: calc((11px + var(--fs-note-step)) * var(--fs-scale)); color: var(--warn); }
+.login-err { font-family: var(--font-note); font-size-adjust: var(--sans-adjust); font-size: calc((11px + var(--fs-note-step)) * var(--fs-scale)); color: var(--warn); }
 
-.banner { font-family: var(--font-note); font-size: calc((11px + var(--fs-note-step)) * var(--fs-scale)); color: var(--warn);
+.banner { font-family: var(--font-note); font-size-adjust: var(--sans-adjust); font-size: calc((11px + var(--fs-note-step)) * var(--fs-scale)); color: var(--warn);
   padding: 6px var(--gutter); border-bottom: 1px solid var(--rule); background: color-mix(in oklch, var(--warn) 10%, transparent); }
 
 /* ---- touch devices: hover-revealed controls must always be visible ---- */
@@ -1004,7 +1083,8 @@ button.menu-toggle:active { scale: var(--press-scale); }
   }
   /* Full-width rows with a chevron — a list you tap, not a tab you pick. */
   .set-sheet .set-nav-item {
-    font-family: var(--sans); font-size: calc(15px * var(--fs-scale)); font-weight: 400;
+    /* A control set in the sans: unadjusted, like the control face (T9). */
+    font-family: var(--sans); font-size-adjust: none; font-size: calc(15px * var(--fs-scale)); font-weight: 400;
     text-transform: none; letter-spacing: 0; color: var(--fg);
     border-left: 0; border-bottom: 1px solid color-mix(in oklab, var(--rule) 55%, transparent);
     padding: 14px 4px; display: flex; align-items: center; justify-content: space-between;
@@ -1036,11 +1116,11 @@ button.menu-toggle:active { scale: var(--press-scale); }
   }
   .side-mobiletrigger svg { flex: none; color: var(--fg-muted); }
   .side-mobiletrigger .mb-title {
-    font-family: var(--mono); font-size: calc(var(--fs-meta) * var(--fs-scale)); text-transform: var(--label-case);
+    font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-meta) * var(--fs-scale)); text-transform: var(--label-case);
     letter-spacing: calc(0.08em * var(--tracking)); color: var(--fg-muted); flex: none;
   }
   .side-mobiletrigger .mb-summary {
-    font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint);
+    font-family: var(--mono); font-size-adjust: none; font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint);
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .side-mobiletrigger .mb-caret {
@@ -1081,6 +1161,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
   .side.drawer .side-head { padding: 14px 14px 8px; }
   .side.drawer .drawer-hint {
     margin: 0; padding: 0 16px 10px; font-size: calc(12.5px * var(--fs-scale)); line-height: 1.4; color: var(--fg-muted);
+    font-weight: var(--wght-ui);   /* T9 */
   }
   .side.drawer .side-list { flex: 1 1 auto; overflow-y: auto; padding-bottom: 8px; }
   /* full-width, touch-sized rows with an always-visible edit affordance */
@@ -1266,7 +1347,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
   padding: 10px 12px;
   background: var(--bg-elev); border: 1px solid var(--warn); border-radius: var(--r-md);
   box-shadow: var(--shadow);
-  font-family: var(--font-note); font-size: calc((12px + var(--fs-note-step)) * var(--fs-scale)); color: var(--warn);
+  font-family: var(--font-note); font-size-adjust: var(--sans-adjust); font-size: calc((12px + var(--fs-note-step)) * var(--fs-scale)); color: var(--warn);
   /* M4 · rises into place — on `translate`, which composes with the
      centring `transform` above instead of replacing it. */
   animation: var(--enter-toast);
@@ -1302,11 +1383,11 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .sched-card.off { border-style: dashed; }
 .sched-card.off .sched-card-title { color: var(--fg-muted); }
 .sched-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-.sched-card-title { font-family: var(--serif); font-size: calc(17px * var(--fs-scale)); font-weight: 500; min-width: 0;
+.sched-card-title { font-family: var(--serif); font-size-adjust: none; font-size: calc(17px * var(--fs-scale)); font-weight: 500; min-width: 0;
   overflow-wrap: break-word; }
 .sched-toggle {
   display: inline-flex; align-items: center; gap: 5px; cursor: pointer; flex: none;
-  font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); color: var(--fg-muted);
 }
 .sched-card.off .sched-toggle { color: var(--fg-faint); }
@@ -1330,7 +1411,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
    `.scroll` it becomes sideways scrolling of the whole pane. */
 .sched-booking .who { font-size: calc(14px * var(--fs-scale)); min-width: 0; overflow-wrap: anywhere; }
 .sched-booking .who .email { color: var(--fg-muted); font-size: calc(12px * var(--fs-scale)); margin-left: 6px; }
-.sched-booking .via { font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
+.sched-booking .via { font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); color: var(--fg-faint); }
 .sched-booking .notes { flex-basis: 100%; font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted);
   white-space: pre-wrap; min-width: 0; overflow-wrap: anywhere; }
@@ -1345,7 +1426,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .sched-day-name {
   display: inline-flex; align-items: center; gap: 7px; cursor: pointer; flex: none;
   width: 64px; padding-top: 6px;
-  font-family: var(--mono); font-size: calc(var(--fs-meta) * var(--fs-scale)); text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking));
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-meta) * var(--fs-scale)); text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking));
 }
 .sched-day.off .sched-day-name { color: var(--fg-faint); }
 .sched-ranges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
@@ -1355,7 +1436,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
    from a label. Same shape as `.login-err`, which is the app's other inline
    field-level error. */
 .sched-err {
-  font-family: var(--font-note); font-size: calc((11px + var(--fs-note-step)) * var(--fs-scale)); color: var(--warn);
+  font-family: var(--font-note); font-size-adjust: var(--sans-adjust); font-size: calc((11px + var(--fs-note-step)) * var(--fs-scale)); color: var(--warn);
 }
 
 /* `min-width: 0` on both, so a range can give way instead of pushing the sheet
@@ -1374,7 +1455,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
    signature. Shared with the bulk composer's row-adder. */
 .sched-add-range, .bulk-add-row {
   background: none; border: 1px dashed var(--rule); border-radius: var(--r-sm); color: var(--fg-faint); cursor: pointer;
-  font-family: var(--font-control); font-size: calc(var(--fs-control-sm) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control-sm) * var(--fs-scale));
   font-weight: var(--wght-control); line-height: var(--lh-control); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); padding: 5px 8px;
   transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
@@ -1404,19 +1485,19 @@ button.menu-toggle:active { scale: var(--press-scale); }
   border: 1px solid var(--edge); border-radius: var(--r-md); background: var(--bg-elev);
   padding: 28px; display: flex; flex-direction: column; gap: 14px;
 }
-.booking-title { font-family: var(--serif); font-size: calc(28px * var(--fs-scale)); font-weight: 500; margin: 0;
+.booking-title { font-family: var(--serif); font-size-adjust: none; font-size: calc(28px * var(--fs-scale)); font-weight: 500; margin: 0;
   letter-spacing: -0.01em; }
 .booking-desc { margin: 0; font-size: calc(14px * var(--fs-scale)); color: var(--fg-muted); white-space: pre-wrap;
   overflow-wrap: anywhere; }
-.booking-lead { margin: 0; font-family: var(--serif); font-size: calc(17px * var(--fs-scale)); }
+.booking-lead { margin: 0; font-family: var(--serif); font-size-adjust: none; font-size: calc(17px * var(--fs-scale)); }
 .booking-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.booking-tz { font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); color: var(--fg-faint);
+.booking-tz { font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale)); color: var(--fg-faint);
   text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking)); }
 /* Inline failure notice — the one place an error is reported in place rather
    than through the toast. Shared with the bulk composer's partial-failure
    banner. */
 .booking-err, .bulk-fail {
-  font-family: var(--font-note); font-size: calc((12px + var(--fs-note-step)) * var(--fs-scale)); color: var(--warn);
+  font-family: var(--font-note); font-size-adjust: var(--sans-adjust); font-size: calc((12px + var(--fs-note-step)) * var(--fs-scale)); color: var(--warn);
   border: 1px solid var(--warn); border-radius: var(--r-sm); padding: 8px 10px;
   background: color-mix(in oklch, var(--warn) 8%, transparent);
 }
@@ -1434,21 +1515,21 @@ button.menu-toggle:active { scale: var(--press-scale); }
 }
 .booking-day:active { scale: var(--press-scale); }
 .booking-day.active { border-color: var(--accent); background: color-mix(in oklch, var(--accent) 10%, transparent); }
-.booking-day .dow { font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
+.booking-day .dow { font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.08em * var(--tracking)); color: var(--fg-faint); }
-.booking-day .dnum { font-family: var(--serif); font-size: calc(14px * var(--fs-scale)); font-weight: 500; }
+.booking-day .dnum { font-family: var(--serif); font-size-adjust: none; font-size: calc(14px * var(--fs-scale)); font-weight: 500; }
 
-.booking-daytitle { font-family: var(--serif); font-size: calc(16px * var(--fs-scale)); font-weight: 500; margin-top: 2px; }
+.booking-daytitle { font-family: var(--serif); font-size-adjust: none; font-size: calc(16px * var(--fs-scale)); font-weight: 500; margin-top: 2px; }
 .booking-busy { display: flex; flex-wrap: wrap; gap: 6px; }
 .busy-chip {
-  font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); letter-spacing: calc(0.04em * var(--tracking));
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale)); letter-spacing: calc(0.04em * var(--tracking));
   color: var(--fg-faint); border: 1px solid var(--rule-faint); border-radius: var(--r-pill);
   background: var(--paper); padding: 3px 7px;
 }
 .booking-slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 7px; }
 .slot-btn {
   background: none; border: 1px solid var(--rule); border-radius: var(--r-sm); cursor: pointer;
-  font-family: var(--mono); font-size: calc(12px * var(--fs-scale)); padding: 9px 6px; color: var(--fg);
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(12px * var(--fs-scale)); padding: 9px 6px; color: var(--fg);
   transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
     background var(--dur) var(--ease), scale var(--dur) var(--ease);
 }
@@ -1461,7 +1542,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   border: 1px solid var(--accent); border-radius: var(--r-sm); padding: 10px 12px;
   background: color-mix(in oklch, var(--accent) 8%, transparent);
-  font-family: var(--serif); font-size: calc(15px * var(--fs-scale));
+  font-family: var(--serif); font-size-adjust: none; font-size: calc(15px * var(--fs-scale));
 }
 .booking-card textarea.input { resize: vertical; }
 
@@ -1538,7 +1619,8 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .dash-pick-blurb { font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted); line-height: 1.35; }
 
 /* module contents */
-.dash-empty { padding: 14px 12px; color: var(--fg-faint); font-size: calc(13px * var(--fs-scale)); margin: 0; }
+.dash-empty { padding: 14px 12px; color: var(--fg-faint); font-size: calc(13px * var(--fs-scale)); margin: 0;
+  font-weight: var(--wght-ui); }   /* T9 */
 /* One line above a module's rows, saying something about part of what is
    listed. The module still shows everything — this is never a filter. */
 .dash-note { padding: 8px 12px 0; margin: 0; color: var(--fg-muted);
@@ -1552,7 +1634,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .dash-week { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
 .dash-week-figure { margin: 0; display: flex; align-items: baseline; gap: 8px; }
 .dash-week-n {
-  font-family: var(--serif); font-weight: 500; line-height: 1;
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500; line-height: 1;
   font-size: calc(34px * var(--fs-scale));
 }
 .dash-week-label { color: var(--fg-muted); font-size: calc(13px * var(--fs-scale)); }
@@ -1569,6 +1651,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .dash-task:last-child { border-bottom: 0; }
 .dash-task.done .dash-task-title { color: var(--fg-faint); text-decoration: line-through; }
 .dash-task-title { flex: 1; min-width: 0; font-size: calc(13px * var(--fs-scale));
+  font-weight: var(--wght-content);   /* T9 · a task title; 13px, so untracked */
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-task-due { flex: none; font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); }
 .dash-task-due.overdue { color: var(--warn); }
@@ -1598,7 +1681,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .mini-cal-head { padding-bottom: 4px; }
 .mini-cal-head .label { text-align: center; }
 .mini-day {
-  text-align: center; padding: 4px 0; font-family: var(--mono);
+  text-align: center; padding: 4px 0; font-family: var(--mono); font-size-adjust: none;
   font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); position: relative;
   background: none; border: 0; width: 100%; cursor: pointer;
 }
@@ -1650,7 +1733,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 }
 .tab-order-row .num { color: var(--fg-faint); font-size: calc(11px * var(--fs-scale)); }
 .tab-order-row .name { flex: 1; font-size: calc(14px * var(--fs-scale)); }
-.tab-order-row .icon-btn { font-family: var(--font-glyph); }
+.tab-order-row .icon-btn { font-family: var(--font-glyph); font-size-adjust: none; }
 
 /* ---- appearance editor ------------------------------------------------- */
 .appearance-modal { width: 640px; max-height: 88vh; overflow-y: auto; }
@@ -1664,7 +1747,8 @@ button.menu-toggle:active { scale: var(--press-scale); }
   flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px;
   font-size: calc(14px * var(--fs-scale)); color: var(--fg);
 }
-.appear-hint { font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); line-height: 1.3; }
+.appear-hint { font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); line-height: 1.3;
+  font-weight: var(--wght-ui); }   /* T9 */
 .appear-control { flex: none; display: flex; align-items: center; gap: 6px; width: 300px; }
 .appear-control .input { width: auto; flex: 1; min-width: 0; }
 .appear-swatch {
@@ -1712,7 +1796,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
    weekday toggles in the availability editor */
 .bulk-toggle {
   display: inline-flex; align-items: center; gap: 7px; cursor: pointer; white-space: nowrap;
-  font-family: var(--mono); font-size: calc(var(--fs-meta) * var(--fs-scale));
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-meta) * var(--fs-scale));
   text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking)); color: var(--fg-faint);
 }
 
@@ -1737,7 +1821,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .bulk-cell .input[type="date"], .task-prop-controls .input[type="date"] { flex: 1.4 1 0; min-width: 92px; }
 .bulk-cell .input[type="time"], .task-prop-controls .input[type="time"] { flex: 1 1 0; min-width: 76px; }
 .bulk-f-num { flex: 0 0 20px; justify-content: flex-end; }
-.bulk-num { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
+.bulk-num { font-family: var(--mono); font-size-adjust: none; font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
 .bulk-f-title { flex: 3 1 190px; }
 .bulk-f-list { flex: 1 1 125px; }
 .bulk-f-due { flex: 1.7 1 195px; }
@@ -1752,7 +1836,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .bulk-cell-label { display: none; }
 
 .bulk-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.bulk-progress { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); }
+.bulk-progress { font-family: var(--mono); font-size-adjust: none; font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); }
 
 @media (max-width: 720px) {
   .task-modal { width: 100%; }
@@ -2164,7 +2248,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
    the list share one vocabulary (see KIND_LABEL). --fg, because this is the
    answer the line exists to give and the rest of it is context. */
 .today-chip-kind {
-  color: var(--fg); font-family: var(--mono);
+  color: var(--fg); font-family: var(--mono); font-size-adjust: none;
   text-transform: var(--label-case); letter-spacing: calc(0.04em * var(--tracking));
 }
 /* WHERE it will end up, which is the half that actually differs between the
@@ -2208,7 +2292,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 }
 .plan-hint {
   margin: 0; font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted);
-  line-height: 1.4;
+  line-height: 1.4; font-weight: var(--wght-ui);   /* T9 */
 }
 .plan-hint.warn { color: var(--warn); }
 .plan-total {
@@ -2277,7 +2361,8 @@ button.menu-toggle:active { scale: var(--press-scale); }
    page's family from `.input` the way an input does — left alone it paints the
    one piece of prose in this app in the browser's monospace default. */
 .shut-reflect {
-  font: inherit; font-size: calc(14px * var(--fs-scale));
+  /* `font: inherit` takes the weight too, so T9's input weight is restated. */
+  font: inherit; font-size: calc(14px * var(--fs-scale)); font-weight: var(--wght-ui);
   resize: vertical; min-height: 76px; line-height: 1.45;
 }
 /* Where the reflection is READ, on the look-back. `pre-wrap` because it is the
@@ -2326,7 +2411,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
    was the only thing that covered. */
 .today-load-say {
   flex: 1; min-width: 0;
-  font-family: var(--sans); font-size: calc(13px * var(--fs-scale));
+  font-family: var(--sans); font-size-adjust: var(--sans-adjust); font-size: calc(13px * var(--fs-scale));
   color: var(--fg-muted);
 }
 /* The offer, pushed to the end of whatever the line already says. `auto` and
@@ -2521,6 +2606,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
      22.5px the inherited 1.5 already computed to; what is new is that it is now
      the same 22.5px by construction. */
   line-height: var(--today-line);
+  font-weight: var(--wght-content); letter-spacing: var(--ls-content);   /* T9 */
   overflow-wrap: anywhere;                  /* see `.task-title` */
 }
 .today-row.done .today-title { color: var(--fg-faint); text-decoration: line-through; }
@@ -2535,7 +2621,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
    the row is there to surface. */
 .today-est {
   background: none; border: 0; padding: 2px 4px; cursor: pointer; flex: none;
-  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(11px * var(--fs-scale));
   color: var(--fg-muted); text-align: right; min-width: 42px;
 }
 /* Unestimated: the affordance is there but says nothing until asked. It is
@@ -2550,7 +2636,8 @@ button.menu-toggle:active { scale: var(--press-scale); }
    min/max do not stop a typed value. */
 .today-est-input {
   flex: none; width: 62px; padding: 2px 4px; min-height: 0;
-  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(11px * var(--fs-scale));
+  font-weight: 400;   /* mono: not `.input`'s T9 weight */
 }
 
 /* `min-width` because this cell is now always painted, empty or not: it is what
@@ -2603,7 +2690,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
    appears on hover, `+` is accent and is always there. */
 .today-drop, .today-plus {
   background: none; border: 0; cursor: pointer; flex: none; line-height: 1;
-  font-family: var(--mono); font-size: calc(13px * var(--fs-scale));
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(13px * var(--fs-scale));
   color: var(--fg-faint); padding: 2px 4px;
 }
 .today-drop { opacity: 0; transition: opacity var(--dur-fast) var(--ease); }
@@ -2685,7 +2772,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .today-more {
   display: block; background: none; border: 0; cursor: pointer; text-align: left;
   padding: 6px var(--gutter);
-  font-family: var(--font-control); font-size: calc(var(--fs-control-compact) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control-compact) * var(--fs-scale));
   font-weight: var(--wght-control); line-height: var(--lh-control);
   color: var(--fg-faint); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); transition: color var(--dur-fast) var(--ease);
@@ -2745,7 +2832,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
    its own now and the JSX drops the `empty`. */
 .today-quiet {
   padding: 6px var(--gutter); color: var(--fg-faint);
-  font-size: calc(13px * var(--fs-scale));
+  font-size: calc(13px * var(--fs-scale)); font-weight: var(--wght-ui);   /* T9 */
 }
 
 /* ---- habits ------------------------------------------------------------
@@ -2813,7 +2900,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .today-kind-mark {
   width: var(--today-mark-w); flex: none; line-height: 1;
   display: flex; align-items: center; justify-content: center;
-  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(11px * var(--fs-scale));
   color: var(--fg-faint);
 }
 /* The MARK: one 7px box, filled or hollow. Selected through `[data-kind]` and
@@ -3033,7 +3120,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
   background: none; border: 0; border-radius: var(--r-menu-item); cursor: pointer;
   display: flex; align-items: center; gap: 7px;
   padding: 9px 11px; min-height: 44px; text-align: left; white-space: nowrap;
-  font-family: var(--font-control); font-size: calc(var(--fs-control) * var(--fs-scale));
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control) * var(--fs-scale));
   line-height: var(--lh-control);
   text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking));
   color: var(--fg-muted);
@@ -3084,6 +3171,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .habit-sheet { gap: 10px; }
 .habit-blurb {
   margin: 0; font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted);
+  font-weight: var(--wght-ui);   /* T9 */
 }
 /* `.empty`'s 40px of padding is sized for a whole pane, not for a gap between
    two controls in a dialog. */
@@ -3165,7 +3253,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
    with the width of "Wed" against "Thu". Matches `.sched-day-name`'s job. */
 .cap-day-name {
   width: 42px; flex: none;
-  font-family: var(--mono); font-size: calc(var(--fs-meta) * var(--fs-scale));
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-meta) * var(--fs-scale));
   color: var(--fg-muted); text-transform: var(--label-case);
 }
 .cap-input { flex: 1; min-width: 0; max-width: 160px; }
@@ -3239,7 +3327,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 }
 .focus-head .label { flex: none; }
 .focus-head__interval, .focus-head__tally {
-  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint);
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint);
   white-space: nowrap;
 }
 .focus-back { flex: none; }
@@ -3256,7 +3344,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
   max-width: 880px; width: 100%; margin: 0 auto; box-sizing: border-box;
 }
 .focus-phase {
-  font-family: var(--mono); font-size: calc(var(--fs-meta) * var(--fs-scale));
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-meta) * var(--fs-scale));
   text-transform: var(--label-case); letter-spacing: calc(0.1em * var(--tracking));
   color: var(--fg-faint);
 }
@@ -3287,7 +3375,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
    the page's to grow. `layout.browser.test.tsx` pins that the float face fits
    across the whole 0.8-1.4 range, which is only true because of this. */
 .focus-clock {
-  font-family: var(--serif); font-weight: 500; font-variation-settings: var(--fvs-display);
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500; font-variation-settings: var(--fvs-display);
   font-size: clamp(calc(56px * var(--fs-scale)), 18vw, calc(168px * var(--fs-scale)));
   line-height: 1; letter-spacing: -0.02em;
 }
@@ -3296,12 +3384,12 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .focus[data-phase="long_break"] .focus-clock { color: var(--fg-muted); }
 .focus-now { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .focus-now__eyebrow {
-  font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale));
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale));
   text-transform: var(--label-case); letter-spacing: calc(0.1em * var(--tracking));
   color: var(--fg-faint);
 }
 .focus-now__title {
-  margin: 0; font-family: var(--serif); font-weight: 500; letter-spacing: -0.01em;
+  margin: 0; font-family: var(--serif); font-size-adjust: none; font-weight: 500; letter-spacing: -0.01em;
   font-size: clamp(calc(24px * var(--fs-scale)), 5vw, calc(56px * var(--fs-scale)));
   line-height: 1.12; overflow-wrap: anywhere;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
@@ -3312,7 +3400,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .focus[data-phase="long_break"] .focus-now__title { color: var(--fg-muted); }
 .focus-now__meta {
   display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px;
-  font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted);
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted);
 }
 /* The cap is a reading that is also a switch: dotted underline, the app's
    convention for "press to change what this says". */
@@ -3331,7 +3419,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
   font-size: calc(15px * var(--fs-scale));
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.focus-next__more { font-family: var(--mono); font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
+.focus-next__more { font-family: var(--mono); font-size-adjust: none; font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
 /* The inset as well as the padding: this is the surface's bottom edge under
    `viewport-fit=cover`, and End session is the one button on it. Same shape
    as `.modal`, `.toast` and `.dash-stack`. The float window hides this footer
@@ -3341,8 +3429,9 @@ button.menu-toggle:active { scale: var(--press-scale); }
   padding: 12px var(--gutter); border-top: 1px solid var(--rule-faint);
   padding-bottom: calc(12px + env(safe-area-inset-bottom));
 }
-.focus-empty { margin: 0; font-family: var(--serif); font-size: clamp(calc(20px * var(--fs-scale)), 3vw, calc(32px * var(--fs-scale))); font-weight: 500; }
-.focus-hint { margin: 0; font-size: calc(13px * var(--fs-scale)); color: var(--fg-muted); line-height: 1.4; max-width: 48ch; }
+.focus-empty { margin: 0; font-family: var(--serif); font-size-adjust: none; font-size: clamp(calc(20px * var(--fs-scale)), 3vw, calc(32px * var(--fs-scale))); font-weight: 500; }
+.focus-hint { margin: 0; font-size: calc(13px * var(--fs-scale)); color: var(--fg-muted); line-height: 1.4; max-width: 48ch;
+  font-weight: var(--wght-ui); }   /* T9 */
 
 /* The way in, in Today's header. `flex: none; align-self: center` is declared
    with its two siblings inside the Today fence; only the word/glyph swap is
@@ -3371,7 +3460,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
    and coloured exactly as the estimate it sits beside — a measurement next to
    a guess, in the same unit, and never a ratio of the two. */
 .today-worked {
-  font-family: var(--mono); font-size: calc(11px * var(--fs-scale));
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(11px * var(--fs-scale));
   color: var(--fg-muted); flex: none; min-width: 42px; text-align: right;
 }
 

@@ -374,12 +374,14 @@ describe("a Today row's cells sit on the title's first line", () => {
   // rendered: it reads as two records, the square beside line one and
   // `25m  Aug 28` floating at the middle of the block touching nothing.
   //
-  // Measured with the REAL faces, which is not a detail: `.list-dot` is placed
-  // by `vertical-align: middle`, so where it lands is a fact about the sans's
-  // x-height (Hanken Grotesk; it was Inter's, and still is under Classic). A rig that failed to load the self-hosted woff2 put it a whole
-  // pixel off and made the coloured square look like the defect when the tick
-  // was the thing out of place. The harness waits on `document.fonts` for
-  // exactly this reason.
+  // Measured with the REAL faces, which is not a detail: `.list-dot` used to be
+  // placed by `vertical-align: middle`, so where it landed was a fact about the
+  // sans's x-height. A rig that failed to load the self-hosted woff2 put it a
+  // whole pixel off and made the coloured square look like the defect when the
+  // tick was the thing out of place. The harness waits on `document.fonts` for
+  // exactly this reason. The dot in a Tasks row is now placed on the tick, and
+  // the tick on the first line, so neither reads the face any more (see the
+  // next block).
   const rows = (title: string) => `
     <div class="shell"><div class="content today-pane"><ul class="today-list">
       <li class="today-row">
@@ -437,15 +439,16 @@ describe("a Today row's cells sit on the title's first line", () => {
     }
 
     // …and the Tasks tab, which is the thing the report actually asked for.
-    // A comparison rather than a pinned number, and a loose one: the two tabs
-    // reach the first line by different routes — `.list-dot` rides it inline on
-    // the sans's x-height, the Today mark is placed on it — so they agree to about
-    // half a pixel, not exactly.
+    // A comparison rather than a pinned number. Both tabs now place the mark
+    // on the first line by arithmetic rather than one of them riding the
+    // sans's x-height, so they agree to the same half pixel as the cells above.
     const tasksTitle = host.querySelector('.task-title')!
     expect(getComputedStyle(today).fontSize).toBe(getComputedStyle(tasksTitle).fontSize)
     expect(Math.abs(off(host, '.today-kind-box', '.today-title')
       - off(host, '.list-dot', '.task-title')), 'the two tabs disagree about the mark')
-      .toBeLessThanOrEqual(1)
+      .toBeLessThanOrEqual(0.5)
+    expect(Math.abs(off(host, '.task > .check', '.task-title') - first),
+      'the Tasks tick is off its title\'s first line').toBeLessThanOrEqual(0.5)
   })
 
   it('and the wrapped phone row keeps its 44px tap boxes', async () => {
@@ -487,6 +490,80 @@ describe("a Today row's cells sit on the title's first line", () => {
 })
 
 // ── the habit count and the title it stands beside ──────────────────────────
+
+describe("a list's coloured square sits on the tick beside it", () => {
+  // Reported by eye: in the Tasks tab the square sat visibly low against the
+  // checkbox. It was placed from the TEXT (`vertical-align: middle` and a 1px
+  // lift, tuned for one face at one tick size) while the tick is placed from
+  // the row, and the two drift apart with the face and with `--check-size`.
+  // Measured before the fix: 0.8px low in a Tasks row, 1.2px high on a phone,
+  // 0.7px and 2.7px high on a day card. Now both are placed by arithmetic on
+  // the same box, so they should agree to a fraction of a pixel in both
+  // designs, at both tick sizes.
+  const ROWS = `
+    <div class="shell"><div class="content">
+      <div class="task"><div class="pri-bar"></div><span class="twisty-gap"></span>
+        <button class="check">&#10003;</button>
+        <div class="task-body"><div class="task-title"><span class="list-dot"></span>Plan a trip</div>
+          <div class="task-meta"><span class="due">&#9719; Sep 23</span></div></div></div>
+      <div class="day-card"><div class="pri-bar"></div><button class="check">&#10003;</button>
+        <div class="day-card-body"><div class="day-card-title"><span class="list-dot"></span>Plan a trip</div></div></div>
+    </div></div>`
+  const centre = (el: Element) => { const r = el.getBoundingClientRect(); return (r.top + r.bottom) / 2 }
+
+  it.each([
+    [1200, undefined], [390, undefined], [1200, 'classic'], [390, 'classic'],
+  ] as const)('at %ipx (preset=%s)', async (w, preset) => {
+    await viewport(w)
+    if (preset) document.documentElement.dataset.preset = preset
+    const host = await mount(ROWS)
+    for (const row of ['.task', '.day-card']) {
+      const r = host.querySelector(row)!
+      expect(Math.abs(centre(r.querySelector('.list-dot')!) - centre(r.querySelector('.check')!)),
+        `${row}: the square is off the tick`).toBeLessThanOrEqual(0.25)
+    }
+  })
+})
+
+describe('the Parked pane lays out as rows', () => {
+  // It had no rule at all: the title is a <button>, and an unstyled one wore
+  // the user agent's ButtonFace, a light grey slab under the dark theme with
+  // the page's near-white ink on it. The row sat flush with the pane edge and
+  // its date and control wrapped under it as loose inline boxes.
+  const PANE = (title: string) => `
+    <div class="shell"><div class="work"><main class="content">
+      <div class="content-head"><span class="content-title">Parked</span><span class="content-sub">1 parked</span></div>
+      <div class="scroll"><div class="task-row">
+        <span class="list-dot" style="background: oklch(0.6 0.15 250)"></span>
+        <button class="task-main"><span class="task-title">${title}</span></button>
+        <span class="task-meta"><span class="due mono">since Sep 13</span></span>
+        <button class="btn ghost">Bring it back</button>
+      </div></div></main></div></div>`
+
+  it.each([[1200, 'Color Run Photos'], [390, 'Color Run Photos from the whole of last summer, sorted by date']] as const)(
+    'at %ipx, in the dark', async (w, title) => {
+      await viewport(w)
+      document.documentElement.dataset.theme = 'dark'
+      const host = await mount(PANE(title))
+      const main = host.querySelector('.task-main')!
+      // No ButtonFace: the title is the page's ink on the page.
+      expect(getComputedStyle(main).backgroundColor).toBe('rgba(0, 0, 0, 0)')
+      expect(getComputedStyle(main).borderTopWidth).toBe('0px')
+      // On the gutter, where the pane's title starts.
+      expect(Math.abs(box(host.querySelector('.task-row > .list-dot')!).left
+        - box(host.querySelector('.content-title')!).left)).toBeLessThanOrEqual(0.5)
+      // The dot on the title's first line, the date under the title, and the
+      // control on the right, clear of both.
+      const line = parseFloat(getComputedStyle(main).lineHeight)
+      const dot = host.querySelector('.task-row > .list-dot')!.getBoundingClientRect()
+      expect(Math.abs((dot.top + dot.bottom) / 2 - (main.getBoundingClientRect().top + line / 2)))
+        .toBeLessThanOrEqual(0.5)
+      const meta = box(host.querySelector('.task-row > .task-meta')!)
+      expect(meta.top).toBeGreaterThanOrEqual(box(main).bottom)
+      expect(meta.left).toBe(box(main).left)
+      expect(box(host.querySelector('.task-row > .btn')!).left).toBeGreaterThan(Math.max(box(main).right, meta.right))
+    })
+})
 
 describe("a habit's week count never crowds out its own title", () => {
   // `.today-habit-count` was `flex: none` and `.today-title` is `flex: 1 1 0%`.

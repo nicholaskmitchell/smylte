@@ -63,6 +63,10 @@
   background: var(--d-paper);
   color: var(--d-ink);
   font-family: var(--d-sans);
+  /* T9's x-height fit is the app's, not the poster's: the body carries it, and
+     a display is drawn under that body, so it is put back here. render.py sets
+     these faces at their own size and could not follow it anyway. */
+  font-size-adjust: none;
   font-variant-numeric: tabular-nums;
   /* The whole point, stated once. Nothing below is clickable, focusable or
      selectable — a passive display that responded to a fingertip would be a
@@ -115,7 +119,7 @@
    dashboard. `render.py::_label` draws the same thing by hand, one glyph at a
    time, because Pillow has no letter-spacing. */
 .display-label {
-  font-family: var(--d-mono);
+  font-family: var(--d-mono); font-size-adjust: none;
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.12em;
@@ -129,7 +133,7 @@
    tracking `.cal-title` and `.content-title` use in app.css, so a display's
    headline is the product's headline. */
 .display-title {
-  font-family: var(--d-serif);
+  font-family: var(--d-serif); font-size-adjust: none;
   font-weight: 500;
   letter-spacing: -0.01em;
 }
@@ -203,7 +207,7 @@
 /* A count, so mono and untracked — a number to be read, not a label to be
    scanned. The same distinction `.day-col-head .count` makes in app.css. */
 .display-cal__more {
-  font-family: var(--d-mono); font-size: clamp(9px, 1vw, 13px);
+  font-family: var(--d-mono); font-size-adjust: none; font-size: clamp(9px, 1vw, 13px);
   letter-spacing: 0; color: var(--d-muted);
 }
 
@@ -285,11 +289,11 @@
    rather than as a different calendar. */
 .display--color .display-chip__mark { width: 0.62em; box-shadow: none; border: 0; }
 
-.display-chip__initial { flex: none; font-family: var(--d-mono); font-weight: 500; }
+.display-chip__initial { flex: none; font-family: var(--d-mono); font-size-adjust: none; font-weight: 500; }
 /* Every clock the app draws is mono (`.task-meta .due`), and here it also buys
    tabular figures — so the times line up down a column instead of ragging. */
 .display-chip__time {
-  flex: none; font-family: var(--d-mono);
+  flex: none; font-family: var(--d-mono); font-size-adjust: none;
   font-size: 0.92em; letter-spacing: 0;
 }
 .display-chip__text { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
@@ -370,7 +374,7 @@
 /* Mono and untracked, like every other count in the app and like
    `.display-cal__more` — a number to be read, not a label to be scanned. */
 .display-day__more {
-  margin: 0; font-family: var(--d-mono); letter-spacing: 0; color: var(--d-muted);
+  margin: 0; font-family: var(--d-mono); font-size-adjust: none; letter-spacing: 0; color: var(--d-muted);
   font-size: clamp(10px, 1.5vh, 15px);
 }
 
@@ -502,6 +506,6 @@
 
 /* Mono and untracked, like every other count the app draws. */
 .display-now__more {
-  margin: 0; flex: none; font-family: var(--d-mono); letter-spacing: 0;
+  margin: 0; flex: none; font-family: var(--d-mono); font-size-adjust: none; letter-spacing: 0;
   color: var(--d-muted); font-size: clamp(10px, 1.5vh, 15px);
 }
