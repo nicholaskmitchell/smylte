@@ -293,6 +293,26 @@
   --fvs-display: normal;       /* T1: opsz follows font-size, never pinned */
   --wght-wordmark: 500;        /* the italic "Smylte." wordmark */
 
+  /* T9 · Hanken Grotesk, fitted to dense rows. This app's sizes were set for
+     Inter, and Hanken sets smaller at the same font-size (x-height 0.493em,
+     against 0.55em for the JetBrains Mono beside it), wider and lighter, so
+     rows of it read small, light and loose. Rather than move a size token, the
+     sans is x-height-normalised: `font-size-adjust` renders it with an x-height
+     of 0.516em of the declared size, 4.7% up on Hanken's own, which leaves
+     every size and line-height (both computed from font-size, which the adjust
+     does not touch) where it was. Content text then takes 460 and 14–15px of
+     it tightens by 0.006em; supporting UI text takes 450. Controls keep 500.
+
+     Only the sans is adjusted. The property is INHERITED, and an adjust tuned
+     for Hanken would shrink Newsreader and JetBrains Mono, so every rule that
+     sets a family sets the adjust that goes with it: `var(--sans-adjust)`
+     beside the sans, `none` beside the serif and the mono (design-tokens.test.ts
+     holds that pairing across the stylesheets). */
+  --sans-adjust: ex-height 0.516;
+  --wght-ui: 450;              /* body UI text: notes, event titles, inputs, descriptions, empty states */
+  --wght-content: 460;         /* task titles, collection names */
+  --ls-content: -0.006em;      /* 14–15px content text only */
+
   /* F4 · control sizing. 38px is the minimum height of a button, an input
      and a toggle; dense rows opt out with `min-height: 0` on their own rules,
      and the float window by setting --control-h: 0px on its
@@ -365,6 +385,20 @@
   --enter-sheet: sheet-in var(--dur-slow) var(--ease);
 }
 
+/* T9 is a fit for one face, and Workspace sets none of it: its three slots are
+   all the system face, which the numbers above were not measured on. Adjusting
+   it would also split that one family in two, since only the sans slot takes
+   the adjust. So Workspace takes the neutral values, the ones Classic's lever
+   block restates, and renders as it did before T9. A block of its own, after
+   the preset's: that block holds exactly the 23 Appearance tokens, and
+   appearance.ts mirrors it. */
+:root[data-preset="workspace"] {
+  --sans-adjust: none;
+  --wght-ui: 400;
+  --wght-content: 400;
+  --ls-content: 0;
+}
+
 /* Dark grounds: a shadow in ink at these alphas does not read, so the dark
    theme uses black, and more of it. The segmented thumb's hairline steps up
    too: --bg-elev and --paper are all but the same tone in the dark themes, so
@@ -393,6 +427,7 @@ body {
   background: var(--bg);
   color: var(--fg);
   font-family: var(--sans);
+  font-size-adjust: var(--sans-adjust);    /* T9 */
   font-size: calc(15px * var(--fs-scale));
   line-height: 1.5;
   -webkit-tap-highlight-color: transparent;
@@ -414,10 +449,22 @@ body {
    The fix is to say nothing and let each platform render text the way its owner
    configured it, which is what `auto` means and what every other declaration in
    this file already assumes. */
-button { font-family: inherit; color: inherit; }
+/* T9 · `font-size-adjust` is inherited, but not into a form control: the user
+   agent sets the `font` shorthand on each, and that resets the adjust along
+   with the rest. Measured in Chromium: under an adjusted <body>, a <button>,
+   <input>, <select> and <textarea> all computed `none`, which would leave every
+   control and every field in unadjusted Hanken beside adjusted text of the
+   same size. So each takes its parent's, the way it already takes the family. */
+button { font-family: inherit; font-size-adjust: inherit; color: inherit; }
 /* touch-action: no 300ms double-tap-zoom delay on interactive bits */
 button, input, select, label { touch-action: manipulation; }
-input, select, textarea { font-family: inherit; }
+input, select, textarea { font-family: inherit; font-size-adjust: inherit; }
+/* …and the reverse for the elements the user agent sets in a monospace, which
+   do inherit the adjust (they take the family, not the shorthand). The
+   attribute selectors are a backstop for a family written inline; no component
+   does that today, and a rule that sets the serif or the mono pairs it with
+   `font-size-adjust: none` itself. */
+:is(code, kbd, pre, samp, [style*="var(--mono)"], [style*="var(--serif)"]) { font-size-adjust: none; }
 ::selection { background: color-mix(in oklch, var(--accent) 30%, transparent); }
 
 /* F1 · focus. A keyboard focus is a 2px accent outline standing 2px clear of
@@ -439,11 +486,11 @@ input, select, textarea { font-family: inherit; }
 
 /* ---- primitives ---- */
 .label {
-  font-family: var(--mono); font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.1em * var(--tracking)); color: var(--fg-faint);
 }
-.mono { font-family: var(--mono); }
-.serif { font-family: var(--serif); }
+.mono { font-family: var(--mono); font-size-adjust: none; }
+.serif { font-family: var(--serif); font-size-adjust: none; }
 
 /* `border: 1px solid transparent` and NOT `border: 0`, which is what this was.
    `.btn.ghost` adds `border: 1px solid var(--rule)` and nothing takes a pixel
@@ -470,7 +517,7 @@ input, select, textarea { font-family: inherit; }
    several rules below already use for positioning and would be clobbered. */
 .btn {
   background: var(--fg); color: var(--bg); border: 1px solid transparent; border-radius: var(--r-sm);
-  font-family: var(--font-control); font-size: calc(var(--fs-control) * var(--fs-scale)); font-weight: 500; text-transform: var(--label-case);
+  font-family: var(--font-control); font-size-adjust: var(--sans-adjust); font-size: calc(var(--fs-control) * var(--fs-scale)); font-weight: 500; text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); line-height: var(--lh-control);
   padding: var(--btn-pad); min-height: var(--control-h); cursor: pointer;
   transition: background var(--dur) var(--ease), color var(--dur-fast) var(--ease),
@@ -517,16 +564,19 @@ input, select, textarea { font-family: inherit; }
 .input {
   background: var(--bg); color: var(--fg); border: 1px solid var(--rule); border-radius: var(--r-sm);
   padding: var(--input-pad); min-height: var(--control-h); font-size: calc(14px * var(--fs-scale)); width: 100%;
+  font-weight: var(--wght-ui);   /* T9 · the value, and the placeholder, which inherits it */
   transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur) var(--ease);
 }
 .input:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
+/* A field set in the mono (a colour's hex, say) keeps the mono's 400. */
+.input.mono { font-weight: 400; }
 
 select.input { appearance: none; -webkit-appearance: none; cursor: pointer; }
 
 /* A chip is a --paper pill with no border, in the control face (C, T7). */
 .chip {
   display: inline-flex; align-items: center; gap: 4px;
-  font-family: var(--font-control); font-weight: var(--wght-control);
+  font-family: var(--font-control); font-size-adjust: var(--sans-adjust); font-weight: var(--wght-control);
   font-size: calc(var(--fs-chip) * var(--fs-scale)); letter-spacing: calc(0.04em * var(--tracking));
   color: var(--fg-muted); border: 1px solid var(--chip-edge); padding: var(--chip-pad);
   border-radius: var(--r-pill);

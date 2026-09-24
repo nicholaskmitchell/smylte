@@ -504,7 +504,12 @@ N.K.M. system as refined in September 2026 — warm off-white, one orange accent
 Newsreader for anything read, Hanken Grotesk for chrome and every control,
 JetBrains Mono for labels and figures. Straight on the page, soft at the hand:
 hairline rules and square grids, and on the things you touch a radius scale,
-soft shadows where they float, and eased motion. **Classic** is the design
+soft shadows where they float, and eased motion. The app's sizes were set for
+Inter, and Hanken Grotesk sets smaller and lighter at the same size, so the
+sans is x-height-normalised (`font-size-adjust`, `--sans-adjust`) rather than
+resized, and content text sits a little heavier (460) and tighter than UI
+text (450). The serif and the mono always reset `font-size-adjust: none`.
+**Classic** is the design
 Smylte shipped before that refinement, kept whole rather than approximated —
 Fraunces headlines, Inter, sharp corners, uppercase mono on every label and
 control, hard shadows, no presses and no popover or modal entrances.
@@ -526,10 +531,11 @@ under `:root[data-preset=…]` and is selected by an attribute, which is what
 keeps it un-editable and lets a palette fix reach everyone on the next deploy.
 Editing while one is active forks a new theme rather than modifying it; a
 fork of a preset is seeded with that preset's values, so it starts out with
-the same tokens. For Workspace that is identical. For Classic it is not quite:
+the same tokens. For Workspace that is all but identical: a fork takes the
+default design's fitted sans, which the preset leaves off. For Classic it is not quite:
 a saved theme carries tokens only, so a fork of Classic keeps its faces, its
 square corners and its capitals and takes the current design's controls,
-shadows and motion — and the editor says so while Classic is selected. Overrides are validated against a token allowlist on both sides of
+shadows, motion and fitted sans — and the editor says so while Classic is selected. Overrides are validated against a token allowlist on both sides of
 the wire — the blob is re-read by a pre-paint script that writes straight into
 the CSSOM, so a `url()` beacon or a property break-out must never survive
 storage. `appearance.test.ts` asserts the defaults *and* the presets still
