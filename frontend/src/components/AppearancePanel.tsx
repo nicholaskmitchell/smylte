@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { clientId } from '../api'
-import { useEscape } from '../hooks'
+import { useEscape, useSegmentThumb } from '../hooks'
 import { useT } from '../i18n'
 import {
   DEFAULTS, FONT_CHOICES, GROUPS, MAX_NAME_LEN, MAX_THEMES, PRESETS, SHARED_DEFAULTS,
@@ -51,6 +51,8 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
   const active = preset ?? themes.find((t) => t.id === appearance.active) ?? null
   const isPreset = !!preset
   const fileRef = useRef<HTMLInputElement>(null)
+  const modesRef = useRef<HTMLDivElement>(null)
+  useSegmentThumb(modesRef, mode === 'light' ? 0 : 1)
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState('')
 
@@ -273,15 +275,23 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
               ? tr('appear.editingHint')
               : tr('appear.shippedHint')}
         </p>
+        {/* Classic is more than its 23 tokens — the rest is classic.css, keyed
+            on the preset attribute a fork does not carry — so a fork of it is
+            not a copy of it, and the panel says so before anyone finds out. */}
+        {active?.id === 'preset:classic' && <p className="hintline">{tr('appear.classicHint')}</p>}
 
         {/* ---- which mode am I editing ---- */}
         <div className="appear-modes" role="group" aria-label={tr('appear.editingMode')}>
-          {(['light', 'dark'] as Mode[]).map((m) => (
-            <button key={m} className={`view-tab ${mode === m ? 'active' : ''}`}
-              aria-pressed={mode === m} onClick={() => onMode(m)}>
-              {m === 'light' ? tr('appear.light') : tr('appear.dark')}
-            </button>
-          ))}
+          {/* A segmented pair; --n and --i place its sliding thumb. */}
+          <div className="view-tabs" ref={modesRef}
+            style={{ '--n': 2, '--i': mode === 'light' ? 0 : 1 } as CSSProperties}>
+            {(['light', 'dark'] as Mode[]).map((m) => (
+              <button key={m} className={`view-tab ${mode === m ? 'active' : ''}`}
+                aria-pressed={mode === m} onClick={() => onMode(m)}>
+                {m === 'light' ? tr('appear.light') : tr('appear.dark')}
+              </button>
+            ))}
+          </div>
           <span className="spacer" />
           <span className="hintline">
             {isPreset

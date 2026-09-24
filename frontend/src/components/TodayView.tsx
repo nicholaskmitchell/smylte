@@ -2494,7 +2494,7 @@ export function TodayView({
             tighter header gap. See the mobile block in app.css. */}
         {weekDone !== null && (
           /* `.content-sub` FIRST, and it is not decoration: it is what makes
-             this the same micro-label the date and the count are — 11px mono,
+             this the same micro-label the date and the count are — --fs-meta mono,
              the label case, the header's tracking. Without it the span took the
              page's own 15px body type and this one figure read half again as
              large as the two facts either side of it, in sentence case beside
@@ -3020,7 +3020,7 @@ export function TodayView({
           {hasLoad && (
             <div className="today-load-bar" aria-hidden="true">
               <div className="today-load-fill"
-                style={{ width: `${Math.min(100, capacity ? (planned / capacity) * 100 : 0)}%` }} />
+                style={{ scale: `${Math.min(1, capacity ? planned / capacity : 0)} 1` }} />
             </div>
           )}
           {over && (

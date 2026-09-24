@@ -1089,10 +1089,10 @@ describe('2026-08-19 — appearance', () => {
     // mode-specific, or a dark theme would be repainted in its light values.
     const { last } = openAppearance({ active: 't1', themes: [theme()] }, 'light')
 
-    fireEvent.change(screen.getByLabelText('Corners'), { target: { value: '8' } })
+    fireEvent.change(screen.getByLabelText('Corners'), { target: { value: '12' } })
     const withRadius = last()
-    expect(resolve(withRadius, 'light')['--radius']).toBe('8px')
-    expect(resolve(withRadius, 'dark')['--radius']).toBe('8px')
+    expect(resolve(withRadius, 'light')['--radius']).toBe('12px')
+    expect(resolve(withRadius, 'dark')['--radius']).toBe('12px')
 
     fireEvent.change(screen.getByLabelText('Accent'), { target: { value: '#00ff00' } })
     const withAccent = last()
@@ -1162,8 +1162,8 @@ describe('2026-08-19 — appearance', () => {
     fireEvent.change(screen.getByLabelText(/^Interface/), { target: { value: sans } })
     expect(resolve(last(), 'dark')['--sans'], '--sans (font control)').toBe(sans)
 
-    fireEvent.change(screen.getByLabelText(/^Labels/), { target: { value: 'none' } })
-    expect(resolve(last(), 'dark')['--label-case'], '--label-case (keyword)').toBe('none')
+    fireEvent.change(screen.getByLabelText(/^Labels/), { target: { value: 'uppercase' } })
+    expect(resolve(last(), 'dark')['--label-case'], '--label-case (keyword)').toBe('uppercase')
 
     fireEvent.change(screen.getByLabelText(/^Gutter/), { target: { value: '40' } })
     expect(resolve(last(), 'dark')['--gutter'], '--gutter (length)').toBe('40px')
@@ -1175,9 +1175,9 @@ describe('2026-08-19 — appearance', () => {
   it('keeps a shared token set on a theme the edit itself created', async () => {
     const { last } = openAppearance({}, 'light')
 
-    fireEvent.change(screen.getByLabelText('Corners'), { target: { value: '8' } })
-    expect(resolve(last(), 'light')['--radius']).toBe('8px')
-    expect(resolve(last(), 'dark')['--radius']).toBe('8px')
+    fireEvent.change(screen.getByLabelText('Corners'), { target: { value: '12' } })
+    expect(resolve(last(), 'light')['--radius']).toBe('12px')
+    expect(resolve(last(), 'dark')['--radius']).toBe('12px')
   })
 
   // WIDENING: clearing has to be symmetric with setting, or the reset arrow

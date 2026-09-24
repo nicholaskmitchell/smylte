@@ -35,8 +35,8 @@ _INLINE_SCRIPT = re.compile(r"<script(?![^>]*\bsrc\s*=)[^>]*>(.*?)</script>", re
 # Where the Appearance font picker gets the families it does not bundle.
 # `appearance.ts ensureFont` injects a stylesheet from the first at runtime, and
 # that stylesheet pulls woff2 from the second. Allowed so the picker keeps
-# working; the shipped defaults (Fraunces/Inter/JetBrains Mono) are local and
-# need neither. Self-hosting the rest would let both of these go.
+# working; the shipped faces (Newsreader/Hanken Grotesk/JetBrains Mono, and the
+# Classic preset's Fraunces/Inter) are local and need neither. Self-hosting the rest would let both of these go.
 _FONT_CSS = "https://fonts.googleapis.com"
 _FONT_FILES = "https://fonts.gstatic.com"
 

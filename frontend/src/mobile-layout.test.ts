@@ -426,7 +426,7 @@ describe('the Today header the phone rules aim at', () => {
     expect(allMobile, 'the Today header buttons stay at their compact ~29px on '
       + 'a phone, under the 44px touch guideline this block enforces everywhere '
       + 'else')
-      .toMatch(/\.btn\.today-review[^{}]*\{[^{}]*padding:\s*9px 13px/)
+      .toMatch(/\.btn\.today-review[^{}]*\{[^{}]*padding:\s*var\(--btn-pad\)/)
   })
 
   it('gives the row controls a tap area that costs no width', () => {

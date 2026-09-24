@@ -119,7 +119,7 @@ public sealed class LinuxIconTests
         var letterArea = Near(counts, letter);
         var periodArea = Near(counts, period);
 
-        // Measured on the shipped art: plate 80.2%, letter 12.5%, period 2.6%,
+        // Measured on the shipped art: plate 80.1%, letter 13.3%, period 1.7%,
         // for all three variants to within a tenth of a point. The bounds sit
         // well clear of those rather than against them.
         Assert.True(plateArea > 0.50, $"{stem}: the plate covers {plateArea:P1}, not most of the tile");
@@ -272,9 +272,9 @@ public sealed class LinuxIconTests
         //
         // Stated as COVERAGE, not as "has a transparent pixel". The plated
         // variants have transparent pixels too — the plate's corners are
-        // rounded, which is a deliberate departure from the editorial system's
-        // `border-radius: 0` and is why the naive test is wrong. Measured, the
-        // plates run 95-99% opaque and the bare mark 12-22%, so the thresholds
+        // rounded, the icon's own deliberate choice rather than the app's radius
+        // scale, and that is why the naive test is wrong. Measured, the
+        // plates run 95-99% opaque and the bare mark 10-20%, so the thresholds
         // below have most of that gap between them and are not tuned to the
         // current art.
         foreach (var size in Expected)

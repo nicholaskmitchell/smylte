@@ -671,7 +671,7 @@ function useNowFit(root: React.RefObject<HTMLDivElement | null>, deps: unknown) 
     }
     measure()
     // Once more when the webfont lands. The first pass usually runs on
-    // fallback metrics — Fraunces loads lazily, when a rule first matches —
+    // fallback metrics — Newsreader loads lazily, when a rule first matches —
     // and a size fitted for Georgia is a few px wrong for the face that then
     // paints. Nothing else refires on a font swap: the box does not resize.
     // `document.fonts` is absent under jsdom, hence the guard.

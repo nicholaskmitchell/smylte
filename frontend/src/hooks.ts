@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useState, type RefObject } from 'react'
 import { msUntilMidnight, ymd } from './util'
 
 // Keep in sync with the mobile breakpoint in styles/app.css.
@@ -68,4 +68,43 @@ export function useToday(): string {
     return () => clearTimeout(t)
   }, [armed])
   return today
+}
+
+/**
+ * Put a segmented control's thumb under its active segment (F5), by measuring
+ * the segment rather than by arithmetic.
+ *
+ * The stylesheet can place the thumb on its own — segment `--i` of `--n`, each
+ * `1 / n` of the track — and that is right exactly while the segments are equal.
+ * They are equal only while the track has room: squeezed by a busy header (the
+ * Tasks pane's 3-Day and Week views between 721px and ~860px, which is iPad
+ * portrait), the grid holds the widest label at its min-content and hands the
+ * others what is left, and the arithmetic then parks the thumb beside the
+ * segment it is meant to be under. So the track gets `--thumb-x` / `--thumb-w`
+ * from the active segment's own box, re-measured whenever the track resizes.
+ *
+ * `useLayoutEffect` so the first paint already has them. Without ResizeObserver
+ * (jsdom) it measures once, and the CSS fallback covers anything unmeasured.
+ * Pass `shown` when the track is rendered conditionally.
+ */
+export function useSegmentThumb(
+  track: RefObject<HTMLElement | null>, active: number, shown = true,
+): void {
+  useLayoutEffect(() => {
+    const el = track.current
+    if (!el) return
+    const place = () => {
+      const seg = el.children[active] as HTMLElement | undefined
+      if (!seg || !seg.offsetWidth) return
+      el.style.setProperty('--thumb-x', `${seg.offsetLeft}px`)
+      el.style.setProperty('--thumb-w', `${seg.offsetWidth}px`)
+    }
+    place()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(place)
+    ro.observe(el)
+    return () => ro.disconnect()
+    // `shown` is for a track the caller renders conditionally: the ref is null
+    // while it is hidden, and nothing else would re-run this once it appears.
+  }, [track, active, shown])
 }
