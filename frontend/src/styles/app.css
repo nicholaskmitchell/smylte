@@ -313,15 +313,30 @@ button.menu-toggle:active { scale: var(--press-scale); }
 
 /* per-list color dot shown on tasks in the combined "All lists" view.
    vertical-align: middle centers on the text's x-height; the -1px lift raises it
-   to the capital-letter optical center, so it lines up with the completion
-   checkbox to its left instead of sitting low. (top: shifts it visually without
-   affecting layout.) */
+   to the capital-letter optical center. (top: shifts it visually without
+   affecting layout.) That is where it sits in a row of text; in a row with a
+   tick, the two rules below place it from the tick instead. */
 .list-dot {
   display: inline-block; width: 7px; height: 7px; flex: none; margin-right: 6px;
   vertical-align: middle; position: relative; top: -1px; background: var(--fg-faint);
   border-radius: var(--r-dot);
 }
 .day-card-title .list-dot { margin-right: 5px; }
+/* Beside a tick, the dot is centred on the TICK. The lift above was tuned for
+   one face at one tick size, and an offset read off the text cannot follow a
+   control that is sized on its own: measured in Chromium, the dot sat 0.8px
+   below the tick's centre in a Tasks row, 1.2px above it on a phone (where
+   `--check-size` grows to 21px and the text does not), and 0.7px and 2.7px
+   above it on a day card. So it hangs from the top of the title's first line,
+   which is the top of the row's content box (both rows are
+   `align-items: flex-start`), by the same arithmetic that places the tick.
+   In a Tasks row both are centred on that first line (see `.task > .check`);
+   on a day card the tick keeps its 1px and the dot takes half the difference
+   between the two boxes from there. The centres then coincide at any tick
+   size, in either design, at any text scale. `top` rather than a margin, so
+   the line box is left alone. */
+.task-title .list-dot { vertical-align: top; top: calc(15px * var(--fs-scale) * 0.75 - 7px / 2); }
+.day-card-title .list-dot { vertical-align: top; top: calc(1px + (var(--check-size) - 7px) / 2); }
 
 /* combined quick-add: the compact target-list picker beside the input. Allowed
    to shrink so the input + picker + button row never overflows a phone. */
@@ -453,6 +468,14 @@ button.menu-toggle:active { scale: var(--press-scale); }
 }
 .check:hover { border-color: var(--accent); }
 .check.on { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+/* A Tasks row's tick, centred on its title's first line (15px at the body's
+   1.5) the way `.today-row .check` is on its own. The 2px `.check` carries
+   was written for this row, and it only centres an 18.5px box: it put the tick
+   0.75px above that line at the desktop's 17px and 1.25px below it at the
+   phone's 21px, and took the list dot beside it off the Today tab's mark by
+   as much. Here rather than on `.check`, which every borrower re-tunes
+   locally (see `.today-row .check`). */
+.task > .check { margin-top: calc(15px * var(--fs-scale) * 0.75 - var(--check-size) / 2); }
 .pri-bar { width: 3px; align-self: stretch; flex: none; background: transparent; }
 .pri-high { background: var(--pri-high); }
 .pri-med { background: var(--pri-med); }
