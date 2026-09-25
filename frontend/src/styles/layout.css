@@ -1,0 +1,305 @@
+/* The sidebar layout (layout.ts) — the frame the September 2026 refinement
+   ships with: one paper column down the left for the views, the open view's
+   collections and Settings; a single header per view; a readable column; and
+   the add box as a composer at the foot of the pane. On a phone, the views go
+   to a bar along the bottom.
+
+   Everything here is scoped to that frame: to `.appnav`, `.tabbar`, `.frame`
+   and `.composer-foot`, which only it renders, or to
+   `.shell[data-layout="sidebar"]`. Nothing names Classic, and nothing here can
+   match inside it — which is what keeps Classic the frame it always was, pixel
+   for pixel. Loaded after classic.css, so at equal specificity this sheet wins;
+   in practice the attribute puts nearly every rule a step above the one it
+   adjusts, and source order is the tiebreak rather than the mechanism.
+
+   Tokens only. A corner is a step of the radius scale, a family travels with
+   its adjust, and every value the Classic design restates reaches here through
+   the same variables — so the Classic design in this frame is square and set
+   in its own faces without a rule of its own. */
+
+/* ---- the frame -------------------------------------------------------- */
+.frame { flex: 1; min-height: 0; display: flex; }
+/* The column the views are drawn in. Each view's root is the same `.work` or
+   `.content` it is under Classic, and they already take `flex: 1` of a column,
+   which is what this is. */
+.frame-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+/* On a phone the frame stacks: the view, then the tab bar under it. */
+@media (max-width: 720px) {
+  .frame { flex-direction: column; }
+}
+
+/* ---- the app sidebar --------------------------------------------------- */
+.appnav {
+  /* The settings menu hangs from it (see `.appnav > .menu`). */
+  position: relative;
+  flex: none; width: 236px; min-height: 0;
+  display: flex; flex-direction: column;
+  padding: 14px 0 10px;
+  background: var(--paper);
+  /* An outlined control on --paper steps its hover up to --bg-elev, as it
+     does on Classic's `.side` (see --ghost-hover-bg-on-paper). */
+  --ghost-hover-bg: var(--ghost-hover-bg-on-paper);
+  /* Rows sit flush with the column's edges, so keyboard focus is drawn inside
+     them — see `.set-panels, .side, …` in app.css. */
+  --focus-offset: -2px;
+}
+.appnav-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 0 10px 14px 20px; min-height: 44px;
+}
+.appnav .brand { font-size: calc(23px * var(--fs-scale)); }
+/* The fold. A glyph on the paper, not a boxed control: it is used rarely and
+   sits beside the wordmark, which a bordered square would compete with. */
+.appnav-fold {
+  border-color: transparent; padding: 5px 8px;
+  font-family: var(--font-glyph); font-size-adjust: none; font-size: calc(13px * var(--fs-scale));
+  line-height: 1; color: var(--fg-faint);
+}
+
+/* The views. The strip's own buttons — `.tabs .tab`, `aria-current` — turned
+   into C3 rows: no rule between them, a rounded fill one step off the paper
+   under the pointer, and the fill with a 2px accent bar on the open view. */
+.appnav-tabs { display: flex; flex-direction: column; gap: 1px; padding: 0 8px; }
+/* F4's control floor, like any button: 38px, which a 14px label in 9px of
+   padding falls three short of. */
+.appnav .tab {
+  display: flex; align-items: center; width: 100%; text-align: left;
+  border: 0; border-radius: var(--r-sm); min-height: var(--control-h);
+  padding: 9px 12px; color: var(--fg-muted);
+  transition: color var(--dur-fast) var(--ease), background var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
+}
+@media (hover: hover) {
+  .appnav .tab:hover { color: var(--fg); background: var(--bg-elev); }
+}
+.appnav .tab.active {
+  color: var(--fg); background: var(--bg-elev); box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* The slot Tasks and Calendar lend their collections to (shell.tsx). Empty on
+   every other view, and then it takes no room at all. When it holds a
+   sidebar, that sidebar is the column's own `.side`, drawn without the
+   chrome it wears standing alone — its width, its paper, its edge. */
+.appnav-slot {
+  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+  margin-top: 14px; border-top: 1px solid var(--rule-faint);
+}
+.appnav-slot:empty { display: none; }
+.appnav-slot > .side {
+  flex: 1 1 auto; min-height: 0; width: auto;
+  background: none; border-right: 0;
+}
+.appnav-slot .side-head { padding: 12px 10px 6px 20px; }
+/* Rows inset to line their swatches up with the views' labels above. */
+.appnav-slot .side-item { margin-inline: 8px; padding-inline: 10px; }
+.appnav-slot .group-head { padding-left: 20px; padding-right: 12px; }
+/* Completed and Parked, which close the list under Classic as full-width
+   footers, are rows here like everything else in the column — a hairline
+   across the middle of a sidebar would read as its end. */
+.appnav-slot .side-completed {
+  justify-content: flex-start; width: auto; margin: 0 8px;
+  border-top: 0; border-radius: var(--r-sm); padding: 8px 12px;
+}
+.appnav-slot .side-completed:first-of-type { margin-top: 6px; }
+
+/* Settings, at the foot. */
+.appnav-foot {
+  margin-top: auto; padding: 8px 8px 0;
+  border-top: 1px solid var(--rule-faint);
+}
+.appnav-settings {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  background: none; border: 0; border-radius: var(--r-sm); min-height: var(--control-h);
+  padding: 9px 12px; cursor: pointer; color: var(--fg-muted); text-align: left;
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control) * var(--fs-scale));
+  font-weight: var(--wght-control); line-height: var(--lh-control);
+  text-transform: var(--label-case); letter-spacing: calc(0.08em * var(--tracking));
+  transition: color var(--dur-fast) var(--ease), background var(--dur) var(--ease);
+}
+.appnav-settings svg { flex: none; }
+@media (hover: hover) {
+  .appnav-settings:hover { color: var(--fg); background: var(--bg-elev); }
+}
+/* Open is a state, not an alarm: the fill of a selected row, where Classic's
+   gear turns solid accent. */
+.appnav-settings.active { color: var(--fg); background: var(--bg-elev); }
+
+/* The settings menu opens beside the column, rising from its foot, rather
+   than dropping from a top bar there no longer is. Its cap is the room left
+   of the viewport once the column has taken its share. */
+.appnav > .menu {
+  top: auto; right: auto; bottom: 10px; left: calc(100% + 8px);
+  max-width: calc(100vw - 100% - 24px);
+  transform-origin: bottom left;
+}
+
+/* Folded: a rail. The unfold, the open view's own rail of collection dots
+   (Sidebar's collapsed branch, which has no fold of its own here), and the
+   gear. */
+.appnav.collapsed { width: 52px; align-items: stretch; }
+.appnav.collapsed .appnav-head { justify-content: center; padding: 0 0 8px; }
+.appnav.collapsed .appnav-slot { margin-top: 0; }
+.appnav.collapsed .appnav-slot > .side.collapsed { width: auto; padding-top: 8px; }
+.appnav.collapsed .appnav-foot { padding-inline: 6px; }
+.appnav.collapsed .appnav-settings { justify-content: center; padding: 10px 0; }
+
+/* ---- the phone's tab bar ------------------------------------------------ */
+.tabbar {
+  flex: none; display: flex; align-items: center; gap: 2px;
+  padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+  background: var(--bg); border-top: 1px solid var(--rule-faint);
+  --focus-offset: -2px;
+}
+/* Every view fits. Each takes its label's width and an equal share of what
+   is left, rather than an equal share of the whole — "Scheduling" is twice
+   "Home", and fifths of a 390px bar cut it off. A label longer than the room
+   (a larger text scale) ends in an ellipsis rather than pushing the gear off.
+   44px tall, which is the touch target itself — Classic's strip needed an
+   invisible `::after` to reach it, and this does not. */
+.tabbar .tab {
+  flex: 1 1 auto; min-width: 0; min-height: 44px;
+  border: 0; border-radius: var(--r-sm); padding: 0 5px;
+  text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: calc(var(--fs-control-sm) * var(--fs-scale));
+  transition: color var(--dur-fast) var(--ease), background var(--dur) var(--ease);
+}
+.tabbar .tab::after { content: none; }
+.tabbar .tab.active { color: var(--fg); background: var(--paper); }
+.tabbar .icon-btn { flex: none; width: 44px; height: 44px; border-color: transparent; }
+.tabbar .icon-btn.active { color: var(--fg); background: var(--paper); border-color: transparent; }
+
+/* The toast clears the bar. It is the app's only error channel, and a toast
+   under the bar is one nobody reads. */
+@media (max-width: 720px) {
+  .shell[data-layout="sidebar"] .toast { bottom: calc(24px + 57px + env(safe-area-inset-bottom)); }
+}
+
+/* ---- one header per view -------------------------------------------------
+   The views' headers were the second of two bars. With the first gone they
+   are the page's only heading, so they drop the rule under them and take a
+   little more room and a larger title. */
+.shell[data-layout="sidebar"] .content-head { border-bottom-color: transparent; }
+@media (min-width: 721px) {
+  /* The sidebar takes 236px of the window from every header, so a header
+     that fitted one row across the whole window may not fit the pane: it
+     wraps whole items onto a second row, as it does on a phone, rather than
+     squeezing its figures into columns of broken lines. */
+  .shell[data-layout="sidebar"] .content-head { flex-wrap: wrap; row-gap: 8px; }
+  .shell[data-layout="sidebar"] .content-head > .content-sub { white-space: nowrap; }
+  .shell[data-layout="sidebar"] .content-head { padding-top: 26px; padding-bottom: 12px; }
+  .shell[data-layout="sidebar"] .content-title { font-size: calc(30px * var(--fs-scale)); letter-spacing: -0.014em; }
+  .shell[data-layout="sidebar"] .cal-head { padding-top: 22px; padding-bottom: 14px; }
+  .shell[data-layout="sidebar"] .cal-title { font-size: calc(30px * var(--fs-scale)); letter-spacing: -0.014em; }
+}
+
+/* ---- a column to read in -------------------------------------------------
+   Rows used to run the width of the window: at 1440px a task and its date
+   sat 1,200px apart. The list-shaped panes read at a measure instead. It is
+   taken out of the RIGHT padding rather than set as a width, so the scroller
+   is still the whole pane — the wheel works over the empty side, and the
+   scrollbar stays at the window's edge. */
+.shell[data-layout="sidebar"] { --measure: 880px; }
+@media (min-width: 721px) {
+  .shell[data-layout="sidebar"] .content[data-pane="list"] > .content-head,
+  .shell[data-layout="sidebar"] .content[data-pane="completed"] > .content-head,
+  .shell[data-layout="sidebar"] .content[data-pane="parked"] > .content-head,
+  .shell[data-layout="sidebar"] .content[data-pane="list"] > .cal-partial,
+  .shell[data-layout="sidebar"] .content[data-pane="list"] > .composer-foot {
+    padding-right: max(var(--gutter), 100% - var(--measure) - var(--gutter));
+  }
+  .shell[data-layout="sidebar"] .content[data-pane="list"] > .scroll,
+  .shell[data-layout="sidebar"] .content[data-pane="completed"] > .scroll,
+  .shell[data-layout="sidebar"] .content[data-pane="parked"] > .scroll {
+    padding-right: max(0px, 100% - var(--measure) - 2 * var(--gutter));
+  }
+}
+
+/* Priority is the tick's edge, not a bar down the row: a coloured stripe
+   running the height of every row was the square design's device, and next
+   to soft rows it read as a rule. The bar stays in the DOM (Classic draws
+   it), and gives its tier to the tick beside it. */
+.shell[data-layout="sidebar"] .pri-bar { display: none; }
+.shell[data-layout="sidebar"] .pri-bar.pri-high + .check:not(.on) { border-color: var(--pri-high); }
+.shell[data-layout="sidebar"] .pri-bar.pri-med + .check:not(.on) { border-color: var(--pri-med); }
+.shell[data-layout="sidebar"] .pri-bar.pri-low + .check:not(.on) { border-color: var(--pri-low); }
+
+/* ---- the composer --------------------------------------------------------
+   The add box at the foot of Today and Tasks: a floating box, the one thing
+   in the flow that takes a resting shadow (E2), with its field borderless
+   inside it and the box showing focus for it. */
+.shell[data-layout="sidebar"] {
+  --composer-shadow: 0 1px 2px rgba(20, 19, 26, 0.04), 0 2px 10px rgba(20, 19, 26, 0.04);
+}
+:root[data-theme="dark"] .shell[data-layout="sidebar"] {
+  --composer-shadow: 0 1px 2px rgba(0, 0, 0, 0.30), 0 2px 10px rgba(0, 0, 0, 0.20);
+}
+.composer-foot { flex: none; padding: 8px var(--gutter) 18px; }
+.composer-foot > .quickadd {
+  padding: 6px; gap: 6px; align-items: center;
+  background: var(--bg-elev); border: 1px solid var(--rule-faint); border-radius: var(--r-lg);
+  box-shadow: var(--composer-shadow);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.composer-foot > .quickadd:focus-within { border-color: var(--accent); box-shadow: var(--composer-shadow), var(--ring); }
+/* The field is the box's own text area; the box carries its edge and focus. */
+.composer-foot > .quickadd > .input:first-child,
+.composer-foot > .quickadd > .input:first-child:focus {
+  border-color: transparent; background: none; box-shadow: none;
+}
+/* Controls inside keep to the box's curve: the box's corner less its padding. */
+.composer-foot > .quickadd .btn,
+.composer-foot > .quickadd .input { border-radius: var(--r-md); }
+.composer-foot > .quickadd .quickadd-list { background: var(--paper); border-color: transparent; }
+/* Today's box wraps a line of chips under the field as you type; inside the
+   composer they sit with the field's text, not the box's edge. */
+.composer-foot > .today-add .today-chip,
+.composer-foot > .today-add .today-add-opts { padding-inline: 8px; }
+@media (max-width: 720px) {
+  .composer-foot { padding: 6px 10px 10px; }
+}
+
+/* ---- Today ---------------------------------------------------------------
+   The day at the same measure as a list, or — past TODAY_SIDE_COLUMN_MIN
+   (TodayView.tsx), which marks the pane `data-cols="two"` — the day and the
+   calendar strip side by side at a wider one. The header, the day's load and
+   the composer take whichever measure the rows below them have, so their
+   right edges line up. The strip stays in view while the day scrolls. */
+.today-cols {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
+  gap: 32px; align-items: start;
+}
+.today-side { position: sticky; top: 0; padding-top: 2px; }
+@media (min-width: 721px) {
+  .shell[data-layout="sidebar"] .today-pane { --today-measure: var(--measure); }
+  .shell[data-layout="sidebar"] .today-pane[data-cols="two"] { --today-measure: 1160px; }
+  .shell[data-layout="sidebar"] .today-pane > .content-head,
+  .shell[data-layout="sidebar"] .today-pane > .today-load,
+  .shell[data-layout="sidebar"] .today-pane > .cal-partial,
+  .shell[data-layout="sidebar"] .today-pane > .composer-foot {
+    padding-right: max(var(--gutter), 100% - var(--today-measure) - var(--gutter));
+  }
+  .shell[data-layout="sidebar"] .today-pane > .scroll {
+    padding-right: max(0px, 100% - var(--today-measure) - 2 * var(--gutter));
+  }
+}
+
+/* The strip's rows lose the square design's devices — a colour rail down the
+   left edge and a rule under every row — for the dot every other row in the
+   app uses. The phone's calendar agenda is the same row, and follows. */
+.shell[data-layout="sidebar"] .today-agenda .agenda-ev,
+.shell[data-layout="sidebar"] .day-agenda .agenda-ev {
+  border-left: 0; border-bottom-color: transparent; border-radius: var(--r-sm);
+  margin-inline: var(--row-inset); width: auto;
+  padding-left: calc(var(--gutter) - var(--row-inset));
+}
+/* Not on a task row, whose tick already wears the list's colour. */
+.shell[data-layout="sidebar"] .today-agenda .agenda-ev:not(.agenda-task)::before,
+.shell[data-layout="sidebar"] .day-agenda .agenda-ev:not(.agenda-task)::before {
+  content: ''; order: 1; align-self: center; flex: none;
+  width: 7px; height: 7px; border-radius: var(--r-dot);
+  background: var(--ev-c, var(--accent));
+}
+.shell[data-layout="sidebar"] .today-agenda .agenda-ev > *,
+.shell[data-layout="sidebar"] .day-agenda .agenda-ev > * { order: 2; }
+.shell[data-layout="sidebar"] .today-agenda .agenda-ev > .t,
+.shell[data-layout="sidebar"] .day-agenda .agenda-ev > .t { order: 0; }

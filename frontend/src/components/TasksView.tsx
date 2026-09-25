@@ -10,6 +10,7 @@ import { fmtClock, fmtDue, inputLang } from '../time'
 import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
 import { useSegmentThumb, useToday } from '../hooks'
+import { NavCollections, useEmbeddedCollections, useShell } from '../shell'
 import { AddMultipleModal } from './AddMultipleModal'
 import { WasDue } from './WasDue'
 import { dateOut, TaskModal } from './TaskModal'
@@ -94,6 +95,8 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
 }) {
   const { locale, t: tr } = useI18n()
   const guard = makeGuard(onExpire)
+  const embedded = useEmbeddedCollections()
+  const { layout } = useShell()
   // Lists, tasks and every write against them live above the tab strip, so
   // switching away and back neither drops them nor refetches from empty — and
   // Home reads the same copy rather than fanning out a second one.
@@ -571,6 +574,16 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
 
   const fmtD = (d: Date) => d.toLocaleDateString(locale, { month: 'short', day: 'numeric' })
 
+  // The quick add, placed under the header (Classic) or at the foot of the
+  // pane as a composer (the sidebar layout) — one element in one spot, so the
+  // DOM order is the order on screen. See the matching note in TodayView.
+  const footComposer = layout === 'sidebar'
+  const quickAdd = defaultList && (
+    <QuickAdd onSubmit={addTask}
+      onExpand={(listId, summary) => setAdding({ listId, summary })}
+      defaultList={defaultList} lists={visibleLists} />
+  )
+
   return (
     <div className="work">
       {/* The raw order, not `lists`: dragging a row here PROPPATCHes
@@ -578,9 +591,12 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           order is an app-only view that has no business rewriting what other
           CalDAV clients read. The rail looks identical either way — its group
           sections are filters, so they preserve relative order. */}
+      {/* In the app sidebar under the sidebar layout (see shell.tsx), where
+          the app owns the fold; in place, with its own, everywhere else. */}
+      <NavCollections>
       <Sidebar kind="list" items={serverOrderedLists}
         countOf={(l) => l.open_count} onItems={setLists} api={listApi}
-        collapsed={sideCollapsed} onToggle={onToggleSide}
+        collapsed={sideCollapsed} onToggle={embedded ? undefined : onToggleSide}
         hiddenIds={hiddenSet} onHiddenChange={onHiddenListsChange}
         groups={groups} onGroupsChange={onGroupsChange}
         collapsedGroups={collapsedGroups} onCollapsedGroupsChange={onCollapsedGroupsChange}
@@ -588,8 +604,14 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
         onToggleCompleted={() => { setCompletedOnly((v) => !v); setParkedOnly(false) }}
         parkedActive={parkedOnly}
         onToggleParked={() => { setParkedOnly((v) => !v); setCompletedOnly(false) }} />
+      </NavCollections>
 
-      <div className="content">
+      {/* `data-pane` names which of the four panes this is, for the sidebar
+          layout's column width: the list-shaped ones read at a measure, the
+          day columns take the whole pane. An attribute, so Classic, which
+          styles none of it, draws exactly what it did. */}
+      <div className="content" data-pane={showCompletedPane ? 'completed'
+        : parkedOnly ? 'parked' : view === 'list' ? 'list' : 'days'}>
         <div className="content-head">
           <span className="content-title">
             {showCompletedPane ? tr('tasks.completed')
@@ -692,11 +714,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           </div>
         ) : view === 'list' ? (
           <>
-            {defaultList && (
-              <QuickAdd onSubmit={addTask}
-                onExpand={(listId, summary) => setAdding({ listId, summary })}
-                defaultList={defaultList} lists={visibleLists} />
-            )}
+            {!footComposer && quickAdd}
             {/* A pane that is short and does not say so is a confident lie about
                 the account, which is the whole reason the fan-out below became
                 `allSettled`. Named, and retryable: the effect keys on `rev`,
@@ -737,6 +755,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
                 </>
               )}
             </div>
+            {footComposer && quickAdd && <div className="composer-foot">{quickAdd}</div>}
           </>
         ) : (
           <>

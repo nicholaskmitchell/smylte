@@ -25,6 +25,7 @@ export const de: Catalogue = {
   'app.settings': 'Einstellungen',
   'app.retry': 'Erneut versuchen',
   'app.dismiss': 'Schließen',
+  'app.nav': 'Ansichten',
   'app.back': 'Zurück',
   'app.closeSettings': 'Einstellungen schließen',
 
@@ -49,6 +50,10 @@ export const de: Catalogue = {
   'tabs.hint': 'Die Reihenfolge hier ist die Reihenfolge oben. '
     + '\u201EZuletzt genutzter Reiter\u201C \u00F6ffnet dort, wo du aufgeh\u00F6rt hast \u2014 auf '
     + 'jedem Ger\u00E4t, das an diesem Konto angemeldet ist.',
+  'tabs.hint.sidebar': 'Die Reihenfolge hier ist die Reihenfolge in der '
+    + 'Seitenleiste und, auf dem Telefon, in der unteren Leiste. „Zuletzt genutzter '
+    + 'Reiter“ öffnet dort, wo du aufgehört hast — auf jedem Gerät, das an diesem '
+    + 'Konto angemeldet ist.',
 
   // ── settings ─────────────────────────────────────────────────────────────
   'settings.sections': 'Einstellungsbereiche',
@@ -336,6 +341,14 @@ export const de: Catalogue = {
   'settings.appearance.hint': 'Anpassen öffnet den vollständigen Editor für das '
     + 'Design-System — jeden Farbwert, die Eckenrundung, die Textgröße und die '
     + 'Schriftfamilien — und speichert das Ergebnis als benanntes Design.',
+  'settings.layout': 'Layout',
+  'settings.layout.aria': 'Seitenleiste oder klassisches Layout',
+  'settings.layout.hint': 'Die Seitenleiste hält die Ansichten, deine Listen und '
+    + 'deine Kalender in einer Spalte am linken Rand. Klassisch ist die Reiterleiste '
+    + 'oben, mit der Smylte ausgeliefert wurde — dort haben Aufgaben und Kalender '
+    + 'je eine eigene Seitenleiste.',
+  'layout.sidebar': 'Seitenleiste',
+  'layout.classic': 'Klassisch',
 
   'settings.calendarWindow': 'Kalenderansicht',
   'settings.calendarFit.aria': 'Festes oder dynamisches Kalenderraster',

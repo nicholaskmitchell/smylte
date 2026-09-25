@@ -25,6 +25,10 @@ const strip = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, '')
 const tokensCss = strip(read('./styles/tokens.css'))
 const appCss = strip(read('./styles/app.css'))
 const classicCss = strip(read('./styles/classic.css'))
+// The sidebar layout's frame (layout.ts). Held to the same rules as app.css:
+// it is the shipped default's frame, so a stray corner or an unpaired family
+// here is on every screen.
+const layoutCss = strip(read('./styles/layout.css'))
 const fontsCss = strip(read('./styles/fonts.css'))
 
 /** The custom properties declared in the first block that opens with
@@ -100,7 +104,7 @@ describe('the radius scale', () => {
   const corners = (css: string) =>
     [...css.matchAll(/border-radius\s*:\s*([^;]+);/g)].map((m) => m[1].trim())
 
-  it.each([['tokens.css', tokensCss, 4], ['app.css', appCss, 30]] as const)('%s rounds only by the scale', (_, css, floor) => {
+  it.each([['tokens.css', tokensCss, 4], ['app.css', appCss, 30], ['layout.css', layoutCss, 6]] as const)('%s rounds only by the scale', (_, css, floor) => {
     const bad = corners(css).filter((v) => !(v === '0' || /^(var\(--r-[\w-]+\)|0)(\s+(var\(--r-[\w-]+\)|0))*$/.test(v)))
     expect(bad).toEqual([])
     expect(corners(css).length, 'vacuity: the scale is used where it should be').toBeGreaterThanOrEqual(floor)
@@ -111,6 +115,30 @@ describe('the radius scale', () => {
     // mobile-layout.test.ts do not model it — so it stays out of the sheet
     // those checks read.
     expect(appCss).not.toMatch(/:where\(/)
+  })
+
+  it('no :has() or :where() in layout.css', () => {
+    // :has() for the reason app.css gives beside `.color-dot.custom`: a
+    // browser that cannot parse it drops the whole rule. :where() because the
+    // frame's rules win by the attribute they are scoped under, and a
+    // zero-specificity selector would quietly lose that.
+    expect(layoutCss).not.toMatch(/:has\(|:where\(/)
+  })
+
+  it('layout.css never reaches into Classic', () => {
+    // Every rule is scoped to the sidebar frame: to an element only it
+    // renders, or to the shell's attribute. A bare `.content-head` here would
+    // restyle Classic's header, which the screenshot comparison would catch
+    // only for the screens it happens to take.
+    const OWN = /\.appnav|\.tabbar|\.frame(-main)?\b|\.composer-foot|\.today-cols|\.today-side|\.shell\[data-layout="sidebar"\]/
+    const selectors = [...layoutCss.matchAll(/([^{}@]+)\{[^{}]*\}/g)]
+      .map((m) => m[1].trim())
+      .filter((sel) => sel && !/^(from|to|\d+%)$/.test(sel))
+      .flatMap((sel) => sel.split(','))
+      .map((sel) => sel.trim())
+    expect(selectors.length, 'vacuity: the rules were found').toBeGreaterThanOrEqual(40)
+    expect(selectors.filter((sel) => !OWN.test(sel))).toEqual([])
+    expect(layoutCss).not.toMatch(/data-layout="classic"/)
   })
 })
 
@@ -184,7 +212,7 @@ describe('T9 · the sans is fitted, and only the sans', () => {
   const expected = (f: { rule: string, family: string }) =>
     SANS_CONTROLS.has(f.rule) ? 'none' : f.family === 'inherit' ? undefined : APP[f.family]
 
-  it.each([['tokens.css', tokensCss, 5], ['app.css', appCss, 80]] as const)(
+  it.each([['tokens.css', tokensCss, 5], ['app.css', appCss, 80], ['layout.css', layoutCss, 2]] as const)(
     'pairs every family in %s with its adjust', (_, css, floor) => {
       const found = families(css)
       expect(found.length, 'vacuity: the families were found').toBeGreaterThanOrEqual(floor)

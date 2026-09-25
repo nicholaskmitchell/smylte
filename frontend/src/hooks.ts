@@ -16,6 +16,29 @@ export function useIsMobile(): boolean {
 }
 
 /**
+ * Whether the window is at least `px` wide, following resizes. For the rare
+ * layout that has to change its ELEMENTS at a width rather than its styles —
+ * a stylesheet can move a block, but not put it in a different column's DOM.
+ *
+ * `innerWidth` and `resize` rather than `matchMedia`: the unit suite's
+ * matchMedia stub treats every listener as a listener to the phone breakpoint
+ * (see test/setup.ts), so a second query subscribed through it would be told
+ * "matches" whenever a test crossed to the phone, whatever it had asked about.
+ * Setting state to the value it already holds is a no-op, so a drag-resize
+ * re-renders only on the frame that crosses `px`.
+ */
+export function useMinWidth(px: number): boolean {
+  const [wide, setWide] = useState(() => window.innerWidth >= px)
+  useEffect(() => {
+    const onResize = () => setWide(window.innerWidth >= px)
+    onResize()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [px])
+  return wide
+}
+
+/**
  * Close on Escape, from wherever focus happens to be.
  *
  * Bound to `window`, the widest of the three spellings this REPLACED — DayPopover
