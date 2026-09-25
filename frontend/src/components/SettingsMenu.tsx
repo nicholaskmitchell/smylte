@@ -173,6 +173,16 @@ export function SettingsMenu({
   // Only meaningful on a phone. On a desktop the nav is a permanent column, so
   // there is nothing to be "in" and nothing to go back to.
   const [view, setView] = useState<'index' | 'panel'>(initialSection ? 'panel' : 'index')
+  // Focus follows the switch. `initialSection` is only ever set by pressing
+  // the Layout row, and that press remounts this menu in the other frame — so
+  // the button that had focus is gone, and without this focus falls to
+  // <body>: behind the phone's modal sheet, or out of the menu altogether.
+  const layoutRowRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (initialSection === 'appearance') layoutRowRef.current?.focus()
+  // Mount only: this is where the menu opens, not a section it follows.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   // The archived-calendar agenda is a step below the Calendar section. It lives
   // here so one back control can unwind the whole stack in order.
   const [viewingCal, setViewingCal] = useState<List | null>(null)
@@ -263,7 +273,7 @@ export function SettingsMenu({
         {section === 'general' && (
           <>
             <div className="menu-head">{tr('settings.tabs')}</div>
-            <TabsSection order={tabOrder} start={startTab}
+            <TabsSection order={tabOrder} start={startTab} layout={layout}
               onOrderChange={onTabOrderChange} onStartChange={onStartTabChange} />
 
             {/* First in the panel, above the clock: it decides what every
@@ -327,7 +337,7 @@ export function SettingsMenu({
                 wants the old frame back comes looking for. */}
             <div className="menu-row">
               <label>{tr('settings.layout')}</label>
-              <button className="menu-toggle" onClick={onToggleLayout}
+              <button ref={layoutRowRef} className="menu-toggle" onClick={onToggleLayout}
                 aria-label={tr('settings.layout.aria')}>
                 {tr(layoutKey(layout))}
               </button>

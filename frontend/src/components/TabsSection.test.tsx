@@ -8,7 +8,7 @@ import { translate } from '../i18n/index'
 function show(order: Tab[] = DEFAULT_TAB_ORDER, start: TabStart = 'home') {
   const onOrderChange = vi.fn()
   const onStartChange = vi.fn()
-  render(<TabsSection order={order} start={start} onOrderChange={onOrderChange}
+  render(<TabsSection layout="classic" order={order} start={start} onOrderChange={onOrderChange}
     onStartChange={onStartChange} />)
   return { onOrderChange, onStartChange }
 }
@@ -77,10 +77,24 @@ describe('<TabsSection>', () => {
 /** A section that actually applies its own reorder, for the focus assertion. */
 function renderControlled() {
   let order: Tab[] = [...DEFAULT_TAB_ORDER]
-  const view = render(<TabsSection order={order} start="home"
+  const view = render(<TabsSection layout="classic" order={order} start="home"
     onOrderChange={(next) => { order = next }} onStartChange={vi.fn()} />)
   return {
-    rerender: () => view.rerender(<TabsSection order={order} start="home"
+    rerender: () => view.rerender(<TabsSection layout="classic" order={order} start="home"
       onOrderChange={(next) => { order = next }} onStartChange={vi.fn()} />),
   }
 }
+
+describe('<TabsSection> hint', () => {
+  // Where the order shows depends on the frame, and the frame arrives as a
+  // prop from the same value SettingsMenu is given — one source, so a menu
+  // rendered with no shell around it still says the right thing.
+  it.each([
+    ['sidebar', /order down the sidebar/],
+    ['classic', /order across the top/],
+  ] as const)('says where the order shows under %s', (layout, text) => {
+    render(<TabsSection layout={layout} order={['today', 'home', 'tasks', 'calendar', 'scheduling']}
+      start="home" onOrderChange={vi.fn()} onStartChange={vi.fn()} />)
+    expect(screen.getByText(text)).toBeInTheDocument()
+  })
+})

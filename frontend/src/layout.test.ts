@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
-  DEFAULT_LAYOUT, LAYOUTS, LAYOUT_KEY, cacheLayout, isLayout, layoutKey, nextLayout,
-  readCachedLayout,
+  DEFAULT_LAYOUT, LAYOUTS, LAYOUT_KEY, SIDEBAR_COLLAPSED_KEY, cacheLayout,
+  cacheSidebarCollapsed, isLayout, layoutKey, nextLayout, readCachedLayout,
+  readCachedSidebarCollapsed,
 } from './layout'
 import { translate } from './i18n/index'
 
@@ -64,5 +65,25 @@ describe('the boot cache', () => {
     // value decides which tree the shell mounts.
     localStorage.setItem(LAYOUT_KEY, 'masthead')
     expect(readCachedLayout()).toBeNull()
+  })
+})
+
+describe('the fold\'s boot cache', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('is empty until something is stored', () => {
+    expect(readCachedSidebarCollapsed()).toBeNull()
+  })
+
+  it('round-trips both states', () => {
+    cacheSidebarCollapsed(true)
+    expect(readCachedSidebarCollapsed()).toBe(true)
+    cacheSidebarCollapsed(false)
+    expect(readCachedSidebarCollapsed()).toBe(false)
+  })
+
+  it('ignores a value it did not write', () => {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, 'true')
+    expect(readCachedSidebarCollapsed()).toBeNull()
   })
 })

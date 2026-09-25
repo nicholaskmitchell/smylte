@@ -1071,6 +1071,11 @@ function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen
   )
 }
 
+/** A task's priority tier as the rows name it, or nothing for none. */
+function priTier(label: Task['priority_label']): 'high' | 'med' | 'low' | undefined {
+  return label === 'high' ? 'high' : label === 'medium' ? 'med' : label === 'low' ? 'low' : undefined
+}
+
 function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
   task: Task; showDate?: boolean; dot?: string | null
   onToggle: (t: Task) => void; onOpen: (t: Task) => void
@@ -1083,7 +1088,10 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
   const timed = !!task.due && task.due.includes('T') && !task.due_is_date
   const tf = useTimeFormat()
   return (
-    <div className={`day-card ${done ? 'done' : ''}`} draggable
+    // `data-pri` carries the tier to the row itself, for the sidebar layout's
+    // tick (layout.css). An attribute rather than the `pri-*` classes, which
+    // paint a background wherever they land.
+    <div className={`day-card ${done ? 'done' : ''}`} data-pri={priTier(pri)} draggable
       onDragStart={(e) => {
         // The KEY, not the uid — the day column resolves it back to this row,
         // and a bare uid is first-wins across lists.
@@ -1162,7 +1170,7 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
   const tf = useTimeFormat()
   return (
     <div className={`task ${depth > 0 ? 'sub' : ''} ${task.completed || task.cancelled ? 'done' : ''}`}
-      style={indentStyle(depth)}>
+      data-pri={priTier(pri)} style={indentStyle(depth)}>
       <div className={`pri-bar ${priClass}`} />
       {/* The twisty holds its column whether or not the row has children, so a
           tree of mixed rows keeps one straight edge down the left. */}

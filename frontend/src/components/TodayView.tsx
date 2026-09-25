@@ -3062,7 +3062,7 @@ export function TodayView({
       )}
 
       <div className="scroll">
-        <TodayColumns side={sideCal ? calendarBlock : null}>
+        <TodayColumns wrap={layout === 'sidebar'} side={sideCal ? calendarBlock : null}>
         {/* The day is UNKNOWN, which is neither "empty" nor "loading". Every
             other render of the day is gated on `entries !== null`, so without
             this the tab showed its furniture over a blank space and said
@@ -3362,17 +3362,26 @@ export function TodayView({
 const TODAY_SIDE_COLUMN_MIN = 1100
 
 /**
- * The day and, when there is one, the column beside it. With no side column
- * this is a fragment, so the children render exactly where they always have —
- * which is Classic, the phone and a narrow window.
+ * The day and, when there is one, the column beside it.
+ *
+ * Under the sidebar layout the wrapper is ALWAYS there, one column or two,
+ * and only the aside comes and goes (the grid itself is CSS, on the pane's
+ * `data-cols`). The day's rows must keep their parent across the switch:
+ * crossing TODAY_SIDE_COLUMN_MIN — a resize, a snapped window, devtools
+ * opening — or entering Review would otherwise move them from a fragment into
+ * a div, React would remount every row, and an estimate being typed would be
+ * dropped unsaved (EstimateCell saves on blur, and a removed input never
+ * blurs). Under Classic this is a fragment, the element tree it always was.
  */
-function TodayColumns({ side, children }: { side: ReactNode; children: ReactNode }) {
+function TodayColumns({ wrap, side, children }: {
+  wrap: boolean; side: ReactNode; children: ReactNode
+}) {
   const tr = useT()
-  if (!side) return <>{children}</>
+  if (!wrap) return <>{children}</>
   return (
     <div className="today-cols">
       <div className="today-main">{children}</div>
-      <aside className="today-side" aria-label={tr('today.onTheCalendar')}>{side}</aside>
+      {side && <aside className="today-side" aria-label={tr('today.onTheCalendar')}>{side}</aside>}
     </div>
   )
 }

@@ -35,7 +35,7 @@ function show(over: Partial<Parameters<typeof SettingsMenu>[0]> = {}) {
   const onClose = vi.fn()
   render(<SettingsMenu panelRef={createRef<HTMLDivElement>()}
     layout="sidebar" onToggleLayout={vi.fn()}
-      theme="light" onToggleTheme={vi.fn()} onCustomizeAppearance={vi.fn()}
+    theme="light" onToggleTheme={vi.fn()} onCustomizeAppearance={vi.fn()}
     tabOrder={DEFAULT_TAB_ORDER} startTab="home"
     onTabOrderChange={vi.fn()} onStartTabChange={vi.fn()}
     timeFormat="12h" onToggleTimeFormat={vi.fn()}

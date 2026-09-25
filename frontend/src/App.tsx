@@ -15,7 +15,8 @@ import {
 } from './calendar'
 import { sanitizeLayout } from './dashboard'
 import {
-  DEFAULT_LAYOUT, cacheLayout, isLayout, nextLayout, readCachedLayout, type Layout,
+  DEFAULT_LAYOUT, cacheLayout, cacheSidebarCollapsed, isLayout, nextLayout,
+  readCachedLayout, readCachedSidebarCollapsed, type Layout,
 } from './layout'
 import { ShellProvider } from './shell'
 import { useIsMobile } from './hooks'
@@ -91,6 +92,13 @@ export function App() {
   // settings read re-runs on every `settings_updated`; the tab restore inside
   // it must not.
   const tabRestored = useRef(false)
+  // Whether the account's layout has been applied for this signed-in session.
+  // The first settings read applies it — that is the one that corrects a boot
+  // cache another account left — and later reads only cache it for the next
+  // load. The frame decides which tree mounts, so switching it under someone
+  // remounts every view: an open task editor or a half-typed quick add would
+  // go with it, because another device happened to change a preference.
+  const layoutApplied = useRef(false)
   // PUTs issued and not yet settled. `pendingPatch` empties when the request is
   // ISSUED, so it alone cannot tell whether our own write has landed.
   const writesInFlight = useRef(0)
@@ -102,7 +110,7 @@ export function App() {
   const writeLog = useRef<string[]>([])
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || 'light')
   const [tasksView, setTasksView] = useState<TasksViewMode>('list')
-  const [sideCollapsed, setSideCollapsed] = useState(false)
+  const [sideCollapsed, setSideCollapsed] = useState(() => readCachedSidebarCollapsed() ?? false)
   // The frame (see layout.ts). Seeded from the boot cache like the tab, and for
   // a stronger reason: the frame decides which tree mounts, so a first paint in
   // the wrong one would rebuild the whole screen when the settings read lands.
@@ -271,7 +279,11 @@ export function App() {
     if (!strip || !active) return
     if (strip.scrollWidth <= strip.clientWidth) return
     active.scrollIntoView({ inline: 'nearest', block: 'nearest' })
-  }, [tab, tabOrder])
+  // `layout` and `focusOpen` because the strip can MOUNT without either of the
+  // others changing — switching to Classic, or leaving the focus surface — and
+  // on a phone that is a strip opening scrolled to its start with the tab you
+  // are on off its right edge.
+  }, [tab, tabOrder, layout, focusOpen])
 
   // Failed saves/deletes anywhere in the app surface here (see makeGuard).
   useEffect(() => {
@@ -367,6 +379,7 @@ export function App() {
     // remounts this component) opens where the account says again.
     if (auth !== 'in') {
       tabRestored.current = false
+      layoutApplied.current = false
       // OFFLINE is a read that was never issued, and it has to arm the same
       // guard a read that failed does. The shell renders in full here — the
       // gear, every view, the Home board — over shipped defaults, and the
@@ -437,11 +450,20 @@ export function App() {
         // the first one's Classic because its own blob says nothing.
         if (keep('layout')) {
           const l = isLayout(s.layout) ? s.layout : DEFAULT_LAYOUT
-          setLayout(l)
           cacheLayout(l)
+          if (!layoutApplied.current) {
+            layoutApplied.current = true
+            setLayout(l)
+          }
         }
-        if (keep('sidebar_collapsed') && typeof s.sidebar_collapsed === 'boolean') {
-          setSideCollapsed(s.sidebar_collapsed)
+        // Cached beside the layout, and for its reason: under the sidebar
+        // layout this flag is the width of the whole frame, so an uncached
+        // `false` painted the full column and then folded it 184px when this
+        // read landed. Absent is `false`, applied, like `layout` above.
+        if (keep('sidebar_collapsed')) {
+          const folded = s.sidebar_collapsed === true
+          setSideCollapsed(folded)
+          cacheSidebarCollapsed(folded)
         }
         if (keep('hidden_calendars') && Array.isArray(s.hidden_calendars)) {
           setHiddenCals(s.hidden_calendars.filter((x) => typeof x === 'string'))
@@ -807,6 +829,7 @@ export function App() {
   const toggleSide = useCallback(() => {
     const next = !sideCollapsed
     setSideCollapsed(next)
+    cacheSidebarCollapsed(next)
     saveSettings({ sidebar_collapsed: next })
   }, [sideCollapsed])
 
@@ -1322,15 +1345,19 @@ export function App() {
           : <FocusView rev={rev} focusRev={focusRev} onExpire={onExpire} onLeave={leaveFocus}
               settings={focus} floating={floating} />
       ) : layout === 'sidebar' ? (
-        <div className="frame">
+        // The settings menu is the frame's last child, not the nav's: inside
+        // the nav it would inherit the nav's custom properties and control
+        // sizes, and be announced as part of the Views landmark. And it holds
+        // the same position whichever nav is drawn, so crossing the phone
+        // breakpoint keeps the one instance — section, panel and all — the
+        // way Classic's single copy in `.topbar` does.
+        <div className="frame" data-nav={sideCollapsed ? 'folded' : undefined}>
           {!isMobile && (
             <AppNav tabOrder={tabOrder} tab={tab} onTab={changeTab} booting={booting}
               gearRef={gearRef} settingsOpen={settingsOpen}
               onToggleSettings={toggleSettings}
               collapsed={sideCollapsed} onToggleCollapsed={toggleSide}
-              slotRef={setNavSlot}>
-              {settingsMenu}
-            </AppNav>
+              slotRef={setNavSlot} />
           )}
           <div className="frame-main">
             {views}
@@ -1339,10 +1366,9 @@ export function App() {
           {isMobile && (
             <TabBar tabOrder={tabOrder} tab={tab} onTab={changeTab} booting={booting}
               gearRef={gearRef} settingsOpen={settingsOpen}
-              onToggleSettings={toggleSettings}>
-              {settingsMenu}
-            </TabBar>
+              onToggleSettings={toggleSettings} />
           )}
+          {settingsMenu}
         </div>
       ) : (<>
       <div className="topbar">

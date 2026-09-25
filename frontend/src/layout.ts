@@ -54,3 +54,21 @@ export function readCachedLayout(): Layout | null {
     return isLayout(raw) ? raw : null
   } catch { return null }
 }
+
+// The fold, cached for the same reason. Under the sidebar layout
+// `sidebar_collapsed` is the width of the whole frame (236px or 52px), so a
+// first paint that guessed wrong would move every view sideways when the
+// settings read landed. It lives beside the layout because it is the same kind
+// of fact: which frame, drawn how.
+export const SIDEBAR_COLLAPSED_KEY = 'smylte-sidebar-collapsed'
+
+export function cacheSidebarCollapsed(folded: boolean): void {
+  try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, folded ? '1' : '0') } catch { /* private mode / quota */ }
+}
+
+export function readCachedSidebarCollapsed(): boolean | null {
+  try {
+    const raw = localStorage.getItem(SIDEBAR_COLLAPSED_KEY)
+    return raw === '1' ? true : raw === '0' ? false : null
+  } catch { return null }
+}

@@ -18,7 +18,11 @@
    in its own faces without a rule of its own. */
 
 /* ---- the frame -------------------------------------------------------- */
-.frame { flex: 1; min-height: 0; display: flex; }
+/* The frame is what the settings menu hangs from (see `.frame > .menu`), so it
+   is positioned, and it carries the column's width for the menu to clear:
+   236px, or the rail's 52px when folded (`data-nav`, set by App). */
+.frame { flex: 1; min-height: 0; display: flex; position: relative; --nav-w: 236px; }
+.frame[data-nav="folded"] { --nav-w: 52px; }
 /* The column the views are drawn in. Each view's root is the same `.work` or
    `.content` it is under Classic, and they already take `flex: 1` of a column,
    which is what this is. */
@@ -29,12 +33,16 @@
 }
 
 /* ---- the app sidebar --------------------------------------------------- */
+/* ONE scroller: the column itself. The collections take the room their rows
+   need rather than whatever is left, and past the window's height the whole
+   column scrolls, with Settings pinned at its foot. A phone on its side gets
+   this column too (the frame is chosen by width), and a column that shrank its
+   collections to fit left the lists 12px tall there. */
 .appnav {
-  /* The settings menu hangs from it (see `.appnav > .menu`). */
-  position: relative;
-  flex: none; width: 236px; min-height: 0;
+  flex: none; width: var(--nav-w); min-height: 0;
   display: flex; flex-direction: column;
-  padding: 14px 0 10px;
+  overflow-x: hidden; overflow-y: auto;
+  padding: 14px 0 0;
   background: var(--paper);
   /* An outlined control on --paper steps its hover up to --bg-elev, as it
      does on Classic's `.side` (see --ghost-hover-bg-on-paper). */
@@ -81,12 +89,12 @@
    sidebar, that sidebar is the column's own `.side`, drawn without the
    chrome it wears standing alone — its width, its paper, its edge. */
 .appnav-slot {
-  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+  flex: none; display: flex; flex-direction: column;
   margin-top: 14px; border-top: 1px solid var(--rule-faint);
 }
 .appnav-slot:empty { display: none; }
 .appnav-slot > .side {
-  flex: 1 1 auto; min-height: 0; width: auto;
+  flex: none; width: auto;
   background: none; border-right: 0;
 }
 .appnav-slot .side-head { padding: 12px 10px 6px 20px; }
@@ -104,8 +112,9 @@
 
 /* Settings, at the foot. */
 .appnav-foot {
-  margin-top: auto; padding: 8px 8px 0;
+  margin-top: auto; padding: 8px 8px 10px;
   border-top: 1px solid var(--rule-faint);
+  position: sticky; bottom: 0; background: var(--paper);
 }
 .appnav-settings {
   display: flex; align-items: center; gap: 10px; width: 100%;
@@ -125,18 +134,20 @@
 .appnav-settings.active { color: var(--fg); background: var(--bg-elev); }
 
 /* The settings menu opens beside the column, rising from its foot, rather
-   than dropping from a top bar there no longer is. Its cap is the room left
-   of the viewport once the column has taken its share. */
-.appnav > .menu {
-  top: auto; right: auto; bottom: 10px; left: calc(100% + 8px);
-  max-width: calc(100vw - 100% - 24px);
+   than dropping from a top bar there no longer is. It is the frame's child,
+   not the column's, so it inherits none of the column's custom properties
+   (the paper hover, the inset focus) and is not part of the Views landmark.
+   Its cap is the room left of the viewport once the column has its share. */
+.frame > .menu {
+  top: auto; right: auto; bottom: 10px; left: calc(var(--nav-w) + 8px);
+  max-width: calc(100vw - var(--nav-w) - 24px);
   transform-origin: bottom left;
 }
 
 /* Folded: a rail. The unfold, the open view's own rail of collection dots
    (Sidebar's collapsed branch, which has no fold of its own here), and the
    gear. */
-.appnav.collapsed { width: 52px; align-items: stretch; }
+.appnav.collapsed { align-items: stretch; }
 .appnav.collapsed .appnav-head { justify-content: center; padding: 0 0 8px; }
 .appnav.collapsed .appnav-slot { margin-top: 0; }
 .appnav.collapsed .appnav-slot > .side.collapsed { width: auto; padding-top: 8px; }
@@ -164,14 +175,35 @@
   transition: color var(--dur-fast) var(--ease), background var(--dur) var(--ease);
 }
 .tabbar .tab::after { content: none; }
-.tabbar .tab.active { color: var(--fg); background: var(--paper); }
-.tabbar .icon-btn { flex: none; width: 44px; height: 44px; border-color: transparent; }
-.tabbar .icon-btn.active { color: var(--fg); background: var(--paper); border-color: transparent; }
+/* The open view: the fill, and the accent bar the desktop column's row has,
+   along the top edge here. The fill and the text alone do not carry it — in
+   dark mode the text step is 2.6:1 and the fill 1.13:1 against the bar. */
+.tabbar .tab.active {
+  color: var(--fg); background: var(--paper); box-shadow: inset 0 2px 0 var(--accent);
+}
+/* `>`: the gear is the bar's own child. The settings sheet is not drawn in
+   here (App renders it beside the bar), and this must not reach it if it
+   ever were — its Back, Close and reorder arrows are icon buttons too. */
+.tabbar > .icon-btn { flex: none; width: 44px; height: 44px; border-color: transparent; }
+.tabbar > .icon-btn.active { color: var(--fg); background: var(--paper); border-color: transparent; }
+/* The narrowest phones still in use are 320px wide. There, at the default
+   text scale, five labels and the gear fit only a step smaller and tighter:
+   12px labels, no gap, and a 40px gear. Measured in English and German. */
+@media (max-width: 359px) {
+  .tabbar { gap: 0; padding-inline: 4px; }
+  .tabbar .tab { padding: 0 3px; font-size: calc(12px * var(--fs-scale)); }
+  .tabbar > .icon-btn { width: 40px; }
+}
 
-/* The toast clears the bar. It is the app's only error channel, and a toast
-   under the bar is one nobody reads. */
+/* The toast clears the composer at the foot of the pane, and on a phone the
+   tab bar under it too. It is the app's only error channel: under either it
+   is unread, and over the composer it covers the very field whose write
+   failed and takes the clicks meant for it. The composer box is 52px on 8px
+   and 18px of padding (78px), and grows a line of chips while its text is
+   read; the phone's bar is 57px and its composer 74px. */
+.shell[data-layout="sidebar"] .toast { bottom: calc(102px + env(safe-area-inset-bottom)); }
 @media (max-width: 720px) {
-  .shell[data-layout="sidebar"] .toast { bottom: calc(24px + 57px + env(safe-area-inset-bottom)); }
+  .shell[data-layout="sidebar"] .toast { bottom: calc(143px + env(safe-area-inset-bottom)); }
 }
 
 /* ---- one header per view -------------------------------------------------
@@ -219,9 +251,15 @@
    to soft rows it read as a rule. The bar stays in the DOM (Classic draws
    it), and gives its tier to the tick beside it. */
 .shell[data-layout="sidebar"] .pri-bar { display: none; }
-.shell[data-layout="sidebar"] .pri-bar.pri-high + .check:not(.on) { border-color: var(--pri-high); }
-.shell[data-layout="sidebar"] .pri-bar.pri-med + .check:not(.on) { border-color: var(--pri-med); }
-.shell[data-layout="sidebar"] .pri-bar.pri-low + .check:not(.on) { border-color: var(--pri-low); }
+/* The tier is read off the row (`data-pri`), not off the bar beside the tick:
+   a list row puts its twisty between the two, so no sibling selector holds
+   for both row shapes. */
+.shell[data-layout="sidebar"] .task[data-pri="high"] > .check:not(.on),
+.shell[data-layout="sidebar"] .day-card[data-pri="high"] > .check:not(.on) { border-color: var(--pri-high); }
+.shell[data-layout="sidebar"] .task[data-pri="med"] > .check:not(.on),
+.shell[data-layout="sidebar"] .day-card[data-pri="med"] > .check:not(.on) { border-color: var(--pri-med); }
+.shell[data-layout="sidebar"] .task[data-pri="low"] > .check:not(.on),
+.shell[data-layout="sidebar"] .day-card[data-pri="low"] > .check:not(.on) { border-color: var(--pri-low); }
 
 /* ---- the composer --------------------------------------------------------
    The add box at the foot of Today and Tasks: a floating box, the one thing
@@ -264,7 +302,9 @@
    calendar strip side by side at a wider one. The header, the day's load and
    the composer take whichever measure the rows below them have, so their
    right edges line up. The strip stays in view while the day scrolls. */
-.today-cols {
+/* One column is the wrapper as a plain block; two is a grid. The wrapper is
+   there either way (TodayColumns), so crossing the width moves no row. */
+.today-pane[data-cols="two"] .today-cols {
   display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
   gap: 32px; align-items: start;
 }
@@ -281,6 +321,13 @@
   .shell[data-layout="sidebar"] .today-pane > .scroll {
     padding-right: max(0px, 100% - var(--today-measure) - 2 * var(--gutter));
   }
+  /* The ··· menu hangs from its own buttons here. Classic places it on the
+     header's gutter, which is where the buttons end there; the measure moves
+     the buttons in from that edge and would leave the menu behind — up to
+     584px away at 1920. (On a phone the header takes no measure and Classic's
+     placement stands.) */
+  .shell[data-layout="sidebar"] .today-acts { position: relative; }
+  .shell[data-layout="sidebar"] .today-menu { right: 0; top: calc(100% + 6px); }
 }
 
 /* The strip's rows lose the square design's devices — a colour rail down the
@@ -289,7 +336,9 @@
 .shell[data-layout="sidebar"] .today-agenda .agenda-ev,
 .shell[data-layout="sidebar"] .day-agenda .agenda-ev {
   border-left: 0; border-bottom-color: transparent; border-radius: var(--r-sm);
-  margin-inline: var(--row-inset); width: auto;
+  /* The width app.css gives the calendar's own rows. Not `auto`: on the
+     phone these rows are buttons, and a button's auto width is its text's. */
+  margin-inline: var(--row-inset); width: calc(100% - 2 * var(--row-inset));
   padding-left: calc(var(--gutter) - var(--row-inset));
 }
 /* Not on a task row, whose tick already wears the list's colour. */
