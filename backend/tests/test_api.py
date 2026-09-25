@@ -633,6 +633,23 @@ def test_settings_calendar_fit_sync(client):
     assert client.put("/api/settings", json={"calendar_fit": "squeeze"}).status_code == 422
 
 
+def test_settings_layout_sync(client):
+    # Absent means the sidebar layout, so an account that never chose has no
+    # key at all. Only the two frames the client can draw are accepted — an
+    # unknown one would reach the shell as a layout nothing renders.
+    assert "layout" not in client.get("/api/settings").json()
+    r = client.put("/api/settings", json={"layout": "classic"})
+    assert r.status_code == 200 and r.json()["layout"] == "classic"
+    assert client.get("/api/settings").json()["layout"] == "classic"
+    assert client.put("/api/settings", json={"layout": "sidebar"}).json()[
+        "layout"] == "sidebar"
+    assert client.put("/api/settings", json={"layout": "tabs"}).status_code == 422
+    # And a rejected value costs nothing it travelled with: the PUT is whole
+    # or not at all, so the good key beside it must not have landed either.
+    assert client.put("/api/settings", json={"layout": "tabs", "theme": "dark"}).status_code == 422
+    assert client.get("/api/settings").json().get("theme") != "dark"
+
+
 def test_settings_task_grouping_sync(client):
     # hidden_lists, task_groups, and collapsed_groups must survive the HTTP
     # round-trip — the model has to accept and re-emit each key (a store test
