@@ -6,8 +6,9 @@
 // Both carry the same buttons as Classic's strip, with the same classes and the
 // same semantics: `.tabs .tab`, `aria-current="page"` on the view that is open
 // (not `role="tab"` — this is page-level navigation, and Settings' own nav is
-// the tablist), and the settings button as the anchor its menu hangs from.
-import type { ReactNode, Ref, RefObject } from 'react'
+// the tablist), and the settings button that opens the menu. The menu itself
+// is not drawn in here: App renders it beside the nav (see the frame there).
+import type { Ref, RefObject } from 'react'
 import { useT } from '../i18n'
 import { TAB_LABELS, type Tab } from '../tabs'
 
@@ -22,8 +23,6 @@ interface NavProps {
   gearRef: RefObject<HTMLButtonElement>
   settingsOpen: boolean
   onToggleSettings: () => void
-  /** The settings menu, rendered here so it anchors to this nav. */
-  children?: ReactNode
 }
 
 /** The gear. A functional glyph, the one Classic's top bar draws. */
@@ -97,7 +96,6 @@ export function AppNav({ collapsed, onToggleCollapsed, slotRef, ...p }: NavProps
           </button>
         </div>
       )}
-      {p.children}
     </nav>
   )
 }
@@ -122,7 +120,6 @@ export function TabBar(p: NavProps) {
           <GearIcon />
         </button>
       )}
-      {p.children}
     </nav>
   )
 }

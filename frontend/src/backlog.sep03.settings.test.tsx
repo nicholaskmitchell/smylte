@@ -135,7 +135,7 @@ function showSettings(lang: 'en' | 'de', over: Partial<Parameters<typeof Setting
     <I18nProvider value={lang}>
       <SettingsMenu panelRef={createRef<HTMLDivElement>()}
         layout="sidebar" onToggleLayout={vi.fn()}
-      theme="light" onToggleTheme={vi.fn()} onCustomizeAppearance={vi.fn()}
+        theme="light" onToggleTheme={vi.fn()} onCustomizeAppearance={vi.fn()}
         tabOrder={DEFAULT_TAB_ORDER} startTab="home"
         onTabOrderChange={vi.fn()} onStartTabChange={vi.fn()}
         timeFormat="12h" onToggleTimeFormat={vi.fn()}

@@ -5,6 +5,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event'
 import { TodayView, dueFromParse, orderEntries, weekStartOf } from './TodayView'
 import { DataProvider } from '../data'
+import { ShellProvider } from '../shell'
 import {
   cacheDayPlan, cacheDayRange, cacheHabits,
   readCachedDayPlan, readCachedHabits, setCacheUser,
@@ -4905,5 +4906,95 @@ describe('what was worked', () => {
     // A row never worked keeps its (empty) cell, so the column holds.
     const cells = document.querySelectorAll('.today-worked')
     expect(cells).toHaveLength(2)
+  })
+})
+
+// ── under the sidebar layout ────────────────────────────────────────────────
+//
+// The frame reaches this tab through the shell (shell.tsx). Everything above
+// runs with no provider, which is Classic — the tree this tab always had — so
+// these are the cases that differ: where the add box sits, and the calendar
+// strip's column on a wide window.
+
+describe('<TodayView> under the sidebar layout', () => {
+  const sidebar = { layout: 'sidebar' as const, navSlot: null, navCollapsed: false }
+  const width = (w: number) =>
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: w })
+  const setupIn = (w: number) => {
+    width(w)
+    render(
+      <ShellProvider value={sidebar}>
+        <DataProvider rev={0} onExpire={vi.fn()}>
+          <TodayView rev={0} onExpire={vi.fn()} />
+        </DataProvider>
+      </ShellProvider>,
+    )
+    return userEvent.setup()
+  }
+  afterEach(() => width(1024))
+
+  it('puts the add box at the foot of the pane, after the day it adds to', async () => {
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    setupIn(1024)
+    await screen.findByText('Water the plants')
+    const form = document.querySelector('.today-pane > .composer-foot > form.today-add')!
+    expect(form).not.toBeNull()
+    // DOM order is the order on screen, so Tab reaches it where it is drawn.
+    const scroll = document.querySelector('.today-pane > .scroll')!
+    expect(scroll.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(document.querySelector('.today-pane > form.today-add')).toBeNull()
+  })
+
+  it('gives the calendar strip a column of its own on a wide window', async () => {
+    m.calendars.mockResolvedValue([cal])
+    m.events.mockResolvedValue([calEvent()])
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    setupIn(1200)
+    await screen.findByText('Water the plants')
+    expect(document.querySelector('.today-pane')).toHaveAttribute('data-cols', 'two')
+    const side = screen.getByRole('complementary', { name: 'On the calendar' })
+    expect(await within(side).findByText('Standup')).toBeInTheDocument()
+    // …and the day's own column does not draw it a second time.
+    expect(within(document.querySelector('.today-main') as HTMLElement)
+      .queryByText('On the calendar')).toBeNull()
+  })
+
+  it('keeps it inline on a narrower window', async () => {
+    m.calendars.mockResolvedValue([cal])
+    m.events.mockResolvedValue([calEvent()])
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    setupIn(1000)
+    await screen.findByText('Water the plants')
+    expect(document.querySelector('.today-pane')).not.toHaveAttribute('data-cols')
+    expect(screen.queryByRole('complementary', { name: 'On the calendar' })).toBeNull()
+    expect(await within(document.querySelector('.today-main') as HTMLElement)
+      .findByText('Standup')).toBeInTheDocument()
+  })
+
+  it('keeps an estimate being typed when the window crosses the column width', async () => {
+    // Crossing the width used to move the day's rows from a fragment into a
+    // div, which remounted every row: the input went, focus fell to <body>,
+    // and the draft was dropped without a save (EstimateCell saves on blur,
+    // and a removed input never blurs).
+    m.calendars.mockResolvedValue([cal])
+    m.events.mockResolvedValue([calEvent()])
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    m.patchDayEntry.mockImplementation(async (_d, id, body) =>
+      entry({ entry_id: id, title: 'Water the plants', ...body as object }))
+    const user = setupIn(1200)
+    await screen.findByText('Water the plants')
+    await user.click(screen.getByRole('button', { name: /^Estimate Water the plants$/ }))
+    const input = screen.getByLabelText('Minutes for Water the plants')
+    await user.type(input, '45')
+
+    await act(async () => { width(1000); window.dispatchEvent(new Event('resize')) })
+    expect(document.querySelector('.today-pane')).not.toHaveAttribute('data-cols')
+    expect(input.isConnected, 'the input was remounted').toBe(true)
+    expect(document.activeElement).toBe(input)
+    expect(input).toHaveValue(45)
+
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(m.patchDayEntry).toHaveBeenCalledWith(
+      today(), 'e1', { estimate_minutes: 45 }))
   })
 })
