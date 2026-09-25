@@ -14,6 +14,12 @@ import {
   DEFAULT_CALENDAR_FIT, isCalendarFit, nextCalendarFit, type CalendarFit,
 } from './calendar'
 import { sanitizeLayout } from './dashboard'
+import {
+  DEFAULT_LAYOUT, cacheLayout, cacheSidebarCollapsed, isLayout, nextLayout,
+  readCachedLayout, readCachedSidebarCollapsed, type Layout,
+} from './layout'
+import { ShellProvider } from './shell'
+import { useIsMobile } from './hooks'
 import { isSessionTtl, nextSessionTtl } from './session'
 import {
   DEFAULT_TIME_FORMAT, isTimeFormat, nextTimeFormat, type TimeFormat,
@@ -42,7 +48,8 @@ import { DEFAULT_LANGUAGE, deviceLanguage, isLanguage, type Language } from './l
 import { I18nProvider } from './i18n'
 import { translate } from './i18n/index'
 import { AppearancePanel } from './components/AppearancePanel'
-import { SettingsMenu } from './components/SettingsMenu'
+import { SettingsMenu, type SettingsSection } from './components/SettingsMenu'
+import { AppNav, TabBar } from './components/AppNav'
 
 // 'offline' is NOT 'out'. A server that cannot be reached is not a session that
 // has gone away — the rule `api.ts`'s SSE loop already states and enforces ("a
@@ -85,6 +92,13 @@ export function App() {
   // settings read re-runs on every `settings_updated`; the tab restore inside
   // it must not.
   const tabRestored = useRef(false)
+  // Whether the account's layout has been applied for this signed-in session.
+  // The first settings read applies it — that is the one that corrects a boot
+  // cache another account left — and later reads only cache it for the next
+  // load. The frame decides which tree mounts, so switching it under someone
+  // remounts every view: an open task editor or a half-typed quick add would
+  // go with it, because another device happened to change a preference.
+  const layoutApplied = useRef(false)
   // PUTs issued and not yet settled. `pendingPatch` empties when the request is
   // ISSUED, so it alone cannot tell whether our own write has landed.
   const writesInFlight = useRef(0)
@@ -96,7 +110,17 @@ export function App() {
   const writeLog = useRef<string[]>([])
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme || 'light')
   const [tasksView, setTasksView] = useState<TasksViewMode>('list')
-  const [sideCollapsed, setSideCollapsed] = useState(false)
+  const [sideCollapsed, setSideCollapsed] = useState(() => readCachedSidebarCollapsed() ?? false)
+  // The frame (see layout.ts). Seeded from the boot cache like the tab, and for
+  // a stronger reason: the frame decides which tree mounts, so a first paint in
+  // the wrong one would rebuild the whole screen when the settings read lands.
+  const [layout, setLayout] = useState<Layout>(() => readCachedLayout() ?? DEFAULT_LAYOUT)
+  // The app sidebar's collections slot, which Tasks and Calendar portal their
+  // lists and calendars into (see shell.tsx). State rather than a ref, because
+  // the views have to re-render once it exists, and a ref landing does not
+  // tell them.
+  const [navSlot, setNavSlot] = useState<HTMLElement | null>(null)
+  const isMobile = useIsMobile()
   const [hiddenCals, setHiddenCals] = useState<string[]>([])
   const [archivedCals, setArchivedCals] = useState<string[]>([])
   const [hiddenLists, setHiddenLists] = useState<string[]>([])
@@ -186,6 +210,14 @@ export function App() {
   // loaded. See the SSE effect and `store.update_settings`' shallow merge.
   const [settingsRev, setSettingsRev] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Where the settings menu opens. Only ever set by a layout switch, which
+  // remounts the menu in the other frame (see SettingsMenu's `initialSection`);
+  // the gear always opens it at the top.
+  const [settingsAt, setSettingsAt] = useState<SettingsSection | undefined>()
+  const toggleSettings = useCallback(() => {
+    setSettingsAt(undefined)
+    setSettingsOpen((o) => !o)
+  }, [])
   // Appearance is the one editor still opened over the app: it is a full token
   // workbench, not a row of settings. Tabs, connected apps and archived
   // calendars are sections inside the settings panel now.
@@ -247,7 +279,11 @@ export function App() {
     if (!strip || !active) return
     if (strip.scrollWidth <= strip.clientWidth) return
     active.scrollIntoView({ inline: 'nearest', block: 'nearest' })
-  }, [tab, tabOrder])
+  // `layout` and `focusOpen` because the strip can MOUNT without either of the
+  // others changing — switching to Classic, or leaving the focus surface — and
+  // on a phone that is a strip opening scrolled to its start with the tab you
+  // are on off its right edge.
+  }, [tab, tabOrder, layout, focusOpen])
 
   // Failed saves/deletes anywhere in the app surface here (see makeGuard).
   useEffect(() => {
@@ -343,6 +379,7 @@ export function App() {
     // remounts this component) opens where the account says again.
     if (auth !== 'in') {
       tabRestored.current = false
+      layoutApplied.current = false
       // OFFLINE is a read that was never issued, and it has to arm the same
       // guard a read that failed does. The shell renders in full here — the
       // gear, every view, the Home board — over shipped defaults, and the
@@ -407,8 +444,26 @@ export function App() {
           && (s.tasks_view === 'list' || s.tasks_view === 'day3' || s.tasks_view === 'week')) {
           setTasksView(s.tasks_view)
         }
-        if (keep('sidebar_collapsed') && typeof s.sidebar_collapsed === 'boolean') {
-          setSideCollapsed(s.sidebar_collapsed)
+        // Absent is a real answer for this key — the default frame — so it is
+        // applied rather than skipped. The boot cache is per BROWSER, not per
+        // account, and a second account signing in here must not keep drawing
+        // the first one's Classic because its own blob says nothing.
+        if (keep('layout')) {
+          const l = isLayout(s.layout) ? s.layout : DEFAULT_LAYOUT
+          cacheLayout(l)
+          if (!layoutApplied.current) {
+            layoutApplied.current = true
+            setLayout(l)
+          }
+        }
+        // Cached beside the layout, and for its reason: under the sidebar
+        // layout this flag is the width of the whole frame, so an uncached
+        // `false` painted the full column and then folded it 184px when this
+        // read landed. Absent is `false`, applied, like `layout` above.
+        if (keep('sidebar_collapsed')) {
+          const folded = s.sidebar_collapsed === true
+          setSideCollapsed(folded)
+          cacheSidebarCollapsed(folded)
         }
         if (keep('hidden_calendars') && Array.isArray(s.hidden_calendars)) {
           setHiddenCals(s.hidden_calendars.filter((x) => typeof x === 'string'))
@@ -774,8 +829,22 @@ export function App() {
   const toggleSide = useCallback(() => {
     const next = !sideCollapsed
     setSideCollapsed(next)
+    cacheSidebarCollapsed(next)
     saveSettings({ sidebar_collapsed: next })
   }, [sideCollapsed])
+
+  // Two frames, so the row cycles like the clock. Not in MERGED_SETTINGS, with
+  // `start_tab` and `tasks_view`, and for their reason rather than the class
+  // rule above it: the value written is the frame the user watches the app
+  // switch into, so it is what they asked for whether or not the read landed.
+  // The screen cannot misreport which frame it is drawn in.
+  const toggleLayout = useCallback(() => {
+    const next = nextLayout(layout)
+    setLayout(next)
+    cacheLayout(next)
+    setSettingsAt('appearance')
+    saveSettings({ layout: next })
+  }, [layout])
 
   // Per-calendar visibility follows the account like the other prefs above.
   const changeHiddenCals = useCallback((next: string[]) => {
@@ -1141,6 +1210,109 @@ export function App() {
   // `return null`: a blank page for the first of four sequential round trips.
   const booting = auth === 'loading'
 
+  // What the views are told about the frame (see shell.tsx). The collapse flag
+  // is the one the per-view sidebars read under Classic: one "sidebar is
+  // folded" preference, whichever sidebar the layout draws.
+  const shell = useMemo(() => ({ layout, navSlot, navCollapsed: sideCollapsed }),
+    [layout, navSlot, sideCollapsed])
+
+  const settingsMenu = settingsOpen && (
+    <SettingsMenu panelRef={settingsRef} initialSection={settingsAt}
+      layout={layout} onToggleLayout={toggleLayout}
+      theme={theme} onToggleTheme={toggleTheme}
+      onCustomizeAppearance={() => { setSettingsOpen(false); setAppearanceOpen(true) }}
+      tabOrder={tabOrder} startTab={startTab}
+      onTabOrderChange={changeTabOrder} onStartTabChange={changeStartTab}
+      timeFormat={timeFormat} onToggleTimeFormat={toggleTimeFormat}
+      language={language} onLanguageChange={changeLanguage}
+      dayCapacity={dayCapacity} onDayCapacityChange={changeDayCapacity}
+      dayCapacityByWeekday={dayCapacityByWeekday}
+      onDayCapacityByWeekdayChange={changeDayCapacityByWeekday}
+      homeTz={homeTz} onToggleHomeTz={toggleHomeTz}
+      calFit={calFit} onToggleCalFit={toggleCalFit}
+      archivedCals={archivedCals} onArchivedCalsChange={changeArchivedCals}
+      showCompleted={showCompleted} onToggleShowCompleted={toggleShowCompleted}
+      autoCloseParents={autoCloseParents}
+      onToggleAutoCloseParents={toggleAutoCloseParents}
+      staleOverdue={staleOverdue} onStaleOverdueChange={changeStaleOverdue}
+      planOnDueToday={planOnDueToday}
+      onTogglePlanOnDueToday={togglePlanOnDueToday}
+      focus={focus} onFocusChange={changeFocus}
+      notifyEnabled={notifyEnabled} onNotifyEnabledChange={changeNotifyEnabled}
+      notifyChatId={notifyChatId} onNotifyChatIdChange={changeNotifyChatId}
+      notifyTokenSet={notifyTokenSet} notifyBotId={notifyBotId}
+      onNotifyTokenChange={changeNotifyToken}
+      notifyTriggers={notifyTriggers} onNotifyTriggersChange={changeNotifyTriggers}
+      notifyDigestTime={notifyDigestTime}
+      onNotifyDigestTimeChange={changeNotifyDigestTime}
+      notifyEventLead={notifyEventLead}
+      onNotifyEventLeadChange={changeNotifyEventLead}
+      notifyEveningTime={notifyEveningTime}
+      onNotifyEveningTimeChange={changeNotifyEveningTime}
+      notifyTaskLead={notifyTaskLead}
+      onNotifyTaskLeadChange={changeNotifyTaskLead}
+      user={user} sessionTtl={sessionTtl} onCycleSessionTtl={cycleSessionTtl}
+      onLogout={onLogout} onExpire={onExpire}
+      onClose={() => setSettingsOpen(false)} />
+  )
+
+  // The views, identical under both frames. Only what surrounds them changes:
+  // Classic draws them as the shell's own children under the top bar, exactly
+  // as it always has; the sidebar layout draws them in `.frame-main` beside
+  // the app sidebar (or above the tab bar on a phone).
+  const views = (<>
+    {booting && <div className="work"><div className="content" aria-busy="true" /></div>}
+    {!booting && tab === 'tasks' && (
+      <TasksView onExpire={onExpire} view={tasksView} onView={changeTasksView}
+        sideCollapsed={sideCollapsed} onToggleSide={toggleSide}
+        hiddenLists={hiddenLists} onHiddenListsChange={changeHiddenLists}
+        groups={taskGroups} onGroupsChange={changeTaskGroups}
+        collapsedGroups={collapsedGroups} onCollapsedGroupsChange={changeCollapsedGroups}
+        collapsedTasks={collapsedTasks} onCollapsedTasksChange={changeCollapsedTasks}
+        showCompleted={showCompleted} />
+    )}
+    {!booting && tab === 'calendar' && (
+      <CalendarView onExpire={onExpire} cursor={cursor} onCursorChange={setCursor}
+        sideCollapsed={sideCollapsed} onToggleSide={toggleSide}
+        hiddenCalendars={hiddenCals} onHiddenCalendarsChange={changeHiddenCals}
+        archivedCalendars={archivedCals} onArchivedCalendarsChange={changeArchivedCals}
+        calTaskLists={calTaskLists} onCalTaskListsChange={changeCalTaskLists}
+        calShowDone={calShowDone} onCalShowDoneChange={toggleCalShowDone}
+        fit={calFit} />
+    )}
+    {!booting && tab === 'scheduling' && <SchedulingView rev={rev} onExpire={onExpire} />}
+    {!booting && tab === 'today' && (
+      // The same two calendar-visibility sets the Home dashboard is handed,
+      // and read-only here for the same reason: the Calendar tab owns editing
+      // (and pruning) them. Passing them is not cosmetic — TodayView asks the
+      // data layer for the same window over the same calendar SET, and
+      // `requestWindow` keys its dedupe on that set, so a Today tab that
+      // asked over the archived calendars too would re-fan-out over every
+      // calendar on each switch between the two tabs.
+      <TodayView rev={rev} onExpire={onExpire}
+        hiddenCalendars={hiddenCals} archivedCalendars={archivedCals}
+        staleOverdueDays={staleOverdue} planOnDueToday={planOnDueToday}
+        onStartWorking={enterFocus} />
+    )}
+    {!booting && tab === 'home' && (
+      <HomeView rev={rev} onExpire={onExpire} staleOverdueDays={staleOverdue}
+        layout={dashboard} onLayoutChange={changeDashboard}
+        hiddenCalendars={hiddenCals} archivedCalendars={archivedCals} />
+    )}
+  </>)
+
+  // The shell stays, and says why it is short. `auth === 'offline'` means
+  // `/api/me` could not be reached, NOT that the session ended — so the
+  // cached rows the views seed from are still on screen underneath this,
+  // which is the whole point of the disk mirror. Retry re-runs boot; so
+  // does coming back online or returning to the tab.
+  const offlineBar = auth === 'offline' && (
+    <div className="offline-bar" role="status">
+      <span>{tr('app.offline')}</span>
+      <button className="btn ghost" onClick={retryBoot}>{tr('app.retry')}</button>
+    </div>
+  )
+
   // The provider sits above the auth branch, not inside the signed-in one:
   // inside, resolving the session would swap the root element type and remount
   // everything under it. `enabled` is what keeps it from talking to a server
@@ -1160,7 +1332,8 @@ export function App() {
     // over: React reconciles by element type, so a different root would throw
     // the boot markup away and mount a fresh tree — losing the very frame this
     // exists to paint (and any click already in flight against it).
-    <div className="shell">
+    <ShellProvider value={shell}>
+    <div className="shell" data-layout={layout}>
       {focusOpen ? (
         // A cold load of /focus — the floating window's whole life — must not
         // flash the tab strip for the one /api/me round trip: at 408px wide
@@ -1171,6 +1344,32 @@ export function App() {
           ? <div className="focus" aria-busy="true" />
           : <FocusView rev={rev} focusRev={focusRev} onExpire={onExpire} onLeave={leaveFocus}
               settings={focus} floating={floating} />
+      ) : layout === 'sidebar' ? (
+        // The settings menu is the frame's last child, not the nav's: inside
+        // the nav it would inherit the nav's custom properties and control
+        // sizes, and be announced as part of the Views landmark. And it holds
+        // the same position whichever nav is drawn, so crossing the phone
+        // breakpoint keeps the one instance — section, panel and all — the
+        // way Classic's single copy in `.topbar` does.
+        <div className="frame" data-nav={sideCollapsed ? 'folded' : undefined}>
+          {!isMobile && (
+            <AppNav tabOrder={tabOrder} tab={tab} onTab={changeTab} booting={booting}
+              gearRef={gearRef} settingsOpen={settingsOpen}
+              onToggleSettings={toggleSettings}
+              collapsed={sideCollapsed} onToggleCollapsed={toggleSide}
+              slotRef={setNavSlot} />
+          )}
+          <div className="frame-main">
+            {views}
+            {offlineBar}
+          </div>
+          {isMobile && (
+            <TabBar tabOrder={tabOrder} tab={tab} onTab={changeTab} booting={booting}
+              gearRef={gearRef} settingsOpen={settingsOpen}
+              onToggleSettings={toggleSettings} />
+          )}
+          {settingsMenu}
+        </div>
       ) : (<>
       <div className="topbar">
         <span className="brand">Smylte<span className="dot">.</span></span>
@@ -1206,7 +1405,7 @@ export function App() {
         {booting ? null : (
         <button ref={gearRef} className={`icon-btn ${settingsOpen ? 'active' : ''}`}
           title={tr('app.settings')} aria-label={tr('app.settings')}
-          onClick={() => setSettingsOpen((o) => !o)}>
+          onClick={toggleSettings}>
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
             strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="3" />
@@ -1215,100 +1414,16 @@ export function App() {
         </button>
         )}
 
-        {settingsOpen && (
-          <SettingsMenu panelRef={settingsRef}
-            theme={theme} onToggleTheme={toggleTheme}
-            onCustomizeAppearance={() => { setSettingsOpen(false); setAppearanceOpen(true) }}
-            tabOrder={tabOrder} startTab={startTab}
-            onTabOrderChange={changeTabOrder} onStartTabChange={changeStartTab}
-            timeFormat={timeFormat} onToggleTimeFormat={toggleTimeFormat}
-            language={language} onLanguageChange={changeLanguage}
-            dayCapacity={dayCapacity} onDayCapacityChange={changeDayCapacity}
-            dayCapacityByWeekday={dayCapacityByWeekday}
-            onDayCapacityByWeekdayChange={changeDayCapacityByWeekday}
-            homeTz={homeTz} onToggleHomeTz={toggleHomeTz}
-            calFit={calFit} onToggleCalFit={toggleCalFit}
-            archivedCals={archivedCals} onArchivedCalsChange={changeArchivedCals}
-            showCompleted={showCompleted} onToggleShowCompleted={toggleShowCompleted}
-            autoCloseParents={autoCloseParents}
-            onToggleAutoCloseParents={toggleAutoCloseParents}
-            staleOverdue={staleOverdue} onStaleOverdueChange={changeStaleOverdue}
-            planOnDueToday={planOnDueToday}
-            onTogglePlanOnDueToday={togglePlanOnDueToday}
-            focus={focus} onFocusChange={changeFocus}
-            notifyEnabled={notifyEnabled} onNotifyEnabledChange={changeNotifyEnabled}
-            notifyChatId={notifyChatId} onNotifyChatIdChange={changeNotifyChatId}
-            notifyTokenSet={notifyTokenSet} notifyBotId={notifyBotId}
-            onNotifyTokenChange={changeNotifyToken}
-            notifyTriggers={notifyTriggers} onNotifyTriggersChange={changeNotifyTriggers}
-            notifyDigestTime={notifyDigestTime}
-            onNotifyDigestTimeChange={changeNotifyDigestTime}
-            notifyEventLead={notifyEventLead}
-            onNotifyEventLeadChange={changeNotifyEventLead}
-            notifyEveningTime={notifyEveningTime}
-            onNotifyEveningTimeChange={changeNotifyEveningTime}
-            notifyTaskLead={notifyTaskLead}
-            onNotifyTaskLeadChange={changeNotifyTaskLead}
-            user={user} sessionTtl={sessionTtl} onCycleSessionTtl={cycleSessionTtl}
-            onLogout={onLogout} onExpire={onExpire}
-            onClose={() => setSettingsOpen(false)} />
-        )}
+        {settingsMenu}
       </div>
-      {booting && <div className="work"><div className="content" aria-busy="true" /></div>}
-      {!booting && tab === 'tasks' && (
-        <TasksView onExpire={onExpire} view={tasksView} onView={changeTasksView}
-          sideCollapsed={sideCollapsed} onToggleSide={toggleSide}
-          hiddenLists={hiddenLists} onHiddenListsChange={changeHiddenLists}
-          groups={taskGroups} onGroupsChange={changeTaskGroups}
-          collapsedGroups={collapsedGroups} onCollapsedGroupsChange={changeCollapsedGroups}
-          collapsedTasks={collapsedTasks} onCollapsedTasksChange={changeCollapsedTasks}
-          showCompleted={showCompleted} />
-      )}
-      {!booting && tab === 'calendar' && (
-        <CalendarView onExpire={onExpire} cursor={cursor} onCursorChange={setCursor}
-          sideCollapsed={sideCollapsed} onToggleSide={toggleSide}
-          hiddenCalendars={hiddenCals} onHiddenCalendarsChange={changeHiddenCals}
-          archivedCalendars={archivedCals} onArchivedCalendarsChange={changeArchivedCals}
-          calTaskLists={calTaskLists} onCalTaskListsChange={changeCalTaskLists}
-          calShowDone={calShowDone} onCalShowDoneChange={toggleCalShowDone}
-          fit={calFit} />
-      )}
-      {!booting && tab === 'scheduling' && <SchedulingView rev={rev} onExpire={onExpire} />}
-      {!booting && tab === 'today' && (
-        // The same two calendar-visibility sets the Home dashboard is handed,
-        // and read-only here for the same reason: the Calendar tab owns editing
-        // (and pruning) them. Passing them is not cosmetic — TodayView asks the
-        // data layer for the same window over the same calendar SET, and
-        // `requestWindow` keys its dedupe on that set, so a Today tab that
-        // asked over the archived calendars too would re-fan-out over every
-        // calendar on each switch between the two tabs.
-        <TodayView rev={rev} onExpire={onExpire}
-          hiddenCalendars={hiddenCals} archivedCalendars={archivedCals}
-          staleOverdueDays={staleOverdue} planOnDueToday={planOnDueToday}
-          onStartWorking={enterFocus} />
-      )}
-      {!booting && tab === 'home' && (
-        <HomeView rev={rev} onExpire={onExpire} staleOverdueDays={staleOverdue}
-          layout={dashboard} onLayoutChange={changeDashboard}
-          hiddenCalendars={hiddenCals} archivedCalendars={archivedCals} />
-      )}
+      {views}
       </>)}
       {appearanceOpen && (
         <AppearancePanel appearance={appearance} onChange={changeAppearance}
           mode={theme === 'dark' ? 'dark' : 'light'} onMode={changeTheme}
           onClose={() => setAppearanceOpen(false)} />
       )}
-      {/* The shell stays, and says why it is short. `auth === 'offline'` means
-          `/api/me` could not be reached, NOT that the session ended — so the
-          cached rows the views seed from are still on screen underneath this,
-          which is the whole point of the disk mirror. Retry re-runs boot; so
-          does coming back online or returning to the tab. */}
-      {auth === 'offline' && (
-        <div className="offline-bar" role="status">
-          <span>{tr('app.offline')}</span>
-          <button className="btn ghost" onClick={retryBoot}>{tr('app.retry')}</button>
-        </div>
-      )}
+      {(layout === 'classic' || focusOpen) && offlineBar}
       {toast && (
         <div className="toast" role="alert">
           <span>{toast}</span>
@@ -1317,6 +1432,7 @@ export function App() {
         </div>
       )}
     </div>
+    </ShellProvider>
         )}
       </TimeFormatProvider>
       </I18nProvider>

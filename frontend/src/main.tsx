@@ -4,6 +4,10 @@ import './styles/fonts.css'
 import './styles/tokens.css'
 import './styles/app.css'
 import './styles/classic.css'
+// The sidebar layout's frame, after Classic's levers: everything in it is
+// scoped to that frame, so where it sits in the order matters only as the
+// tiebreak for rules of equal specificity (see the sheet's header).
+import './styles/layout.css'
 import './styles/display.css'
 import { App } from './App'
 import { BookingPage } from './components/BookingPage'

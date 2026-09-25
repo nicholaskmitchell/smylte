@@ -10,10 +10,14 @@
 import { useEffect, useRef } from 'react'
 import { TAB_LABELS, moveTab, type Tab, type TabStart } from '../tabs'
 import { useT } from '../i18n'
+import type { Layout } from '../layout'
 
-export function TabsSection({ order, start, onOrderChange, onStartChange }: {
+export function TabsSection({ order, start, layout, onOrderChange, onStartChange }: {
   order: Tab[]
   start: TabStart
+  /** Which frame the order shows in, for the hint: down the sidebar, or
+   *  across the top. A prop, from the same value SettingsMenu is given. */
+  layout: Layout
   onOrderChange: (next: Tab[]) => void
   onStartChange: (next: TabStart) => void
 }) {
@@ -67,7 +71,7 @@ export function TabsSection({ order, start, onOrderChange, onStartChange }: {
         </select>
       </div>
 
-      <p className="hintline">{tr('tabs.hint')}</p>
+      <p className="hintline">{tr(layout === 'sidebar' ? 'tabs.hint.sidebar' : 'tabs.hint')}</p>
     </>
   )
 }

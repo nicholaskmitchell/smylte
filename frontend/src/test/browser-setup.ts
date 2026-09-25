@@ -24,6 +24,8 @@ import '../styles/app.css'
 // Classic's lever block, after app.css: `:root[data-preset="classic"]` ties the
 // dark block's specificity and has to win on source order.
 import '../styles/classic.css'
+// The sidebar layout's frame, in main.tsx's place after classic.css.
+import '../styles/layout.css'
 // The display page's own sheet, last, as main.tsx loads it. It is here because
 // what it asserts cannot be asserted anywhere else: a display is drawn in the
 // app's three typefaces, and "which face won" is a question about the cascade

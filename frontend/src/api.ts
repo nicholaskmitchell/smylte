@@ -7,6 +7,7 @@
 import type { Appearance } from './appearance'
 import type { Language } from './lang'
 import type { CalendarFit } from './calendar'
+import type { Layout } from './layout'
 import type { DashboardModule } from './dashboard'
 import type { Tab, TabStart } from './tabs'
 import type { TimeFormat } from './time'
@@ -895,7 +896,8 @@ export interface Settings {
   start_tab?: TabStart             // which tab the app opens on; 'last' remembers
   last_tab?: Tab                   // where the user left off; only written while start_tab is 'last'
   tasks_view?: TasksViewMode
-  sidebar_collapsed?: boolean
+  layout?: Layout                  // the app's frame; absent means 'sidebar' (see layout.ts)
+  sidebar_collapsed?: boolean      // whichever sidebar the layout draws
   hidden_calendars?: string[]      // calendar ids hidden in the calendar view
   archived_calendars?: string[]    // calendar ids archived (hidden + listed in settings, restorable)
   hidden_lists?: string[]          // task-list ids hidden from the combined "All lists" view

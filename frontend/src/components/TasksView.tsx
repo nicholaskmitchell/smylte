@@ -10,6 +10,7 @@ import { fmtClock, fmtDue, inputLang } from '../time'
 import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
 import { useSegmentThumb, useToday } from '../hooks'
+import { NavCollections, useEmbeddedCollections, useShell } from '../shell'
 import { AddMultipleModal } from './AddMultipleModal'
 import { WasDue } from './WasDue'
 import { dateOut, TaskModal } from './TaskModal'
@@ -94,6 +95,8 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
 }) {
   const { locale, t: tr } = useI18n()
   const guard = makeGuard(onExpire)
+  const embedded = useEmbeddedCollections()
+  const { layout } = useShell()
   // Lists, tasks and every write against them live above the tab strip, so
   // switching away and back neither drops them nor refetches from empty — and
   // Home reads the same copy rather than fanning out a second one.
@@ -571,6 +574,16 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
 
   const fmtD = (d: Date) => d.toLocaleDateString(locale, { month: 'short', day: 'numeric' })
 
+  // The quick add, placed under the header (Classic) or at the foot of the
+  // pane as a composer (the sidebar layout) — one element in one spot, so the
+  // DOM order is the order on screen. See the matching note in TodayView.
+  const footComposer = layout === 'sidebar'
+  const quickAdd = defaultList && (
+    <QuickAdd onSubmit={addTask}
+      onExpand={(listId, summary) => setAdding({ listId, summary })}
+      defaultList={defaultList} lists={visibleLists} />
+  )
+
   return (
     <div className="work">
       {/* The raw order, not `lists`: dragging a row here PROPPATCHes
@@ -578,9 +591,12 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           order is an app-only view that has no business rewriting what other
           CalDAV clients read. The rail looks identical either way — its group
           sections are filters, so they preserve relative order. */}
+      {/* In the app sidebar under the sidebar layout (see shell.tsx), where
+          the app owns the fold; in place, with its own, everywhere else. */}
+      <NavCollections>
       <Sidebar kind="list" items={serverOrderedLists}
         countOf={(l) => l.open_count} onItems={setLists} api={listApi}
-        collapsed={sideCollapsed} onToggle={onToggleSide}
+        collapsed={sideCollapsed} onToggle={embedded ? undefined : onToggleSide}
         hiddenIds={hiddenSet} onHiddenChange={onHiddenListsChange}
         groups={groups} onGroupsChange={onGroupsChange}
         collapsedGroups={collapsedGroups} onCollapsedGroupsChange={onCollapsedGroupsChange}
@@ -588,8 +604,14 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
         onToggleCompleted={() => { setCompletedOnly((v) => !v); setParkedOnly(false) }}
         parkedActive={parkedOnly}
         onToggleParked={() => { setParkedOnly((v) => !v); setCompletedOnly(false) }} />
+      </NavCollections>
 
-      <div className="content">
+      {/* `data-pane` names which of the four panes this is, for the sidebar
+          layout's column width: the list-shaped ones read at a measure, the
+          day columns take the whole pane. An attribute, so Classic, which
+          styles none of it, draws exactly what it did. */}
+      <div className="content" data-pane={showCompletedPane ? 'completed'
+        : parkedOnly ? 'parked' : view === 'list' ? 'list' : 'days'}>
         <div className="content-head">
           <span className="content-title">
             {showCompletedPane ? tr('tasks.completed')
@@ -692,11 +714,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           </div>
         ) : view === 'list' ? (
           <>
-            {defaultList && (
-              <QuickAdd onSubmit={addTask}
-                onExpand={(listId, summary) => setAdding({ listId, summary })}
-                defaultList={defaultList} lists={visibleLists} />
-            )}
+            {!footComposer && quickAdd}
             {/* A pane that is short and does not say so is a confident lie about
                 the account, which is the whole reason the fan-out below became
                 `allSettled`. Named, and retryable: the effect keys on `rev`,
@@ -737,6 +755,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
                 </>
               )}
             </div>
+            {footComposer && quickAdd && <div className="composer-foot">{quickAdd}</div>}
           </>
         ) : (
           <>
@@ -1052,6 +1071,11 @@ function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen
   )
 }
 
+/** A task's priority tier as the rows name it, or nothing for none. */
+function priTier(label: Task['priority_label']): 'high' | 'med' | 'low' | undefined {
+  return label === 'high' ? 'high' : label === 'medium' ? 'med' : label === 'low' ? 'low' : undefined
+}
+
 function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
   task: Task; showDate?: boolean; dot?: string | null
   onToggle: (t: Task) => void; onOpen: (t: Task) => void
@@ -1064,7 +1088,10 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
   const timed = !!task.due && task.due.includes('T') && !task.due_is_date
   const tf = useTimeFormat()
   return (
-    <div className={`day-card ${done ? 'done' : ''}`} draggable
+    // `data-pri` carries the tier to the row itself, for the sidebar layout's
+    // tick (layout.css). An attribute rather than the `pri-*` classes, which
+    // paint a background wherever they land.
+    <div className={`day-card ${done ? 'done' : ''}`} data-pri={priTier(pri)} draggable
       onDragStart={(e) => {
         // The KEY, not the uid — the day column resolves it back to this row,
         // and a bare uid is first-wins across lists.
@@ -1143,7 +1170,7 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
   const tf = useTimeFormat()
   return (
     <div className={`task ${depth > 0 ? 'sub' : ''} ${task.completed || task.cancelled ? 'done' : ''}`}
-      style={indentStyle(depth)}>
+      data-pri={priTier(pri)} style={indentStyle(depth)}>
       <div className={`pri-bar ${priClass}`} />
       {/* The twisty holds its column whether or not the row has children, so a
           tree of mixed rows keeps one straight edge down the left. */}
