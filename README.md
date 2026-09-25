@@ -526,6 +526,22 @@ old shadows — lives in `styles/classic.css` as the pre-refinement value of
 each "lever" `app.css` reads, which is what keeps the cascade the one the old
 design had and Classic pixel-identical to it.
 
+**Two layouts ship, and the layout is a separate choice from the design.** The
+default, **Sidebar**, keeps the views, the open view's collections and Settings
+in one paper column down the left. Tasks and Calendar lend that column their
+lists and calendars — a portal into a slot the shell provides (`shell.tsx`), so
+the collections are still the view's own code, drawer and dialogs included.
+Each view has a single header and reads at a column width rather than across
+the whole window; on a wide screen Today's calendar takes a column of its own;
+and adding happens in a composer at the foot of Today and Tasks. On a phone the
+views are a bar along the bottom. **Classic** is the frame Smylte shipped with
+— a tab strip across the top, Tasks and Calendar each carrying their own
+sidebar — kept as it was. Settings → Appearance → Layout switches between them,
+the choice follows the account, and any design works in either. Everything the
+Sidebar layout draws lives in `styles/layout.css`, scoped to
+`data-layout="sidebar"`; `design-tokens.test.ts` fails the build if a rule
+there could match inside Classic.
+
 **No shipped design is ever edited.** Customization is a sparse override
 layer written as inline custom properties on `<html>`, so `styles/tokens.css`
 stays the product's design and "Reset to Smylte" is simply dropping the
@@ -582,8 +598,8 @@ to start without a public URL, app auth and a persistent session secret.
 
 **Across the app.** Optimistic writes (paint immediately, reconcile with the
 server DTO, roll back on failure), live updates over Server-Sent Events, and
-account-synced UI preferences (theme, appearance, dashboard layout, task view,
-sidebar state, hidden/archived calendars, hidden lists, task groups, clock,
+account-synced UI preferences (theme, appearance, layout, dashboard layout,
+task view, sidebar state, hidden/archived calendars, hidden lists, task groups, clock,
 which task lists show on the calendar). The public gate is the app's own
 username/password (scrypt-hashed, cookie session); Cloudflare Access is an
 optional second layer.
@@ -630,11 +646,13 @@ backend/
 frontend/
   src/
     components/ TodayView, FocusView, TasksView, CalendarView, SchedulingView,
-                HomeView, BookingPage, DisplayView, Sidebar, Login, TaskModal,
+                HomeView, BookingPage, DisplayView, Sidebar, AppNav, Login, TaskModal,
                 AppearancePanel, ArchivedCalendarsSection, DisplaysSection,
                 FocusSection
     api.ts      typed, same-origin API client (+ SSE subscribe)
-    App.tsx     shell: tabs, settings, theme, live-refresh
+    App.tsx     shell: the frame (Sidebar or Classic), settings, theme, live-refresh
+    layout.ts   the two layouts, their setting and boot cache — pure, unit-tested
+    shell.tsx   what a view knows about its frame; where Tasks/Calendar lend their collections
     appearance.ts  token allowlist + validation, apply/reset, theme import/export
     dashboard.ts   Home grid math (pack/move/resize) — pure, unit-tested
     daytext.ts     reading one typed line ("gym at 7") — pure, unit-tested
