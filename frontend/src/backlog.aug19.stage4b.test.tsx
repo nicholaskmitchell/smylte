@@ -1158,6 +1158,7 @@ describe('aug19 leftovers — every dialog answers Escape at the window', () => 
     // `window` at all, because `userEvent.keyboard` bubbles through both.
     const onClose = vi.fn()
     render(<SettingsMenu panelRef={createRef<HTMLDivElement>()}
+      layout="sidebar" onToggleLayout={vi.fn()}
       theme="light" onToggleTheme={vi.fn()} onCustomizeAppearance={vi.fn()}
       tabOrder={DEFAULT_TAB_ORDER} startTab="home"
       onTabOrderChange={vi.fn()} onStartTabChange={vi.fn()}

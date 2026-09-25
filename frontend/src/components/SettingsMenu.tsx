@@ -22,6 +22,7 @@ import { LANGUAGES, languageLabel, type Language } from '../lang'
 import { useT } from '../i18n'
 import type { List } from '../api'
 import type { Tab, TabStart } from '../tabs'
+import { layoutKey, type Layout } from '../layout'
 import { ArchivedCalendarsSection } from './ArchivedCalendarsSection'
 import { ConnectionsSection } from './ConnectionsSection'
 import { DisplaysSection } from './DisplaysSection'
@@ -54,6 +55,7 @@ const SECTIONS = [
 ] as const
 
 type Section = (typeof SECTIONS)[number]['id']
+export type SettingsSection = Section
 
 // AGPL §13 asks that a modified copy reachable over a network PROMINENTLY OFFER
 // its source to the people using it, and a link in the running app is the
@@ -67,6 +69,8 @@ type Section = (typeof SECTIONS)[number]['id']
 const SOURCE_URL = 'https://github.com/nicholaskmitchell/smylte'
 
 export function SettingsMenu({
+  initialSection,
+  layout, onToggleLayout,
   theme, onToggleTheme, onCustomizeAppearance,
   tabOrder, startTab, onTabOrderChange, onStartTabChange,
   timeFormat, onToggleTimeFormat,
@@ -90,6 +94,13 @@ export function SettingsMenu({
   user, sessionTtl, onCycleSessionTtl,
   onLogout, onExpire, onClose, panelRef,
 }: {
+  /** Where to open, when not at the top. The menu is drawn inside whichever
+   *  frame is on screen, so switching the frame remounts it — and the switch
+   *  is made from Appearance, which is where it should still be open. */
+  initialSection?: Section
+  /** The app's frame (see layout.ts). */
+  layout: Layout
+  onToggleLayout: () => void
   theme: string
   onToggleTheme: () => void
   onCustomizeAppearance: () => void
@@ -158,10 +169,20 @@ export function SettingsMenu({
   panelRef: React.RefObject<HTMLDivElement>
 }) {
   const isMobile = useIsMobile()
-  const [section, setSection] = useState<Section>('general')
+  const [section, setSection] = useState<Section>(initialSection ?? 'general')
   // Only meaningful on a phone. On a desktop the nav is a permanent column, so
   // there is nothing to be "in" and nothing to go back to.
-  const [view, setView] = useState<'index' | 'panel'>('index')
+  const [view, setView] = useState<'index' | 'panel'>(initialSection ? 'panel' : 'index')
+  // Focus follows the switch. `initialSection` is only ever set by pressing
+  // the Layout row, and that press remounts this menu in the other frame — so
+  // the button that had focus is gone, and without this focus falls to
+  // <body>: behind the phone's modal sheet, or out of the menu altogether.
+  const layoutRowRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (initialSection === 'appearance') layoutRowRef.current?.focus()
+  // Mount only: this is where the menu opens, not a section it follows.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   // The archived-calendar agenda is a step below the Calendar section. It lives
   // here so one back control can unwind the whole stack in order.
   const [viewingCal, setViewingCal] = useState<List | null>(null)
@@ -252,7 +273,7 @@ export function SettingsMenu({
         {section === 'general' && (
           <>
             <div className="menu-head">{tr('settings.tabs')}</div>
-            <TabsSection order={tabOrder} start={startTab}
+            <TabsSection order={tabOrder} start={startTab} layout={layout}
               onOrderChange={onTabOrderChange} onStartChange={onStartTabChange} />
 
             {/* First in the panel, above the clock: it decides what every
@@ -311,6 +332,17 @@ export function SettingsMenu({
 
         {section === 'appearance' && (
           <>
+            {/* First, above the theme: it is the one choice here that moves
+                things rather than recolouring them, and the one someone who
+                wants the old frame back comes looking for. */}
+            <div className="menu-row">
+              <label>{tr('settings.layout')}</label>
+              <button ref={layoutRowRef} className="menu-toggle" onClick={onToggleLayout}
+                aria-label={tr('settings.layout.aria')}>
+                {tr(layoutKey(layout))}
+              </button>
+            </div>
+            <div className="hintline">{tr('settings.layout.hint')}</div>
             <div className="menu-row">
               <label>{tr('settings.theme')}</label>
               <button className="menu-toggle" onClick={onToggleTheme}>
