@@ -18,6 +18,7 @@ export const en = {
   'app.settings': 'Settings',
   'app.retry': 'Retry',
   'app.dismiss': 'Dismiss',
+  'app.nav': 'Views',
   'app.back': 'Back',
   'app.closeSettings': 'Close settings',
 
@@ -33,6 +34,9 @@ export const en = {
   'tabs.moveRight': 'Move {tab} right',
   'tabs.hint': 'The order here is the order across the top. “Last used tab” '
     + 'reopens wherever you left off, on every device signed into this account.',
+  'tabs.hint.sidebar': 'The order here is the order down the sidebar, and along '
+    + 'the bottom bar on a phone. “Last used tab” reopens wherever you left off, '
+    + 'on every device signed into this account.',
 
   // ── settings ─────────────────────────────────────────────────────────────
   'settings.sections': 'Settings sections',
@@ -320,6 +324,13 @@ export const en = {
   'settings.appearance.hint': 'Customize opens the full editor over the design '
     + 'system — every color token, the corner radius, the text scale and the '
     + 'type families — and saves what you make as a named theme.',
+  'settings.layout': 'Layout',
+  'settings.layout.aria': 'Sidebar or classic layout',
+  'settings.layout.hint': 'Sidebar keeps the views, your lists and your calendars '
+    + 'in one column down the left. Classic is the tab strip across the top that '
+    + 'Smylte shipped with, where Tasks and Calendar each carry their own sidebar.',
+  'layout.sidebar': 'Sidebar',
+  'layout.classic': 'Classic',
 
   'settings.calendarWindow': 'Calendar window',
   'settings.calendarFit.aria': 'Fixed or dynamic calendar grid',

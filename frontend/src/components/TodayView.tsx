@@ -289,7 +289,8 @@ import {
   type CalEvent, type DayEntry, type DayPlan, type Habit, type PatchHabitBody, type Task,
 } from '../api'
 import { useCalendarData, useTaskData } from '../data'
-import { useEscape } from '../hooks'
+import { useEscape, useIsMobile, useMinWidth } from '../hooks'
+import { useShell } from '../shell'
 import {
   CACHE_DEBOUNCE_MS,
   cacheDayPlan, cacheDayRange, cacheHabits,
@@ -681,6 +682,12 @@ export function TodayView({
   const guard = useMemo(() => makeGuard(() => expire.current()), [])
 
   const tf = useTimeFormat()
+  // The frame this tab is drawn in (see layout.ts). Under the sidebar layout
+  // the add box is a composer at the foot of the pane, and on a screen wide
+  // enough the calendar strip takes a column of its own beside the day.
+  const { layout } = useShell()
+  const isMobile = useIsMobile()
+  const wide = useMinWidth(TODAY_SIDE_COLUMN_MIN)
   const { lists, tasks, loaded, create, toggle, saveDetail, park } = useTaskData()
 
   // ── the day, and the rollover that keeps it honest ───────────────────────
@@ -2417,6 +2424,173 @@ export function TodayView({
   // focus session actually spent on each, beside what it was estimated at.
   const renderReviewRow = (e: DayEntry) => rowFor(e, true)
 
+  // Under the sidebar layout, the one box that writes to the day sits at the
+  // foot of the pane as a composer, below the rows it adds to, where the eye
+  // lands after reading them and a thumb reaches on a phone. Classic keeps it
+  // under the header. One element, placed in one spot or the other, so the
+  // DOM order is the visual order either way and Tab reaches it where it is.
+  const footComposer = layout === 'sidebar'
+  // The calendar strip takes its own column when there is room for two: the
+  // sidebar layout, on a desktop, past TODAY_SIDE_COLUMN_MIN. Only while the
+  // day is live — a review has no strip to move (see the look-back below).
+  const sideCal = layout === 'sidebar' && !isMobile && wide && !reviewing
+  const addForm = isToday && (
+    <form className="quickadd today-add"
+      onSubmit={(e) => { e.preventDefault(); void commit() }}>
+      {/* DISABLED while the day is unknown. Not cosmetic: with no plan for
+          this day every optimistic writer here is a no-op, so an add would
+          reach the server, succeed, and paint nothing — a write that landed
+          invisibly, which is the worse half of that finding. Refusing is
+          the honest answer until there is a day to add to.
+
+          "Unknown" is the read having failed AND nothing to paint, which is
+          exactly `entries === null` — not `dayError` alone. Those were the
+          same condition until the day gained a disk mirror: now a failed
+          read on a tab the owner has used before still has last-known-good
+          rows on screen, and refusing to write to a day that is visibly
+          there would be refusing for a reason the screen contradicts. The
+          add is safe against a stale snapshot besides — `add_day_entry` is
+          idempotent on (day, task) and on (day, note text), and a row added
+          to a day nobody has opened does not suppress its later snapshot
+          (`service.open_day` merges around what is already there). */}
+      <input className="input" value={text} aria-label={tr('today.addAria')}
+        disabled={dayError && entries === null}
+        placeholder={tr('today.addPlaceholder')}
+        // The chip below DESCRIBES this field rather than announcing at it.
+        // It used to be a `role="status"` live region, which was tolerable
+        // while it appeared only on the rare line that parsed; now that it
+        // is on for every line with a character in it, a live region would
+        // re-announce on every keystroke. Described-by is read on demand,
+        // and the submit button carries the same answer at the moment it is
+        // acted on — see its label.
+        aria-describedby={text.trim() ? 'today-add-fate' : undefined}
+        onChange={(e) => {
+          setText(e.target.value)
+          // Emptying the box abandons the line, and the pin is a statement
+          // about THAT line — so it goes with it. This is the one edit that
+          // clears it, and it is not the keystroke rule the boolean it
+          // replaced had: typing on is still typing the same line, and the
+          // choice survives that.
+          if (!e.target.value.trim()) setPinned(null)
+        }} />
+      {/* The consequence, in the name of the control that causes it. This is
+          what a screen-reader user gets instead of the chip's colour and
+          wording, and it is better placed than the chip was: it is heard
+          when the button is reached, which is the instant before it fires. */}
+      <button className="btn" type="submit" disabled={!text.trim()}
+        aria-label={text.trim()
+          ? (willBe === 'task' ? tr('today.addAsTask') : tr('today.addAsNote'))
+          : undefined}>{tr('common.add')}</button>
+
+      {/* THE LINE THAT SAYS WHAT ENTER WILL DO.
+          It is on for any line with a character in it, not only for one
+          that parsed. That is the change: the old chip appeared only when a
+          date was recognised, so the case it never covered was the one that
+          needed covering most — a plain line silently becoming a note that
+          lives nowhere but in this day and reaches no other client on the
+          account. Both outcomes are now stated in the same words the rows
+          below use for the same three things (see KIND_LABEL).
+
+          Advisory, never a gate: Enter commits whether or not this has been
+          looked at, which is the difference between a preview and a
+          confirmation step. */}
+      {text.trim() && (
+        <p className="today-chip" id="today-add-fate">
+          <span className="label">{tr('today.willAdd')}</span>
+          <span className="today-chip-kind">{tr(KIND_LABEL[willBe])}</span>
+          {/* A task shows the parser's title, because the recognised phrase
+              has moved into the date beside it. A note shows the LINE, all
+              of it — what a note keeps is what was typed. */}
+          <span className="today-chip-sum"
+            dir={textDir(willBe === 'task' ? parsed.summary : text.trim())}>
+            {willBe === 'task' ? parsed.summary : text.trim()}
+          </span>
+          {willBe === 'task' && reads && (
+            // Through `fmtDue` with the live 12/24-hour setting, so what the
+            // chip promises is exactly what the row will read once it exists.
+            <span className="mono">
+              {fmtDue(dueFromParse(parsed, day), !parsed.dueTime, tf, locale)}
+              {parsed.guessed ? tr('today.guess') : ''}
+            </span>
+          )}
+          {/* Where it ends up, which is the half the old chip never said and
+              the half that actually differs. */}
+          {/* The list is named ONCE. When the picker is showing it is the
+              thing naming it, and repeating the name a line above it is the
+              same fact twice in two typefaces; when there is no picker —
+              one task list, or none — the sentence is the only place it can
+              be said. */}
+          <span className="today-chip-fate">
+            {willBe !== 'task'
+              ? tr('today.fate.note')
+              : taskLists.length > 1
+                ? tr('today.fate.taskAnyList')
+                : tr('today.fate.taskNamedList', {
+                  list: taskLists.find((l) => l.id === listId)?.name
+                    ?? tr('today.yourLists'),
+                })}
+          </span>
+          {/* SAID BEFORE ENTER, which is the whole of what this line adds:
+              the load strip below already says the day is over, and by the
+              time it is read the thing has been added. Here it is attached
+              to the control that would add another one.
+              
+              It reports the day as it STANDS and does not project. A line
+              being typed has no estimate yet — the task does not exist — so
+              there is no honest total to promise, and inventing one would
+              be worse than saying nothing. The suggestion strip is where a
+              projection is possible, because those tasks already exist and
+              may remember what they take. */}
+          {over && (
+            <span className="today-chip-over">
+              {tr('today.addWhenOver', {
+                amount: fmtDuration(planned - capacity!),
+              })}
+            </span>
+          )}
+        </p>
+      )}
+
+      {/* The CONTROLS, deliberately outside the paragraph above. Two
+          reasons, and they point the same way: a control never belongs
+          inside a region that describes something, and `aria-describedby`
+          would otherwise read the buttons' labels out as part of the
+          description. */}
+      {text.trim() && (
+        <div className="today-add-opts">
+          <button type="button" className="btn ghost today-swap"
+            onClick={() => setPinned(willBe === 'task' ? 'note' : 'task')}
+            // Absent when there is nowhere to put a task: `willBe` has
+            // already resolved to `note` for that reason, and offering a
+            // swap that silently does nothing is worse than offering none.
+            disabled={!listId}>
+            {willBe === 'task' ? tr('today.makeItNote') : tr('today.makeItTask')}
+          </button>
+          {willBe === 'task' && taskLists.length > 1 && (
+            // Only when there is a choice to make, and only when a task is
+            // what is being made. The box is still ONE input on the fast
+            // path — this appears beside a line already typed, it is never
+            // a field to fill in first.
+            <select className="input quickadd-list" value={listId}
+              aria-label={tr('today.listForNewTask')}
+              onChange={(e) => setListId(e.target.value)}>
+              {taskLists.map((l) => (
+                <option key={l.id} value={l.id}>{l.name}</option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
+    </form>
+  )
+  const calendarBlock = (
+    <>
+      <div className="label section-label">{tr('today.onTheCalendar')}</div>
+      <CalendarStrip events={todaysEvents} day={day} loaded={calsLoaded}
+        styleOf={eventStyle} />
+    </>
+  )
+
   return (
     // `today-pane`, and it is a SCOPING hook rather than a styling one. Three
     // of the things this tab is built out of — `.section-label`, `.scroll`,
@@ -2438,7 +2612,7 @@ export function TodayView({
     // The rituals render inside `.modal`, OUTSIDE this element, so they keep
     // the shared roomier values — which is right: a dialog has room a tab does
     // not.
-    <div className="content today-pane">
+    <div className="content today-pane" data-cols={sideCal ? 'two' : undefined}>
       {/* `today-head` because this header holds more than any other tab's — a
           title, a two-button day nav, a date, a count and TWO named actions
           plus an overflow menu — and on a phone that is a layout question the
@@ -2749,155 +2923,7 @@ export function TodayView({
           would be inconsistent in the one direction that costs something. The
           SUGGESTIONS do go — they are the surface offering more work, which is
           the thing a review is not for. */}
-      {isToday && (
-        <form className="quickadd today-add"
-          onSubmit={(e) => { e.preventDefault(); void commit() }}>
-          {/* DISABLED while the day is unknown. Not cosmetic: with no plan for
-              this day every optimistic writer here is a no-op, so an add would
-              reach the server, succeed, and paint nothing — a write that landed
-              invisibly, which is the worse half of that finding. Refusing is
-              the honest answer until there is a day to add to.
-
-              "Unknown" is the read having failed AND nothing to paint, which is
-              exactly `entries === null` — not `dayError` alone. Those were the
-              same condition until the day gained a disk mirror: now a failed
-              read on a tab the owner has used before still has last-known-good
-              rows on screen, and refusing to write to a day that is visibly
-              there would be refusing for a reason the screen contradicts. The
-              add is safe against a stale snapshot besides — `add_day_entry` is
-              idempotent on (day, task) and on (day, note text), and a row added
-              to a day nobody has opened does not suppress its later snapshot
-              (`service.open_day` merges around what is already there). */}
-          <input className="input" value={text} aria-label={tr('today.addAria')}
-            disabled={dayError && entries === null}
-            placeholder={tr('today.addPlaceholder')}
-            // The chip below DESCRIBES this field rather than announcing at it.
-            // It used to be a `role="status"` live region, which was tolerable
-            // while it appeared only on the rare line that parsed; now that it
-            // is on for every line with a character in it, a live region would
-            // re-announce on every keystroke. Described-by is read on demand,
-            // and the submit button carries the same answer at the moment it is
-            // acted on — see its label.
-            aria-describedby={text.trim() ? 'today-add-fate' : undefined}
-            onChange={(e) => {
-              setText(e.target.value)
-              // Emptying the box abandons the line, and the pin is a statement
-              // about THAT line — so it goes with it. This is the one edit that
-              // clears it, and it is not the keystroke rule the boolean it
-              // replaced had: typing on is still typing the same line, and the
-              // choice survives that.
-              if (!e.target.value.trim()) setPinned(null)
-            }} />
-          {/* The consequence, in the name of the control that causes it. This is
-              what a screen-reader user gets instead of the chip's colour and
-              wording, and it is better placed than the chip was: it is heard
-              when the button is reached, which is the instant before it fires. */}
-          <button className="btn" type="submit" disabled={!text.trim()}
-            aria-label={text.trim()
-              ? (willBe === 'task' ? tr('today.addAsTask') : tr('today.addAsNote'))
-              : undefined}>{tr('common.add')}</button>
-
-          {/* THE LINE THAT SAYS WHAT ENTER WILL DO.
-              It is on for any line with a character in it, not only for one
-              that parsed. That is the change: the old chip appeared only when a
-              date was recognised, so the case it never covered was the one that
-              needed covering most — a plain line silently becoming a note that
-              lives nowhere but in this day and reaches no other client on the
-              account. Both outcomes are now stated in the same words the rows
-              below use for the same three things (see KIND_LABEL).
-
-              Advisory, never a gate: Enter commits whether or not this has been
-              looked at, which is the difference between a preview and a
-              confirmation step. */}
-          {text.trim() && (
-            <p className="today-chip" id="today-add-fate">
-              <span className="label">{tr('today.willAdd')}</span>
-              <span className="today-chip-kind">{tr(KIND_LABEL[willBe])}</span>
-              {/* A task shows the parser's title, because the recognised phrase
-                  has moved into the date beside it. A note shows the LINE, all
-                  of it — what a note keeps is what was typed. */}
-              <span className="today-chip-sum"
-                dir={textDir(willBe === 'task' ? parsed.summary : text.trim())}>
-                {willBe === 'task' ? parsed.summary : text.trim()}
-              </span>
-              {willBe === 'task' && reads && (
-                // Through `fmtDue` with the live 12/24-hour setting, so what the
-                // chip promises is exactly what the row will read once it exists.
-                <span className="mono">
-                  {fmtDue(dueFromParse(parsed, day), !parsed.dueTime, tf, locale)}
-                  {parsed.guessed ? tr('today.guess') : ''}
-                </span>
-              )}
-              {/* Where it ends up, which is the half the old chip never said and
-                  the half that actually differs. */}
-              {/* The list is named ONCE. When the picker is showing it is the
-                  thing naming it, and repeating the name a line above it is the
-                  same fact twice in two typefaces; when there is no picker —
-                  one task list, or none — the sentence is the only place it can
-                  be said. */}
-              <span className="today-chip-fate">
-                {willBe !== 'task'
-                  ? tr('today.fate.note')
-                  : taskLists.length > 1
-                    ? tr('today.fate.taskAnyList')
-                    : tr('today.fate.taskNamedList', {
-                      list: taskLists.find((l) => l.id === listId)?.name
-                        ?? tr('today.yourLists'),
-                    })}
-              </span>
-              {/* SAID BEFORE ENTER, which is the whole of what this line adds:
-                  the load strip below already says the day is over, and by the
-                  time it is read the thing has been added. Here it is attached
-                  to the control that would add another one.
-                  
-                  It reports the day as it STANDS and does not project. A line
-                  being typed has no estimate yet — the task does not exist — so
-                  there is no honest total to promise, and inventing one would
-                  be worse than saying nothing. The suggestion strip is where a
-                  projection is possible, because those tasks already exist and
-                  may remember what they take. */}
-              {over && (
-                <span className="today-chip-over">
-                  {tr('today.addWhenOver', {
-                    amount: fmtDuration(planned - capacity!),
-                  })}
-                </span>
-              )}
-            </p>
-          )}
-
-          {/* The CONTROLS, deliberately outside the paragraph above. Two
-              reasons, and they point the same way: a control never belongs
-              inside a region that describes something, and `aria-describedby`
-              would otherwise read the buttons' labels out as part of the
-              description. */}
-          {text.trim() && (
-            <div className="today-add-opts">
-              <button type="button" className="btn ghost today-swap"
-                onClick={() => setPinned(willBe === 'task' ? 'note' : 'task')}
-                // Absent when there is nowhere to put a task: `willBe` has
-                // already resolved to `note` for that reason, and offering a
-                // swap that silently does nothing is worse than offering none.
-                disabled={!listId}>
-                {willBe === 'task' ? tr('today.makeItNote') : tr('today.makeItTask')}
-              </button>
-              {willBe === 'task' && taskLists.length > 1 && (
-                // Only when there is a choice to make, and only when a task is
-                // what is being made. The box is still ONE input on the fast
-                // path — this appears beside a line already typed, it is never
-                // a field to fill in first.
-                <select className="input quickadd-list" value={listId}
-                  aria-label={tr('today.listForNewTask')}
-                  onChange={(e) => setListId(e.target.value)}>
-                  {taskLists.map((l) => (
-                    <option key={l.id} value={l.id}>{l.name}</option>
-                  ))}
-                </select>
-              )}
-            </div>
-          )}
-        </form>
-      )}
+      {!footComposer && addForm}
 
       {/* Both rituals are gated on `entries !== null` as well as on the flag —
           a flow that opened over a day still being read would ask what follows
@@ -3036,6 +3062,7 @@ export function TodayView({
       )}
 
       <div className="scroll">
+        <TodayColumns side={sideCal ? calendarBlock : null}>
         {/* The day is UNKNOWN, which is neither "empty" nor "loading". Every
             other render of the day is gated on `entries !== null`, so without
             this the tab showed its furniture over a blank space and said
@@ -3166,9 +3193,7 @@ export function TodayView({
                 never asked for; widening the window instead would cost the
                 shared fetch for every account. A look-back is about what was
                 planned and what got done in any case. */}
-            <div className="label section-label">{tr('today.onTheCalendar')}</div>
-            <CalendarStrip events={todaysEvents} day={day} loaded={calsLoaded}
-              styleOf={eventStyle} />
+            {!sideCal && calendarBlock}
           </>
         ) : (
           <LookBack review={review} offPlan={offPlan} renderRow={renderReviewRow}
@@ -3324,7 +3349,30 @@ export function TodayView({
           </section>
           )
         })}
+        </TodayColumns>
       </div>
+      {footComposer && addForm && <div className="composer-foot">{addForm}</div>}
+    </div>
+  )
+}
+
+/** The narrowest window that gives Today's calendar strip a column of its own
+ *  beside the day, under the sidebar layout: the app sidebar, a day column at
+ *  a readable width and a strip of times and titles, with gutters between. */
+const TODAY_SIDE_COLUMN_MIN = 1100
+
+/**
+ * The day and, when there is one, the column beside it. With no side column
+ * this is a fragment, so the children render exactly where they always have —
+ * which is Classic, the phone and a narrow window.
+ */
+function TodayColumns({ side, children }: { side: ReactNode; children: ReactNode }) {
+  const tr = useT()
+  if (!side) return <>{children}</>
+  return (
+    <div className="today-cols">
+      <div className="today-main">{children}</div>
+      <aside className="today-side" aria-label={tr('today.onTheCalendar')}>{side}</aside>
     </div>
   )
 }

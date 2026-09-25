@@ -595,8 +595,13 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
   if (collapsed) {
     return (
       <div className="side collapsed">
-        <button className="icon-btn side-toggle" title={tr('side.expand')}
-          aria-label={tr('side.expand')} onClick={onToggle}>»</button>
+        {/* Only when this sidebar owns its fold. In the app sidebar the rail's
+            unfold is the app's own (AppNav), and a second one here would be a
+            button that does the same thing twice over, one row apart. */}
+        {onToggle && (
+          <button className="icon-btn side-toggle" title={tr('side.expand')}
+            aria-label={tr('side.expand')} onClick={onToggle}>»</button>
+        )}
         <div className="side-rail">
           {allLabel && items.length > 1 && (
             <button className={`rail-dot ${sel === ALL_ID ? 'active' : ''}`}

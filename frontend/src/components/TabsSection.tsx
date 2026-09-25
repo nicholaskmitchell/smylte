@@ -10,6 +10,7 @@
 import { useEffect, useRef } from 'react'
 import { TAB_LABELS, moveTab, type Tab, type TabStart } from '../tabs'
 import { useT } from '../i18n'
+import { useShell } from '../shell'
 
 export function TabsSection({ order, start, onOrderChange, onStartChange }: {
   order: Tab[]
@@ -29,6 +30,8 @@ export function TabsSection({ order, start, onOrderChange, onStartChange }: {
   }, [order])
 
   const tr = useT()
+  // The hint says where the order shows, and that is a question of frame.
+  const { layout } = useShell()
 
   const move = (t: Tab, dir: -1 | 1) => {
     refocus.current = `${t}:${dir}`
@@ -67,7 +70,7 @@ export function TabsSection({ order, start, onOrderChange, onStartChange }: {
         </select>
       </div>
 
-      <p className="hintline">{tr('tabs.hint')}</p>
+      <p className="hintline">{tr(layout === 'sidebar' ? 'tabs.hint.sidebar' : 'tabs.hint')}</p>
     </>
   )
 }

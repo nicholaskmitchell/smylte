@@ -18,6 +18,7 @@ import {
 import { TagInput } from './AddMultipleModal'
 import { taskKey } from '../order'
 import { useIsMobile } from '../hooks'
+import { NavCollections, useEmbeddedCollections } from '../shell'
 import { AgendaEvent, AgendaTask, DayPopover } from './DayPopover'
 import { Sidebar } from './Sidebar'
 import { TaskModal } from './TaskModal'
@@ -189,6 +190,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
 }) {
   const guard = makeGuard(onExpire)
   const isMobile = useIsMobile()
+  const embedded = useEmbeddedCollections()
   const tf = useTimeFormat()
   const { locale, t: tr } = useI18n()
   // Sunday-first, because the grid's columns are indexed by `Date#getDay` and
@@ -639,9 +641,10 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
       {/* Sidebar keeps the full `cals` set (so reorder/drag operate on the real
           order and send the full id list); `archivedIds` hides archived rows at
           render time only. */}
+      <NavCollections>
       <Sidebar kind="calendar" items={cals}
         countOf={(c) => c.event_count} onItems={setCals} api={calApi}
-        collapsed={sideCollapsed} onToggle={onToggleSide}
+        collapsed={sideCollapsed} onToggle={embedded ? undefined : onToggleSide}
         hiddenIds={hidden} onHiddenChange={onHiddenCalendarsChange}
         archivedIds={archived} onArchive={archiveCal}
         extra={
@@ -649,6 +652,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
             onShownChange={onCalTaskListsChange}
             showDone={calShowDone} onShowDoneChange={onCalShowDoneChange} />
         } />
+      </NavCollections>
 
       <div className="content">
         <div className="cal-head">
