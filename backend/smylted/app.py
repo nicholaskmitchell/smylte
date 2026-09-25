@@ -758,6 +758,15 @@ class SettingsPatch(BaseModel):
     ] | None = None
     last_tab: Literal["home", "tasks", "calendar", "scheduling", "today"] | None = None
     tasks_view: Literal["list", "day3", "week"] | None = None
+    # The app's frame. "sidebar" keeps navigation and the Tasks and Calendar
+    # collections in one column down the left; "classic" is the top tab strip
+    # the app shipped with, each view carrying its own sidebar. Absent means
+    # sidebar, the default since the September 2026 refinement. A Literal, and
+    # accepted here before the client sends it, for the reason `tab_order`
+    # gives above: an unknown value is a 422 that loses the whole PUT.
+    layout: Literal["sidebar", "classic"] | None = None
+    # One flag for whichever sidebar the layout draws: the lists or calendars
+    # rail under Classic, the whole app sidebar under the sidebar layout.
     sidebar_collapsed: bool | None = None
     # Ids of calendars the user has hidden in the calendar view. Empty/absent
     # means every calendar is visible (the default) — an empty list is a real
