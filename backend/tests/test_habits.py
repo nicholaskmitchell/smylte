@@ -861,13 +861,26 @@ def test_routes_refuse_a_bad_habit(client):
     client.delete(f"/api/habits/{made['id']}")
 
 
+def _open_friday() -> date:
+    """A Friday at least a week out, by the clock the app under `client` reads.
+
+    These tests go through the real app, whose `_today` is not pinned, so the
+    day they open has to be worked out from that same clock. A literal date is
+    a test that passes until the calendar reaches it: once `_writable_floor`
+    passes the day, nothing is minted on it and the assertion about the
+    occurrence fails with no code having changed. A week of margin puts the day
+    beyond any timezone or grace-day edge.
+    """
+    d = date.today() + timedelta(days=7)
+    return d + timedelta(days=(4 - d.weekday()) % 7)
+
+
 @pytest.mark.radicale
 def test_an_occurrence_reaches_the_day_over_http(client):
     """End to end: a habit created through the API shows up on the day the API
     opens, with `habit_id` on the entry and `done` accepted on it — an
     occurrence's doneness lives nowhere but in the day, exactly like a note's."""
-    day = "2027-04-02"                                   # a Friday
-    assert date.fromisoformat(day).weekday() == 4
+    day = _open_friday().isoformat()
     title = f"Stretch-{uuid.uuid4().hex[:8]}"
     habit = client.post("/api/habits", json={"title": title, "days": "fri"}).json()
     try:
@@ -887,7 +900,7 @@ def test_an_occurrence_estimate_reaches_the_habit_over_http(client):
     habit behind it has to learn the number through that same route, or the
     ritual asks again on the next day the rule runs — which is the bug this
     closes, seen from the wire."""
-    day = "2027-04-09"                                   # a day not yet run
+    day = (date.today() + timedelta(days=7)).isoformat()   # a day not yet run
     title = f"Read-{uuid.uuid4().hex[:8]}"
     habit = client.post("/api/habits", json={"title": title}).json()   # every day
     try:

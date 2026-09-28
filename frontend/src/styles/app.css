@@ -1950,12 +1950,16 @@ button.menu-toggle:active { scale: var(--press-scale); }
 
      `display: inline-flex` stays: it is what centres each glyph in whatever box
      it ends up with, and `position: relative` is what the ::after is measured
-     from. */
-  .today-row button, .today-row .today-est {
+     from.
+
+     `.habit-est .today-est` is the same control in the habits sheet, where a
+     rule's estimate sits at the end of its days line — no `.today-row` around
+     it, so it is named here or it gets only its own 34px box. */
+  .today-row button, .today-row .today-est, .habit-est .today-est {
     position: relative;
     display: inline-flex; align-items: center; justify-content: center;
   }
-  .today-row button::after, .today-row .today-est::after {
+  .today-row button::after, .today-row .today-est::after, .habit-est .today-est::after {
     content: ''; position: absolute; top: 50%; left: 50%;
     width: 44px; height: 44px; transform: translate(-50%, -50%);
   }
@@ -3268,8 +3272,9 @@ button.menu-toggle:active { scale: var(--press-scale); }
    right edge instead of squeezing the chips. The wrapper carries the place, not
    the control, because the control is a button one moment and a field the next
    and the place must not move between the two. Everything else about it is the
-   day row's `.today-est` in the fence above, unchanged — the same reading, the
-   same field, the same tap size on a phone. */
+   day row's `.today-est` in the fence above, unchanged — the same reading and
+   the same field — and it is named beside the row's in the phone block's 44px
+   tap box, which is scoped to `.today-row` and would otherwise miss it. */
 .habit-est { margin-left: auto; display: flex; align-items: center; }
 /* Disabled with the rest of a pending row, whose own fade already says so. This
    only stops a bare button offering a pointer it will not answer; `.btn` is

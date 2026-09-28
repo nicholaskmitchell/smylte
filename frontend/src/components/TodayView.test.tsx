@@ -4703,6 +4703,49 @@ describe('<TodayView> the habits sheet, before the server answers', () => {
     expect(within(sheet).getByRole('button', { name: 'How long Stretch takes' })).toBeEnabled()
   })
 
+  it('writes nothing when a field it opened is left as it opened', async () => {
+    // The mirror is the sheet's first paint, and it can be behind the rule: a
+    // day row taught the rule 30 while the sheet was shut, and the mirror is
+    // only written from in here. Pressed before the fetch lands, the field
+    // opens empty over a rule that now says 30 — and a blur that committed
+    // "empty" sent -1 and cleared the rule, so tomorrow asked again.
+    setCacheUser('nick')
+    cacheHabits([habit({ estimate_minutes: null })])
+    const fetched = held<Habit[]>()
+    m.habits.mockReturnValue(fetched.promise)
+    const user = setup()
+    const sheet = await openSheet(user)
+
+    await user.click(within(sheet).getByRole('button', { name: 'How long Read takes' }))
+    expect(within(sheet).getByLabelText('Minutes each time for Read')).toHaveValue(null)
+    await act(async () => { fetched.land([habit({ estimate_minutes: 30 })]) })
+    await user.click(within(sheet).getByText(/A habit is a rule/))
+
+    expect(m.patchHabit).not.toHaveBeenCalled()
+    expect(within(sheet).getByRole('button', { name: 'Read takes 30m each time — change it' }))
+      .toBeInTheDocument()
+  })
+
+  it('hands focus back to the estimate on Enter and on Escape', async () => {
+    // The field unmounts on either key, and without this the focus fell to
+    // <body> — outside this dialog, which is modal, and the next Tab went to
+    // whatever sat behind it.
+    m.habits.mockResolvedValue([habit()])
+    const user = setup()
+    const sheet = await openSheet(user)
+
+    await user.click(await within(sheet).findByRole('button', { name: 'How long Read takes' }))
+    await user.type(within(sheet).getByLabelText('Minutes each time for Read'), '25{Enter}')
+    await waitFor(() => expect(within(sheet).getByRole('button',
+      { name: 'Read takes 25m each time — change it' })).toHaveFocus())
+
+    await user.keyboard('{Enter}')
+    await user.keyboard('{Escape}')
+    expect(within(sheet).getByRole('button',
+      { name: 'Read takes 25m each time — change it' })).toHaveFocus()
+    expect(screen.getByRole('dialog', { name: 'Habits' })).toBeInTheDocument()
+  })
+
   it('takes a refused rule back off and puts the line back', async () => {
     const create = held<Habit>()
     m.createHabit.mockReturnValue(create.promise)
