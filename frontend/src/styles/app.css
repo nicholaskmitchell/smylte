@@ -2845,9 +2845,9 @@ button.menu-toggle:active { scale: var(--press-scale); }
 
    It used to be one line: the last habit's hairline stepped up from
    --rule-faint to --rule, and that was the whole visual statement that the
-   spine sits above the day rather than inside it. That line is still here — it
-   is what closes the band — but on its own it only speaks to a reader looking
-   directly at it. Everything else about the two lists is identical by design:
+   spine sits above the day rather than inside it. Classic still draws that
+   line — it is what closes the band there — but on its own it only speaks to a
+   reader looking directly at it. Everything else about the two lists is identical by design:
    same row, same checkbox, same left edge, same type. Four habits followed by
    four tasks read as eight rows with a slightly darker line in the middle.
 
@@ -2860,13 +2860,44 @@ button.menu-toggle:active { scale: var(--press-scale); }
    changes ship with it. --paper is a themeable token: the Appearance editor
    will happily set it to --bg and flatten this to nothing. The ↻ on every row
    and the headings above and below both survive that, and both survive a
-   greyscale screenshot. */
-.today-habits { background: var(--paper); box-shadow: inset 0 -1px 0 var(--habits-close); }
-/* The line that closes the band. It was the last habit row's own bottom rule,
-   which is right while rows are square and full-width (Classic) and wrong once
-   they are inset and rounded — it would be a short curved line floating inside
-   the band. So the current design draws it on the band itself, full width, and
-   the two levers hand the job to whichever element is straight. */
+   greyscale screenshot.
+
+   SHAPED AS A BAND (C2) — a rounded --paper card with no border — rather than
+   a strip. The strip ran from the pane's left edge to the measure and stopped
+   there, square, in the middle of the pane, and the hovered last row sat flush
+   on its closing hairline. Inset by --row-inset, the card's edges fall on the
+   same lines as the day rows' hover fills below it; the same inset under the
+   last row gives its fill the room the sides have. Everything is read off
+   --row-inset and --r-md, which Classic sets to 0, so there the band is still
+   the square full-width strip it always was. */
+.today-habits {
+  /* How far a habit row's fill sits inside the card, and the corner that
+     follows from it (S2) — `--r-menu-item`'s rule, declared here rather than
+     in tokens.css because the inset it subtracts is this card's own. */
+  --habits-inset: var(--row-inset);
+  --r-habit-row: max(var(--r-xs), calc(var(--r-md) - var(--habits-inset)));
+  background: var(--paper);
+  margin-inline: var(--row-inset); padding-bottom: var(--row-inset);
+  border-radius: var(--r-md);
+}
+/* The card's inset comes back out of what is inside it, so the heading and the
+   rows keep the page gutter the rows below are read down. A habit row's fill
+   sits one more inset inside the card. */
+.today-habits > .section-label { padding-inline: calc(var(--gutter) - var(--row-inset)); }
+.today-habits .today-row {
+  margin-inline: var(--habits-inset);
+  padding-inline: calc(var(--gutter) - var(--row-inset) - var(--habits-inset));
+  border-radius: var(--r-habit-row);
+}
+/* Not nested on a phone. The gutter there is 14px, and two insets out of it
+   left the fill 2px from the tick. Here a habit row's fill is the day rows'
+   fill exactly: the card's width, the same 8px to the tick. */
+@media (max-width: 720px) {
+  .today-habits { --habits-inset: 0px; }
+}
+/* The line that closes the band under Classic, where rows are square and
+   full-width and the last one's own bottom rule is straight. The current
+   design's band has no line to close it: the card's edge does that. */
 .today-habits .today-row:last-child { border-bottom-color: var(--habits-close-row); }
 /* Hover, computed FROM the band rather than inherited from `.today-row:hover`.
    That rule paints --bg-elev, which is a step LIGHTER than --bg in the light

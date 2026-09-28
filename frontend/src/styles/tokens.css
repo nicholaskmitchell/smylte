@@ -338,8 +338,7 @@
   --row-inset: 6px;
   --row-divider: transparent;
   --row-hover: var(--paper);
-  --habits-close: var(--rule);        /* the Today habits band's closing line… */
-  --habits-close-row: transparent;    /* …drawn on the band, not its last row */
+  --habits-close-row: transparent;    /* Classic closes the habits band on its last row */
   --chip-bg: var(--paper);
   --chip-edge: transparent;
   --chip-pad: 3px 10px;
