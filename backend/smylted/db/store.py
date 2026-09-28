@@ -1129,8 +1129,10 @@ def update_day_entry(
     One UPDATE for all of them rather than the statement-per-field loop
     `set_sidecar` and `update_booking_link` use. Those need a transaction to be
     atomic (the connection is in autocommit — see `tx`); a single statement is
-    atomic on its own, and this one runs on the PATCH path where there is no
-    other reason to open one.
+    atomic on its own, so this function neither opens one nor assumes one. When
+    the PATCH path has more to write beside it — the task sidecar or the habit
+    rule an estimate teaches — `service.patch_day_entry` opens the transaction
+    around all of them.
 
     `rowcount` is what distinguishes "no such entry" from a patch that changed
     nothing: SQLite counts the rows the statement PROCESSED, not the ones whose
@@ -1153,6 +1155,41 @@ def update_day_entry(
         if not cur.rowcount:
             return None
     return find_day_entry(conn, day, entry_id=entry_id)
+
+
+def fill_habit_estimates(
+    conn: sqlite3.Connection, habit_id: str, from_day: str, minutes: int
+) -> int:
+    """Give `minutes` to every occurrence of one habit, on `from_day` or later,
+    that has no estimate of its own yet. Returns how many rows it filled.
+
+    Here, in the day-plan section, rather than beside `update_habit`: it writes
+    day_plan, and the habits section's promise that nothing in it does is worth
+    more kept than bent for one helper.
+
+    Each filter keeps a thing a day has already said:
+
+    - `estimate_minutes IS NULL` — only a BLANK is filled. A number on the row
+      is that day's own, whether the owner typed it there or it was copied off
+      an older rule when the row was minted, and overwriting it would be the
+      join that copy-never-join exists to refuse: re-estimating the rule would
+      then rewrite what those days planned.
+    - `day >= from_day` — never a day before the cutoff. A day that has run is
+      the record of what was intended at the time, and filling it with a number
+      chosen now would move its "planned" total under the look-back. The caller
+      supplies the cutoff because this module has no clock. `day` leads the
+      WHERE so `idx_day_plan_day` can serve it: ISO keys compare correctly as
+      strings, the same range predicate `get_day_range` uses.
+    - `dropped_at IS NULL` — a declined row counts for nothing (the day's total
+      skips it), so a number on it would inform no sum, and writing to it would
+      make a row the owner set aside look attended to.
+    """
+    return conn.execute(
+        "UPDATE day_plan SET estimate_minutes=? "
+        "WHERE day >= ? AND kind='habit' AND habit_id=? "
+        "AND estimate_minutes IS NULL AND dropped_at IS NULL",
+        (minutes, from_day, habit_id),
+    ).rowcount
 
 
 def add_worked_seconds(
@@ -1283,7 +1320,9 @@ def find_day_entry(
 #
 # A habit is a RULE. It owns no occurrences: those are ordinary `day_plan` rows
 # written by `insert_day_entry` like any other entry, which is why nothing in
-# this section reads or writes day_plan at all. Deleting a habit therefore
+# this section reads or writes day_plan at all (the one write a rule's estimate
+# makes into its occurrences is `fill_habit_estimates`, in the day-plan section
+# above, and it only ever fills a blank). Deleting a habit therefore
 # CANNOT touch a past day — there is no cascade to write, and no sweep of
 # "orphaned" occurrences to be tempted into writing, because a dangling
 # habit_id beside a copied title is a complete record on its own.
@@ -1335,7 +1374,9 @@ def update_habit(
     `update_booking_link` uses, for the reason `update_day_entry` gives: a single
     statement is atomic on its own, so an autocommit connection needs no
     transaction around it and a rejected value cannot leave earlier fields
-    applied."""
+    applied. The service opens one anyway when an estimate is written, because
+    that write also fills the occurrences' blanks (`fill_habit_estimates`) — a
+    second statement, in another table."""
     bad = set(fields) - _HABIT_FIELDS
     if bad:
         raise ValueError(f"unknown habit fields: {bad}")

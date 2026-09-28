@@ -610,7 +610,9 @@ def build_tools(api) -> dict[str, Tool]:
                 "minimum": -1,
                 "description": _ESTIMATE["description"]
                 + " Refused on a past day. Pass -1 to clear one, which is not "
-                  "the same as 0 — zero is a real estimate.",
+                  "the same as 0 — zero is a real estimate. On a habit "
+                  "occurrence it sets that day only; the habit's own estimate "
+                  "is the owner's, set in the app.",
             },
             "move_to": {**_DAY, "description":
                         "Send this entry to this day, 'YYYY-MM-DD'. Creates a "

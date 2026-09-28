@@ -186,13 +186,18 @@ beforeEach(() => {
     habit({ id: 'hb-new', title: body.title, days: body.days ?? '' }))
   // Spelled out field by field rather than spread, because the wire shapes
   // differ where it matters: the body carries `paused`, a boolean, and the
-  // habit carries `paused_at`, a stamp. A mock that echoed the body back would
-  // hand the component a field the real endpoint never sends.
+  // habit carries `paused_at`, a stamp; and a cleared estimate is -1 in the
+  // body and null on the habit. A mock that echoed the body back would hand
+  // the component a field the real endpoint never sends — and a -1 settling
+  // onto the row would paint a clear as a negative duration.
   m.patchHabit.mockImplementation(async (id, body) => habit({
     id,
     ...(body.title !== undefined ? { title: body.title } : {}),
     ...(body.days !== undefined ? { days: body.days } : {}),
     paused_at: body.paused ? '2026-08-21T10:00:00.000Z' : null,
+    ...(body.estimate_minutes !== undefined
+      ? { estimate_minutes: body.estimate_minutes < 0 ? null : body.estimate_minutes }
+      : {}),
   }))
   m.deleteHabit.mockResolvedValue(null)
   m.patchDayEntry.mockImplementation(async (_d, id) => entry({ entry_id: id }))
@@ -4182,6 +4187,145 @@ describe('<TodayView> the habits sheet', () => {
       expect(screen.queryByLabelText('Rename Read')).not.toBeInTheDocument())
   })
 
+  // ── the rule's estimate ────────────────────────────────────────────────────
+  //
+  // Set once, here, and every day the habit comes up starts with it. Until
+  // this control existed the sheet had no way to set it — the field was on the
+  // rule and on the wire with no way in from the app — so each morning's row
+  // asked again, which is the bug the owner actually hit.
+
+  it("shows each rule's estimate, and invites one where there is none", async () => {
+    m.habits.mockResolvedValue([
+      habit({ estimate_minutes: 20 }),
+      habit({ id: 'hb2', title: 'Stretch' }),
+    ])
+    const user = setup()
+    const sheet = await openSheet(user)
+
+    // The day row's reading, not a second one: a duration where there is one,
+    // and `est` — an invitation, not a zero — where nobody has said.
+    expect(await within(sheet).findByRole('button',
+      { name: 'Read takes 20m each time — change it' })).toHaveTextContent('20m')
+    expect(within(sheet).getByRole('button', { name: 'How long Stretch takes' }))
+      .toHaveTextContent('est')
+  })
+
+  it('sets one with exactly that on the wire, and paints it before the reply',
+    async () => {
+      m.habits.mockResolvedValue([habit()])
+      const reply = held<Habit>()
+      m.patchHabit.mockReturnValueOnce(reply.promise)
+      const user = setup()
+      const sheet = await openSheet(user)
+
+      await user.click(await within(sheet).findByRole('button', { name: 'How long Read takes' }))
+      await user.type(within(sheet).getByLabelText('Minutes each time for Read'), '25{Enter}')
+
+      // The estimate and nothing else. A body that also carried the title or
+      // the days would be a second edit riding along on this one.
+      await waitFor(() =>
+        expect(m.patchHabit).toHaveBeenCalledWith('hb1', { estimate_minutes: 25 }))
+      expect(m.patchHabit).toHaveBeenCalledTimes(1)
+      // On screen while the write is still in flight — `applyPatch` has to
+      // know the field, or the row sits on `est` for the whole round trip.
+      expect(within(sheet).getByRole('button',
+        { name: 'Read takes 25m each time — change it' })).toHaveTextContent('25m')
+
+      await act(async () => { reply.land(habit({ estimate_minutes: 25 })) })
+      expect(within(sheet).getByRole('button',
+        { name: 'Read takes 25m each time — change it' })).toHaveTextContent('25m')
+    })
+
+  it('clears one as -1, and paints the clear as unset rather than as 0m', async () => {
+    m.habits.mockResolvedValue([habit({ estimate_minutes: 30 })])
+    const reply = held<Habit>()
+    m.patchHabit.mockReturnValueOnce(reply.promise)
+    const user = setup()
+    const sheet = await openSheet(user)
+
+    await user.click(await within(sheet).findByRole('button',
+      { name: 'Read takes 30m each time — change it' }))
+    await user.clear(within(sheet).getByLabelText('Minutes each time for Read'))
+    await user.keyboard('{Enter}')
+
+    // The same sentinel a day row sends, translated at the call site.
+    await waitFor(() =>
+      expect(m.patchHabit).toHaveBeenCalledWith('hb1', { estimate_minutes: -1 }))
+    // Before the reply: the optimistic row has to read the sentinel as "nobody
+    // said". Painted as it came it is a negative duration; floored, it is 0m,
+    // which is a real estimate and the opposite of the one just made.
+    expect(within(sheet).getByRole('button', { name: 'How long Read takes' }))
+      .toHaveTextContent('est')
+    expect(within(sheet).queryByText('0m')).not.toBeInTheDocument()
+
+    await act(async () => { reply.land(habit({ estimate_minutes: null })) })
+    expect(within(sheet).getByRole('button', { name: 'How long Read takes' }))
+      .toHaveTextContent('est')
+  })
+
+  it('abandons an estimate on Escape and keeps the sheet open', async () => {
+    // The day row's Escape, for the same reason: `useEscape` is on the window,
+    // and this field is INSIDE the dialog it closes — so without the
+    // propagation stop, backing out of a number would throw away the sheet.
+    m.habits.mockResolvedValue([habit({ estimate_minutes: 20 })])
+    const user = setup()
+    const sheet = await openSheet(user)
+
+    await user.click(await within(sheet).findByRole('button',
+      { name: 'Read takes 20m each time — change it' }))
+    const input = within(sheet).getByLabelText('Minutes each time for Read')
+    await user.clear(input)
+    await user.type(input, '45')
+    await user.keyboard('{Escape}')
+
+    expect(m.patchHabit).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog', { name: 'Habits' })).toBeInTheDocument()
+    expect(within(sheet).getByRole('button',
+      { name: 'Read takes 20m each time — change it' })).toBeInTheDocument()
+  })
+
+  it("is named apart from today's row for the same habit", async () => {
+    // The sheet does not make the day behind it inert, so both controls are
+    // in the accessibility tree at once. Sharing a name would make them two
+    // controls a screen reader cannot tell apart — and would make every
+    // screen-wide `getByRole('button', { name: 'Estimate Read' })` in this
+    // suite match twice. `getBy*` throws on a second match, so each lookup
+    // below is also the assertion that its name is unique.
+    m.habits.mockResolvedValue([habit()])
+    m.openDay.mockResolvedValue(plan([occurrence()]))
+    const user = setup()
+    await waitFor(() => expect(habitTitles()).toEqual(['Read']))
+    const sheet = await openSheet(user)
+
+    const rule = await within(sheet).findByRole('button', { name: 'How long Read takes' })
+    const day = screen.getByRole('button', { name: 'Estimate Read' })
+    expect(sheet).not.toContainElement(day)
+
+    // …and the field each opens into.
+    await user.click(rule)
+    expect(screen.getByLabelText('Minutes each time for Read')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Minutes for Read')).not.toBeInTheDocument()
+  })
+
+  it('and apart from it once both carry a number', async () => {
+    // The set state has names of its own, and "20m" on both is exactly when
+    // the two are otherwise indistinguishable.
+    m.habits.mockResolvedValue([habit({ estimate_minutes: 20 })])
+    m.openDay.mockResolvedValue(plan([occurrence({ estimate_minutes: 20 })]))
+    const user = setup()
+    await waitFor(() => expect(habitTitles()).toEqual(['Read']))
+    const sheet = await openSheet(user)
+
+    const rule = await within(sheet).findByRole('button',
+      { name: 'Read takes 20m each time — change it' })
+    const day = screen.getByRole('button', { name: 'Read is estimated at 20m — change it' })
+    expect(sheet).not.toContainElement(day)
+    const both = screen.getAllByRole('button', { name: /20m/ })
+    expect(both).toHaveLength(2)
+    expect(both).toContain(day)
+    expect(both).toContain(rule)
+  })
+
   it('closes on an Escape dispatched at the window', async () => {
     // At the WINDOW, not at the focused element: a listener bound to the dialog
     // only fires while focus is inside it, and with no focus trap that is
@@ -4537,6 +4681,27 @@ describe('<TodayView> the habits sheet, before the server answers', () => {
       await act(async () => { create.land(habit({ id: 'hb-new', title: 'Stretch' })) })
       expect(screen.getByLabelText('Rename Stretch')).toBeEnabled()
     })
+
+  it('holds its estimate back too, until the rule has an id', async () => {
+    // The estimate is one more control naming the provisional id, and a PATCH
+    // on an id the server has never heard of is a 404 toast for a number the
+    // owner typed a moment after pressing Add.
+    const create = held<Habit>()
+    m.createHabit.mockReturnValue(create.promise)
+    const user = setup()
+    const sheet = await openSheet(user)
+    await user.type(screen.getByLabelText('New habit'), 'Stretch')
+    await user.click(within(sheet).getByRole('button', { name: 'Add' }))
+
+    const est = await within(sheet).findByRole('button', { name: 'How long Stretch takes' })
+    expect(est).toBeDisabled()
+    await user.click(est)
+    expect(within(sheet).queryByLabelText('Minutes each time for Stretch')).not.toBeInTheDocument()
+    expect(m.patchHabit).not.toHaveBeenCalled()
+
+    await act(async () => { create.land(habit({ id: 'hb-new', title: 'Stretch' })) })
+    expect(within(sheet).getByRole('button', { name: 'How long Stretch takes' })).toBeEnabled()
+  })
 
   it('takes a refused rule back off and puts the line back', async () => {
     const create = held<Habit>()
