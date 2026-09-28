@@ -891,7 +891,9 @@ export const en = {
   'today.weekCountThat': '{done} of {total} that week so far',
   'today.movedTo': '→ {day}',
   'today.removeFromToday': 'Remove {entry} from today',
-  'habit.sheet.blurb': 'A habit is a rule that puts a line on your day. It never becomes a task, and it never leaves this app.',
+  'habit.sheet.blurb': 'A habit is a rule that puts a line on your day — one that '
+    + 'never becomes a task and never leaves this app. You estimate it once, here '
+    + 'or on any day’s row, and every day it comes up starts with that estimate.',
   'habit.none': 'No habits yet.',
   'habit.newAria': 'New habit',
   'habit.addPlaceholder': 'Add a habit — “read”, “stretch”…',
@@ -905,6 +907,14 @@ export const en = {
   'habit.dayFor': '{day} for {habit}',
   'habit.everyDay': 'Every day',
   'habit.paused': 'Paused',
+  // The RULE's estimate, in the sheet. Worded apart from `today.estimateAria`
+  // and its two siblings, not only translated apart: today's row for the same
+  // habit stays on screen behind the sheet, so sharing those names would put
+  // two controls called "Estimate Read" in front of a screen reader — and
+  // "each time" is the difference between them, one day against every day.
+  'habit.estimateAria': 'How long {habit} takes',
+  'habit.estimatedAt': '{habit} takes {amount} each time — change it',
+  'habit.minutesFor': 'Minutes each time for {habit}',
   'habit.deleteWarn': 'The rule stops coming back. Every day it has already run on keeps the line it put there — a past day is a finished record, not a projection of today’s rules.',
   // ── the shell's own messages ────────────────────────────────────────────────
   'app.settingsLoadFailed': 'Couldn\'t load your preferences — changes won\'t be saved until this reloads',

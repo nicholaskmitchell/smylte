@@ -410,8 +410,12 @@ CREATE TABLE IF NOT EXISTS day_plan (
     -- A task additionally REMEMBERS its last estimate in `sidecar`, which
     -- pre-fills this at entry-creation time — copied, never joined, so
     -- re-estimating a task in March cannot rewrite what January's plan said it
-    -- would take. A column added by store.init_db on existing DBs; see the
-    -- ALTER there for why it must not be split from the DTO that reads it.
+    -- would take. A habit occurrence is pre-filled from its rule the same way;
+    -- the one write this column takes from outside its own row is that rule's
+    -- estimate filling a NULL here on a day still open
+    -- (store.fill_habit_estimates), which rewrites nothing a day said. A column
+    -- added by store.init_db on existing DBs; see the ALTER there for why it
+    -- must not be split from the DTO that reads it.
     estimate_minutes INTEGER,
     done_at         TEXT,
     dropped_at      TEXT,                    -- stamped, never DELETEd: the day keeps its record
@@ -567,7 +571,13 @@ CREATE TABLE IF NOT EXISTS habits (
     -- How long an occurrence of this habit is expected to take. The RULE
     -- remembers it and every occurrence is minted with a COPY, exactly as the
     -- title is — so a habit is estimated once rather than every morning, and
-    -- changing the rule leaves past days saying what they said. A task
+    -- changing the rule leaves past days saying what they said. It is learned
+    -- from either end: set on the habit, or typed on an occurrence in the app
+    -- (which teaches the rule the way a task entry teaches `sidecar`). Either
+    -- way a new value also FILLS this habit's occurrences already minted on
+    -- days still open that have no estimate — a blank only, never a number a
+    -- day already holds, never a dropped row, never a day that has run
+    -- (store.fill_habit_estimates). A clear fills and un-fills nothing. A task
     -- remembers its estimate in `sidecar` and a note is remembered by the
     -- carry; this is the third of those three, and habits need their own
     -- because an occurrence has no wire object and never carries.
