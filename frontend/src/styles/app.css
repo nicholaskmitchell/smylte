@@ -3218,8 +3218,11 @@ button.menu-toggle:active { scale: var(--press-scale); }
 }
 .habit-edit:last-child { border-bottom: 0; }
 /* A paused habit is still on the list — it is the screen that un-pauses it —
-   so it recedes rather than disappearing. */
-.habit-edit.paused .habit-name, .habit-edit.paused .habit-day { color: var(--fg-faint); }
+   so it recedes rather than disappearing. Its estimate recedes with it: a
+   number left at full strength on a faded row reads as the one live thing on
+   it, and a paused rule puts nothing on the days ahead for it to estimate. */
+.habit-edit.paused .habit-name, .habit-edit.paused .habit-day,
+.habit-edit.paused .today-est { color: var(--fg-faint); }
 /* A rule painted before the server has minted its id. Every control on it is
    `disabled` — they would each name an id only this browser knows — and this
    says so, for the instant it lasts. Deliberately faint rather than a spinner:
@@ -3257,6 +3260,21 @@ button.menu-toggle:active { scale: var(--press-scale); }
   .habit-day.on:hover { color: var(--bg); background: var(--accent); border-color: var(--accent); }
 }
 .habit-every, .habit-paused { margin-left: 4px; }
+/* The rule's estimate, at the far end of the days line — under Pause and
+   Delete, the other things done to the rule as a whole, and clear of the chips
+   it has nothing to do with. `margin-left: auto` takes the line's spare room
+   rather than a fixed gap, so on a phone, where seven chips and "Every day"
+   already fill the line, it wraps to a line of its own and still sits at the
+   right edge instead of squeezing the chips. The wrapper carries the place, not
+   the control, because the control is a button one moment and a field the next
+   and the place must not move between the two. Everything else about it is the
+   day row's `.today-est` in the fence above, unchanged — the same reading, the
+   same field, the same tap size on a phone. */
+.habit-est { margin-left: auto; display: flex; align-items: center; }
+/* Disabled with the rest of a pending row, whose own fade already says so. This
+   only stops a bare button offering a pointer it will not answer; `.btn` is
+   told the same in tokens.css. */
+.habit-est .today-est:disabled { cursor: default; }
 
 /* The delete warning. --warn here IS the right token — this one is a warning
    about an irreversible action, which is the opposite of the weekly count. */

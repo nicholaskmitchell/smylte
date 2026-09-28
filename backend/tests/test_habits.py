@@ -24,6 +24,7 @@ from test_day_plan import DAY, LIST_A, NEXT, PREV, _seed_task, _settings
 
 from smylted.dav.client import CollectionInfo
 from smylted.db import store
+from smylted.mcp.api import McpApi
 from smylted.service import (
     SmylteService,
     _WEEKDAYS,
@@ -65,12 +66,13 @@ def svc(monkeypatch):
 def _pin_today(monkeypatch, svc_, day: str) -> None:
     """Pin the service's idea of the owner's today.
 
-    `_habit_minting_allowed` is the one part of this feature that consults a
-    clock — but it is consulted from `_habit_entries_for`, so EVERY path that
-    mints an occurrence reads it, and a suite whose expectations move at midnight
-    is a suite that fails at midnight. Patching `_today` rather than the clock
-    keeps the seam where the code puts it: `_today` is the single place the
-    owner's day is decided.
+    The window `_writable_floor` draws is the one part of this feature that
+    consults a clock — but it is consulted from `_habit_entries_for`, so EVERY
+    path that mints an occurrence reads it, and so does every estimate that
+    fills or teaches one. A suite whose expectations move at midnight is a suite
+    that fails at midnight. Patching `_today` rather than the clock keeps the
+    seam where the code puts it: `_today` is the single place the owner's day is
+    decided.
     """
     monkeypatch.setattr(svc_, "_today", lambda: day)
 
@@ -471,6 +473,266 @@ def test_unknown_habit_and_empty_patches(svc):
         svc.update_habit(habit["id"], title=" ")
 
 
+# ── an estimate, said once ───────────────────────────────────────────────────
+#
+# How long a habit takes is a standing answer, so it is said once and every day
+# after starts from it — whichever end it is said at. Typed on an occurrence in
+# the app, it teaches the rule; set on the rule, it reaches the rows already
+# waiting on days still open. Either way it only ever fills a BLANK: a number a
+# day already holds is that day's own (copy-never-join, as for the title), and a
+# day that has run, or a row the owner declined, is a record that no later
+# answer rewrites. These tests pin both doors and each of the three fences.
+
+# Further days after NEXT, for tests that need more than one open day ahead.
+NEXT2 = "2026-08-23"
+NEXT3 = "2026-08-24"
+
+
+def _rule(svc_, habit_id: str) -> dict:
+    return next(h for h in svc_.list_habits() if h["id"] == habit_id)
+
+
+def _occ(svc_, day: str, habit_id: str) -> dict:
+    """The one occurrence of `habit_id` on `day`, dropped or not, read back
+    without opening anything."""
+    rows = [e for e in svc_.open_day(day, create=False)["entries"]
+            if e["habit_id"] == habit_id]
+    assert len(rows) == 1, (day, rows)
+    return rows[0]
+
+
+def test_estimating_todays_occurrence_teaches_the_rule(svc, monkeypatch):
+    """The bug this section exists for. Estimating "Read" on Today used to set
+    that one row, so tomorrow's occurrence was minted blank and the ritual asked
+    again — every morning, for a number that never changes. The row's number is
+    now written through to the rule, and the next day's first open copies it."""
+    habit = svc.create_habit(title="Read")               # every day, unestimated
+    occ = _habits_on(svc.open_day(DAY, create=True))[0]
+    assert occ["estimate_minutes"] is None
+    sidecars = _count(svc, "sidecar")
+
+    dto = svc.patch_day_entry(DAY, occ["entry_id"], estimate_minutes=20)
+    assert dto["estimate_minutes"] == 20
+    assert _rule(svc, habit["id"])["estimate_minutes"] == 20
+    # The habit arm is not the task arm: an occurrence has no task behind it,
+    # so nothing lands in the sidecar table.
+    assert _count(svc, "sidecar") == sidecars
+
+    _pin_today(monkeypatch, svc, NEXT)                   # tomorrow, as today
+    assert [e["estimate_minutes"]
+            for e in _habits_on(svc.open_day(NEXT, create=True))] == [20]
+
+
+def test_an_estimate_on_the_rule_fills_only_the_blanks_on_days_still_open(svc, monkeypatch):
+    """Estimating a habit on the habits screen reaches the row already sitting on
+    today — and on any later day already opened — rather than waiting for
+    tomorrow's mint. What it may fill is narrow, and each exclusion below is a
+    thing a day has already said: a number of its own (here one copied off an
+    older version of the rule), a decision to decline the row, or simply having
+    happened. The grace day is still open, as it is for minting."""
+    habit = svc.create_habit(title="Read")               # every day, unestimated
+    other = svc.create_habit(title="Stretch")            # never estimated at all
+    # A day that has run, minted while it was still today.
+    _pin_today(monkeypatch, svc, LONG_PAST)
+    svc.open_day(LONG_PAST, create=True)
+    _pin_today(monkeypatch, svc, DAY)
+    # A number copied off an older rule: estimate the rule, mint a day, then
+    # clear the rule — which fills nothing and UN-fills nothing.
+    svc.update_habit(habit["id"], estimate_minutes=45)
+    svc.open_day(NEXT2, create=True)
+    svc.update_habit(habit["id"], estimate_minutes=-1)
+    assert _occ(svc, NEXT2, habit["id"])["estimate_minutes"] == 45
+    # Blanks on the grace day, today, tomorrow, and a later day then declined.
+    for d in (PREV, DAY, NEXT, NEXT3):
+        svc.open_day(d, create=True)
+    svc.patch_day_entry(NEXT3, _occ(svc, NEXT3, habit["id"])["entry_id"], dropped=True)
+
+    assert svc.update_habit(habit["id"], estimate_minutes=30)["estimate_minutes"] == 30
+
+    got = {d: _occ(svc, d, habit["id"])["estimate_minutes"]
+           for d in (LONG_PAST, PREV, DAY, NEXT, NEXT2, NEXT3)}
+    assert got == {
+        LONG_PAST: None,   # has run: a record, not a plan
+        PREV: 30,          # the grace day is still open
+        DAY: 30,
+        NEXT: 30,
+        NEXT2: 45,         # its own number, kept
+        NEXT3: None,       # declined: counts for nothing, so is given nothing
+    }
+    # One rule's rows, and only habit rows: the other habit's blanks and the
+    # day's task entry are untouched.
+    assert [_occ(svc, d, other["id"])["estimate_minutes"]
+            for d in (PREV, DAY, NEXT)] == [None, None, None]
+    assert [e["estimate_minutes"] for e in svc.open_day(DAY, create=False)["entries"]
+            if e["kind"] == "task"] == [None]
+
+
+def test_an_occurrence_estimate_fills_the_habits_other_blanks(svc):
+    """The other door onto the same fill. Tomorrow, already opened, would
+    otherwise keep asking the question today just answered. And a second answer
+    later moves the rule again without reaching back into the rows the first
+    one filled — by then those numbers are those days' own."""
+    habit = svc.create_habit(title="Read")
+    for d in (DAY, NEXT, NEXT2):
+        svc.open_day(d, create=True)
+
+    svc.patch_day_entry(NEXT, _occ(svc, NEXT, habit["id"])["entry_id"], estimate_minutes=10)
+    assert _rule(svc, habit["id"])["estimate_minutes"] == 10
+    assert [_occ(svc, d, habit["id"])["estimate_minutes"]
+            for d in (DAY, NEXT, NEXT2)] == [10, 10, 10]
+
+    svc.patch_day_entry(DAY, _occ(svc, DAY, habit["id"])["entry_id"], estimate_minutes=25)
+    assert _rule(svc, habit["id"])["estimate_minutes"] == 25
+    assert [_occ(svc, d, habit["id"])["estimate_minutes"]
+            for d in (DAY, NEXT, NEXT2)] == [25, 10, 10]
+    # A day minted afterwards starts from the newest answer.
+    assert _habits_on(svc.open_day(NEXT3, create=True))[0]["estimate_minutes"] == 25
+
+
+def test_a_declined_occurrence_or_a_day_that_has_run_teaches_nothing(svc, monkeypatch):
+    """Two rows whose number is that day's business alone.
+
+    A day that has run: REST can still estimate it — only the connector fences
+    a past-day estimate — but a number tidied onto last week is a record being
+    corrected, not a plan for tomorrow. A dropped row: it counts for nothing on
+    its own day, so it must not decide every day after it. "Dropped" is judged
+    as the row stands once the PATCH lands, so a body that drops and estimates
+    teaches nothing, and one that restores and estimates does teach.
+    """
+    habit = svc.create_habit(title="Read", estimate_minutes=20)
+    _pin_today(monkeypatch, svc, LONG_PAST)
+    past = _habits_on(svc.open_day(LONG_PAST, create=True))[0]
+    _pin_today(monkeypatch, svc, DAY)
+    today = _habits_on(svc.open_day(DAY, create=True))[0]
+    tomorrow = _habits_on(svc.open_day(NEXT, create=True))[0]
+
+    assert svc.patch_day_entry(
+        LONG_PAST, past["entry_id"], estimate_minutes=90)["estimate_minutes"] == 90
+    assert _rule(svc, habit["id"])["estimate_minutes"] == 20
+
+    svc.patch_day_entry(DAY, today["entry_id"], dropped=True)
+    assert svc.patch_day_entry(
+        DAY, today["entry_id"], estimate_minutes=50)["estimate_minutes"] == 50
+    assert _rule(svc, habit["id"])["estimate_minutes"] == 20
+
+    svc.patch_day_entry(NEXT, tomorrow["entry_id"], dropped=True, estimate_minutes=5)
+    assert _rule(svc, habit["id"])["estimate_minutes"] == 20
+
+    svc.patch_day_entry(DAY, today["entry_id"], dropped=False, estimate_minutes=35)
+    assert _rule(svc, habit["id"])["estimate_minutes"] == 35
+
+
+def test_yesterday_still_teaches_inside_the_grace(svc, monkeypatch):
+    """The same one-day grace minting and the rituals allow, for the same
+    reason: an evening browser west of the server sends yesterday's key for what
+    is, to its owner, still today. Estimating that row has to teach the rule,
+    or the feature stops working after dinner."""
+    habit = svc.create_habit(title="Read")
+    _pin_today(monkeypatch, svc, PREV)
+    occ = _habits_on(svc.open_day(PREV, create=True))[0]
+    _pin_today(monkeypatch, svc, DAY)                    # the server has moved on
+
+    svc.patch_day_entry(PREV, occ["entry_id"], estimate_minutes=40)
+    assert _rule(svc, habit["id"])["estimate_minutes"] == 40
+
+
+def test_an_occurrence_of_a_deleted_habit_can_still_be_estimated(svc):
+    """A dangling habit_id is the design — the row outlives its rule — so there
+    is no rule to teach, and that is not an error: the day's own write lands and
+    no habit is conjured back into existence."""
+    habit = svc.create_habit(title="Read")
+    occ = _habits_on(svc.open_day(DAY, create=True))[0]
+    assert svc.delete_habit(habit["id"]) is True
+
+    dto = svc.patch_day_entry(DAY, occ["entry_id"], estimate_minutes=30)
+    assert dto["estimate_minutes"] == 30 and dto["habit_id"] == habit["id"]
+    assert svc.list_habits() == [] and _count(svc, "habits") == 0
+
+
+def test_clearing_an_occurrence_clears_the_rule_and_no_other_day(svc):
+    """-1 on an occurrence passes through to the rule, as a task entry's clear
+    passes through to its sidecar: days minted from now on start blank. A clear
+    never reaches another day's number — that was copied, so it is that day's."""
+    habit = svc.create_habit(title="Read", estimate_minutes=20)
+    today = _habits_on(svc.open_day(DAY, create=True))[0]
+    svc.open_day(NEXT, create=True)
+
+    assert svc.patch_day_entry(
+        DAY, today["entry_id"], estimate_minutes=-1)["estimate_minutes"] is None
+    assert _rule(svc, habit["id"])["estimate_minutes"] is None
+    assert _occ(svc, NEXT, habit["id"])["estimate_minutes"] == 20
+    assert _habits_on(svc.open_day(NEXT2, create=True))[0]["estimate_minutes"] is None
+
+
+def test_teach_habit_false_keeps_an_estimate_to_its_day(svc):
+    """The switch the connector uses. The row takes the number; the rule and
+    every other row are exactly as they were."""
+    habit = svc.create_habit(title="Read")
+    today = _habits_on(svc.open_day(DAY, create=True))[0]
+    svc.open_day(NEXT, create=True)
+
+    dto = svc.patch_day_entry(DAY, today["entry_id"], estimate_minutes=50, teach_habit=False)
+    assert dto["estimate_minutes"] == 50
+    assert _rule(svc, habit["id"])["estimate_minutes"] is None
+    assert _occ(svc, NEXT, habit["id"])["estimate_minutes"] is None
+
+
+def test_the_connector_estimates_an_occurrence_for_that_day_only(svc, monkeypatch):
+    """A model may say how long today's "Read" will take; it may not decide how
+    long "Read" takes. The rule is the owner's standing decision, and the
+    connector reports those and never writes them — so neither the rule nor
+    tomorrow's blank moves.
+
+    The connector keeps its own clock (`McpApi._today`), which refuses a past
+    estimate; it is pinned to the same DAY as the service so the two agree
+    about which side of today this falls on.
+    """
+    api = McpApi(svc)
+    monkeypatch.setattr(api, "_today", lambda: DAY)
+    habit = svc.create_habit(title="Read")
+    today = _habits_on(svc.open_day(DAY, create=True))[0]
+    svc.open_day(NEXT, create=True)
+
+    out = api.update_day_entry(today["entry_id"], estimate_minutes=30)
+    assert out["estimate_minutes"] == 30 and out["day"] == DAY
+    assert _rule(svc, habit["id"])["estimate_minutes"] is None
+    assert _occ(svc, NEXT, habit["id"])["estimate_minutes"] is None
+
+
+def test_the_rule_and_what_it_fills_land_together_or_not_at_all(svc, monkeypatch):
+    """The connection is autocommit, so "one change" has to be a transaction on
+    purpose. Without one, a failure between the statements leaves the rule
+    saying 30 while the rows the same edit was meant to reach are still blank —
+    or, on the occurrence path, the rule taught by a number the row it was typed
+    on never took. The failure is injected at the LAST write of each path."""
+    habit = svc.create_habit(title="Read")
+    today = _habits_on(svc.open_day(DAY, create=True))[0]
+    svc.open_day(NEXT, create=True)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("database or disk is full")
+
+    real_fill = store.fill_habit_estimates
+    monkeypatch.setattr(store, "fill_habit_estimates", boom)
+    with pytest.raises(RuntimeError):
+        svc.update_habit(habit["id"], estimate_minutes=30)
+    assert _rule(svc, habit["id"])["estimate_minutes"] is None
+    monkeypatch.setattr(store, "fill_habit_estimates", real_fill)
+
+    real_update = store.update_day_entry
+    monkeypatch.setattr(store, "update_day_entry", boom)
+    with pytest.raises(RuntimeError):
+        svc.patch_day_entry(DAY, today["entry_id"], estimate_minutes=30)
+    monkeypatch.setattr(store, "update_day_entry", real_update)
+    assert _rule(svc, habit["id"])["estimate_minutes"] is None
+    assert [_occ(svc, d, habit["id"])["estimate_minutes"] for d in (DAY, NEXT)] == [None, None]
+
+    # And the connection is left usable: no transaction was stranded open.
+    svc.patch_day_entry(DAY, today["entry_id"], estimate_minutes=30)
+    assert _rule(svc, habit["id"])["estimate_minutes"] == 30
+    assert _occ(svc, NEXT, habit["id"])["estimate_minutes"] == 30
+
+
 # ── the guards ───────────────────────────────────────────────────────────────
 
 def test_a_client_cannot_hand_mint_an_occurrence(svc):
@@ -615,5 +877,27 @@ def test_an_occurrence_reaches_the_day_over_http(client):
         assert (mine[0]["kind"], mine[0]["source"], mine[0]["title"]) == ("habit", "habit", title)
         r = client.patch(f"/api/day/{day}/entries/{mine[0]['entry_id']}", json={"done": True})
         assert r.status_code == 200 and r.json()["done_at"]
+    finally:
+        client.delete(f"/api/habits/{habit['id']}")
+
+
+@pytest.mark.radicale
+def test_an_occurrence_estimate_reaches_the_habit_over_http(client):
+    """The Today row's estimate control PATCHes the ENTRY, and nothing else. The
+    habit behind it has to learn the number through that same route, or the
+    ritual asks again on the next day the rule runs — which is the bug this
+    closes, seen from the wire."""
+    day = "2027-04-09"                                   # a day not yet run
+    title = f"Read-{uuid.uuid4().hex[:8]}"
+    habit = client.post("/api/habits", json={"title": title}).json()   # every day
+    try:
+        entries = client.post(f"/api/day/{day}/open").json()["entries"]
+        mine = [e for e in entries if e["habit_id"] == habit["id"]]
+        assert len(mine) == 1 and mine[0]["estimate_minutes"] is None
+        r = client.patch(f"/api/day/{day}/entries/{mine[0]['entry_id']}",
+                         json={"estimate_minutes": 25})
+        assert r.status_code == 200 and r.json()["estimate_minutes"] == 25
+        listed = {h["id"]: h for h in client.get("/api/habits").json()}
+        assert listed[habit["id"]]["estimate_minutes"] == 25
     finally:
         client.delete(f"/api/habits/{habit['id']}")
