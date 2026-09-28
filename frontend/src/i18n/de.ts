@@ -961,7 +961,10 @@ export const de: Catalogue = {
   'today.weekCountThat': '{done} von {total} in jener Woche bis dahin',
   'today.movedTo': '→ {day}',
   'today.removeFromToday': '{entry} von heute entfernen',
-  'habit.sheet.blurb': 'Eine Gewohnheit ist eine Regel, die eine Zeile auf deinen Tag setzt — und dabei nie zur Aufgabe wird und diese App nie verlässt.',
+  'habit.sheet.blurb': 'Eine Gewohnheit ist eine Regel, die eine Zeile auf deinen Tag '
+    + 'setzt — und dabei nie zur Aufgabe wird und diese App nie verlässt. Du schätzt '
+    + 'sie einmal, hier oder in der Zeile eines beliebigen Tages, und jeder Tag, an '
+    + 'dem sie vorkommt, beginnt mit dieser Schätzung.',
   'habit.none': 'Noch keine Gewohnheiten.',
   'habit.newAria': 'Neue Gewohnheit',
   'habit.addPlaceholder': 'Gewohnheit hinzufügen — „lesen“, „dehnen“…',
@@ -975,6 +978,9 @@ export const de: Catalogue = {
   'habit.dayFor': '{day} für {habit}',
   'habit.everyDay': 'Jeden Tag',
   'habit.paused': 'Pausiert',
+  'habit.estimateAria': 'Wie lange {habit} dauert',
+  'habit.estimatedAt': '{habit} dauert jedes Mal {amount} — ändern',
+  'habit.minutesFor': 'Minuten für {habit}, jedes Mal',
   'habit.deleteWarn': 'Die Regel kommt nicht mehr wieder. Jeder Tag, an dem sie schon lief, behält die Zeile, die sie dort gesetzt hat — ein vergangener Tag ist ein abgeschlossener Bericht, keine Hochrechnung der heutigen Regeln.',
   // ── the shell's own messages ────────────────────────────────────────────────
   'app.settingsLoadFailed': 'Deine Einstellungen konnten nicht geladen werden — Änderungen werden erst gespeichert, wenn das hier neu lädt',

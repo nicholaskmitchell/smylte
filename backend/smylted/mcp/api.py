@@ -1391,8 +1391,13 @@ class McpApi:
             # and no second `day_updated` for every other tab to refetch on.
             if (estimate_minutes is not None
                     and entry["estimate_minutes"] != estimate_minutes):
+                # Only ever a task or a note here, so `teach_habit` changes
+                # nothing today; it is passed so that no call from this surface
+                # can teach a habit's rule, whatever the add comes to return
+                # (see `update_day_entry`).
                 entry = self._svc.patch_day_entry(
-                    resolved, entry["entry_id"], estimate_minutes=estimate_minutes)
+                    resolved, entry["entry_id"], estimate_minutes=estimate_minutes,
+                    teach_habit=False)
             return entry
         except ValueError as exc:
             raise ToolError(str(exc)) from None
@@ -1514,9 +1519,17 @@ class McpApi:
                 raise ToolError(self._no_entry(entry_id, resolved))
             return moved
         try:
+            # `teach_habit=False`: estimating a habit occurrence from here sets
+            # THAT DAY only. In the app the same number also teaches the habit's
+            # rule, but the rule is the owner's standing decision, and this
+            # surface reports those and never writes them — the third rule in
+            # the notes that open this section, the one that gives habits no
+            # tool here. A model's guess at how long "Read" takes, stored on the
+            # rule, would be copied onto every morning after it as though the
+            # owner had said it.
             entry = self._svc.patch_day_entry(
                 resolved, entry_id, done=done, dropped=dropped, position=position,
-                estimate_minutes=estimate_minutes,
+                estimate_minutes=estimate_minutes, teach_habit=False,
             )
         except ValueError as exc:
             raise ToolError(

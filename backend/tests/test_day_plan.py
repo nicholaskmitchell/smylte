@@ -929,8 +929,10 @@ def test_saying_something_about_a_day_does_not_open_it(svc):
 #
 # The rule these pin: the ENTRY is what its day counts, and the estimate on it
 # is a COPY taken when the row was made. What a task, a note or a habit
-# "remembers" only ever decides what the NEXT entry starts at — so re-estimating
-# something today can never rewrite what a finished day said the work would take.
+# "remembers" decides what the NEXT entry starts at — and, for a habit, also
+# answers the blanks already waiting on days still open (test_habits.py pins
+# that) — so re-estimating something today can never rewrite a number a day
+# already holds, nor anything a finished day said the work would take.
 
 
 def test_an_estimate_is_set_and_cleared_on_the_entry(svc):
@@ -1074,8 +1076,9 @@ def test_a_habit_occurrence_copies_the_estimate_off_its_rule(svc):
                  if e["kind"] == "habit")
     assert entry["estimate_minutes"] == 20
 
-    # Re-estimating the RULE leaves the day that already ran it alone, exactly as
-    # renaming it leaves that day's title alone.
+    # Re-estimating the RULE leaves a row that already holds a number alone —
+    # even today's, which is still open — exactly as renaming it leaves that
+    # day's title alone. Only a BLANK is filled (test_habits.py).
     hb = svc.list_habits()[0]
     svc.update_habit(hb["id"], estimate_minutes=90)
     again = next(e for e in svc.open_day(today, create=False)["entries"]

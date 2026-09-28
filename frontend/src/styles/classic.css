@@ -56,7 +56,6 @@
   --row-inset: 0px;
   --row-divider: var(--rule-faint);
   --row-hover: var(--bg-elev);
-  --habits-close: transparent;
   --habits-close-row: var(--rule);
   --chip-bg: none;
   --chip-edge: var(--rule);

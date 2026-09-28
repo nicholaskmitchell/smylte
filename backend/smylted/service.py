@@ -2767,10 +2767,19 @@ class SmylteService:
         and another for what may be said about it — would be two places to get
         the timezone reasoning right and one place to get it wrong.
         """
-        return (
-            date.fromisoformat(day)
-            >= date.fromisoformat(self._today()) - timedelta(days=_HABIT_MINT_GRACE_DAYS)
-        )
+        return date.fromisoformat(day) >= self._writable_floor()
+
+    def _writable_floor(self) -> date:
+        """The earliest day still open to the owner: today, less the grace.
+
+        The ONE statement of the window that `_ritual_writable` and
+        `_habit_minting_allowed` both ask about, and that a habit estimate's
+        fill (`_fill_habit_estimates`) starts from. They used to each carry
+        their own copy of this subtraction; a third copy for the fill would have
+        been the one to drift, and a fill reaching a day the ritual calls closed
+        would write into exactly the record the other two exist to protect.
+        """
+        return date.fromisoformat(self._today()) - timedelta(days=_HABIT_MINT_GRACE_DAYS)
 
     def _habit_minting_allowed(self, day: str) -> bool:
         """May `day` be given habit occurrences at all?
@@ -2798,10 +2807,7 @@ class SmylteService:
         it costs only this — a genuinely stale tab, left open overnight, may add
         yesterday's habit rows to yesterday.
         """
-        return (
-            date.fromisoformat(day)
-            >= date.fromisoformat(self._today()) - timedelta(days=_HABIT_MINT_GRACE_DAYS)
-        )
+        return date.fromisoformat(day) >= self._writable_floor()
 
     def _today(self) -> str:
         """The owner's calendar day, not necessarily the server's.
@@ -2954,7 +2960,7 @@ class SmylteService:
         self, day: str, entry_id: str, *,
         done: bool | None = None, dropped: bool | None = None,
         position: float | None = None, estimate_minutes: int | None = None,
-        capped: bool | None = None,
+        capped: bool | None = None, teach_habit: bool = True,
     ) -> dict[str, Any] | None:
         """Tick, drop, reposition, estimate or cap one entry. None for an
         entry_id this day does not have (the route turns that into a 404).
@@ -2974,6 +2980,13 @@ class SmylteService:
         Sending it for a TASK entry raises ValueError (routes → 422): a task
         already has one answer, its VTODO STATUS, that every client on the
         account can see. Dropping and repositioning apply to every entry.
+
+        An estimate on a task entry or a habit occurrence also TEACHES what
+        stands behind it — the task's sidecar, or the habit's rule — so the next
+        day starts from this answer instead of asking again (the comment at the
+        write says exactly when). `teach_habit=False` keeps the habit half of
+        that to this one day, and exists for the connector, which never writes
+        the owner's standing decisions (`mcp/api.py`); the app leaves it on.
         """
         day = day_key(day)
         fields: dict[str, object] = {}
@@ -3028,23 +3041,70 @@ class SmylteService:
                     "done applies to a note or habit entry; a task's doneness "
                     "is its VTODO STATUS — complete the task instead"
                 )
-            # Estimating a TASK also teaches the task, so the next day that
-            # plans it starts from this answer instead of asking again. Only a
-            # task: a note and a habit occurrence have no sidecar row to teach —
-            # a note is remembered by the carry, a habit by its rule.
-            #
-            # WRITE-through, never read-through, and that asymmetry is the whole
-            # of it. The entry is what its day counts; this only moves where the
-            # NEXT entry starts. Joining instead would make re-estimating in
-            # March rewrite what January's plan said the work would take, which
-            # is the same mistake a habit occurrence avoids by copying its title.
-            if ("estimate_minutes" in fields and row["kind"] == "task"
-                    and row["collection_href"] and row["uid"]):
-                store.set_sidecar(
-                    self._conn, row["collection_href"], row["uid"],
-                    estimated_minutes=fields["estimate_minutes"],
-                )
-            row = store.update_day_entry(self._conn, day, entry_id, **fields)
+            # One transaction for the entry and whatever the estimate teaches.
+            # The connection is autocommit (see `store.tx`), so without it a
+            # failure between the statements would leave the rule or the sidecar
+            # holding the new number while the row the owner actually typed it
+            # on still showed the old one — the one outcome that reads as the
+            # edit not having happened.
+            with store.tx(self._conn):
+                # Estimating an entry also teaches what stands behind it, so the
+                # next day starts from this answer instead of asking again. A
+                # TASK teaches its sidecar row. A HABIT occurrence teaches its
+                # rule, which had no door from here before: the rule was only
+                # editable on the habits screen, so estimating "Read" on Today
+                # set that one day and the ritual asked again every morning.
+                # A note teaches nothing — there is nothing behind it, and the
+                # carry is what remembers it.
+                #
+                # WRITE-through, never read-through, and that asymmetry is the
+                # whole of it. The entry is what its day counts; this only moves
+                # where the NEXT entry starts (and, for a habit, answers the
+                # blanks already waiting on days still open, which no day has
+                # said anything in). Joining instead would make re-estimating in
+                # March rewrite what January's plan said the work would take,
+                # which is the same mistake a habit occurrence avoids by copying
+                # its title.
+                if ("estimate_minutes" in fields and row["kind"] == "task"
+                        and row["collection_href"] and row["uid"]):
+                    store.set_sidecar(
+                        self._conn, row["collection_href"], row["uid"],
+                        estimated_minutes=fields["estimate_minutes"],
+                    )
+                # The habit arm asks three more things than the task arm. Each
+                # names a number that is that day's business alone and must not
+                # become the standing one:
+                #
+                # - `teach_habit`: the caller may keep it to this day. The
+                #   connector does, because the rule is the owner's standing
+                #   decision and nothing a model says may write one.
+                # - not dropped once THIS patch has landed (a PATCH can drop or
+                #   restore in the same body): a row the owner declined counts
+                #   for nothing on its day, so what it says about duration
+                #   should not decide every day after it either.
+                # - a day still open (`_ritual_writable`): a day that has run
+                #   teaches nothing. REST reaches past days — only the connector
+                #   fences a past-day estimate — and a number tidied onto last
+                #   week is a record being corrected, not a plan for tomorrow.
+                #
+                # A clear passes through as None, exactly as the task arm's
+                # does: the rule forgets, so days minted from now on start blank,
+                # and no other day's value is touched. A set also fills this
+                # habit's other BLANK occurrences on days still open — tomorrow,
+                # already opened, would otherwise keep asking. A dangling
+                # habit_id (the rule was deleted; kept on the row by design) makes
+                # `update_habit` answer None and the day's own write goes ahead
+                # alone.
+                elif ("estimate_minutes" in fields and row["kind"] == "habit"
+                        and row["habit_id"] and teach_habit
+                        and fields.get("dropped_at", row["dropped_at"]) is None
+                        and self._ritual_writable(day)):
+                    minutes = fields["estimate_minutes"]
+                    taught = store.update_habit(
+                        self._conn, row["habit_id"], {"estimate_minutes": minutes})
+                    if taught is not None:
+                        self._fill_habit_estimates(row["habit_id"], minutes)
+                row = store.update_day_entry(self._conn, day, entry_id, **fields)
             dto = self._day_entry_dto(row)
         # Only when something was actually written: a PATCH with an empty body
         # is a read, and an SSE event for it would have every other tab refetch
@@ -3191,9 +3251,17 @@ class SmylteService:
 
     # ── habits (the rules that put entries on a day) ─────────────────────────
     #
-    # Four methods, and between them they are a habit's entire lifecycle. None of
-    # them writes to day_plan: an occurrence is minted by `_habit_entries_for`
-    # when a day is opened, and a day already written is nobody's to rewrite.
+    # Four methods, and between them they are a habit's entire lifecycle. An
+    # occurrence is minted by `_habit_entries_for` when a day is opened, and what
+    # a day already says is nobody's to rewrite — so a rename, a reschedule, a
+    # pause or a delete leaves every existing day_plan row exactly as it is.
+    #
+    # An ESTIMATE is the one exception, and it is narrow: it fills the
+    # occurrences on days still open (`_writable_floor` onward) that have no
+    # estimate of their own, and nothing else. A blank is not something a day
+    # said — it is the question the ritual will otherwise ask again — so filling
+    # one rewrites nothing. The same fill runs when an estimate reaches the rule
+    # the other way, typed on an occurrence (`patch_day_entry`).
     #
     # Every write publishes {"type": "day_updated", …} and NEVER
     # settings_updated. App.tsx ignores settings_updated for its `rev` bump on
@@ -3214,12 +3282,30 @@ class SmylteService:
             "paused_at": row["paused_at"],
             "position": row["position"],
             # What one run of this is expected to take. Copied onto every
-            # occurrence at mint time, exactly as the title is — so this only
-            # ever decides what FUTURE days start at, and changing it leaves
-            # last Tuesday saying what last Tuesday said.
+            # occurrence at mint time, exactly as the title is, and setting it
+            # also fills the occurrences already on days still open that have
+            # no number yet — so it decides what today and every later day start
+            # at, while last Tuesday keeps saying what last Tuesday said and a
+            # day given its own number keeps that.
             "estimate_minutes": row["estimate_minutes"],
             "created_at": row["created_at"],
         }
+
+    def _fill_habit_estimates(self, habit_id: str, minutes: int | None) -> None:
+        """Give `minutes` to this habit's unestimated occurrences on every day
+        still open. Called under the lock, inside the caller's transaction —
+        the rule write it follows must not land without it, or the other way
+        round.
+
+        A clear (None) fills nothing and UN-fills nothing. The rows already
+        holding a number got it either from the owner or from the rule as it
+        stood when they were minted, and in both cases it is that day's own;
+        forgetting the rule's number is a statement about days not yet minted.
+        """
+        if minutes is None:
+            return
+        store.fill_habit_estimates(
+            self._conn, habit_id, self._writable_floor().isoformat(), minutes)
 
     def list_habits(self) -> list[dict[str, Any]]:
         """Every habit in position order, PAUSED ONES INCLUDED — this is the list
@@ -3264,20 +3350,33 @@ class SmylteService:
         paused: bool | None = None, position: float | None = None,
         estimate_minutes: int | None = None,
     ) -> dict[str, Any] | None:
-        """Rename, reschedule, pause/resume or reorder one habit. None for an id
-        that does not exist (the route turns that into a 404).
+        """Rename, reschedule, pause/resume, reorder or estimate one habit. None
+        for an id that does not exist (the route turns that into a 404), and
+        nothing is written for one.
 
         `paused` is a tri-state boolean for the reason `patch_day_entry`'s `done`
         is one: None means "the client did not send this field", and False is a
         real value — resuming. Pausing stamps `paused_at`, which hides the habit
         from FUTURE snapshots and top-ups only. The occurrences it has already put
-        on past days are ordinary day_plan rows that nothing in this section can
-        reach, so a paused habit's history reads exactly as it did.
+        on past days are ordinary day_plan rows that pausing never touches, so a
+        paused habit's history reads exactly as it did.
 
         A rename works the same way, and deliberately: an occurrence copies the
         title at the moment it is minted, so yesterday's row still says what the
         owner actually planned yesterday. Only occurrences minted from now on
         carry the new name.
+
+        An ESTIMATE is the one field that reaches rows already minted, and only
+        rows with nothing of their own to say: it fills every occurrence of this
+        habit that is unestimated, not dropped, and on a day still open
+        (`_writable_floor` — today, less the grace). Without that, estimating
+        "Read" on the habits screen at noon would reach tomorrow and not the row
+        already sitting on today. A row that holds a number keeps it, whether
+        the owner typed it or it was copied off the rule as it stood at mint
+        time — that is copy-never-join again — and a clear (-1) fills nothing
+        and un-fills nothing: only days minted afterwards start blank. The rule
+        and the fill share one transaction, so the rule can never say 30 while
+        today's row, which the same edit was meant to reach, is still blank.
         """
         fields: dict[str, object] = {}
         if title is not None:
@@ -3299,13 +3398,19 @@ class SmylteService:
                 None if estimate_minutes < 0 else int(estimate_minutes)
             )
         with self._lock:
-            row = store.update_habit(self._conn, habit_id, fields)
-            if row is None:
-                return None
+            with store.tx(self._conn):
+                row = store.update_habit(self._conn, habit_id, fields)
+                if row is None:
+                    return None
+                if "estimate_minutes" in fields:
+                    self._fill_habit_estimates(habit_id, fields["estimate_minutes"])
             dto = self._habit_dto(row)
         # Only when something was actually written — a PATCH with an empty body
         # is a read, and an event for it would have every other tab refetch for
-        # nothing (`patch_day_entry` draws the same line).
+        # nothing (`patch_day_entry` draws the same line). One event, keyed to
+        # today, even when the fill also reached tomorrow or yesterday: the SPA
+        # refetches on an event's type and never reads its day, so a second one
+        # would only be a second refetch.
         if fields:
             self._publish({"type": "day_updated", "day": self._today()})
         return dto

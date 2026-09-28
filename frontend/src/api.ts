@@ -626,9 +626,11 @@ export interface DayEntry {
   //
   // A COPY, never a join. A task remembers its last estimate in the sidecar, a
   // habit remembers one on its rule, and a note is remembered by the carry — but
-  // all three only decide what a NEW entry starts at. Once the row exists the
-  // row is what its day counts, which is what stops re-estimating something in
-  // March from rewriting what January's plan said it would take.
+  // all three only decide what an entry STARTS at: a new one, or, for a habit, an
+  // occurrence on a day still open that nobody has estimated yet (see
+  // `Habit.estimate_minutes`). Once the row carries a number the row is what its
+  // day counts, which is what stops re-estimating something in March from
+  // rewriting what January's plan said it would take.
   estimate_minutes: number | null
   /** Seconds a focus session actually spent on this row, or null when no
    *  session ever did. A MEASUREMENT beside the guess above, credited by the
@@ -742,7 +744,14 @@ export interface PatchDayEntryBody {
   /** Minutes, or **-1 to clear**. The sentinel is explicit because an int has no
    *  spare falsy value to borrow: 0 is a legitimate estimate and an omitted key
    *  already means "not asked about". The backend bounds this at [-1, 1440], so
-   *  -1 is the only negative that can arrive. */
+   *  -1 is the only negative that can arrive.
+   *
+   *  On more than this row, for two kinds. A task's estimate is remembered for
+   *  the next day it is planned on, and a habit occurrence's — on a day still
+   *  open — is written to its RULE, so estimating "Read" on Today answers every
+   *  morning after it rather than only this one; see `Habit.estimate_minutes`.
+   *  The connector sends this same field and teaches no rule with it: a rule is
+   *  the owner's to change. */
   estimate_minutes?: number
   /** Stop at the estimate (true) or run until ticked (false). Refused on a
    *  day that has run — a cap is how a row WILL be worked. */
@@ -833,7 +842,15 @@ export interface Habit {
   position: number | null
   /** How long one run of this takes. The RULE remembers it and every occurrence
    *  is minted with a copy, exactly as the title is — so a habit is estimated
-   *  once rather than every morning, and changing it leaves past days alone. */
+   *  once rather than every morning.
+   *
+   *  Once, WHEREVER the owner does it: here through `patchHabit`, or on any of
+   *  its occurrences in the app, which writes the number through to this rule
+   *  (`PatchDayEntryBody.estimate_minutes`). Either way the occurrences already
+   *  minted on days still open that carry no estimate take the new one too, so
+   *  a tomorrow opened in advance does not go on asking. A day that already has
+   *  a number keeps it, and a closed day is never touched — a past day is the
+   *  record of what was planned then, not a view of today's rules. */
   estimate_minutes: number | null
   created_at: string
 }
@@ -869,7 +886,10 @@ export interface PatchHabitBody {
   position?: number
   /** Minutes, or -1 to clear — the same sentinel and bounds as
    *  `PatchDayEntryBody.estimate_minutes`, so a duration is spelled one way
-   *  wherever this app takes one. */
+   *  wherever this app takes one. A number also fills the unestimated
+   *  occurrences on days still open (see `Habit.estimate_minutes`); a clear
+   *  reaches none of them, since blank is what those already are, and only
+   *  stops the days minted from now on starting with a number. */
   estimate_minutes?: number
 }
 

@@ -1143,9 +1143,18 @@ export function TodayView({
    * a task, a note and a habit occurrence are all things that cost time.
    *
    * `null` clears, and the wire spells that -1 — an int has no spare falsy value
-   * to mean "unset", because 0 is a real estimate. The translation happens here,
-   * at the one call site, rather than leaking the sentinel into the component
-   * that collects the number.
+   * to mean "unset", because 0 is a real estimate. The translation happens at
+   * the call site — here for a row, and in `HabitEditRow` for a habit's rule —
+   * rather than leaking the sentinel into the component that collects the
+   * number.
+   *
+   * On a habit occurrence this is more than one row's write: the server also
+   * teaches the number to the habit's rule and gives it to that habit's other
+   * unestimated days still open, so the owner is not asked again tomorrow. Only
+   * THIS row is painted here. The rest is the server's to decide — which days
+   * are open, which rows are blank — and reaches the screen the way every
+   * other write does, through `day_updated` and the refetch it provokes,
+   * rather than as a second guess at that rule written on this side.
    */
   const setEstimate = useCallback(async (e: DayEntry, minutes: number | null) => {
     token.current += 1
@@ -3564,6 +3573,17 @@ function CalendarStrip({ events, day, loaded, styleOf }: {
  *  owner watching a number they typed come back rejected. */
 const MAX_ESTIMATE = 1440
 
+/** What an estimate control is called in each of its three states, given what
+ *  it estimates. See `EstimateCell`'s `names`. */
+interface EstimateNames {
+  /** The button, while nothing is estimated. */
+  unset: (label: string) => string
+  /** The button once something is, handed the amount already formatted. */
+  set: (label: string, amount: string) => string
+  /** The field the button opens into. */
+  input: (label: string) => string
+}
+
 /**
  * One row's estimate: a quiet reading that becomes an input when pressed.
  *
@@ -3576,19 +3596,69 @@ const MAX_ESTIMATE = 1440
  * Commits on blur AND on Enter, reverts on Escape. That is `HabitEditRow`'s
  * rename, deliberately: the two are the same interaction and a second set of
  * keys for it would be a second thing to learn.
+ *
+ * TWO homes, one control: every row on the day, and each rule in the habits
+ * sheet, where the estimate is the one every day of that habit starts from. The
+ * sheet's copy is this component rather than a second one written for it,
+ * because an estimate that commits on Enter in one place and only on blur in
+ * the other — or clamps in one and not the other — is two things to learn for
+ * one gesture, and the second copy is the one that drifts.
  */
-function EstimateCell({ minutes, readOnly, label, onChange }: {
+function EstimateCell({ minutes, readOnly, disabled, label, names, onChange }: {
   minutes: number | null
   /** The day has finished, so this is a record and not a control. */
   readOnly?: boolean
+  /** A control, but not one that can be pressed YET: what it would write names
+   *  something the server has not heard of. The habits sheet's pending row —
+   *  see `HabitEditRow`. Distinct from `readOnly`, which is a record and never
+   *  becomes anything else. */
+  disabled?: boolean
   /** What this estimates, for the control's accessible name. */
   label: string
+  /** How the control names itself around `label`, when the day row's "Estimate
+   *  X" family would say the wrong thing — or the right thing TWICE. The sheet
+   *  opens over the day without making it inert, so its control for a habit
+   *  and today's row for the same habit are on screen together, and two
+   *  controls sharing one accessible name are two a screen reader cannot tell
+   *  apart. Omitted everywhere on the day, which keeps those names as they were. */
+  names?: EstimateNames
   /** Minutes, or null to clear. */
   onChange: (next: number | null) => void
 }) {
   const tr = useT()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
+  // What the field opened with. A field left as it opened says nothing, so
+  // closing it writes nothing — and that is not only a saved round trip. The
+  // number it opened with is only what THIS screen knew at the press, and on
+  // the habits sheet that can be the disk mirror's stale copy of a rule the day
+  // row has since taught: pressed before the fetch lands, the field opens empty
+  // over a rule that says 30, and a blur that committed "empty" would clear the
+  // rule — putting back the exact bug the sheet's control exists to close. A
+  // second tab's refetch can do the same to a day row. Only a change is sent.
+  const opened = useRef('')
+  // Enter and Escape close the field from the keyboard, so focus goes back to
+  // the control that opened it; otherwise the field unmounts under the focus
+  // and it falls to <body> — outside the habits sheet, which is a modal, and
+  // off the row a keyboard user was working down. A blur is the other way out
+  // and is left alone: focus has already gone where the owner sent it.
+  const refocus = useRef(false)
+  const button = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (editing || !refocus.current) return
+    refocus.current = false
+    button.current?.focus()
+  }, [editing])
+  // Functions of the label rather than finished strings, so `label` stays the
+  // one statement of WHAT is estimated and a caller supplies only the phrasing
+  // around it. Each is a literal `tr('…')` call at its source, which is what
+  // keeps them inside `i18n.test.ts`'s sweep of the keys the code asks for — a
+  // key passed around as data is one a typo can hide in.
+  const say: EstimateNames = names ?? {
+    unset: (l) => tr('today.estimateAria', { entry: l }),
+    set: (l, amount) => tr('today.estimatedAt', { entry: l, amount }),
+    input: (l) => tr('today.minutesFor', { entry: l }),
+  }
 
   // A finished day shows what was estimated and offers no way to change it —
   // the same line every other control on this row draws. Nothing at all when
@@ -3602,11 +3672,17 @@ function EstimateCell({ minutes, readOnly, label, onChange }: {
 
   if (!editing) {
     return (
-      <button type="button" className={`today-est mono ${minutes == null ? 'unset' : ''}`}
+      <button type="button" ref={button}
+        className={`today-est mono ${minutes == null ? 'unset' : ''}`}
+        disabled={disabled}
         aria-label={minutes == null
-          ? tr('today.estimateAria', { entry: label })
-          : tr('today.estimatedAt', { entry: label, amount: fmtDuration(minutes) })}
-        onClick={() => { setDraft(minutes == null ? '' : String(minutes)); setEditing(true) }}>
+          ? say.unset(label)
+          : say.set(label, fmtDuration(minutes))}
+        onClick={() => {
+          opened.current = minutes == null ? '' : String(minutes)
+          setDraft(opened.current)
+          setEditing(true)
+        }}>
         {minutes == null ? tr('today.est') : fmtDuration(minutes)}
       </button>
     )
@@ -3614,6 +3690,7 @@ function EstimateCell({ minutes, readOnly, label, onChange }: {
 
   const commit = () => {
     setEditing(false)
+    if (draft === opened.current) return
     const raw = draft.trim()
     // An emptied field CLEARS, which is the only way back to "nobody said" and
     // is why the wire needed a sentinel for it at all.
@@ -3630,15 +3707,21 @@ function EstimateCell({ minutes, readOnly, label, onChange }: {
   return (
     <input className="input today-est-input" type="number" autoFocus
       min={0} max={MAX_ESTIMATE} step={5} value={draft}
-      aria-label={tr('today.minutesFor', { entry: label })}
+      aria-label={say.input(label)}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') { e.preventDefault(); commit() }
+        if (e.key === 'Enter') { e.preventDefault(); refocus.current = true; commit() }
         // Escape abandons the edit. It does NOT close anything above this —
         // `useEscape` is bound to the window and would take the habits sheet
-        // with it, so the propagation stop is load-bearing rather than tidy.
-        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setEditing(false) }
+        // with it, whether this is a day row behind the sheet or the sheet's
+        // own copy inside it, so the propagation stop is load-bearing rather
+        // than tidy.
+        if (e.key === 'Escape') {
+          e.preventDefault(); e.stopPropagation()
+          refocus.current = true
+          setEditing(false)
+        }
       }} />
   )
 }
@@ -4012,15 +4095,20 @@ const daysOn = (days: string): Set<string> =>
  * the click and the reply.
  *
  * THE ONE PLACE the wire's shape and the row's are converted between, and the
- * conversion is not the identity: pausing is a BOOLEAN on the body and a STAMP
- * on the row. The stand-in stamp is local, exactly as `toggleEntry`'s `done_at`
- * is, and the server's own is what the row settles on a moment later — nothing
- * reads the value, only whether it is there (`paused` is `!!paused_at`).
+ * conversion is not the identity in two places. Pausing is a BOOLEAN on the
+ * body and a STAMP on the row: the stand-in stamp is local, exactly as
+ * `toggleEntry`'s `done_at` is, and the server's own is what the row settles on
+ * a moment later — nothing reads the value, only whether it is there (`paused`
+ * is `!!paused_at`). And a cleared estimate is -1 on the body and null on the
+ * row, because the wire needed a sentinel for "unset" and the row has one
+ * already; painting the -1 as it came would put a negative duration on screen,
+ * and flooring it at 0 would read as "takes no time", which is a real estimate
+ * and the opposite of the one just made.
  *
  * An omitted field is left alone, which is what the endpoint does with it too.
  * `undefined` is the only test that can tell "not asked about" from "set to
- * false", because `paused: false` is a real value — resuming. See
- * `PatchHabitBody`.
+ * false", because `paused: false` is a real value — resuming — and
+ * `estimate_minutes: 0` is one too. See `PatchHabitBody`.
  */
 const applyPatch = (h: Habit, body: PatchHabitBody): Habit => ({
   ...h,
@@ -4030,18 +4118,23 @@ const applyPatch = (h: Habit, body: PatchHabitBody): Habit => ({
   ...(body.paused !== undefined
     ? { paused_at: body.paused ? h.paused_at ?? new Date().toISOString() : null }
     : {}),
+  ...(body.estimate_minutes !== undefined
+    ? { estimate_minutes: body.estimate_minutes < 0 ? null : body.estimate_minutes }
+    : {}),
 })
 
 /**
- * Where habits are made, renamed, rescheduled, paused and deleted.
+ * Where habits are made, renamed, rescheduled, estimated, paused and deleted.
  *
  * It edits RULES, not a day, so it holds none of the day's state and writes
  * none of it. What it changes reaches the screen behind it the way every other
  * write in this app does: the server publishes `day_updated`, `rev` bumps, and
  * the view re-opens the day — which is also what mints today's occurrence of a
  * habit created this morning, since opening a day tops up the rows its rules are
- * owed. Re-fetching the day from in here as well would be a second path for one
- * signal, and the two would drift.
+ * owed, and what carries an estimate set here onto today's row when that row
+ * had none, since the server fills an unestimated occurrence from its rule in
+ * the same write. Re-fetching the day from in here as well would be a second
+ * path for one signal, and the two would drift.
  *
  * The dialog conventions are the ones every other overlay in this app keeps —
  * `.overlay` + `.modal`, `aria-modal`, a ✕, a scrim that closes on a press AND
@@ -4257,8 +4350,9 @@ function HabitsSheet({ rev, guard, onClose }: {
   )
 }
 
-/** One habit's rule: its name, the days it comes up on, and the two things that
- *  can be done to it that a past day must survive. */
+/** One habit's rule: its name, the days it comes up on, how long it takes each
+ *  time, and the two things that can be done to it that a past day must
+ *  survive. */
 function HabitEditRow({ habit, pending = false, onPatch, onDelete }: {
   habit: Habit
   /** This row is a habit whose create is still in flight, painted under an id
@@ -4337,7 +4431,11 @@ function HabitEditRow({ habit, pending = false, onPatch, onDelete }: {
           // Enter commits without leaving the field. There is deliberately no
           // Escape-to-revert here: Escape closes the sheet, as it closes every
           // other dialog in this app, and one control quietly meaning something
-          // else is worse than not offering the shortcut at all.
+          // else is worse than not offering the shortcut at all. The estimate
+          // below DOES take Escape, and is not that exception: it is a field
+          // only because it was pressed into one, so Escape leaves the edit the
+          // press opened — as it does on every day row — while this name is a
+          // field all the time and has no edit to leave but the sheet.
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); rename() } }} />
         <button type="button" className="btn ghost" aria-pressed={paused}
           disabled={pending}
@@ -4375,6 +4473,28 @@ function HabitEditRow({ habit, pending = false, onPatch, onDelete }: {
             when the habit carries no restriction. */}
         {!habit.days && <span className="label habit-every">{tr('habit.everyDay')}</span>}
         {paused && <span className="label habit-paused">{tr('habit.paused')}</span>}
+        {/* The RULE's estimate: what every day this habit comes up on starts
+            with. It is the day row's control and not a lookalike — see
+            `EstimateCell` — named apart from it because that row is still on
+            screen behind this sheet, and "Estimate Read" twice is two controls
+            a screen reader cannot tell apart. The wrapper is what `.habit-est`
+            pushes to the end of the line, whichever of button or field is in it.
+
+            Cleared is -1 on the wire, translated here as `setEstimate`
+            translates it for a row: the control speaks null, the endpoint
+            speaks the sentinel, and `applyPatch` turns it back. Disabled with
+            everything else while the rule is pending — its id is one only this
+            browser knows, so the PATCH would be a 404. */}
+        <span className="habit-est">
+          <EstimateCell minutes={habit.estimate_minutes} disabled={pending}
+            label={habit.title}
+            names={{
+              unset: (h) => tr('habit.estimateAria', { habit: h }),
+              set: (h, amount) => tr('habit.estimatedAt', { habit: h, amount }),
+              input: (h) => tr('habit.minutesFor', { habit: h }),
+            }}
+            onChange={(next) => onPatch({ estimate_minutes: next ?? -1 })} />
+        </span>
       </div>
       {confirming && (
         <p className="habit-warn" role="status">
