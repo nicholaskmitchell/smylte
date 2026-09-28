@@ -3628,6 +3628,27 @@ function EstimateCell({ minutes, readOnly, disabled, label, names, onChange }: {
   const tr = useT()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
+  // What the field opened with. A field left as it opened says nothing, so
+  // closing it writes nothing — and that is not only a saved round trip. The
+  // number it opened with is only what THIS screen knew at the press, and on
+  // the habits sheet that can be the disk mirror's stale copy of a rule the day
+  // row has since taught: pressed before the fetch lands, the field opens empty
+  // over a rule that says 30, and a blur that committed "empty" would clear the
+  // rule — putting back the exact bug the sheet's control exists to close. A
+  // second tab's refetch can do the same to a day row. Only a change is sent.
+  const opened = useRef('')
+  // Enter and Escape close the field from the keyboard, so focus goes back to
+  // the control that opened it; otherwise the field unmounts under the focus
+  // and it falls to <body> — outside the habits sheet, which is a modal, and
+  // off the row a keyboard user was working down. A blur is the other way out
+  // and is left alone: focus has already gone where the owner sent it.
+  const refocus = useRef(false)
+  const button = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (editing || !refocus.current) return
+    refocus.current = false
+    button.current?.focus()
+  }, [editing])
   // Functions of the label rather than finished strings, so `label` stays the
   // one statement of WHAT is estimated and a caller supplies only the phrasing
   // around it. Each is a literal `tr('…')` call at its source, which is what
@@ -3651,12 +3672,17 @@ function EstimateCell({ minutes, readOnly, disabled, label, names, onChange }: {
 
   if (!editing) {
     return (
-      <button type="button" className={`today-est mono ${minutes == null ? 'unset' : ''}`}
+      <button type="button" ref={button}
+        className={`today-est mono ${minutes == null ? 'unset' : ''}`}
         disabled={disabled}
         aria-label={minutes == null
           ? say.unset(label)
           : say.set(label, fmtDuration(minutes))}
-        onClick={() => { setDraft(minutes == null ? '' : String(minutes)); setEditing(true) }}>
+        onClick={() => {
+          opened.current = minutes == null ? '' : String(minutes)
+          setDraft(opened.current)
+          setEditing(true)
+        }}>
         {minutes == null ? tr('today.est') : fmtDuration(minutes)}
       </button>
     )
@@ -3664,6 +3690,7 @@ function EstimateCell({ minutes, readOnly, disabled, label, names, onChange }: {
 
   const commit = () => {
     setEditing(false)
+    if (draft === opened.current) return
     const raw = draft.trim()
     // An emptied field CLEARS, which is the only way back to "nobody said" and
     // is why the wire needed a sentinel for it at all.
@@ -3684,13 +3711,17 @@ function EstimateCell({ minutes, readOnly, disabled, label, names, onChange }: {
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') { e.preventDefault(); commit() }
+        if (e.key === 'Enter') { e.preventDefault(); refocus.current = true; commit() }
         // Escape abandons the edit. It does NOT close anything above this —
         // `useEscape` is bound to the window and would take the habits sheet
         // with it, whether this is a day row behind the sheet or the sheet's
         // own copy inside it, so the propagation stop is load-bearing rather
         // than tidy.
-        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setEditing(false) }
+        if (e.key === 'Escape') {
+          e.preventDefault(); e.stopPropagation()
+          refocus.current = true
+          setEditing(false)
+        }
       }} />
   )
 }

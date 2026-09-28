@@ -1177,8 +1177,9 @@ def fill_habit_estimates(
     - `day >= from_day` — never a day before the cutoff. A day that has run is
       the record of what was intended at the time, and filling it with a number
       chosen now would move its "planned" total under the look-back. The caller
-      supplies the cutoff because this module has no clock. `day` leads the
-      WHERE so `idx_day_plan_day` can serve it: ISO keys compare correctly as
+      supplies the cutoff because this module has no clock. The `day >= ?`
+      range is what lets `idx_day_plan_day` serve the statement (the order of
+      the terms is nothing to SQLite's planner): ISO keys compare correctly as
       strings, the same range predicate `get_day_range` uses.
     - `dropped_at IS NULL` — a declined row counts for nothing (the day's total
       skips it), so a number on it would inform no sum, and writing to it would
