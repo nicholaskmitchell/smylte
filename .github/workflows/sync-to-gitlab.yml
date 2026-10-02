@@ -51,7 +51,9 @@ jobs:
           AUTH=$(printf 'x-access-token:%s' "$GH_READ_TOKEN" | base64 -w0)
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" \
             fetch origin "pull/$PR/head"
-          git push "$REMOTE" "FETCH_HEAD:refs/heads/$BR" --force
+          # ci.skip: outside code must not run on our runners unprompted. After
+          # reviewing the MR, start its pipeline by hand.
+          git push -o ci.skip "$REMOTE" "FETCH_HEAD:refs/heads/$BR" --force
 
           OUT="$RUNNER_TEMP/mr.json"
           CODE=$(curl -s -o "$OUT" -w '%{http_code}' -X POST \
