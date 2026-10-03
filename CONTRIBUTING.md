@@ -24,5 +24,6 @@ A few things to know:
   request rather than on your pull request.
 - Automated checks do not run on outside contributions until a maintainer has
   looked at the change and started them.
-- Issues and discussions on GitHub are not synced, so GitLab is the better
-  place to report a problem.
+- Issues are synced both ways, so you can open one or comment on either
+  platform. Edit an issue's title and description on the side it was opened
+  on. GitHub Discussions are not synced.
