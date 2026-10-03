@@ -1,0 +1,174 @@
+# Smylte CI on GitLab — ported from .github/workflows/ci.yml, which stays and
+# keeps running on GitHub. Same gates, run in both places.
+#
+#   backend         full pytest suite on both interpreters pyproject.toml advertises,
+#                   against a scratch Radicale (see below)
+#   frontend        typecheck, vitest unit + rendering, real-browser layout tier, build
+#   desktop-linux   GTK client build + the shared client unit tests
+#   desktop-windows Windows client build + the same unit tests; only when desktop/
+#                   changes (or from "Run pipeline" in the UI), because Windows
+#                   minutes cost more than Linux ones
+#   workflows       desktop-release.yml's publish step against a stubbed `gh`
+#   security-*      pip-audit + bandit, and npm audit
+#
+# Release publishing stays on GitHub (desktop-release.yml): the desktop client
+# updates from the `desktop-latest` GitHub Release.
+#
+# Pull requests mirrored from GitHub arrive as gh-pr-N branches pushed with
+# `ci.skip`, so outside code never runs here unprompted. After reviewing one,
+# run its pipeline by hand from the merge request.
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUEST
+      when: never
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+default:
+  interruptible: true
+
+variables:
+  PIP_CACHE_DIR: $CI_PROJECT_DIR/.cache/pip
+  npm_config_cache: $CI_PROJECT_DIR/.cache/npm
+  PLAYWRIGHT_BROWSERS_PATH: $CI_PROJECT_DIR/.cache/ms-playwright
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+backend:
+  # Both interpreters `backend/pyproject.toml` advertises: testing one of them
+  # is how a service-down defect shipped (a lone surrogate in a docstring raised
+  # UnicodeEncodeError at import on 3.13 and nowhere earlier).
+  # fail-fast does not exist for matrix jobs here, so a 3.13-only failure never
+  # cancels the 3.12 leg.
+  image: python:$PYTHON-bookworm
+  parallel:
+    matrix:
+      - PYTHON: ["3.12", "3.13"]
+  cache:
+    key: pip-backend-$PYTHON
+    paths: [.cache/pip]
+  variables:
+    SCRATCH_STORAGE: $CI_PROJECT_DIR/scratch/data/collections
+    # Without this the gate is unenforceable: conftest's `_scratch_up` turns ANY
+    # probe failure into a skip, so a Radicale that answers but rejects the test
+    # credentials would silently skip ~240 tests while pytest still exits 0.
+    SCRATCH_REQUIRED: "1"
+  script:
+    # The scratch Radicale (spec §8) the GitHub job runs through docker compose,
+    # run here as a plain process: same pinned version (3.7.4), same config, same
+    # test user, on :5233 — which is where the tests look. No docker-in-docker,
+    # and SCRATCH_STORAGE is a real local path the cache-drop test can delete from.
+    - python -m venv /opt/radicale
+    - /opt/radicale/bin/pip install --quiet radicale==3.7.4 bcrypt passlib
+    - mkdir -p scratch/data/collections
+    - >
+      sed -e 's#0\.0\.0\.0:5232#127.0.0.1:5233#'
+      -e "s#/config/users#$CI_PROJECT_DIR/scratch/radicale/users#"
+      -e "s#/data/collections#$SCRATCH_STORAGE#"
+      scratch/radicale/config > /tmp/radicale.conf
+    - (/opt/radicale/bin/python -m radicale --config /tmp/radicale.conf > /tmp/radicale.log 2>&1 &)
+    - |
+      for i in $(seq 1 30); do
+        curl -s -o /dev/null http://127.0.0.1:5233/ && break
+        sleep 1
+      done
+      curl -s -o /dev/null http://127.0.0.1:5233/ || { echo "scratch Radicale did not come up"; cat /tmp/radicale.log; exit 1; }
+    - cd backend
+    - pip install --quiet -r requirements.txt
+    - |
+      rc=0
+      python -m pytest || rc=$?
+      # Audit backlog status: an xfail is not a failure and an XPASS already
+      # failed the step above. This re-runs just those to print the itemised
+      # state. Runs even when the suite failed, and still fails the job itself.
+      python -m pytest -m backlog -rxX --no-header -q || rc=$?
+      exit $rc
+
+frontend:
+  image: node:22-bookworm
+  cache:
+    - key:
+        files: [frontend/package-lock.json]
+      paths: [.cache/npm]
+    # Browsers live outside node_modules; keyed on the lockfile (which pins the
+    # playwright version) and on the set of browsers installed.
+    - key:
+        prefix: playwright-chromium-webkit
+        files: [frontend/package-lock.json]
+      paths: [.cache/ms-playwright]
+  script:
+    - cd frontend
+    - npm ci
+    - npm run typecheck
+    - npm test
+    # The layout tier: jsdom computes no layout, so a mobile rule that loses the
+    # cascade is invisible to the unit tests. BOTH ENGINES — WebKit is what every
+    # iPhone runs. No "required" knob on purpose: `vitest run --project browser`
+    # exits 1 when the browser is missing or the glob matches nothing.
+    - npx playwright install --with-deps chromium webkit
+    - npm run test:browser
+    - npm run build
+
+desktop-linux:
+  # The GTK client is compiled by CI and never on a user's machine, so without
+  # this a break would only surface when a release was cut.
+  image: mcr.microsoft.com/dotnet/sdk:8.0
+  script:
+    - dotnet build desktop/Smylte.Desktop.Linux/Smylte.Desktop.Linux.csproj -c Release
+    # The SAME suite the Windows job runs. This leg exercises the derived-key
+    # arm of PasswordProtector (Windows takes DPAPI) and is the only leg on a
+    # CASE-SENSITIVE filesystem, where LocalServer's traversal guard can be wrong.
+    - dotnet test desktop/Smylte.Desktop.Tests/Smylte.Desktop.Tests.csproj
+
+desktop-windows:
+  # The Windows client is compiled by CI and never on a user's machine.
+  tags: [saas-windows-medium-amd64]
+  timeout: 30m
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - changes:
+        - desktop/**/*
+        - .gitlab-ci.yml
+  script:
+    # The runner image ships .NET SDK 3.1 and 9.0 but not 8, and the projects
+    # target net8.0 / net8.0-windows (tests need the 8.0 runtime to execute).
+    - Invoke-WebRequest -UseBasicParsing https://dot.net/v1/dotnet-install.ps1 -OutFile dotnet-install.ps1
+    - ./dotnet-install.ps1 -Channel 8.0 -InstallDir "$env:USERPROFILE\dotnet8"
+    - $env:DOTNET_ROOT = "$env:USERPROFILE\dotnet8"
+    - $env:PATH = "$env:USERPROFILE\dotnet8;" + $env:PATH
+    - dotnet --list-sdks
+    - dotnet build desktop/Smylte.Desktop/Smylte.Desktop.csproj -c Release
+    # Targets plain net8.0 and *links* the sources it covers, so it needs no
+    # Windows Desktop runtime pack.
+    - dotnet test desktop/Smylte.Desktop.Tests/Smylte.Desktop.Tests.csproj
+
+workflows:
+  # desktop-release.yml's publish step is shell that never runs on a PR, and a
+  # transient between the asset upload and the notes edit leaves
+  # `desktop-latest` green and half-updated. So it is tested against a stub
+  # `gh`, reading the `run:` block out of the YAML (still in .github/workflows).
+  image: python:3.12-bookworm
+  script:
+    - pip install --quiet pyyaml
+    - .github/workflows/tests/publish-release.test.sh
+
+security-python:
+  image: python:3.12-bookworm
+  cache:
+    key: pip-security
+    paths: [.cache/pip]
+  script:
+    # Resolves requirements.txt in an isolated venv and checks the whole tree
+    # against the vulnerability databases. Fails on any known CVE.
+    - pip install --quiet pip-audit bandit
+    - pip-audit -r backend/requirements.txt
+    # Medium+ severity fails the build. Known-safe sites carry reviewed
+    # `# nosec` annotations.
+    - cd backend && bandit -r smylted -ll
+
+security-npm:
+  image: node:22-bookworm
+  script:
+    - cd frontend && npm audit --audit-level=high
