@@ -1,0 +1,456 @@
+name: Sync issues with GitLab
+
+# Two-way issue sync between this repo and its canonical GitLab project.
+#
+#   - New issues on either side get a mirror on the other.
+#   - Comments are copied both ways.
+#   - Open/closed state follows whichever side changed it most recently.
+#   - Title and description belong to the side the issue was opened on; edit
+#     them there (edits to a mirror's text are overwritten).
+#   - Confidential GitLab issues and internal notes are never copied.
+#
+# Every run reconciles everything updated recently on both sides, so a missed or
+# superseded run is caught up by the next one. GitLab starts a run through a
+# project webhook that calls this workflow's workflow_dispatch endpoint; the
+# daily schedule is the safety net.
+#
+# Pairing is recorded in hidden markers (<!-- issue-sync:... -->). Markers are
+# only trusted in text written by the sync's own bot accounts, and markers in
+# anything a person writes are made inert before it is copied.
+
+on:
+  issues:
+    types: [opened, edited, closed, reopened]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "sweep (default) or backfill (link issues imported before sync was set up)"
+        type: choice
+        options: [sweep, backfill]
+        default: sweep
+      dry_run:
+        description: "Print what would change without changing anything"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "23 6 * * *"
+
+permissions:
+  issues: write
+
+concurrency:
+  group: issue-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.event_name != 'issue_comment' || !github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+      GITLAB_PATH: ${{ vars.GITLAB_PATH }}
+      GH_TOKEN: ${{ github.token }}
+      MODE: ${{ inputs.mode }}
+      DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+      WINDOW_HOURS: ${{ github.event_name == 'schedule' && '26' || '3' }}
+      # Issues created before this are only synced once linked (see backfill).
+      SYNC_SINCE: "2026-10-03T00:00:00Z"
+    steps:
+      - name: Sync
+        run: |
+          python3 - <<'PY'
+          import datetime as dt
+          import hashlib
+          import json
+          import os
+          import re
+          import sys
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          GL_ROOT = "https://gitlab.com/api/v4"
+          GL_PATH = os.environ["GITLAB_PATH"]
+          GL_API = GL_ROOT + "/projects/" + urllib.parse.quote(GL_PATH, safe="")
+          GL_WEB = "https://gitlab.com/" + GL_PATH
+          GH_API = "https://api.github.com/repos/" + os.environ["GITHUB_REPOSITORY"]
+          GH_BOT = "github-actions[bot]"
+          MODE = os.environ.get("MODE") or "sweep"
+          DRY = os.environ.get("DRY_RUN") == "1"
+          WINDOW = dt.timedelta(hours=float(os.environ.get("WINDOW_HOURS") or 3))
+          EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+          LIMIT = 60000  # GitHub caps issue and comment bodies at 65536 chars
+
+          GL_HEADERS = {"PRIVATE-TOKEN": os.environ["GITLAB_TOKEN"]}
+          GH_HEADERS = {
+              "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "issue-sync",
+          }
+
+
+          def ts(value):
+              return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+          SINCE = ts(os.environ["SYNC_SINCE"])
+
+
+          # ---------- HTTP ----------
+
+          def call(method, url, headers, body=None, missing_ok=False):
+              data = None if body is None else json.dumps(body).encode()
+              hdrs = dict(headers)
+              if data is not None:
+                  hdrs["Content-Type"] = "application/json"
+              for attempt in range(4):
+                  req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
+                  try:
+                      with urllib.request.urlopen(req, timeout=30) as resp:
+                          raw = resp.read()
+                          return json.loads(raw) if raw else None
+                  except urllib.error.HTTPError as err:
+                      if err.code == 404 and missing_ok:
+                          return None
+                      if err.code in (429, 500, 502, 503, 504) and attempt < 3:
+                          time.sleep(5 * (attempt + 1))
+                          continue
+                      detail = err.read().decode(errors="replace")[:300]
+                      sys.exit(f"{method} {url.split('?')[0]} -> HTTP {err.code}: {detail}")
+
+
+          def with_params(url, params):
+              return url + ("?" + urllib.parse.urlencode(params) if params else "")
+
+
+          def gl(method, path, body=None, params=None, missing_ok=False):
+              return call(method, with_params(GL_API + path, params), GL_HEADERS, body, missing_ok)
+
+
+          def gh(method, path, body=None, params=None, missing_ok=False):
+              return call(method, with_params(GH_API + path, params), GH_HEADERS, body, missing_ok)
+
+
+          def pages(fn, path, params=None):
+              out, page = [], 1
+              while True:
+                  batch = fn("GET", path, params=dict(params or {}, per_page=100, page=page)) or []
+                  out.extend(batch)
+                  if len(batch) < 100:
+                      return out
+                  page += 1
+
+
+          CHANGES = []
+
+
+          def write(fn, method, path, body, what):
+              CHANGES.append(what)
+              print(("[dry run] " if DRY else "") + what)
+              return None if DRY else fn(method, path, body)
+
+
+          # ---------- markers and text ----------
+
+          MARK_RE = re.compile(r"^<!-- issue-sync:([a-z-]+)=([0-9a-f]+) -->$", re.M)
+
+
+          def mark(key, value):
+              return f"<!-- issue-sync:{key}={value} -->"
+
+
+          def marks(text):
+              found = {}
+              for key, value in MARK_RE.findall(text or ""):
+                  found.setdefault(key, []).append(value)
+              return found
+
+
+          def inert(text):
+              """Copied text must not carry markers, pings or hidden HTML."""
+              text = (text or "").replace("\r\n", "\n").replace("<!--", "&lt;!--")
+              return re.sub(r"@(?=[A-Za-z0-9_.-])", "@​", text)
+
+
+          def quote(text):
+              text = inert(text).strip()
+              if not text:
+                  return "> _(no text)_"
+              lines = text.split("\n")
+              return "\n".join(("> " + line) if line.strip() else ">" for line in lines)
+
+
+          def clip(text):
+              return text if len(text) <= LIMIT else text[:LIMIT] + "\n\n_(truncated)_"
+
+
+          def gl_links(text):
+              """GitLab upload links are relative; make them work elsewhere."""
+              return re.sub(r"\]\(/uploads/", lambda m: "](" + GL_WEB + "/uploads/", text or "")
+
+
+          def one_line(text):
+              return " ".join((text or "").split())
+
+
+          def src_hash(title, body):
+              return hashlib.sha1(((title or "") + "\0" + (body or "")).encode()).hexdigest()[:16]
+
+
+          def first(text, key):
+              values = marks(text).get(key)
+              return values[0] if values else None
+
+
+          # ---------- who wrote what ----------
+
+          GL_BOT_ID = call("GET", GL_ROOT + "/user", GL_HEADERS)["id"]
+
+
+          def is_gl_bot(obj):
+              return (obj.get("author") or {}).get("id") == GL_BOT_ID
+
+
+          def login(obj):
+              return (obj.get("user") or {}).get("login") or "ghost"
+
+
+          def gl_notes(iid):
+              return pages(gl, f"/issues/{iid}/notes", {"sort": "asc", "order_by": "created_at"})
+
+
+          def gh_comments(number):
+              return pages(gh, f"/issues/{number}/comments")
+
+
+          # ---------- pairing ----------
+
+          def gl_linked_gh(issue, notes):
+              """GitHub number paired with this GitLab issue, from bot-written markers."""
+              if is_gl_bot(issue) and first(issue.get("description"), "gh-issue"):
+                  return int(first(issue.get("description"), "gh-issue"))
+              for note in notes:
+                  if is_gl_bot(note) and not note.get("system") and first(note.get("body"), "gh-issue"):
+                      return int(first(note.get("body"), "gh-issue"))
+              return None
+
+
+          def gh_linked_gl(issue, comments):
+              """GitLab iid paired with this GitHub issue, from bot-written markers."""
+              if login(issue) == GH_BOT and first(issue.get("body"), "gl-issue"):
+                  return int(first(issue.get("body"), "gl-issue"))
+              for comment in comments:
+                  if login(comment) == GH_BOT and first(comment.get("body"), "gl-issue"):
+                      return int(first(comment.get("body"), "gl-issue"))
+              # Issues imported before sync are linked from the GitLab side only.
+              twin = gl("GET", f"/issues/{issue['number']}", missing_ok=True)
+              if twin and gl_linked_gh(twin, gl_notes(twin["iid"])) == issue["number"]:
+                  return twin["iid"]
+              return None
+
+
+          # ---------- rendering ----------
+
+          def render_on_gl(ghi, src):
+              text = clip(f"**`{login(ghi)}`** opened this issue on GitHub: {ghi['html_url']}\n\n"
+                          + quote(ghi.get("body")))
+              return f"{text}\n\n{mark('gh-issue', ghi['number'])}\n{mark('src', src)}"
+
+
+          def render_on_gh(gli, src):
+              who = inert(one_line(gli["author"]["name"]))
+              text = clip(f"**{who}** (`{gli['author']['username']}`) opened this issue on GitLab: "
+                          f"{gli['web_url']}\n\n" + quote(gl_links(gli.get("description"))))
+              return f"{text}\n\n{mark('gl-issue', gli['iid'])}\n{mark('src', src)}"
+
+
+          # ---------- creating mirrors ----------
+
+          def create_on_gl(ghi):
+              src = src_hash(ghi["title"], ghi.get("body"))
+              made = write(gl, "POST", "/issues",
+                           {"title": ghi["title"][:255], "description": render_on_gl(ghi, src)},
+                           f"GitLab: open mirror of GitHub issue {ghi['number']}")
+              if not made:
+                  return None
+              write(gh, "POST", f"/issues/{ghi['number']}/comments",
+                    {"body": f"Tracked on GitLab: {made['web_url']}\n"
+                             f"Comments on either side are copied to the other.\n\n"
+                             f"{mark('gl-issue', made['iid'])}"},
+                    f"GitHub issue {ghi['number']}: link to GitLab issue {made['iid']}")
+              return made["iid"]
+
+
+          def create_on_gh(gli):
+              src = src_hash(gli["title"], gli.get("description"))
+              made = write(gh, "POST", "/issues",
+                           {"title": gli["title"], "body": render_on_gh(gli, src)},
+                           f"GitHub: open mirror of GitLab issue {gli['iid']}")
+              if not made:
+                  return None
+              write(gl, "POST", f"/issues/{gli['iid']}/notes",
+                    {"body": f"Mirrored to GitHub: {made['html_url']}\n\n{mark('gh-issue', made['number'])}"},
+                    f"GitLab issue {gli['iid']}: link to GitHub issue {made['number']}")
+              return made["number"]
+
+
+          # ---------- reconciling a pair ----------
+
+          def gh_state_time(number):
+              events = pages(gh, f"/issues/{number}/events")
+              return max((ts(e["created_at"]) for e in events if e.get("event") in ("closed", "reopened")),
+                         default=EPOCH)
+
+
+          def gl_state_time(iid):
+              events = pages(gl, f"/issues/{iid}/resource_state_events")
+              return max((ts(e["created_at"]) for e in events if e.get("state") in ("closed", "reopened")),
+                         default=EPOCH)
+
+
+          def reconcile(number, iid):
+              ghi = gh("GET", f"/issues/{number}")
+              gli = gl("GET", f"/issues/{iid}")
+              if gli.get("confidential"):
+                  print(f"GitLab issue {iid} is confidential; not syncing it")
+                  return
+              ghc = gh_comments(number)
+              gln = gl_notes(iid)
+              label = f"GitHub {number} / GitLab {iid}"
+
+              # Title and description: the side the issue was opened on wins.
+              if is_gl_bot(gli):
+                  src = src_hash(ghi["title"], ghi.get("body"))
+                  if first(gli.get("description"), "src") != src:
+                      write(gl, "PUT", f"/issues/{iid}",
+                            {"title": ghi["title"][:255], "description": render_on_gl(ghi, src)},
+                            f"{label}: GitLab mirror text updated")
+              elif login(ghi) == GH_BOT:
+                  src = src_hash(gli["title"], gli.get("description"))
+                  if first(ghi.get("body"), "src") != src:
+                      write(gh, "PATCH", f"/issues/{number}",
+                            {"title": gli["title"], "body": render_on_gh(gli, src)},
+                            f"{label}: GitHub mirror text updated")
+
+              # State: whichever side changed it most recently wins.
+              gh_open, gl_open = ghi["state"] == "open", gli["state"] == "opened"
+              if gh_open != gl_open:
+                  if gh_state_time(number) > gl_state_time(iid):
+                      write(gl, "PUT", f"/issues/{iid}", {"state_event": "reopen" if gh_open else "close"},
+                            f"{label}: GitLab {'reopened' if gh_open else 'closed'} to match GitHub")
+                  else:
+                      body = {"state": "open" if gl_open else "closed"}
+                      if not gl_open:
+                          body["state_reason"] = "completed"
+                      write(gh, "PATCH", f"/issues/{number}", body,
+                            f"{label}: GitHub {'reopened' if gl_open else 'closed'} to match GitLab")
+
+              # Comments, both ways. Markers say what was already copied; the
+              # baselines cover comments that existed before the pair was linked.
+              base_gh = base_gl = 0
+              copied_from_gh, copied_from_gl = set(), set()
+              for note in gln:
+                  if is_gl_bot(note):
+                      found = marks(note.get("body"))
+                      base_gh = max([base_gh] + [int(v) for v in found.get("baseline-gh", [])])
+                      base_gl = max([base_gl] + [int(v) for v in found.get("baseline-gl", [])])
+                      copied_from_gh.update(int(v) for v in found.get("gh-comment", []))
+              for comment in ghc:
+                  if login(comment) == GH_BOT:
+                      copied_from_gl.update(int(v) for v in marks(comment.get("body")).get("gl-note", []))
+
+              for comment in ghc:
+                  if login(comment) == GH_BOT or comment["id"] <= base_gh or comment["id"] in copied_from_gh:
+                      continue
+                  text = clip(f"**`{login(comment)}`** commented on GitHub: {comment['html_url']}\n\n"
+                              + quote(comment.get("body")))
+                  write(gl, "POST", f"/issues/{iid}/notes",
+                        {"body": f"{text}\n\n{mark('gh-comment', comment['id'])}"},
+                        f"{label}: GitHub comment {comment['id']} copied to GitLab")
+
+              for note in gln:
+                  if note.get("system") or note.get("internal") or note.get("confidential") or is_gl_bot(note):
+                      continue
+                  if note["id"] <= base_gl or note["id"] in copied_from_gl:
+                      continue
+                  who = inert(one_line(note["author"]["name"]))
+                  text = clip(f"**{who}** (`{note['author']['username']}`) commented on GitLab: "
+                              f"{GL_WEB}/-/issues/{iid}#note_{note['id']}\n\n" + quote(gl_links(note.get("body"))))
+                  write(gh, "POST", f"/issues/{number}/comments",
+                        {"body": f"{text}\n\n{mark('gl-note', note['id'])}"},
+                        f"{label}: GitLab note {note['id']} copied to GitHub")
+
+
+          # ---------- modes ----------
+
+          def sweep():
+              start = (dt.datetime.now(dt.timezone.utc) - WINDOW).strftime("%Y-%m-%dT%H:%M:%SZ")
+              done = set()
+
+              def pair(number, iid):
+                  if (number, iid) not in done:
+                      done.add((number, iid))
+                      reconcile(number, iid)
+
+              for gli in pages(gl, "/issues", {"updated_after": start, "state": "all", "issue_type": "issue"}):
+                  if gli.get("confidential") or gli.get("moved_to_id"):
+                      continue
+                  number = gl_linked_gh(gli, gl_notes(gli["iid"]))
+                  if number is None:
+                      if is_gl_bot(gli) or ts(gli["created_at"]) < SINCE:
+                          continue
+                      number = create_on_gh(gli)
+                  if number is not None:
+                      pair(number, gli["iid"])
+
+              for ghi in pages(gh, "/issues", {"since": start, "state": "all"}):
+                  if "pull_request" in ghi:
+                      continue
+                  iid = gh_linked_gl(ghi, gh_comments(ghi["number"]))
+                  if iid is None:
+                      if login(ghi) == GH_BOT or ts(ghi["created_at"]) < SINCE:
+                          continue
+                      iid = create_on_gl(ghi)
+                  if iid is not None:
+                      pair(ghi["number"], iid)
+
+
+          def backfill():
+              """Link issues the GitHub importer copied: same number, same title."""
+              for ghi in pages(gh, "/issues", {"state": "all"}):
+                  if "pull_request" in ghi:
+                      continue
+                  number = ghi["number"]
+                  comments = gh_comments(number)
+                  if gh_linked_gl(ghi, comments) is not None:
+                      print(f"GitHub issue {number}: already linked")
+                      continue
+                  twin = gl("GET", f"/issues/{number}", missing_ok=True)
+                  if not twin or is_gl_bot(twin) or twin["title"].strip() != ghi["title"].strip():
+                      print(f"GitHub issue {number}: no GitLab issue with the same number and title; left alone")
+                      continue
+                  notes = gl_notes(number)
+                  if gl_linked_gh(twin, notes) is not None:
+                      print(f"GitLab issue {number}: already linked elsewhere; left alone")
+                      continue
+                  base_gh = max((c["id"] for c in comments), default=0)
+                  base_gl = max((n["id"] for n in notes), default=0)
+                  write(gl, "POST", f"/issues/{number}/notes",
+                        {"body": f"Linked to GitHub: {ghi['html_url']}\n"
+                                 f"Imported before issue sync was set up; new comments are copied both ways.\n\n"
+                                 f"{mark('gh-issue', number)}\n{mark('baseline-gh', base_gh)}\n"
+                                 f"{mark('baseline-gl', base_gl)}"},
+                        f"GitLab issue {number}: linked to GitHub issue {number}")
+
+
+          backfill() if MODE == "backfill" else sweep()
+          summary = f"{MODE}{' (dry run)' if DRY else ''}: {len(CHANGES)} change(s)"
+          print(summary)
+          with open(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull), "a") as out:
+              out.write(f"### Issue sync — {summary}\n\n" + "".join(f"- {c}\n" for c in CHANGES))
+          PY
