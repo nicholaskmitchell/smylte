@@ -142,7 +142,14 @@ desktop-windows:
     - dotnet build desktop/Smylte.Desktop/Smylte.Desktop.csproj -c Release
     # Targets plain net8.0 and *links* the sources it covers, so it needs no
     # Windows Desktop runtime pack.
-    - dotnet test desktop/Smylte.Desktop.Tests/Smylte.Desktop.Tests.csproj
+    #
+    # The four excluded tests call DPAPI (ProtectedData.Protect, CurrentUser
+    # scope), which throws "Access is denied" under the shared runner's service
+    # account — an environment limit, not a client bug. The DPAPI arm of
+    # PasswordProtector is still tested by the GitHub Actions `desktop` job
+    # (windows-latest), which runs as a real user. Everything else runs.
+    - |
+      dotnet test desktop/Smylte.Desktop.Tests/Smylte.Desktop.Tests.csproj --filter "FullyQualifiedName!~A_password_survives_a_round_trip&FullyQualifiedName!~A_password_with_non_ascii_survives_a_round_trip&FullyQualifiedName!~Two_passwords_encrypted_in_a_row_produce_different_blobs&FullyQualifiedName!~The_stored_blob_does_not_contain_the_password"
 
 workflows:
   # desktop-release.yml's publish step is shell that never runs on a PR, and a
