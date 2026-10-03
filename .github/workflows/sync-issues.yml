@@ -115,7 +115,7 @@ jobs:
                           raw = resp.read()
                           return json.loads(raw) if raw else None
                   except urllib.error.HTTPError as err:
-                      if err.code == 404 and missing_ok:
+                      if err.code in (404, 410) and missing_ok:
                           return None
                       if err.code in (429, 500, 502, 503, 504) and attempt < 3:
                           time.sleep(5 * (attempt + 1))
@@ -314,8 +314,11 @@ jobs:
 
 
           def reconcile(number, iid):
-              ghi = gh("GET", f"/issues/{number}")
-              gli = gl("GET", f"/issues/{iid}")
+              ghi = gh("GET", f"/issues/{number}", missing_ok=True)
+              gli = gl("GET", f"/issues/{iid}", missing_ok=True)
+              if not ghi or not gli:
+                  print(f"GitHub {number} / GitLab {iid}: one side was deleted; leaving the other alone")
+                  return
               if gli.get("confidential"):
                   print(f"GitLab issue {iid} is confidential; not syncing it")
                   return
