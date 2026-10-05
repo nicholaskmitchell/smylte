@@ -466,6 +466,25 @@ export function MailSection({ onExpire, mailRev }: {
       {toggle('mail-notes-self', s.capture_notes_to_self,
         (capture_notes_to_self) => ({ capture_notes_to_self }), 'mail.notesSelf')}
 
+      <div className="menu-head">{tr('mail.head.typesafe')}</div>
+      <SecretField id="mail-typesafe-key" label={tr('mail.typesafeKey')}
+        status={payload.secrets.typesafe_api_key} envVar="SMYLTE_TYPESAFE_API_KEY"
+        onSave={(v) => saveSecret('typesafe_api_key', v)}
+        onClear={() => saveSecret('typesafe_api_key', '')} />
+      <div className="menu-row">
+        <label htmlFor="mail-jev-model">{tr('mail.jevModel')}</label>
+        <Draft id="mail-jev-model" className="input" value={s.jev_model}
+          onCommit={(raw) => commitText(raw, s.jev_model, (jev_model) => save({ jev_model }))} />
+      </div>
+      <div className="hintline">{tr('mail.jev.hint')}</div>
+      <div className="menu-actions">
+        <button className="btn ghost"
+          disabled={testing === 'jev' || !payload.secrets.typesafe_api_key.set}
+          onClick={() => { void runCheck('jev') }}>
+          {tr(testing === 'jev' ? 'mail.test.running' : 'mail.test.typesafe')}
+        </button>
+      </div>
+      {checkLine(jevCheck)}
       <div className="menu-row">
         <label htmlFor="mail-kind-decider">{tr('mail.kindDecider')}</label>
         <select className="menu-toggle mail-select" id="mail-kind-decider" value={s.kind_decider}
@@ -479,28 +498,16 @@ export function MailSection({ onExpire, mailRev }: {
       </div>
       {s.kind_decider === 'rules' && listField('mail-kind-rules', 'mail.kindRules', 'kind_rules',
         'mail.kindRules.hint', false)}
-      {s.kind_decider === 'jev' && (
-        <>
-          <SecretField id="mail-typesafe-key" label={tr('mail.typesafeKey')}
-            status={payload.secrets.typesafe_api_key} envVar="SMYLTE_TYPESAFE_API_KEY"
-            onSave={(v) => saveSecret('typesafe_api_key', v)}
-            onClear={() => saveSecret('typesafe_api_key', '')} />
-          <div className="menu-row">
-            <label htmlFor="mail-jev-model">{tr('mail.jevModel')}</label>
-            <Draft id="mail-jev-model" className="input" value={s.jev_model}
-              onCommit={(raw) => commitText(raw, s.jev_model, (jev_model) => save({ jev_model }))} />
-          </div>
-          <div className="hintline">{tr('mail.jev.hint')}</div>
-          <div className="menu-actions">
-            <button className="btn ghost"
-              disabled={testing === 'jev' || !payload.secrets.typesafe_api_key.set}
-              onClick={() => { void runCheck('jev') }}>
-              {tr(testing === 'jev' ? 'mail.test.running' : 'mail.test.typesafe')}
-            </button>
-          </div>
-          {checkLine(jevCheck)}
-        </>
-      )}
+      <div className="menu-row">
+        <label htmlFor="mail-dedup-decider">{tr('mail.dedupDecider')}</label>
+        <select className="menu-toggle mail-select" id="mail-dedup-decider" value={s.dedup_decider}
+          onChange={(e) => {
+            void save({ dedup_decider: e.target.value as typeof s.dedup_decider })
+          }}>
+          <option value="jev">{tr('mail.dedupDecider.jev')}</option>
+          <option value="model">{tr('mail.dedupDecider.model')}</option>
+        </select>
+      </div>
 
       <div className="menu-head">{tr('mail.head.where')}</div>
       {picker('mail-task-list', 'mail.taskList', s.task_list ?? '', 'mail.taskList.first',

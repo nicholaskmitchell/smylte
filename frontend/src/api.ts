@@ -1077,6 +1077,9 @@ export interface MailSettingsValues {
   /** Rules for `kind_decider: 'rules'`, one per entry, in canonical form. */
   kind_rules: string[]
   jev_model: string
+  /** Who decides whether a new item repeats one already there. Both deciders
+   *  mean "Jev when a TypeSafe key is set, else Claude". */
+  dedup_decider: 'model' | 'jev'
   /** Only for an Anthropic key that is not scoped to a workspace; empty otherwise. */
   anthropic_workspace_id: string
 }
