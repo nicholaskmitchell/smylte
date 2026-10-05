@@ -82,7 +82,8 @@ const WORDS: Record<CollectionKind, {
 export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api,
   collapsed, onToggle, allLabel, hiddenIds, onHiddenChange, onArchive, archivedIds,
   groups, onGroupsChange, collapsedGroups, onCollapsedGroupsChange,
-  completedActive, onToggleCompleted, parkedActive, onToggleParked, extra }: {
+  completedActive, onToggleCompleted, parkedActive, onToggleParked,
+  suggestedActive, onToggleSuggested, suggestedCount, extra }: {
   kind: CollectionKind
   items: List[]
   sel?: string
@@ -126,6 +127,14 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
   // between them would make the owner press through one to reach the other.
   parkedActive?: boolean
   onToggleParked?: () => void
+  // Suggested view (opt-in, Tasks only): the third footer pane, holding what the
+  // email reader proposes and the owner has not yet approved. Not tasks yet, so
+  // it is its own pane rather than a filter on the others; `suggestedCount` is
+  // what is waiting, shown on the button so a pending suggestion is not
+  // something the owner has to open a pane to discover.
+  suggestedActive?: boolean
+  onToggleSuggested?: () => void
+  suggestedCount?: number
   // A second, foreign section under the collections — the Calendar tab's task
   // lists. It is rendered rather than described because those rows are not this
   // sidebar's `items`: they are a different kind of collection, borrowed for
@@ -471,7 +480,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
     </>
   )
 
-  const completedFooter = (onToggleCompleted || onToggleParked) && (
+  const completedFooter = (onToggleCompleted || onToggleParked || onToggleSuggested) && (
     <>
       {onToggleCompleted && (
         <button className={`side-completed ${completedActive ? 'active' : ''}`}
@@ -483,6 +492,13 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
         <button className={`side-completed ${parkedActive ? 'active' : ''}`}
           aria-pressed={parkedActive} onClick={onToggleParked}>
           {parkedActive ? tr('side.backToTasks') : tr('side.viewParked')}
+        </button>
+      )}
+      {onToggleSuggested && (
+        <button className={`side-completed ${suggestedActive ? 'active' : ''}`}
+          aria-pressed={suggestedActive} onClick={onToggleSuggested}>
+          {suggestedActive ? tr('side.backToTasks')
+            : tr('side.viewSuggested', { count: suggestedCount ?? 0 })}
         </button>
       )}
     </>
@@ -533,6 +549,15 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
               title={parkedActive
                 ? tr('side.backToTasksShort') : tr('side.viewParkedShort')}
               aria-pressed={parkedActive} onClick={onToggleParked}>⏸</button>
+          )}
+          {onToggleSuggested && (
+            <button className={`side-mobile-completed ${suggestedActive ? 'active' : ''}`}
+              title={suggestedActive
+                ? tr('side.backToTasksShort') : tr('side.viewSuggestedShort')}
+              aria-pressed={suggestedActive} onClick={onToggleSuggested}>
+              ✉
+              {!!suggestedCount && <span className="side-badge">{suggestedCount}</span>}
+            </button>
           )}
           <button className="side-mobile-add" title={tr(words.new)}
             aria-label={tr(words.new)}

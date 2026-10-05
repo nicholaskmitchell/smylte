@@ -15,6 +15,8 @@ import { AddMultipleModal } from './AddMultipleModal'
 import { WasDue } from './WasDue'
 import { dateOut, TaskModal } from './TaskModal'
 import { Sidebar } from './Sidebar'
+import { SuggestionsPane } from './SuggestionsPane'
+import { useMailSuggestions } from '../mail'
 import { useI18n } from '../i18n'
 import { useT } from '../i18n'
 
@@ -83,7 +85,7 @@ type Progress = { total: number; done: number } | null
 export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   hiddenLists, onHiddenListsChange, groups, onGroupsChange,
   collapsedGroups, onCollapsedGroupsChange,
-  collapsedTasks, onCollapsedTasksChange, showCompleted }: {
+  collapsedTasks, onCollapsedTasksChange, showCompleted, mailRev }: {
   onExpire: () => void
   view: TasksViewMode; onView: (v: TasksViewMode) => void
   sideCollapsed: boolean; onToggleSide: () => void
@@ -92,9 +94,13 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   collapsedGroups: string[]; onCollapsedGroupsChange: (next: string[]) => void
   collapsedTasks: string[]; onCollapsedTasksChange: (next: string[]) => void
   showCompleted: boolean
+  /** Bumped by App on every `mail_updated` event; the Suggested pane re-reads
+   *  on it. */
+  mailRev?: number
 }) {
   const { locale, t: tr } = useI18n()
   const guard = makeGuard(onExpire)
+  const sug = useMailSuggestions(mailRev ?? 0, onExpire)
   const embedded = useEmbeddedCollections()
   const { layout } = useShell()
   // Lists, tasks and every write against them live above the tab strip, so
@@ -121,12 +127,19 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // state exists to keep apart. Transient too: which pane is open is a place
   // the owner is standing, not a preference worth following them around.
   const [parkedOnly, setParkedOnly] = useState(false)
+  // And the third: what the email reader proposes and the owner has not yet
+  // approved. Transient for the same reason, and exclusive with the other two.
+  const [suggestedWanted, setSuggestedWanted] = useState(false)
+  // Wanted AND still offered. The footer button disappears when email reading
+  // is switched off and nothing is waiting, and a pane whose way back has gone
+  // would be a dead end, so the pane gives way to the lists instead.
+  const suggestedOnly = suggestedWanted && (sug.enabled || sug.items.length > 0)
   // One at a time. Both on would leave two headings and two counts describing
   // one list, and the pane below can only be one of them.
   const showCompletedPane = completedOnly && !parkedOnly
   const viewTabsRef = useRef<HTMLDivElement>(null)
   useSegmentThumb(viewTabsRef, Math.max(0, VIEWS.findIndex(([v]) => v === view)),
-    !completedOnly && !parkedOnly)
+    !completedOnly && !parkedOnly && !suggestedOnly)
   // Multi-day views window from here: day3 starts on the anchor day itself,
   // week snaps to the anchor's Sunday (same week start as the calendar grid).
   const [anchor, setAnchor] = useState(() => new Date())
@@ -601,34 +614,47 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
         groups={groups} onGroupsChange={onGroupsChange}
         collapsedGroups={collapsedGroups} onCollapsedGroupsChange={onCollapsedGroupsChange}
         completedActive={completedOnly}
-        onToggleCompleted={() => { setCompletedOnly((v) => !v); setParkedOnly(false) }}
+        onToggleCompleted={() => {
+          setCompletedOnly((v) => !v); setParkedOnly(false); setSuggestedWanted(false)
+        }}
         parkedActive={parkedOnly}
-        onToggleParked={() => { setParkedOnly((v) => !v); setCompletedOnly(false) }} />
+        onToggleParked={() => {
+          setParkedOnly((v) => !v); setCompletedOnly(false); setSuggestedWanted(false)
+        }}
+        suggestedActive={suggestedOnly}
+        onToggleSuggested={(sug.enabled || sug.items.length > 0) ? () => {
+          setSuggestedWanted((v) => !v); setCompletedOnly(false); setParkedOnly(false)
+        } : undefined}
+        suggestedCount={sug.items.length} />
       </NavCollections>
 
-      {/* `data-pane` names which of the four panes this is, for the sidebar
+      {/* `data-pane` names which of the five panes this is, for the sidebar
           layout's column width: the list-shaped ones read at a measure, the
           day columns take the whole pane. An attribute, so Classic, which
           styles none of it, draws exactly what it did. */}
       <div className="content" data-pane={showCompletedPane ? 'completed'
-        : parkedOnly ? 'parked' : view === 'list' ? 'list' : 'days'}>
+        : parkedOnly ? 'parked' : suggestedOnly ? 'suggested'
+        : view === 'list' ? 'list' : 'days'}>
         <div className="content-head">
           <span className="content-title">
             {showCompletedPane ? tr('tasks.completed')
-              : parkedOnly ? tr('tasks.parked') : tr('tasks.allLists')}
+              : parkedOnly ? tr('tasks.parked')
+              : suggestedOnly ? tr('mail.sug.title') : tr('tasks.allLists')}
           </span>
           <span className="content-sub">
             {showCompletedPane
               ? tr('tasks.completedCount', { count: completedTasks.length })
               : parkedOnly
               ? tr('tasks.parkedCount', { count: parkedTasks.length })
+              : suggestedOnly
+              ? tr('mail.sug.count', { count: sug.items.length })
               : view === 'list'
                 ? tr('tasks.openCount', { count: active.length })
                 : tr('tasks.range',
                   { from: fmtD(days[0]), to: fmtD(days[span - 1]) })}
           </span>
           <span className="spacer" />
-          {!completedOnly && !parkedOnly && view !== 'list' && (
+          {!completedOnly && !parkedOnly && !suggestedOnly && view !== 'list' && (
             <div className="range-nav">
               <button className="icon-btn" title={tr('tasks.earlier')}
                 aria-label={tr('tasks.earlier')}
@@ -641,7 +667,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
                 onClick={() => setAnchor(addDays(days[0], span))}>›</button>
             </div>
           )}
-          {!completedOnly && !parkedOnly && (
+          {!completedOnly && !parkedOnly && !suggestedOnly && (
             // --n and --i place the sliding thumb under the active segment;
             // useSegmentThumb corrects it from the measured segment.
             <div className="view-tabs" role="tablist" aria-label={tr('tasks.viewTabs')}
@@ -700,6 +726,10 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
               </div>
             ))}
           </div>
+        ) : suggestedOnly ? (
+          <SuggestionsPane onExpire={onExpire} lists={lists}
+            items={sug.items} loaded={sug.loaded} error={sug.error}
+            onApprove={sug.approve} onReject={sug.reject} />
         ) : visibleLists.length === 0 ? (
           // Three states, not two. Before a fetch has landed there is nothing
           // to say about the account: telling a user with a dozen lists to

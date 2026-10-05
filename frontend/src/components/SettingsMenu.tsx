@@ -33,6 +33,7 @@ import { CapacitySection } from './CapacitySection'
 import { FocusSection } from './FocusSection'
 import type { FocusSettings } from '../focus'
 import { NotificationsSection } from './NotificationsSection'
+import { MailSection } from './MailSection'
 import type { Trigger } from '../notifications'
 
 // The nav, in order. `label` is the accessible name of both the nav item and,
@@ -48,6 +49,7 @@ const SECTIONS = [
   { id: 'tasks', label: 'settings.section.tasks' },
   { id: 'focus', label: 'settings.section.focus' },
   { id: 'notifications', label: 'settings.section.notifications' },
+  { id: 'mail', label: 'settings.section.mail' },
   { id: 'displays', label: 'settings.section.displays' },
   { id: 'developer', label: 'settings.section.developer' },
   { id: 'account', label: 'settings.section.account' },
@@ -91,6 +93,7 @@ export function SettingsMenu({
   notifyEveningTime, onNotifyEveningTimeChange,
   notifyEventLead, onNotifyEventLeadChange,
   notifyTaskLead, onNotifyTaskLeadChange,
+  mailRev,
   user, sessionTtl, onCycleSessionTtl,
   onLogout, onExpire, onClose, panelRef,
 }: {
@@ -159,6 +162,9 @@ export function SettingsMenu({
   onNotifyEventLeadChange: (next: number) => void
   notifyTaskLead: number
   onNotifyTaskLeadChange: (next: number) => void
+  /** Bumped by App on every `mail_updated` event, so the email section can
+   *  re-read its status without a poll. */
+  mailRev?: number
   user: string
   sessionTtl: number | null
   onCycleSessionTtl: () => void
@@ -487,6 +493,13 @@ export function SettingsMenu({
               taskLead={notifyTaskLead}
               onTaskLeadChange={onNotifyTaskLeadChange}
               homeTz={homeTz} />
+          </>
+        )}
+
+        {section === 'mail' && (
+          <>
+            <div className="hintline">{tr('mail.intro')}</div>
+            <MailSection onExpire={onExpire} mailRev={mailRev} />
           </>
         )}
 

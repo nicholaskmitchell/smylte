@@ -1033,6 +1033,172 @@ export interface Settings {
   notify_telegram_bot_id?: string
 }
 
+// ── email ingestion ────────────────────────────────────────────────────────
+//
+// The payloads of /api/mail/*. The backend's `MailConfig` and the review DTOs
+// in `smylted/mail` are the source of truth; these mirror them.
+
+/** Whether a credential is stored, never the credential. `hint` is the last
+ *  four characters (or a bare ellipsis for a short one) — enough to tell two
+ *  keys apart, not enough to use either. `source` says who supplied it: the
+ *  server's environment wins over the store and cannot be changed from here. */
+export interface MailSecretStatus {
+  set: boolean
+  hint: string | null
+  source: 'env' | 'store' | null
+}
+
+export interface MailSettingsValues {
+  enabled: boolean
+  model: string
+  imap_host: string
+  imap_port: number
+  imap_username: string
+  imap_tls: 'starttls' | 'ssl'
+  imap_cert_mode: 'system' | 'pinned' | 'insecure_localhost'
+  /** PEM text — public, so it round-trips, unlike the credentials. */
+  imap_pinned_cert: string
+  folders: string[]
+  self_addresses: string[]
+  always_parse: string[]
+  never_parse: string[]
+  capture_notes_to_self: boolean
+  poll_minutes: number
+  body_max_chars: number
+  backfill_days: number
+  /** A list id, or null for "the first list". */
+  task_list: string | null
+  /** A calendar id, or null for "the first calendar". */
+  event_calendar: string | null
+  trusted_authserv_ids: string[]
+  auto_accept_min_confidence: number | null
+  /** Who decides whether an email is a task or a calendar event. */
+  kind_decider: 'model' | 'jev' | 'rules'
+  /** Rules for `kind_decider: 'rules'`, one per entry, in canonical form. */
+  kind_rules: string[]
+  jev_model: string
+}
+
+export interface MailSettingsPayload {
+  settings: MailSettingsValues
+  secrets: {
+    anthropic_api_key: MailSecretStatus
+    imap_password: MailSecretStatus
+    typesafe_api_key: MailSecretStatus
+  }
+  secrets_backend: {
+    name: string | null
+    choice: string
+    available: boolean
+    error: string | null
+  }
+  pinned_cert_fingerprint: string | null
+  deployment_enabled: boolean
+  defaults: { model: string }
+}
+
+/** A partial settings write. The credentials are WRITE-ONLY: a non-empty string
+ *  stores one, an empty string clears it, and no response ever carries one. */
+export type MailSettingsPatch = Partial<MailSettingsValues> & {
+  anthropic_api_key?: string
+  imap_password?: string
+  typesafe_api_key?: string
+}
+
+export interface MailFolder {
+  name: string
+  special: string[]
+  /** Never read, whatever is configured: Sent, Drafts, All Mail, Spam, Trash. */
+  excluded: boolean
+  selected: boolean
+}
+
+export interface MailImapTest {
+  ok: true
+  detail: string
+  folders: MailFolder[]
+  auth_results: {
+    checked: boolean
+    present: boolean
+    authserv_ids: string[]
+    trusted: boolean
+  }
+}
+
+export interface MailModel {
+  id: string
+  display_name: string
+}
+
+export interface MailStatus {
+  enabled: boolean
+  deployment_enabled: boolean
+  running: boolean
+  last_run_started?: string | null
+  last_run_finished?: string | null
+  last_ok_at?: string | null
+  last_error?: string | null
+  last_counts?: Record<string, number>
+  pending_count: number
+  cursors: { folder: string; uidvalidity: number; last_uid: number; last_scan_at: string | null }[]
+  counts: Record<string, number>
+}
+
+export interface MailSuggestion {
+  id: string
+  /** `update` adds to a task the owner already has rather than making one. */
+  kind: 'task' | 'update' | 'event'
+  status: 'pending' | 'approving' | 'approved' | 'rejected'
+  title: string
+  notes: string
+  due: string | null
+  confidence: number | null
+  event: {
+    start: string
+    end: string | null
+    all_day: boolean
+    location: string | null
+    rrule: string | null
+  } | null
+  target: { list: string; uid: string; title: string | null } | null
+  source: {
+    sender: string
+    sender_name: string | null
+    subject: string | null
+    sent_at: string | null
+    message_id: string | null
+    thread_id: string
+    folder: string | null
+  }
+  /** Later messages in the same thread folded into this suggestion. */
+  updates: {
+    sender: string
+    subject: string | null
+    sent_at: string | null
+    notes: string
+    due: string | null
+  }[]
+  created_at: string
+  decided_at: string | null
+  result: { list: string; uid: string } | null
+}
+
+export interface MailSuggestionList {
+  enabled: boolean
+  suggestions: MailSuggestion[]
+  pending_count: number
+}
+
+/** What the owner changed before approving. An omitted key keeps the
+ *  suggestion's own value; `due: null` clears it. */
+export interface ApproveSuggestionBody {
+  title?: string
+  notes?: string
+  due?: string | null
+  list?: string
+  calendar?: string
+}
+
 // Creates carry a client-generated id that becomes the CalDAV resource slug,
 // so a replayed request (retry after a lost response, transport resend) lands
 // on the same resource instead of duplicating it. Hex only — it is an href.
@@ -1361,6 +1527,42 @@ export const api = {
     .then((r) => (r as unknown as { connections: McpConnection[] }).connections ?? []),
   mcpDisconnect: (familyId: string) =>
     j<null>('DELETE', `/api/mcp/connections/${encodeURIComponent(familyId)}`),
+
+  // email ingestion. Cookie-gated like the rest of /api; the credentials go in
+  // through `putMailSettings` and never come back out of any of these.
+  /** The email settings, the state of each credential, and which secret store
+   *  is in use. */
+  mailSettings: () => j<MailSettingsPayload>('GET', '/api/mail/settings'),
+  /** Change some of them. Answers with the whole payload, so the caller can
+   *  replace its copy rather than merge. */
+  putMailSettings: (patch: MailSettingsPatch) =>
+    j<MailSettingsPayload>('PUT', '/api/mail/settings', patch),
+  /** Ask Anthropic whether the stored key works. A 409 carries the reason. */
+  testMailAnthropic: () => j<{ ok: boolean; detail: string }>(
+    'POST', '/api/mail/test/anthropic'),
+  /** Ask TypeSafe whether the stored key works. A 409 carries the reason. */
+  testMailTypesafe: () => j<{ ok: boolean; detail: string }>(
+    'POST', '/api/mail/test/typesafe'),
+  /** Log in to Bridge with what is saved and list its folders. Nothing is
+   *  fetched or changed. */
+  testMailImap: () => j<MailImapTest>('POST', '/api/mail/test/imap'),
+  /** The models the saved Anthropic key can use. A 409 when there is no key. */
+  mailModels: () => j<{ models: MailModel[] }>('GET', '/api/mail/models'),
+  mailStatus: () => j<MailStatus>('GET', '/api/mail/status'),
+  /** Ask the reader to check now rather than at its next turn. */
+  mailScan: () => j<{ queued: boolean }>('POST', '/api/mail/scan'),
+  /** What the reader proposes. `pending` is the ones awaiting a decision. */
+  mailSuggestions: (status: 'pending' | 'approved' | 'rejected' | 'all' = 'pending') =>
+    j<MailSuggestionList>('GET', `/api/mail/suggestions?status=${status}`),
+  /** Turn a suggestion into a task, an update or an event. Every field is an
+   *  optional override of what the reader proposed. */
+  approveSuggestion: (id: string, body: ApproveSuggestionBody) =>
+    j<{ suggestion: MailSuggestion; created: unknown }>(
+      'POST', `/api/mail/suggestions/${encodeURIComponent(id)}/approve`, body),
+  /** Dismiss one. Touches no task, and the same email is not suggested again. */
+  rejectSuggestion: (id: string) =>
+    j<{ suggestion: MailSuggestion }>(
+      'POST', `/api/mail/suggestions/${encodeURIComponent(id)}/reject`),
 
   // misc
   tags: () => j<string[]>('GET', '/api/tags'),
