@@ -1,0 +1,19 @@
+Message-ID: <html-001@school.example>
+Date: Mon, 05 Oct 2026 10:00:00 +0000
+From: Ms Smith <office@school.example>
+To: me@proton.me
+Subject: Trip details
+MIME-Version: 1.0
+Content-Type: text/html; charset=utf-8
+
+<html><head><title>Trip</title><style>p { color: red }</style></head>
+<body>
+<script>alert("do not read me")</script>
+<p>Hello &amp; welcome.</p>
+<p>First line<br>second line</p>
+<ul>
+  <li>Bring a packed lunch</li>
+  <li>Wear <b>sturdy</b> shoes</li>
+</ul>
+<p>Details at <a href="https://school.example/trip">the trip page</a>.</p>
+</body></html>

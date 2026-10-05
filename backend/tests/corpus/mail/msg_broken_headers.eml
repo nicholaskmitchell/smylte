@@ -1,0 +1,10 @@
+Message-ID: <broken-001@school.example>
+Date: not a date at all
+From: =?bogus-charset?q?abc?= <office@school.example>
+To: me@proton.me
+Subject: =?utf-8?q?=ZZ=GG?= still readable
+MIME-Version: 1.0
+Content-Type: text/plain; charset=nonsense-9
+Content-Transfer-Encoding: base64
+
+!!!not base64!!!

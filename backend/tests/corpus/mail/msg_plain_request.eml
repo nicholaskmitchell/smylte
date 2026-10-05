@@ -1,0 +1,18 @@
+Message-ID: <req-001@school.example>
+Date: Mon, 05 Oct 2026 09:30:00 +0200
+From: "Ms Smith" <Office@School.example>
+To: Nick <me@proton.me>, parents@club.example
+Cc: Coach <coach@club.example>, me@proton.me
+Subject: Permission slip for the museum trip
+References: <root-001@school.example> <req-000@school.example>
+In-Reply-To: <req-000@school.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+Hello,
+
+Please sign and return the permission slip for the museum trip by Friday.
+
+Thanks,
+Ms Smith
