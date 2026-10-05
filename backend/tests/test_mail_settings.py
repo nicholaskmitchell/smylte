@@ -1,6 +1,7 @@
 """The mail configuration: tolerant load, strict checkers, folder and host rules."""
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import ssl
 from datetime import datetime, timedelta, timezone
@@ -33,10 +34,12 @@ def test_load_defaults():
     assert S.load({}) == MailConfig()
     assert S.load(None) == MailConfig()
     assert S.load("not a mapping") == MailConfig()
-    assert S.FIELDS[0] == "enabled" and S.FIELDS[-5:] == (
-        "kind_decider", "kind_rules", "dedup_decider", "jev_model", "anthropic_workspace_id")
+    assert S.FIELDS[0] == "enabled" and S.FIELDS[-6:] == (
+        "kind_decider", "kind_rules", "dedup_decider", "jev_model", "anthropic_workspace_id",
+        "imap_password_binding")
     assert (MailConfig().kind_decider, MailConfig().dedup_decider) == ("jev", "jev")
-    assert set(S.public(MailConfig())) == set(S.FIELDS)
+    # The password binding is the server's bookkeeping, not a setting.
+    assert set(S.public(MailConfig())) == set(S.FIELDS) - {"imap_password_binding"}
 
 
 def test_load_good_values():
@@ -181,6 +184,42 @@ def test_check_pem_and_fingerprint():
             S.check_pem(bad)
     assert S.pem_fingerprint("") is None
     assert S.pem_fingerprint(junk) is None
+
+
+def test_connection_binding_covers_every_bound_field():
+    pem = _self_signed_pem()
+    base = S.load({"imap_host": "127.0.0.1", "imap_port": 1143, "imap_username": "me@proton.me",
+                   "imap_cert_mode": "pinned", "imap_pinned_cert": pem})
+    binding = S.connection_binding(base)
+    assert len(binding) == 64 and binding == S.connection_binding(base)
+    changes = {"imap_host": "127.0.0.2", "imap_port": 1144, "imap_tls": "ssl",
+               "imap_cert_mode": "system", "imap_pinned_cert": _self_signed_pem(),
+               "imap_username": "you@proton.me"}
+    assert set(changes) == set(S.BOUND_FIELDS)
+    for field, value in changes.items():
+        assert S.connection_binding(dataclasses.replace(base, **{field: value})) != binding, field
+    # Not bound: the host's case, the PEM's line breaks, and every other setting.
+    same = S.load({"imap_host": "127.0.0.1", "imap_port": 1143, "imap_username": "me@proton.me",
+                   "imap_cert_mode": "pinned", "imap_pinned_cert": pem.replace("\n", "\r\n"),
+                   "folders": ["Labels/School"], "model": "claude-other"})
+    assert S.connection_binding(same) == binding
+    host = dataclasses.replace(base, imap_host="Bridge.Local")
+    assert S.connection_binding(host) == S.connection_binding(
+        dataclasses.replace(base, imap_host="bridge.local"))
+
+
+def test_password_binding_ok_and_its_load():
+    cfg = S.load({"imap_host": "127.0.0.1"})
+    binding = S.connection_binding(cfg)
+    assert not S.password_binding_ok(cfg)                  # no binding: never ok
+    bound = S.load({"imap_host": "127.0.0.1", "imap_password_binding": binding})
+    assert bound.imap_password_binding == binding and S.password_binding_ok(bound)
+    moved = S.load({"imap_host": "127.0.0.2", "imap_password_binding": binding})
+    assert not S.password_binding_ok(moved)
+    for bad in ("", "x" * 64, binding.upper(), binding[:-1], 7, None):
+        assert S.load({"imap_password_binding": bad}).imap_password_binding == "", bad
+    assert "imap_password_binding" not in S.public(bound)
+    assert "enter it again" in S.PASSWORD_BINDING_MESSAGE
 
 
 def test_hard_excluded_folders():

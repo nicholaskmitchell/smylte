@@ -46,6 +46,15 @@ is less reliable and therefore stricter about what counts as a cut line. A
 forwarded-message marker is deliberately not a cut point: a note-to-self
 forward is *about* the forwarded content.
 
+Only Outlook-style header blocks cut everything after them. An "On … wrote:"
+attribution does not: the `>` lines are the quote, and a reply written below
+the quote or between its pieces is exactly the new text. Cutting at the
+attribution, the obvious rule, dropped every bottom-posted reply whole. Outlook
+writes the same header block above a forward as above a reply, so a forward
+prefix in the subject (`FW:`, `Fwd:`, `WG:`, …) switches the cut off, as does a
+cut that would leave nothing; the cost is a forward that also carries a reply
+chain reaching the model whole, which beats an empty body.
+
 **Calendar parts** (`text/calendar`, `application/ics`, `*.ics`) are collected
 whether inline or attached and are never body text: the `.ics` fast path reads
 them, and pasting iCalendar syntax into the prompt would only hand the model
@@ -134,6 +143,19 @@ def _decoded(value: object) -> str:
 
 
 def _values(headers: Message, name: str) -> list[str]:
+    """Every value of header `name`, as text.
+
+    Read from `raw_items()`, not `get_all()`: for a value with raw 8-bit bytes
+    (`Subject: Rückmeldung` sent as UTF-8, which RFC 6532 allows and many
+    clients do) compat32's `get_all` returns a `Header` whose `str()` has
+    already replaced every such byte with U+FFFD. `raw_items()` gives the
+    surrogate-escaped string, which `_unescape` reads back as UTF-8.
+    """
+    key = name.lower()
+    try:
+        return [_raw(v) for k, v in headers.raw_items() if k.lower() == key]
+    except Exception:
+        pass
     try:
         return [_raw(v) for v in headers.get_all(name, [])]
     except Exception:
@@ -147,10 +169,7 @@ def _first(headers: Message, name: str) -> str | None:
 
 def header_value(msg: ParsedMessage, name: str) -> str | None:
     """The first value of header `name`, decoded to text, or None."""
-    try:
-        vals = msg.headers.get_all(name, [])
-    except Exception:
-        return None
+    vals = _values(msg.headers, name)
     return _decoded(vals[0]) if vals else None
 
 
@@ -192,7 +211,11 @@ def _is_internal(mid: str) -> bool:
 
 def _address_list(headers: Message, name: str) -> tuple[str, ...]:
     out: list[str] = []
-    for _, addr in addresses.parse_address_list(_values(headers, name)):
+    try:
+        parsed = addresses.parse_address_list(_values(headers, name))
+    except Exception:                    # e.g. RecursionError on nested comments
+        return ()
+    for _, addr in parsed:
         if addr not in out:
             out.append(addr)
     return tuple(out)
@@ -231,7 +254,8 @@ def _part_text(part: Message) -> str:
         return bytes(payload).decode("utf-8", errors="replace")
 
 
-def _extract_body(root: Message | None) -> tuple[str, bool, tuple[Attachment, ...]]:
+def _extract_body(root: Message | None, *,
+                  keep_forwarded: bool = False) -> tuple[str, bool, tuple[Attachment, ...]]:
     plain: str | None = None
     html: str | None = None
     calendars: list[Attachment] = []
@@ -265,7 +289,7 @@ def _extract_body(root: Message | None) -> tuple[str, bool, tuple[Attachment, ..
     if plain is not None and (len(plain.strip()) >= 20 or html is None):
         text = plain
     elif html is not None:
-        text = html_to_text(html)
+        text = html_to_text(html, keep_forwarded=keep_forwarded)
         html_used = True
     else:
         text = ""
@@ -285,10 +309,16 @@ def parse_message(raw: bytes) -> ParsedMessage:
         root = None
 
     from_values = _values(headers, "From")
-    # The count includes entries that are not valid addresses: a second,
-    # malformed From must still make the header "not exactly one address".
-    from_count = sum(1 for _, a in getaddresses(from_values) if a.strip())
-    from_list = addresses.parse_address_list(from_values)
+    try:
+        # The count includes entries that are not valid addresses: a second,
+        # malformed From must still make the header "not exactly one address".
+        from_count = sum(1 for _, a in getaddresses(from_values) if a.strip())
+        from_list = addresses.parse_address_list(from_values)
+    except Exception:
+        # The stdlib address parser recurses once per nested comment, so a
+        # From of six hundred "(" raises RecursionError. No address is the
+        # answer that keeps the message out of every sender list.
+        from_count, from_list = 0, []
     from_name = _decoded(from_list[0][0]) if from_list else ""
     from_name = re.sub(r"\s+", " ", from_name).strip()
     from_addr = from_list[0][1] if from_list else None
@@ -300,7 +330,7 @@ def parse_message(raw: bytes) -> ParsedMessage:
     in_reply_to = next((i for i in parse_id_list(_first(headers, "In-Reply-To"))
                         if not _is_internal(i)), None)
 
-    text, html_used, calendars = _extract_body(root)
+    text, html_used, calendars = _extract_body(root, keep_forwarded=_is_forward(subject))
     return ParsedMessage(
         message_id=normalize_message_id(_first(headers, "Message-ID")),
         from_name=from_name,
@@ -417,8 +447,22 @@ def _drop_outlook_reply(root) -> None:
         el.drop_tree()
 
 
-def html_to_text(html: str) -> str:
+def _render(root) -> str:
+    w = _Writer()
+    _walk(root, w, False)
+    return _tidy("".join(w.parts))
+
+
+def html_to_text(html: str, *, keep_forwarded: bool = False) -> str:
     """Readable text of an HTML mail, without the quoted conversation.
+
+    Outlook writes the same `divRplyFwdMsg` header block above a forwarded
+    message as above a quoted reply, so the markup cannot tell them apart.
+    `keep_forwarded` (the subject says it is a forward) keeps that block and
+    everything after it, because a forward is *about* the forwarded message.
+    And when removing it would leave no text at all — a forward with nothing
+    written above it — the forwarded message is what there is to read, so it
+    is kept.
 
     Falls back to stripping tags with a regex if lxml cannot make a tree of it.
     """
@@ -434,10 +478,11 @@ def html_to_text(html: str) -> str:
         for el in root.xpath(_QUOTE_XPATH):
             if el.getparent() is not None:
                 el.drop_tree()
+        if keep_forwarded or not root.xpath(_OUTLOOK_XPATH):
+            return _render(root)
+        whole = _render(root)
         _drop_outlook_reply(root)
-        w = _Writer()
-        _walk(root, w, False)
-        return _tidy("".join(w.parts))
+        return _render(root) or whole
     except Exception as exc:
         log.debug("mail: html could not be parsed, stripping tags (%s)", type(exc).__name__)
         return _tidy(re.sub(r"<[^>]+>", " ", html))
@@ -460,17 +505,36 @@ _FORWARD_MARKER = re.compile(
 )
 
 
+_FORWARD_SUBJECT = re.compile(r"^\s*(?:fwd?|wg|tr|rv)\s*:", re.IGNORECASE)
+
+
+def _is_forward(subject: str) -> bool:
+    """Does the subject start with a forward prefix (Fwd, FW, WG, TR, RV)?"""
+    return bool(_FORWARD_SUBJECT.match(subject or ""))
+
+
+def _attribution_length(lines: list[str], i: int) -> int:
+    """How many lines from `i` on are a reply attribution ("On … wrote:",
+    possibly wrapped onto a second line, or "Am … schrieb …:"); 0 if none."""
+    if any(rx.match(lines[i]) for rx in (_ON_WROTE, _AM_SCHRIEB)):
+        return 1
+    if i + 1 < len(lines):
+        joined = lines[i].rstrip() + " " + lines[i + 1].strip()
+        if any(rx.match(joined) for rx in (_ON_WROTE, _AM_SCHRIEB)):
+            return 2
+    return 0
+
+
 def _cut_index(lines: list[str]) -> int:
+    """The first line of an Outlook-style quoted message, or len(lines)."""
     n = len(lines)
     for i, line in enumerate(lines):
-        joined = line.rstrip() + " " + lines[i + 1].strip() if i + 1 < n else None
-        for rx in (_ON_WROTE, _AM_SCHRIEB):
-            if rx.match(line) or (joined is not None and rx.match(joined)):
-                return i
         if _ORIGINAL.match(line) or _URSPRUENGLICH.match(line):
             return i
         if _UNDERSCORES.match(line):
-            following = [ln for ln in lines[i + 1:] if ln.strip()][:3]
+            # Bounded: a body of nothing but underscore lines must not make
+            # each one scan the rest of the message.
+            following = [ln for ln in lines[i + 1:i + 9] if ln.strip()][:3]
             if any(_FROM_LINE.match(ln) for ln in following):
                 return i
         if _FROM_HEADER.match(line):
@@ -484,11 +548,38 @@ def _cut_index(lines: list[str]) -> int:
     return n
 
 
-def strip_quotes(text: str) -> str:
-    """What the sender wrote, without the conversation quoted beneath it."""
+def strip_quotes(text: str, *, subject: str = "") -> str:
+    """What the sender wrote, without the conversation quoted beneath it.
+
+    Two kinds of marker, treated differently:
+
+    - An attribution ("On … wrote:", "Am … schrieb …:") introduces `>`-quoted
+      lines, and the sender's own text may come after the quote (bottom
+      posting) or between its pieces (inline answers). So only the
+      attribution line itself is removed; the `>` lines go with every other
+      `>` line, and the unquoted text around them stays.
+    - An Outlook-style header block ("-----Original Message-----", underscores
+      then From:, a From:/Sent:/To: block) quotes without `>`, so everything
+      from it on is cut. Not when `subject` marks a forward — the same block
+      then introduces the content being passed on — and not when the cut
+      would leave nothing, which is a memo that starts with From:/Date: lines
+      or a forward with nothing written above it.
+    """
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    kept = lines[:_cut_index(lines)]
-    kept = [ln.rstrip() for ln in kept if not ln.lstrip().startswith(">")]
+    without_attribution: list[str] = []
+    i = 0
+    while i < len(lines):
+        skip = _attribution_length(lines, i)
+        if skip:
+            i += skip
+            continue
+        without_attribution.append(lines[i])
+        i += 1
+    lines = without_attribution
+    cut = _cut_index(lines)
+    if not _is_forward(subject) and any(ln.strip() for ln in lines[:cut]):
+        lines = lines[:cut]
+    kept = [ln.rstrip() for ln in lines if not ln.lstrip().startswith(">")]
     return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
 
 

@@ -158,3 +158,43 @@ def test_trusted_list_exact_vs_wildcard():
     assert [h.authserv_id for h in authres.trusted_only(parsed, ["mail.example"])] == ["mail.example"]
     assert [h.authserv_id for h in authres.trusted_only(parsed, ["*.mail.example"])] == ["mx.mail.example"]
     assert authres.trusted_only(parsed, ["someone@mail.example", "not a domain"]) == []
+
+
+def test_forged_dkim_pass_below_protons_dkim_none_fails():
+    # A domain with no DMARC record, spoofed: Proton records dmarc=none,
+    # dkim=none and a softfail, and the sender wrote a dkim=pass of its own
+    # under a trusted-looking id further down.
+    msg = _msg(_ar("dmarc=none (p=none dis=none) header.from=school.org"),
+               _ar("spf=softfail smtp.mailfrom=evil.example"),
+               _ar("dkim=none"),
+               _ar("arc=none"),
+               "Received: from mx.evil.example by mailin008.protonmail.ch",
+               _ar("dkim=pass header.d=school.org", server="mailin001.protonmail.ch"))
+    v = _verify(msg)
+    assert v.passed is False
+    assert v.reason == "no DMARC pass and no SPF or DKIM pass aligned with school.org"
+
+
+def test_forged_spf_pass_below_protons_spf_pass_for_another_domain_fails():
+    msg = _msg(_ar("dmarc=none (p=none dis=none) header.from=school.org"),
+               _ar("spf=pass smtp.mailfrom=bounce@evil.example"),
+               _ar("dkim=none"),
+               _ar("spf=pass smtp.mailfrom=school.org", server="mailin001.protonmail.ch"))
+    assert _verify(msg).passed is False
+
+
+def test_protons_own_dkim_pass_on_top_passes():
+    msg = _msg(_ar("dmarc=none header.from=school.org"),
+               _ar("dkim=pass header.d=school.org"),
+               _ar("dkim=none", server="mailin001.protonmail.ch"))
+    v = _verify(msg)
+    assert v.passed is True and v.method == "dkim"
+    assert v.reason == f"dkim=pass header.d=school.org aligned with school.org ({PROTON})"
+
+
+def test_protons_own_spf_pass_on_top_passes():
+    msg = _msg(_ar("dmarc=none header.from=school.org"),
+               _ar("spf=pass smtp.mailfrom=school.org"),
+               _ar("spf=fail smtp.mailfrom=school.org", server="mailin001.protonmail.ch"))
+    v = _verify(msg)
+    assert v.passed is True and v.method == "spf"

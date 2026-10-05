@@ -1,7 +1,11 @@
 """The .ics fast path."""
 from __future__ import annotations
 
+import threading
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+import pytest
 
 from smylted.mail.ics import MAX_EVENTS, parse_ics
 
@@ -102,3 +106,82 @@ def test_events_are_capped():
 def test_fields_are_length_capped():
     (ev,) = parse_ics(cal("DTSTART:20261005T170000Z\nSUMMARY:" + "s" * 900 + "\nDESCRIPTION:" + "d" * 5000))
     assert len(ev.summary) == 300 and len(ev.description) == 2000
+
+
+def _within(seconds: float, fn):
+    """Run `fn` in a thread and fail, instead of hanging the suite, when it
+    does not finish in time."""
+    out: list = []
+    worker = threading.Thread(target=lambda: out.append(fn()), daemon=True)
+    worker.start()
+    worker.join(seconds)
+    assert not worker.is_alive(), f"did not finish within {seconds}s"
+    assert out, "raised instead of returning"
+    return out[0]
+
+
+# A sender-written VTIMEZONE whose rules recur every second from 1601: asking
+# the tzinfo built from it for an offset in 2026 walks four centuries of seconds.
+HOSTILE_TZ = """BEGIN:VTIMEZONE
+TZID:{tzid}
+BEGIN:STANDARD
+DTSTART:16010101T000000
+TZOFFSETFROM:+0100
+TZOFFSETTO:+0200
+RRULE:FREQ=SECONDLY
+END:STANDARD
+BEGIN:DAYLIGHT
+DTSTART:16010101T000001
+TZOFFSETFROM:+0200
+TZOFFSETTO:+0100
+RRULE:FREQ=SECONDLY
+END:DAYLIGHT
+END:VTIMEZONE
+"""
+
+
+def _with_timezone(tzid: str, event: str) -> bytes:
+    head = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:REQUEST\r\n" + HOSTILE_TZ.format(tzid=tzid)
+    body = f"BEGIN:VEVENT\r\n{event.strip()}\r\nEND:VEVENT\r\n"
+    return (head + body + "END:VCALENDAR\r\n").replace("\r\n", "\n").replace("\n", "\r\n").encode()
+
+
+def test_hostile_vtimezone_gives_floating_time():
+    data = _with_timezone("Evil", """UID:evil-1
+DTSTART;TZID=Evil:20261014T180000
+DTEND;TZID=Evil:20261014T190000
+SUMMARY:Parent evening""")
+
+    def run():
+        (ev,) = parse_ics(data)
+        return ev, ev.start.isoformat(), ev.end.isoformat()
+
+    ev, start, end = _within(5, run)
+    assert start == "2026-10-14T18:00:00" and end == "2026-10-14T19:00:00"
+    assert ev.start.tzinfo is None and ev.end.tzinfo is None
+
+
+def test_hostile_vtimezone_with_a_real_name_gets_the_real_zone():
+    data = _with_timezone("Europe/Berlin", """UID:evil-2
+DTSTART;TZID=Europe/Berlin:20261014T180000
+DURATION:PT1H
+SUMMARY:Parent evening""")
+
+    def run():
+        (ev,) = parse_ics(data)
+        return ev, ev.start.utcoffset(), ev.end.utcoffset()
+
+    ev, start_offset, end_offset = _within(5, run)
+    assert isinstance(ev.start.tzinfo, ZoneInfo) and str(ev.start.tzinfo) == "Europe/Berlin"
+    assert start_offset == end_offset == timedelta(hours=2)
+
+
+@pytest.mark.parametrize("method", ["REPLY", "COUNTER", "DECLINECOUNTER", "REFRESH", "CANCEL", "X-OTHER"])
+def test_methods_that_do_not_propose_an_event(method):
+    assert parse_ics(cal("DTSTART:20261005T170000Z\nSUMMARY:x", method=method)) == []
+
+
+@pytest.mark.parametrize("method", [None, "PUBLISH", "REQUEST", "ADD", "request"])
+def test_methods_that_propose_an_event(method):
+    (ev,) = parse_ics(cal("DTSTART:20261005T170000Z\nSUMMARY:x", method=method))
+    assert ev.summary == "x"

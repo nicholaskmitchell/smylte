@@ -3481,8 +3481,13 @@ class SmylteService:
         The same borrow `notifications` performs, for the mail pipeline's
         ledger and suggestions. Never held across IMAP or Anthropic I/O: the
         pipeline claims, releases the lock, does the slow work, then settles.
+
+        Refused once the service is closed: a scan still finishing a message at
+        shutdown gets a clear error instead of a write to a closed connection.
         """
         with self._lock:
+            if self._closed:
+                raise RuntimeError("the service is closed")
             return fn(self._conn, *args, **kwargs)
 
     def publish_mail_changed(self) -> None:

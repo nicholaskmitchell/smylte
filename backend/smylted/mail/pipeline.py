@@ -30,6 +30,22 @@ Why it is built this way:
   folder stops there so the cursor does not move past a message that was never
   read. The alternative — settle every failure — silently loses mail on every
   Anthropic outage.
+- **An interrupted run loses nothing.** A run starts by releasing every claim
+  nobody settled: the run lock makes this process the only claimer, so such a
+  claim belongs to a run that died (crash, kill, restart), and its message is
+  read again. A claim found unsettled mid-run is retried later, never called
+  a duplicate. Shutdown asks the scan to stop after the message in hand and
+  waits for it, so the cursor is saved before the database closes. A message
+  that cannot even be parsed is settled as an error under a hash of its
+  bytes: one message never stops a folder or a run.
+- **A date window ends at UIDNEXT.** The first scan of a folder (and a rescan
+  after the server renumbered it) searches by date. Once that window is done
+  the cursor jumps to the folder's UIDNEXT, so an old message sitting at a
+  high UID is not read on the next run; a window cut short (too many
+  messages, a stop) is remembered and continued, by date, next time.
+- **A dropped connection is retried once.** A network or protocol failure on
+  a folder saves the cursor, reconnects once and retries the folder; a
+  second failure ends the run with the error.
 - **Configuration errors stop the run.** A missing or rejected key, an unknown
   model: every further message would fail the same way, and settling each one
   as an error would burn through the inbox. `RunAbort` releases the message in
@@ -66,6 +82,7 @@ keys, stages and outcomes, and every error string passes through `redact`.
 from __future__ import annotations
 
 import email
+import hashlib
 import json
 import logging
 import re
@@ -92,7 +109,12 @@ log = logging.getLogger("smylted.mail")
 
 MAX_PER_FOLDER_PER_RUN = 100
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
-STALE_CLAIM_AGE = timedelta(hours=1)
+# Long enough for any approval's CalDAV write to finish (its timeout is 30 s).
+STUCK_APPROVING_AGE = timedelta(minutes=10)
+# Quote stripping runs before the body is cut to `body_max_chars`; this bounds
+# its input so a megabyte of text costs no more than the body anyone reads.
+MAX_STRIP_CHARS = 200_000
+AUTHRES_SAMPLE = 10
 MAX_CANDIDATE_TASKS = 5
 MAX_CANDIDATE_SUGGESTIONS = 5
 MAX_CANDIDATE_REJECTIONS = 5
@@ -130,8 +152,9 @@ class RunReport:
     started_at: str
     finished_at: str | None = None
     ok: bool = True
-    skipped_reason: str | None = None     # "disabled" | "deployment" | "busy"
+    skipped_reason: str | None = None     # "disabled" | "deployment" | "busy" | "stopping"
     error: str | None = None
+    reconnects: int = 0
     counts: dict[str, int] = field(default_factory=dict)      # outcome -> n
     folders: dict[str, dict] = field(default_factory=dict)    # folder -> {"uidvalidity","fetched","last_uid","rescanned"}
 
@@ -262,6 +285,7 @@ class Ingestor:
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(timezone.utc))
         self._log = log or logging.getLogger("smylted.mail")
         self._run_lock = threading.Lock()
+        self._stop = threading.Event()
 
     @property
     def llm(self) -> LlmClient:
@@ -282,8 +306,23 @@ class Ingestor:
 
     # ── one scan ──
 
+    def request_stop(self) -> None:
+        """Ask a running scan to stop after the message in hand, and refuse new ones.
+        For shutdown; there is no way back."""
+        self._stop.set()
+
+    def wait_idle(self, timeout: float) -> bool:
+        """Wait up to `timeout` seconds for a running scan to finish; True when none runs."""
+        if not self._run_lock.acquire(timeout=timeout):
+            return False
+        self._run_lock.release()
+        return True
+
     def run_once(self) -> RunReport:
         """Scan every configured folder once. Never raises."""
+        if self._stop.is_set():
+            now = settings.utcnow_iso()
+            return RunReport(started_at=now, finished_at=now, skipped_reason="stopping")
         if not self._run_lock.acquire(blocking=False):
             now = settings.utcnow_iso()
             return RunReport(started_at=now, finished_at=now, skipped_reason="busy")
@@ -319,6 +358,14 @@ class Ingestor:
         report.error = redact(error)
         self._log.warning("mail: run stopped: %s", report.error)
 
+    @staticmethod
+    def _check_binding(cfg: MailConfig) -> None:
+        """Refuse a stored password saved for other server settings (see
+        `settings.password_binding_ok`): sending it to whatever host the
+        settings now name would hand the Bridge password to that host."""
+        if not settings.password_binding_ok(cfg):
+            raise MailConnectError(settings.PASSWORD_BINDING_MESSAGE, kind="config")
+
     def _imap_config(self, cfg: MailConfig) -> ImapConfig:
         return ImapConfig(host=cfg.imap_host, port=cfg.imap_port, username=cfg.imap_username,
                           tls=cfg.imap_tls, cert_mode=cfg.imap_cert_mode,
@@ -326,7 +373,14 @@ class Ingestor:
 
     def _scan(self, cfg: MailConfig, report: RunReport) -> None:
         now = self._clock()
-        self._host.mail(store.mail_release_stale, before=_iso(now - STALE_CLAIM_AGE))
+        # The run lock makes this process the only claimer, so an unsettled
+        # claim at the start of a run belongs to a run that never finished —
+        # crash, kill, restart — and its message must be read again.
+        self._host.mail(store.mail_release_unsettled)
+        # An approve interrupted after its compare-and-swap; the deterministic
+        # client_id makes the retried create idempotent.
+        self._host.mail(store.mail_reset_stuck_approving,
+                        before=_iso(now - STUCK_APPROVING_AGE))
         try:
             password = self._secrets.get("imap_password")
             api_key = self._secrets.get("anthropic_api_key")
@@ -339,6 +393,7 @@ class Ingestor:
             # every message would be claimed and released for nothing.
             return self._fail(report, "no Anthropic API key is set")
         try:
+            self._check_binding(cfg)
             source = self._source_factory(self._imap_config(cfg), password)
         except MailConnectError as e:
             return self._fail(report, str(e))
@@ -354,12 +409,31 @@ class Ingestor:
                     continue
                 if found not in targets:
                     targets.append(found)
-            for folder in targets:
+            i = 0
+            while i < len(targets) and not self._stop.is_set():
                 try:
-                    self._scan_folder(source, folder, cfg, report)
+                    self._scan_folder(source, targets[i], cfg, report)
                 except RunAbort as e:
                     self._fail(report, str(e))
                     break
+                except MailConnectError as e:
+                    # Bridge restarts and dropped connections are routine: the
+                    # folder saved its cursor, so reconnect once and retry it.
+                    # A second failure, or a failing reconnect, ends the run.
+                    if report.reconnects or e.kind not in ("network", "protocol"):
+                        raise
+                    self._log.info("mail: %s failed (%s); reconnecting once",
+                                   targets[i].name, e)
+                    report.reconnects += 1
+                    try:
+                        source.close()
+                    except Exception:  # noqa: BLE001 — closing a dead connection
+                        pass
+                    source = self._source_factory(self._imap_config(cfg), password)
+                    continue
+                i += 1
+            if self._stop.is_set() and report.ok:
+                report.skipped_reason = "stopping"
         except MailConnectError as e:
             self._fail(report, str(e))
         finally:
@@ -369,6 +443,16 @@ class Ingestor:
                 pass
 
     def _scan_folder(self, source, folder: FolderInfo, cfg: MailConfig, report: RunReport) -> None:
+        """Read one folder from its cursor.
+
+        A folder is read in one of two modes. Normal: every UID after the
+        cursor. Window: by date — the first scan (since the backfill start),
+        a rescan after UIDVALIDITY changed (since before the last scan), or a
+        window an earlier run did not finish (since its stored date, above its
+        stored UID). A window that runs to the end moves the cursor to
+        UIDNEXT - 1, so the old mail it skipped by date is not picked up as
+        "new" next time; one that stops early stores its date to carry on.
+        """
         host = self._host
         state = source.select(folder)
         cur = host.mail(store.mail_get_cursor, folder.name)
@@ -376,9 +460,9 @@ class Ingestor:
         backfill_since = (now - timedelta(days=cfg.backfill_days)).date()
         same_validity = cur is not None and cur["uidvalidity"] == state.uidvalidity
         rescan = False
+        since: date | None = None
         if cur is None:
-            uids = source.search_uids(since=backfill_since)
-            floor = 0
+            since, floor = backfill_since, 0
         elif not same_validity:
             # The server renumbered the folder: every UID we remember is
             # meaningless. Search by date instead, from before the last scan,
@@ -389,13 +473,24 @@ class Ingestor:
                 since = min(backfill_since, (last_scan - timedelta(days=1)).date())
             self._log.info("mail: UIDVALIDITY of %s changed (%s → %s); rescanning since %s",
                            folder.name, cur["uidvalidity"], state.uidvalidity, since.isoformat())
-            uids = source.search_uids(since=since)
             floor = 0
             rescan = True
-        else:
-            uids = source.search_uids(after_uid=cur["last_uid"])
+        elif cur["window_since"]:
+            try:
+                since = date.fromisoformat(cur["window_since"])
+            except ValueError:
+                since = backfill_since
             floor = cur["last_uid"]
-        uids = sorted(u for u in uids if u > floor)[:MAX_PER_FOLDER_PER_RUN]
+        else:
+            floor = cur["last_uid"]
+        window = since is not None
+        if window:
+            found = source.search_uids(since=since)
+        else:
+            found = source.search_uids(after_uid=floor)
+        found = sorted(u for u in found if u > floor)
+        truncated = len(found) > MAX_PER_FOLDER_PER_RUN
+        uids = found[:MAX_PER_FOLDER_PER_RUN]
 
         info = {"uidvalidity": state.uidvalidity, "fetched": 0, "last_uid": floor,
                 "rescanned": rescan}
@@ -404,6 +499,8 @@ class Ingestor:
         complete = False
         try:
             for m in source.fetch(uids, max_bytes=MAX_MESSAGE_BYTES):
+                if self._stop.is_set():
+                    break
                 info["fetched"] += 1
                 if m.raw is None:
                     self._skip_oversize(folder, state.uidvalidity, m.uid)
@@ -426,15 +523,26 @@ class Ingestor:
                 complete = True
         finally:
             # Save what was achieved — unless nothing was, and the loop stopped
-            # early: a new or rescanned folder saved at 0 would turn the next
-            # run's date search into "every UID", the whole folder.
-            if complete or last_good > floor:
-                last_uid = max(last_good, cur["last_uid"] if same_validity else 0)
-                if not uids and state.uidnext:
+            # early: the cursor (or its absence) then still says where to
+            # start, which saving would only blur.
+            window_since = None
+            if complete:
+                # Every UID asked for was read or is gone (expunged between the
+                # search and the fetch), so the cursor may pass all of them.
+                last_uid = max(last_good, floor, uids[-1] if uids else 0)
+                if window and truncated:
+                    window_since = since.isoformat()
+                elif (window or not uids) and state.uidnext:
                     last_uid = max(last_uid, state.uidnext - 1)
+            else:
+                last_uid = max(last_good, floor)
+                if window:
+                    window_since = since.isoformat()
+            if complete or last_good > floor:
                 info["last_uid"] = last_uid
                 host.mail(store.mail_set_cursor, folder.name, uidvalidity=state.uidvalidity,
-                          last_uid=last_uid, last_scan_at=_iso(self._clock()))
+                          last_uid=last_uid, last_scan_at=_iso(self._clock()),
+                          window_since=window_since)
 
     def _skip_oversize(self, folder: FolderInfo, uidvalidity: int, uid: int) -> None:
         key = f"oversize:{folder.name}:{uidvalidity}:{uid}"
@@ -475,13 +583,16 @@ class Ingestor:
         Raises only `RunAbort`; every other failure is an `Outcome`.
         """
         cfg = config or self.config()
-        msg = message.parse_message(raw)
-        key = message.ledger_key(msg)
-        tid = message.thread_id(msg)
+        try:
+            msg = message.parse_message(raw)
+            key = message.ledger_key(msg)
+            tid = message.thread_id(msg)
+        except Exception as exc:  # noqa: BLE001 — one bad message must not stall the folder
+            return self._unreadable(folder, raw, uid, exc)
         claimed = self._host.mail(store.mail_claim, key, message_id=msg.message_id,
                                   thread_id=tid, folder=folder.name, uid=uid)
         if not claimed:
-            return Outcome("ledger", "duplicate", "already processed")
+            return self._claim_lost(key)
         c = _Msg(folder=folder, msg=msg, key=key, tid=tid, internaldate=internaldate, cfg=cfg)
         try:
             out = self._stages(c)
@@ -493,6 +604,41 @@ class Ingestor:
             out = self._settle(c, "error", "error", detail, extra=False)
         self._log.info("mail: %s in %s: %s/%s", key, folder.name, out.stage, out.outcome)
         return out
+
+    def _claim_lost(self, key: str) -> Outcome:
+        """The outcome for a message whose key is already in the ledger.
+
+        Settled: a decision, so a duplicate. Unsettled: another caller is
+        still working on it, or died doing so — retried later, never counted
+        as done, or the cursor would pass a message nobody read.
+        """
+        row = self._host.mail(store.mail_ledger_get, key)
+        if row is None or row["settled_at"] is None:
+            return Outcome("ledger", "retry", "an unfinished run holds this message",
+                           transient=True)
+        return Outcome("ledger", "duplicate", "already processed")
+
+    def _unreadable(self, folder: FolderInfo, raw: bytes, uid: int | None,
+                    exc: Exception) -> Outcome:
+        """Settle a message that could not even be parsed, under a hash of its bytes.
+
+        There is no Message-ID to key it by, and leaving it unsettled would
+        stop the folder at it on every run.
+        """
+        key = "hash:" + hashlib.sha256(raw).hexdigest()
+        detail = redact_exc(exc)[:300]
+        self._log.warning("mail: %s in %s could not be read: %s", key, folder.name, detail)
+
+        def write(conn):
+            with store.tx(conn):
+                if not store.mail_claim(conn, key, message_id=None, thread_id=key,
+                                        folder=folder.name, uid=uid):
+                    return False
+                store.mail_settle(conn, key, stage="error", outcome="error", detail=detail)
+                return True
+        if not self._host.mail(write):
+            return self._claim_lost(key)
+        return Outcome("error", "error", detail)
 
     def _settle(self, c: _Msg, stage: str, outcome: str, detail: str = "", *,
                 suggestion_id: str | None = None, extra: bool = True) -> Outcome:
@@ -570,7 +716,7 @@ class Ingestor:
             return self._stage_fastpath(c, *hit)
 
         # 8. extraction
-        body = message.strip_quotes(msg.text)
+        body = message.strip_quotes(msg.text[:MAX_STRIP_CHARS], subject=msg.subject)
         if not body.strip():
             return self._settle(c, "extract", "not_actionable",
                                 "nothing left after removing quoted text")
@@ -651,9 +797,15 @@ class Ingestor:
         if th is not None and th["suggestion_id"]:
             s = host.mail(store.mail_get_suggestion, th["suggestion_id"])
             if s is not None and s["status"] == "pending":
-                return self._merge(c, s, ex, keep_due=False, detail="same thread")
+                return self._merge(c, s, ex, kind, keep_due=False, detail="same thread")
 
-        # b. the thread became a task: propose an update to it (tasks only —
+        # b. the owner dismissed this already — checked before the thread's
+        #    task, or a dismissed update to that task comes back on every reply
+        rejected = list(host.mail(store.mail_rejections_for_thread, c.tid))
+        if rejected and any(_same_item(ex, r) for r in rejected):
+            return self._settle(c, "dedup", "suppressed", "same as a dismissed suggestion")
+
+        # c. the thread became a task: propose an update to it (tasks only —
         #    an event in a task's thread is its own suggestion)
         if kind == "task" and th is not None and th["task_uid"]:
             task = host.get_task(th["task_list"], th["task_uid"])
@@ -661,11 +813,6 @@ class Ingestor:
                 fields = self._fields("update", c, ex=ex,
                                       target=(th["task_list"], th["task_uid"]))
                 return self._stage(c, fields, "dedup", "update to the thread's task")
-
-        # c. the owner dismissed this already
-        rejected = list(host.mail(store.mail_rejections_for_thread, c.tid))
-        if rejected and any(_same_item(ex, r) for r in rejected):
-            return self._settle(c, "dedup", "suppressed", "same as a dismissed suggestion")
 
         # d. ask Jev or the model about whatever looks similar
         candidates: list[Candidate] = []
@@ -728,8 +875,9 @@ class Ingestor:
             return self._stage(c, fields, "dedup", "update to an open task")
         s = targets[target]
         if m.decision == "duplicate":
-            return self._merge(c, s, ex, keep_due=True, detail="same as a pending suggestion")
-        return self._merge(c, s, ex, keep_due=False, detail="update to a pending suggestion")
+            return self._merge(c, s, ex, kind, keep_due=True,
+                               detail="same as a pending suggestion")
+        return self._merge(c, s, ex, kind, keep_due=False, detail="update to a pending suggestion")
 
     def _jev_match(self, c: _Msg, ex: Extraction, candidates: list[Candidate]) -> Match | None:
         """Jev's answer to the dedup question as a `Match`, or None when Claude should decide.
@@ -765,20 +913,35 @@ class Ingestor:
         changed = (jm.changed or 0.0) >= JEV_CHANGED_T
         return Match("update" if moved or changed else "duplicate", jm.target)
 
-    def _merge(self, c: _Msg, s, ex: Extraction, *, keep_due: bool, detail: str) -> Outcome:
-        """Record this message on pending suggestion `s` instead of staging a new one."""
-        sid = s["id"]
-        entry = {
+    def _update_entry(self, c: _Msg, *, notes: str, due: str | None) -> dict:
+        """One `updates` entry: a later message merged into a suggestion."""
+        return {
             "message_key": c.key, "message_id": c.msg.message_id, "sender": c.msg.from_addr,
+            "sender_name": c.msg.from_name or "",
             "subject": c.msg.subject, "sent_at": c.sent.isoformat() if c.sent else None,
-            "notes": "" if keep_due else ex.notes,
-            "due": ex.due.isoformat() if ex.due else None,
+            "notes": notes, "due": due, "thread_id": c.tid,
         }
+
+    def _merge(self, c: _Msg, s, ex: Extraction, kind: str, *, keep_due: bool,
+               detail: str) -> Outcome:
+        """Record this message on pending suggestion `s` instead of staging a new one.
+
+        `s` was read before the slow dedup question; the owner may have
+        approved or rejected it since. Re-read in the write's transaction, and
+        if it is no longer pending the message becomes a suggestion of its
+        own: writing into a decided suggestion would change a rejected row or
+        add notes no approval will ever carry.
+        """
+        sid = s["id"]
+        entry = self._update_entry(c, notes="" if keep_due else ex.notes,
+                                   due=ex.due.isoformat() if ex.due else None)
         d = _detail(detail, c.extra)
 
         def write(conn):
             with store.tx(conn):
                 row = store.mail_get_suggestion(conn, sid)
+                if row is None or row["status"] != "pending":
+                    return False
                 patch: dict[str, Any] = {"updates": [*_load_updates(row["updates"]), entry]}
                 if (not keep_due and ex.due and row["kind"] in ("task", "update")
                         and ex.due.isoformat() != row["due"]):
@@ -787,7 +950,9 @@ class Ingestor:
                 store.mail_upsert_thread(conn, c.tid, suggestion_id=sid)
                 store.mail_settle(conn, c.key, stage="dedup", outcome="attached", detail=d,
                                   suggestion_id=sid)
-        self._host.mail(write)
+                return True
+        if not self._host.mail(write):
+            return self._stage_new(c, ex, kind)
         return Outcome("dedup", "attached", d, suggestion_id=sid)
 
     # ── staging ──
@@ -852,34 +1017,71 @@ class Ingestor:
         return out
 
     def _stage_fastpath(self, c: _Msg, name: str, proposals: list) -> Outcome:
+        """Stage an invite's events, or apply them to the suggestion its UID already has.
+
+        Per event with a UID the earlier suggestion decides: dismissed — it
+        stays dismissed; still pending — a reschedule or a new place is
+        written onto it (the owner approves the current version); already
+        added — nothing, because changing an event in the owner's calendar
+        from an email is not this pipeline's job.
+        """
         fields = [(p, self._fields("event", c, proposal=p))
                   for p in proposals[:MAX_FASTPATH_EVENTS]]
-        dup = _detail("event already suggested", c.extra)
+        compared = ("title", "event_start", "event_end", "event_all_day", "location")
 
         def write(conn):
             with store.tx(conn):
                 ids: list[str] = []
+                updated: list[str] = []
+                dup = added = False
                 for p, f in fields:
-                    if p.uid and store.mail_find_suggestion_by_ics_uid(conn, p.uid) is not None:
-                        continue
-                    sid = uuid.uuid4().hex
-                    store.mail_insert_suggestion(conn, sid, f)
-                    ids.append(sid)
-                if not ids:
-                    store.mail_settle(conn, c.key, stage="fastpath", outcome="duplicate",
-                                      detail=dup)
-                    return Outcome("fastpath", "duplicate", dup)
-                d = _detail(f"{len(ids)} event(s) from {name}", c.extra)
-                store.mail_upsert_thread(conn, c.tid, suggestion_id=ids[0])
-                store.mail_settle(conn, c.key, stage="fastpath", outcome="staged", detail=d,
-                                  suggestion_id=ids[0])
-                return Outcome("fastpath", "staged", d, suggestion_id=ids[0])
+                    old = store.mail_find_suggestion_by_ics_uid(conn, p.uid) if p.uid else None
+                    if old is None:
+                        sid = uuid.uuid4().hex
+                        store.mail_insert_suggestion(conn, sid, f)
+                        ids.append(sid)
+                    elif old["status"] == "rejected":
+                        continue                    # the owner's "no" stands
+                    elif old["status"] != "pending":
+                        added = True
+                    elif all(old[k] == f[k] for k in compared):
+                        dup = True
+                    else:
+                        change = f"Changed: {f['event_start']}"
+                        if f["location"]:
+                            change += f" at {f['location']}"
+                        entry = self._update_entry(c, notes=change, due=None)
+                        store.mail_update_suggestion(
+                            conn, old["id"], **{k: f[k] for k in compared},
+                            updates=[*_load_updates(old["updates"]), entry])
+                        updated.append(old["id"])
+                if ids:
+                    d = _detail(f"{len(ids)} event(s) from {name}", c.extra)
+                    stage, outcome, sid = "fastpath", "staged", ids[0]
+                elif updated:
+                    d = _detail("updated the pending invitation", c.extra)
+                    stage, outcome, sid = "fastpath", "attached", updated[0]
+                elif dup or added:
+                    d = _detail("event already suggested" if dup else
+                                "already added; changes to an added event are not applied",
+                                c.extra)
+                    stage, outcome, sid = "fastpath", "duplicate", None
+                else:
+                    d = _detail("the invitation was dismissed before", c.extra)
+                    stage, outcome, sid = "fastpath", "suppressed", None
+                if sid is not None:
+                    store.mail_upsert_thread(conn, c.tid, suggestion_id=sid)
+                store.mail_settle(conn, c.key, stage=stage, outcome=outcome, detail=d,
+                                  suggestion_id=sid)
+                return Outcome(stage, outcome, d, suggestion_id=sid)
         return self._host.mail(write)
 
     # ── settings page ──
 
     def test_imap(self) -> dict:
-        """Log in, list folders and look at one message's Authentication-Results.
+        """Log in, list folders and look at the Authentication-Results of the
+        newest INBOX messages (up to `AUTHRES_SAMPLE`: one message may predate a
+        change of server, or be a note to self that never passed an MTA).
 
         Raises `MailConnectError` / `SecretStoreError` for the route to report.
         """
@@ -887,22 +1089,25 @@ class Ingestor:
         password = self._secrets.get("imap_password")
         if not password:
             raise MailConnectError("no IMAP password is set", kind="config")
+        self._check_binding(cfg)
         source = self._source_factory(self._imap_config(cfg), password)
         try:
             folders = source.list_folders()
-            uids: list[int] = []
+            sample: list[int] = []
             ids: list[str] = []
             trusted = False
             inbox = next((f for f in folders if settings.folder_selected(f.name, ["INBOX"])), None)
             if inbox is not None:
                 source.select(inbox)
-                uids = source.search_uids()
-                if uids:
-                    hdr = source.fetch_header_fields(uids[-1], ["AUTHENTICATION-RESULTS"])
+                sample = sorted(source.search_uids())[-AUTHRES_SAMPLE:]
+                for uid in reversed(sample):                # newest first
+                    hdr = source.fetch_header_fields(uid, ["AUTHENTICATION-RESULTS"])
                     parsed = email.message_from_bytes(hdr)
-                    ids = authres.authserv_ids(parsed)
-                    trusted = bool(authres.trusted_only(authres.collect(parsed),
-                                                        cfg.trusted_authserv_ids))
+                    for i in authres.authserv_ids(parsed):
+                        if i not in ids:
+                            ids.append(i)
+                    if authres.trusted_only(authres.collect(parsed), cfg.trusted_authserv_ids):
+                        trusted = True
         finally:
             try:
                 source.close()
@@ -917,8 +1122,8 @@ class Ingestor:
                 "excluded": settings.is_hard_excluded(f.name, f.flags, f.delimiter),
                 "selected": settings.folder_selected(f.name, cfg.folders),
             } for f in folders],
-            "auth_results": {"checked": bool(uids), "present": bool(ids),
-                             "authserv_ids": ids, "trusted": trusted},
+            "auth_results": {"checked": bool(sample), "present": bool(ids),
+                             "authserv_ids": ids, "trusted": trusted, "sampled": len(sample)},
         }
 
     def status(self) -> dict:

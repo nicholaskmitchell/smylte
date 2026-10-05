@@ -50,3 +50,5 @@ keyring>=25,<26
 # secret store (smylted/mail/secrets.py) is AES-GCM from this package, which
 # today arrives only as an extra of pyjwt[crypto].
 cryptography>=43
+# UTS 46 non-transitional: ß stays ß; the stdlib codec is IDNA 2003.
+idna>=3.6

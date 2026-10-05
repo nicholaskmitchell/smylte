@@ -3,8 +3,9 @@
 Everything runs in-process through `secrets_main`, with the environment
 pointing the database, the encrypted file and its key at tmp_path. The
 keyring is a fake module backed by a dict. What these pin down: the key file
-is created 0600 and never overwritten, a value goes in through getpass and
-never comes back out, and migration moves the secrets rather than copying them.
+is created 0600 and never overwritten — and only by `init-key` — a value goes
+in through getpass and never comes back out, every command says which paths it
+uses, and migration moves the secrets rather than copying them.
 """
 from __future__ import annotations
 
@@ -37,6 +38,11 @@ def env(monkeypatch, tmp_path):
     redact.forget_all_for_tests()
     yield monkeypatch
     redact.forget_all_for_tests()
+
+
+def _init_key(capsys) -> None:
+    assert cli.secrets_main(["init-key"]) == 0
+    capsys.readouterr()
 
 
 def _prompt(monkeypatch, value: str) -> list[str]:
@@ -100,6 +106,7 @@ def test_init_key_defaults_to_the_configured_path(tmp_path, capsys):
 # ── set / status / clear ─────────────────────────────────────────────────────
 
 def test_set_reads_the_value_from_getpass_and_status_shows_only_a_hint(env, tmp_path, capsys):
+    _init_key(capsys)
     prompts = _prompt(env, KEY)
     assert cli.secrets_main(["set", "anthropic_api_key"]) == 0
     assert prompts == ["anthropic_api_key: "]
@@ -134,6 +141,7 @@ def test_an_unknown_name_is_a_usage_error(capsys):
 
 
 def test_a_store_error_is_reported_without_a_traceback(env, tmp_path, capsys):
+    _init_key(capsys)
     _prompt(env, KEY)
     assert cli.secrets_main(["set", "anthropic_api_key"]) == 0
     os.chmod(tmp_path / "secrets.key", 0o644)
@@ -142,6 +150,34 @@ def test_a_store_error_is_reported_without_a_traceback(env, tmp_path, capsys):
     err = capsys.readouterr().err
     assert err.startswith("error: ") and "chmod 600" in err
     assert KEY not in err
+
+
+def test_commands_never_create_a_key_and_say_how_to_get_one(env, tmp_path, capsys):
+    _prompt(env, KEY)
+    assert cli.secrets_main(["set", "anthropic_api_key"]) == 1
+    err = capsys.readouterr().err
+    assert "init-key" in err and "service's environment" in err
+    assert not (tmp_path / "secrets.key").exists()
+    assert not (tmp_path / "secrets.enc").exists()
+
+    assert cli.secrets_main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert "unavailable: no secrets key" in out
+    assert not (tmp_path / "secrets.key").exists()
+
+
+def test_every_command_prints_the_paths_it_uses(env, tmp_path, capsys):
+    paths = [f"database: {tmp_path / 'cli.db'}", "backend: file (choice file)",
+             f"secrets file: {tmp_path / 'secrets.enc'}", f"key file: {tmp_path / 'secrets.key'}"]
+    assert cli.secrets_main(["init-key"]) == 0
+    assert capsys.readouterr().out.splitlines()[0] == paths[-1]
+    _prompt(env, KEY)
+    for argv in (["status"], ["set", "anthropic_api_key"], ["clear", "anthropic_api_key"],
+                 ["migrate", "--to", "file"]):
+        assert cli.secrets_main(argv) == 0, argv
+        out = capsys.readouterr().out
+        assert out.splitlines()[:4] == paths, argv
+        assert KEY not in out
 
 
 def test_main_dispatches_the_secrets_command(env, monkeypatch, capsys):
@@ -161,6 +197,7 @@ def test_migrate_moves_secrets_from_the_keyring_to_the_file(env, tmp_path, capsy
 
     env.setattr(sec, "KeyringBackend", FakeKeyringBackend)
     env.setenv("SMYLTE_SECRETS_BACKEND", "auto")
+    _init_key(capsys)
 
     _prompt(env, KEY)
     assert cli.secrets_main(["set", "anthropic_api_key"]) == 0

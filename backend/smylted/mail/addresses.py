@@ -25,6 +25,8 @@ import re
 from collections.abc import Iterable
 from email.utils import getaddresses
 
+import idna
+
 # One DNS label, after IDNA: letters, digits, hyphens, not starting or ending
 # with a hyphen. Underscores are refused — they do not occur in mail domains.
 _LABEL = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)$")
@@ -47,14 +49,22 @@ def normalize_domain(domain: str) -> str | None:
     IDNA so that `bücher.example` written in Settings and `xn--bcher-kva.example`
     in a header compare equal; refusal rather than a best guess, because a
     pattern that silently matches nothing is the least debuggable outcome.
+
+    UTS 46 non-transitional (IDNA 2008), from the `idna` package, not the
+    stdlib codec: that one is IDNA 2003, which maps `ß` to `ss`, so
+    `straße.de` would compare equal to `strasse.de` — a different registrant
+    — and it accepts unassigned code points. An all-ASCII domain skips the
+    encoder: `idna` refuses ASCII labels such as `ab--cd` that DNS and mail
+    accept, and an ASCII domain has nothing to encode.
     """
     d = (domain or "").strip().rstrip(".").lower()
     if not d or len(d) > 253:
         return None
-    try:
-        d = d.encode("idna").decode("ascii")
-    except UnicodeError:
-        return None
+    if not d.isascii():
+        try:
+            d = idna.encode(d, uts46=True, transitional=False).decode("ascii")
+        except (idna.IDNAError, UnicodeError):
+            return None
     labels = d.split(".")
     if len(labels) < 2 or not all(_LABEL.match(label) for label in labels):
         return None
