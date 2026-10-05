@@ -529,8 +529,11 @@ running Bridge (none was reachable from where this was built):
   arrive over IMAP. Proton writes one per method — `arc`, `dkim`, `spf`, `dmarc` —
   with authserv-id `mailinNNN.protonmail.ch` (ARC sets use `mail.protonmail.ch`).
   The trusted list defaults to `protonmail.ch` and `*.protonmail.ch`; only those
-  headers are believed, `ARC-Authentication-Results` never is, and every trusted
-  DMARC result must say `pass`, so a forged "pass" cannot outvote Proton's own.
+  headers are believed, and `ARC-Authentication-Results` never is. A sender can
+  write a header that claims Proton's authserv-id, but Proton prepends its own
+  above anything that arrived with the message. So DKIM and SPF are read only
+  from the topmost trusted header that has them, and every trusted DMARC result
+  must say `pass`. A forged "pass" lower down cannot outvote Proton's verdict.
 - When a message has no `Message-ID`, Bridge invents `<id@protonmail.internalid>`,
   and it appends `<id@protonmail.internalid>` to `References`. Thread identity
   ignores those, or every new thread would be its own root and a reply would
@@ -574,8 +577,10 @@ the repository. One store holds all of them:
   (`/var/lib/smylte/secrets.enc`), AES-256-GCM under a key read from
   `SMYLTE_SECRETS_KEY_FILE` (default `~/.config/smylte/secrets.key`, or the
   systemd credential `smylte-secrets-key` when the unit loads one). The key file
-  is refused if group or others can read it, if another user owns it, or if it
-  sits inside the source tree.
+  is refused if other users can read it, if anyone but its user or root owns it,
+  or if it sits inside the source tree. Group read is refused too, except under
+  the systemd credentials directory, where it is how systemd's ACL for the
+  service user shows up (`0440`).
 
 Which one is used is decided once and recorded (`meta.secrets_backend`, a name,
 not a secret), so a desktop whose keyring is locked one morning reports "secrets
@@ -585,15 +590,39 @@ unavailable" instead of silently writing the next key somewhere else.
 values (Settings then says "set by the environment") and never touch either store.
 
 Under the hardened unit the home directory is read-only, so give the key to the
-service as a credential:
+service as a credential. The key stays root's (`0600` under `/etc/smylte`), and
+systemd hands the service a read-only copy:
 
     sudo /home/<user>/smylte/backend/.venv/bin/python -m smylted secrets init-key --path /etc/smylte/secrets.key
     # in deploy/smylte.service, [Service]:
     LoadCredential=smylte-secrets-key:/etc/smylte/secrets.key
 
+Leave `SMYLTE_SECRETS_KEY_FILE` unset in that case. Pointed at
+`/etc/smylte/secrets.key`, it would make the service read root's file directly
+and fail.
+
 `python -m smylted secrets status` shows which store is in use and which secrets
-are set (never their values); `secrets set NAME` reads one from the terminal
-without echo, `secrets clear NAME` removes it.
+are set (never their values). `secrets set NAME` reads one from the terminal
+without echo, and `secrets clear NAME` removes it. Every command first prints the
+database, the store and the key file it is using. Those must be the service's,
+so run the CLI with the service's user, environment and credential, not from a
+plain shell (which would read `~/.config` and the default database):
+
+    sudo systemd-run --pipe --wait --quiet -p User=<user> \
+        -p EnvironmentFile=/etc/smylte/smylte.env \
+        -p LoadCredential=smylte-secrets-key:/etc/smylte/secrets.key \
+        -p WorkingDirectory=/home/<user>/smylte/backend \
+        /home/<user>/smylte/backend/.venv/bin/python -m smylted secrets status
+
+The CLI never creates a key implicitly; `init-key` is the only command that does.
+
+**The Bridge password is tied to its server.** Saving the password records
+which host, port, encryption, pinned certificate and username it was entered
+for. Changing any of those in Settings forgets a stored password, and the next
+scan or test asks for it again, so a changed setting can never send it to a
+different server. A password from `SMYLTE_MAIL_IMAP_PASSWORD` is tied to the
+server settings at startup. After changing the server in Settings, restart the
+service.
 
 **Moving to the homelab.** The values are write-only, so the plain path is to
 enter them again in Settings on the new box — the Bridge password changes with a

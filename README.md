@@ -389,7 +389,10 @@ run as code.
 The Anthropic key, the TypeSafe key and the Bridge password are write-only. Settings shows that one
 is stored and its last four characters, and no endpoint, export or log line will
 give one back; they live in the OS keyring, or encrypted under a key file
-outside the repository on a headless box, never in `smylte.db`. Setup — Bridge's
+outside the repository on a headless box, never in `smylte.db`. The Bridge
+password is also tied to the server it was entered for. Change the host, port,
+encryption, certificate or username, and it has to be entered again, so a
+changed setting cannot send it somewhere else. Setup — Bridge's
 certificate, the egress rule, and moving the secrets to another machine — is in
 `docs/DEPLOY.md`; the stages are in `backend/smylted/mail/pipeline.py`.
 
