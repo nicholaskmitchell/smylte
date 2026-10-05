@@ -1,7 +1,8 @@
 """Owner-written rules that decide whether an email becomes a task or an event.
 
 The owner chooses who decides: the model (it already proposes a kind with every
-extraction) or these rules. A rule is one line:
+extraction), TypeSafe's Jev (see `jev.py`; the pipeline asks it, not this
+module), or these rules. A rule is one line:
 
     from:*.school.example subject:"parent evening" -> event
     subject:invoice -> task
@@ -250,7 +251,12 @@ def _holds(c: Condition, facts: KindFacts, text: _Text) -> bool:
 
 
 def decide(mode: str, rules: Sequence[KindRule], facts: KindFacts) -> tuple[str, str]:
-    """`(kind, why)` — the kind for this extraction and a reason for the ledger."""
+    """`(kind, why)` — the kind for this extraction and a reason for the ledger.
+
+    Mode "jev" is not decided here: the pipeline calls Jev itself. Here it is
+    treated like "model", like any other mode that is not "rules", so a caller
+    that cannot reach Jev still gets the extraction model's choice.
+    """
     if mode == "rules":
         text = _Text(facts)
         for rule in rules:

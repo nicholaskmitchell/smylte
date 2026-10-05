@@ -306,6 +306,19 @@ export function MailSection({ onExpire, mailRev }: {
         status={payload.secrets.anthropic_api_key} envVar="SMYLTE_ANTHROPIC_API_KEY"
         onSave={(v) => saveSecret('anthropic_api_key', v)}
         onClear={() => saveSecret('anthropic_api_key', '')} />
+      <div className="menu-row">
+        <label htmlFor="mail-workspace">{tr('mail.workspace')}</label>
+        {/* Not a secret, and clearing it is a real choice, so unlike the other
+            text fields an emptied box is written rather than put back. */}
+        <Draft id="mail-workspace" className="input" value={s.anthropic_workspace_id}
+          onCommit={(raw) => {
+            const v = raw.trim()
+            return v === s.anthropic_workspace_id
+              ? Promise.resolve(false)
+              : save({ anthropic_workspace_id: v })
+          }} />
+      </div>
+      <div className="hintline">{tr('mail.workspace.hint')}</div>
 
       <div className="menu-row">
         <label htmlFor="mail-model">{tr('mail.model')}</label>

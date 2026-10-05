@@ -33,7 +33,7 @@ function payload(
       backfill_days: 7, task_list: null, event_calendar: null,
       trusted_authserv_ids: ['protonmail.ch', '*.protonmail.ch'],
       auto_accept_min_confidence: null, kind_decider: 'model', kind_rules: [],
-      jev_model: 'jev-latest', ...over.settings,
+      jev_model: 'jev-latest', anthropic_workspace_id: '', ...over.settings,
     },
     secrets: {
       anthropic_api_key: unset, imap_password: unset, typesafe_api_key: unset, ...over.secrets,
@@ -166,6 +166,26 @@ describe('saving', () => {
     expect(m.putMailSettings).not.toHaveBeenCalled()
     await user.tab()
     expect(m.putMailSettings).toHaveBeenCalledWith({ imap_host: 'bridge.lan' })
+  })
+
+  it('writes the optional workspace id on blur, and an emptied box clears it', async () => {
+    const user = userEvent.setup()
+    await show()
+    const ws = el('mail-workspace') as HTMLInputElement
+    expect(ws.value).toBe('')
+    expect(screen.getByText(/Leave empty unless Anthropic says/)).toBeInTheDocument()
+    await user.type(ws, ' wrkspc_01ABC ')
+    expect(m.putMailSettings).not.toHaveBeenCalled()
+    await user.tab()
+    expect(m.putMailSettings).toHaveBeenCalledWith({ anthropic_workspace_id: 'wrkspc_01ABC' })
+    cleanup()
+    m.putMailSettings.mockClear()
+    await show(payload({ settings: { anthropic_workspace_id: 'wrkspc_01ABC' } }))
+    const stored = el('mail-workspace') as HTMLInputElement
+    expect(stored.value).toBe('wrkspc_01ABC')
+    await user.clear(stored)
+    await user.tab()
+    expect(m.putMailSettings).toHaveBeenCalledWith({ anthropic_workspace_id: '' })
   })
 
   it('splits a list on lines and commas', async () => {

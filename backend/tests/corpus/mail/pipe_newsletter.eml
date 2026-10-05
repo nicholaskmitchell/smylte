@@ -1,0 +1,11 @@
+Message-ID: <news-2026-10@shop.example>
+Date: Mon, 05 Oct 2026 07:00:00 +0000
+From: Shop News <news@shop.example>
+To: me@proton.me
+Subject: Autumn sale: 20% off everything
+List-Unsubscribe: <https://shop.example/unsubscribe?u=123>, <mailto:unsub@shop.example>
+List-Unsubscribe-Post: List-Unsubscribe=One-Click
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Our autumn sale starts today. Order before Sunday to get 20% off.

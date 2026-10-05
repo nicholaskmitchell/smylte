@@ -235,13 +235,15 @@
   .shell[data-layout="sidebar"] .content[data-pane="list"] > .content-head,
   .shell[data-layout="sidebar"] .content[data-pane="completed"] > .content-head,
   .shell[data-layout="sidebar"] .content[data-pane="parked"] > .content-head,
+  .shell[data-layout="sidebar"] .content[data-pane="suggested"] > .content-head,
   .shell[data-layout="sidebar"] .content[data-pane="list"] > .cal-partial,
   .shell[data-layout="sidebar"] .content[data-pane="list"] > .composer-foot {
     padding-right: max(var(--gutter), 100% - var(--measure) - var(--gutter));
   }
   .shell[data-layout="sidebar"] .content[data-pane="list"] > .scroll,
   .shell[data-layout="sidebar"] .content[data-pane="completed"] > .scroll,
-  .shell[data-layout="sidebar"] .content[data-pane="parked"] > .scroll {
+  .shell[data-layout="sidebar"] .content[data-pane="parked"] > .scroll,
+  .shell[data-layout="sidebar"] .content[data-pane="suggested"] > .scroll {
     padding-right: max(0px, 100% - var(--measure) - 2 * var(--gutter));
   }
 }

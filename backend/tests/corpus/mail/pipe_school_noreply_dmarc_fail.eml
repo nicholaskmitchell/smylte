@@ -1,0 +1,14 @@
+Authentication-Results: mailin008.protonmail.ch; dmarc=fail (p=quarantine dis=quarantine)
+ header.from=portal.school.example
+Authentication-Results: mailin008.protonmail.ch; spf=fail smtp.mailfrom=mx.forger.example
+Authentication-Results: mailin008.protonmail.ch; dkim=none
+Message-ID: <trip-fail-1@portal.school.example>
+Date: Mon, 05 Oct 2026 08:00:00 +0200
+From: School Portal <noreply@portal.school.example>
+To: me@proton.me
+Subject: Field trip permission slip
+List-Unsubscribe: <mailto:unsubscribe@portal.school.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Please sign the field trip permission slip by Friday.

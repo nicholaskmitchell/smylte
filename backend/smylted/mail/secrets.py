@@ -1,7 +1,8 @@
-"""Where the two mail credentials live: the OS keyring, or a file encrypted at rest.
+"""Where the mail credentials live: the OS keyring, or a file encrypted at rest.
 
-Smylte needs exactly two secrets of its own — the Anthropic API key and the
-Bridge IMAP password — and the owner sets both from the settings page. They are
+Smylte needs three secrets of its own — the Anthropic API key, the Bridge IMAP
+password and the TypeSafe API key (for Jev, when it decides task or event) —
+and the owner sets them from the settings page. They are
 deliberately NOT stored in the SQLite cache: the cache is disposable by
 construction, gets copied into bug reports and backups, and its schema header
 promises that reading it yields no working credential.
@@ -30,8 +31,8 @@ session that ended) cannot make the secrets silently "disappear" by switching
 stores. `migrate()` moves them on purpose, verifying each copy before deleting
 the original.
 
-Environment variables (`SMYLTE_ANTHROPIC_API_KEY`, `SMYLTE_MAIL_IMAP_PASSWORD`)
-override both stores and are never written anywhere — for operators who already
+Environment variables (`SMYLTE_ANTHROPIC_API_KEY`, `SMYLTE_MAIL_IMAP_PASSWORD`,
+`SMYLTE_TYPESAFE_API_KEY`) override both stores and are never written anywhere — for operators who already
 manage secrets in their unit files.
 
 Nothing in this module logs, prints, or puts a secret value in an exception
@@ -55,9 +56,10 @@ from .redact import redact_exc, register_secret
 
 log = logging.getLogger("smylted.mail")
 
-SECRET_NAMES: tuple[str, ...] = ("anthropic_api_key", "imap_password")
+SECRET_NAMES: tuple[str, ...] = ("anthropic_api_key", "imap_password", "typesafe_api_key")
 ENV_VARS: dict[str, str] = {"anthropic_api_key": "SMYLTE_ANTHROPIC_API_KEY",
-                            "imap_password": "SMYLTE_MAIL_IMAP_PASSWORD"}
+                            "imap_password": "SMYLTE_MAIL_IMAP_PASSWORD",
+                            "typesafe_api_key": "SMYLTE_TYPESAFE_API_KEY"}
 # Longer than any real credential; a paste this long is a mistake (a whole
 # file, a log), and storing it would only put more text through the redactor.
 MAX_SECRET_LEN = 4096
@@ -624,7 +626,8 @@ def build_secret_store(settings, marker_get, marker_set) -> SecretStore:
     keyring_backend = KeyringBackend(settings.secrets_namespace)
     env: dict[str, str] = {}
     for name, value in (("anthropic_api_key", settings.anthropic_api_key),
-                        ("imap_password", settings.mail_imap_password)):
+                        ("imap_password", settings.mail_imap_password),
+                        ("typesafe_api_key", settings.typesafe_api_key)):
         value = (value or "").strip()
         if value:
             register_secret(value)

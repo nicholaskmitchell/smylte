@@ -1204,6 +1204,8 @@ export const en = {
   'mail.secret.cancel': 'Cancel',
   'mail.secret.placeholder': 'Paste it here',
   'mail.secret.hint': 'Write-only: once saved it is never shown again, by this page or any other.',
+  'mail.workspace': 'Workspace ID (only for keys not scoped to a workspace)',
+  'mail.workspace.hint': 'Leave empty unless Anthropic says the key needs an anthropic-workspace-id.',
   'mail.model': 'Model',
   'mail.model.other': 'Other…',
   'mail.model.needKey': 'Save an API key to choose from Anthropic’s list.',

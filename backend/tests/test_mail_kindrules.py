@@ -96,6 +96,8 @@ def test_decide_model_mode():
     assert decide("model", rules, _facts(model_kind="event")) == ("event", "the model chose event")
     assert decide("model", rules, _facts(model_kind="task")) == ("task", "the model chose task")
     assert decide("something else", rules, _facts(model_kind="event"))[0] == "event"
+    # "jev" is decided by the pipeline; here it falls back to the model's choice.
+    assert decide("jev", rules, _facts(model_kind="event")) == ("event", "the model chose event")
 
 
 def test_decide_rules_mode_first_match_wins():
