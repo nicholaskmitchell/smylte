@@ -1093,3 +1093,128 @@ def test_quote_stripping_reads_a_bounded_prefix_and_the_subject(svc, secrets, mo
     [(n, kw)] = seen
     assert n == pipeline.MAX_STRIP_CHARS == 200_000
     assert kw == {"subject": "Fwd: the form"}
+
+
+# ── an event already added (review fix E1) ──
+
+class _EventHost:
+    """The service, with a calendar to approve an event into; records the writes."""
+
+    def __init__(self, svc):
+        self._svc = svc
+        self.events: list[dict] = []
+
+    def __getattr__(self, name):
+        return getattr(self._svc, name)
+
+    def list_calendars(self):
+        return [{"id": "family"}]
+
+    def resolve_list(self, list_id, *, component=None):
+        return "/dav/me/family/" if list_id == "family" and component == "VEVENT" else None
+
+    def create_event(self, href, summary, *, dtstart, dtend=None, edit=None, client_id=None):
+        self.events.append({"href": href, "summary": summary, "dtstart": dtstart})
+        return {"uid": f"{client_id}@smylted", "summary": summary}
+
+
+def test_a_restated_event_in_an_approved_events_thread_is_not_staged_again(svc, secrets):
+    llm = FakeLlm(extract=[
+        extraction("Match on Saturday", kind="event", event_start=datetime(2026, 10, 10, 10, 0)),
+        extraction("Saturday's match", kind="event", event_start=datetime(2026, 10, 10, 10, 0)),
+        extraction("Match on Saturday", kind="event", event_start=datetime(2026, 10, 17, 10, 0)),
+    ])
+    host = _EventHost(svc)
+    ing = ingestor(svc, secrets, llm, host=host)
+    first = ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    assert (first.stage, first.outcome) == ("stage", "staged")
+    review.approve(host, first.suggestion_id, config=ing.config())
+    assert [e["summary"] for e in host.events] == ["Match on Saturday"]
+
+    # The same day, reworded: already on the calendar.
+    out = ing.process_message(INBOX, reply(1, "Reminder: the match is on Saturday at 10."), uid=2)
+    assert (out.stage, out.outcome) == ("dedup", "duplicate")
+    assert out.detail.startswith("already added as an event")
+    assert pending(svc) == []
+
+    # Another day: a new suggestion for the owner; the added event is not changed.
+    out = ing.process_message(INBOX, reply(2, "The match moves to the 17th."), uid=3)
+    assert (out.stage, out.outcome) == ("stage", "staged")
+    [s] = pending(svc)
+    assert (s["kind"], s["event_start"]) == ("event", "2026-10-17T10:00:00")
+    assert len(host.events) == 1
+
+
+# ── stages that had no test (review fix E4) ──
+
+def _with_header(raw: bytes, header: str) -> bytes:
+    return raw.replace(b"\r\n\r\n", f"\r\n{header}\r\n\r\n".encode(), 1)
+
+
+def test_a_never_parse_sender_is_skipped_before_the_model(svc, secrets):
+    set_config(svc, never_parse=["club.example"])
+    llm = FakeLlm(extract=extraction("Bring the team snack list"))
+    out = ingestor(svc, secrets, llm).process_message(INBOX, eml("pipe_request"), uid=1)
+    assert (out.stage, out.outcome, out.detail) == ("never", "skipped",
+                                                    "never_parse club.example")
+    assert ledger(svc, "mid:req-1@club.example")["stage"] == "never"
+    assert llm.extract_calls == []
+
+
+@pytest.mark.parametrize("header, reason", [
+    ("Precedence: bulk", "Precedence: bulk"),
+    ("Auto-Submitted: auto-replied", "Auto-Submitted: auto-replied"),
+])
+def test_bulk_headers_skip_the_message(svc, secrets, header, reason):
+    raw = _with_header(plain("bulk-1@school.example", "Out of office", "Back on Monday."), header)
+    llm = FakeLlm(extract=extraction("should not be asked"))
+    out = ingestor(svc, secrets, llm).process_message(INBOX, raw, uid=1)
+    assert (out.stage, out.outcome, out.detail) == ("bulk", "skipped", reason)
+    assert llm.extract_calls == []
+
+
+def test_auto_submitted_no_is_not_bulk(svc, secrets):
+    raw = _with_header(plain("auto-1@school.example", "The form", "Please sign the form."),
+                       "Auto-Submitted: no")
+    llm = FakeLlm(extract=extraction("Sign the form"))
+    out = ingestor(svc, secrets, llm).process_message(INBOX, raw, uid=1)
+    assert out.outcome == "staged" and len(llm.extract_calls) == 1
+
+
+def test_a_no_reply_sender_is_bulk_without_any_bulk_header(svc, secrets):
+    raw = plain("nr-1@club.example", "Your booking", "Bring your racket.",
+                sender="no-reply@club.example")
+    llm = FakeLlm(extract=extraction("should not be asked"))
+    out = ingestor(svc, secrets, llm).process_message(INBOX, raw, uid=1)
+    assert (out.stage, out.outcome, out.detail) == ("bulk", "skipped", "no-reply sender")
+    assert llm.extract_calls == []
+
+
+def test_a_note_to_self_is_skipped_when_not_captured(svc, secrets):
+    set_config(svc, capture_notes_to_self=False)
+    llm = FakeLlm(extract=extraction("Buy stamps for the school forms"))
+    out = ingestor(svc, secrets, llm).process_message(INBOX, eml("pipe_note_to_self"), uid=1)
+    assert (out.stage, out.outcome, out.detail) == ("self", "skipped", "sent by you")
+    assert pending(svc) == [] and llm.extract_calls == []
+
+
+def test_a_hard_excluded_folder_is_skipped_even_when_selected(svc, secrets):
+    set_config(svc, folders=["INBOX", "Sent"])
+    sent = FolderInfo(name="Sent", raw="Sent", flags=frozenset(), delimiter="/")
+    llm = FakeLlm(extract=extraction("Bring the team snack list"))
+    out = ingestor(svc, secrets, llm).process_message(sent, eml("pipe_request"), uid=1)
+    assert (out.stage, out.outcome, out.detail) == ("folder", "skipped",
+                                                    "folder Sent is not scanned")
+    assert ledger(svc, "mid:req-1@club.example")["stage"] == "folder"
+    assert llm.extract_calls == []
+
+
+def test_a_long_body_is_cut_to_body_max_chars_before_the_model(svc, secrets):
+    set_config(svc, body_max_chars=500)
+    raw = plain("long-1@school.example", "The form", "Sign the form. " + "word " * 1000)
+    llm = FakeLlm(extract=extraction("Sign the form"))
+    ingestor(svc, secrets, llm).process_message(INBOX, raw, uid=1)
+    [email] = llm.extract_calls
+    marker = "\n[…truncated]"
+    assert email.body.startswith("Sign the form. word")
+    assert email.body.endswith(marker) and len(email.body) == 500 + len(marker)

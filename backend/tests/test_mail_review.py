@@ -261,6 +261,69 @@ def test_reject_records_merged_messages_under_their_own_thread(svc, tmp_path):
     assert (out.stage, out.outcome) == ("dedup", "suppressed")
 
 
+class UpdateHost(TaskHost):
+    """A service with one open task that dedup finds and an update can edit."""
+
+    TASK = {"uid": "t1", "list": "family", "summary": "Bring the team snack list",
+            "notes": "Coach asked.", "due": None, "completed": False, "cancelled": False}
+
+    def __init__(self, svc):
+        super().__init__(svc)
+        self.edits: list[dict] = []
+
+    def search_open_tasks_any(self, terms, *, limit):
+        return [dict(self.TASK)]
+
+    def get_task(self, href, uid):
+        return dict(self.TASK) if (href, uid) == ("/dav/me/family/", "t1") else None
+
+    def edit_task(self, href, uid, edit):
+        self.edits.append({"href": href, "uid": uid, "edit": edit})
+        return dict(self.TASK)
+
+
+def test_approving_an_update_maps_its_thread_to_the_task(svc, tmp_path):
+    llm = FakeLlm(extract=[extraction("Bring the team snack list"),
+                           extraction("Bring cups", notes="Also please bring cups.")],
+                  match=Match("update", "T1"))
+    host = UpdateHost(svc)
+    ing = Ingestor(host, make_store(tmp_path), llm=llm, jev=FakeJev(),
+                   clock=lambda: at(2026, 10, 6))
+    first = ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    assert (first.stage, first.outcome) == ("dedup", "staged")
+    assert first.detail.startswith("update to an open task")
+    review.approve(host, first.suggestion_id, config=MailConfig())
+    th = svc.mail(store.mail_get_thread, "mid:req-1@club.example")
+    assert (th["task_list"], th["task_uid"], th["suggestion_id"]) == ("/dav/me/family/", "t1",
+                                                                      None)
+
+    # A later reply is an update to the same task, without asking again.
+    out = ing.process_message(INBOX, eml("pipe_reply_quoting"), uid=2)
+    assert (out.stage, out.outcome) == ("dedup", "staged")
+    assert out.detail.startswith("update to the thread's task")
+    upd = svc.mail(store.mail_get_suggestion, out.suggestion_id)
+    assert (upd["kind"], upd["target_list"], upd["target_uid"]) == ("update", "/dav/me/family/",
+                                                                    "t1")
+    assert len(llm.match_calls) == 1
+
+
+def test_an_update_names_merged_senders_by_name(svc, tmp_path):
+    llm = FakeLlm(extract=[extraction("Bring the team snack list", notes="Snacks."),
+                           extraction("Bring cups", notes="Also please bring cups.")],
+                  match=Match("update", "T1"))
+    host = UpdateHost(svc)
+    ing = Ingestor(host, make_store(tmp_path), llm=llm, jev=FakeJev(),
+                   clock=lambda: at(2026, 10, 6))
+    first = ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    assert ing.process_message(INBOX, eml("pipe_reply_quoting"), uid=2).outcome == "attached"
+    review.approve(host, first.suggestion_id, config=MailConfig())
+    [e] = host.edits
+    assert e["edit"].description == (
+        "Coach asked.\n\n"
+        "— Update from Coach Miller, 2026-10-05: Snacks.\n"
+        "— Update from Coach Miller, 2026-10-05: Also please bring cups.")
+
+
 # ── against the scratch Radicale ──
 
 @pytest.fixture
