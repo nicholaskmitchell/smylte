@@ -77,6 +77,31 @@ def test_release_stale_goes_by_age_and_spares_settled_rows(db):
     assert store.mail_ledger_get(db, "mid:oldsettled@x") is not None
 
 
+def test_release_unsettled_drops_every_unsettled_claim_whatever_its_age(db):
+    for key in ("mid:old@x", "mid:new@x", "mid:settled@x"):
+        _claim(db, key)
+    store.mail_settle(db, "mid:settled@x", stage="s", outcome="skipped")
+    db.execute("UPDATE mail_ledger SET claimed_at='2026-01-01T00:00:00.000Z' "
+               "WHERE key='mid:old@x'")
+    assert store.mail_release_unsettled(db) == 2
+    assert store.mail_ledger_get(db, "mid:old@x") is None
+    assert store.mail_ledger_get(db, "mid:new@x") is None
+    assert store.mail_ledger_get(db, "mid:settled@x") is not None
+
+
+def test_reset_stuck_approving_goes_by_age_and_status(db):
+    for sid in ("old", "young", "oldpending"):
+        _suggestion(db, sid, message_key=f"mid:{sid}@x")
+    store.mail_transition_suggestion(db, "old", "pending", "approving")
+    store.mail_transition_suggestion(db, "young", "pending", "approving")
+    db.execute("UPDATE mail_suggestions SET updated_at='2026-01-01T00:00:00.000Z' "
+               "WHERE id IN ('old','oldpending')")
+    assert store.mail_reset_stuck_approving(db, before="2026-06-01T00:00:00.000Z") == 1
+    row = store.mail_get_suggestion(db, "old")
+    assert row["status"] == "pending" and row["updated_at"] > "2026-06-01"
+    assert store.mail_get_suggestion(db, "young")["status"] == "approving"
+
+
 def test_ledger_recent_and_counts(db):
     for i, outcome in enumerate(["suggested", "skipped", "skipped"]):
         key = f"mid:{i}@x"
@@ -101,6 +126,12 @@ def test_cursor_upsert_and_list(db):
     store.mail_set_cursor(db, "INBOX", uidvalidity=6, last_uid=2, last_scan_at="t2")
     row = store.mail_get_cursor(db, "INBOX")
     assert (row["uidvalidity"], row["last_uid"], row["last_scan_at"]) == (6, 2, "t2")
+    assert row["window_since"] is None
+    store.mail_set_cursor(db, "INBOX", uidvalidity=6, last_uid=4, last_scan_at="t3",
+                          window_since="2026-09-06")
+    assert store.mail_get_cursor(db, "INBOX")["window_since"] == "2026-09-06"
+    store.mail_set_cursor(db, "INBOX", uidvalidity=6, last_uid=9, last_scan_at="t4")
+    assert store.mail_get_cursor(db, "INBOX")["window_since"] is None    # the window ended
     assert [c["folder"] for c in store.mail_list_cursors(db)] == ["INBOX", "Labels/School"]
 
 
@@ -194,7 +225,11 @@ def test_suggestions_for_thread_and_ics_lookup(db):
     assert store.mail_find_suggestion_by_ics_uid(db, "nope") is None
 
     store.mail_transition_suggestion(db, "s3", "pending", "rejected")
-    assert store.mail_find_suggestion_by_ics_uid(db, "inv-2") is None  # rejected is not live
+    # A rejected invite is found too: the owner's "no" must hold for a re-send.
+    assert store.mail_find_suggestion_by_ics_uid(db, "inv-2")["status"] == "rejected"
+    _suggestion(db, "s4", thread_id="t3", message_key="mid:d@x", ics_uid="inv-2")
+    db.execute("UPDATE mail_suggestions SET created_at='2099-01-01T00:00:00.000Z' WHERE id='s4'")
+    assert store.mail_find_suggestion_by_ics_uid(db, "inv-2")["id"] == "s4"  # most recent first
     store.mail_transition_suggestion(db, "s1", "pending", "approving")
     assert store.mail_find_suggestion_by_ics_uid(db, "inv-1")["id"] == "s1"
 
@@ -309,6 +344,15 @@ def test_search_caps_terms(tasks):
 
 
 # ── schema ───────────────────────────────────────────────────────────────────
+
+def test_init_db_adds_window_since_to_an_old_cursor_table(db):
+    db.execute("DROP TABLE mail_cursors")
+    db.execute("CREATE TABLE mail_cursors (folder TEXT PRIMARY KEY, uidvalidity INTEGER NOT NULL, "
+               "last_uid INTEGER NOT NULL DEFAULT 0, last_scan_at TEXT)")
+    db.execute("INSERT INTO mail_cursors VALUES ('INBOX', 1, 5, 't')")
+    init_db(db)
+    assert store.mail_get_cursor(db, "INBOX")["window_since"] is None
+
 
 def test_init_db_twice_is_idempotent(db):
     _claim(db)

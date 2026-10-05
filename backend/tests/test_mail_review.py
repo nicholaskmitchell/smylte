@@ -13,6 +13,7 @@ import pytest
 from smylted.db import store
 from smylted.mail import redact, review
 from smylted.mail.imap import FolderInfo
+from smylted.mail.llm import Match
 from smylted.mail.pipeline import Ingestor
 from smylted.mail.review import ReviewError
 from smylted.mail.settings import MailConfig
@@ -171,6 +172,93 @@ def test_auto_accept_failure_leaves_the_suggestion_pending(svc, tmp_path):
     [out] = ingest(svc, tmp_path, extraction("Bring the team snack list", confidence=0.9))
     assert out.outcome == "staged"          # approval failed: no list on an unreachable server
     assert svc.mail(store.mail_get_suggestion, out.suggestion_id)["status"] == "pending"
+
+
+class TaskHost:
+    """Just enough of the service to approve a task, recording the write.
+    `before_swap` runs once, just before approval's pending → approving swap."""
+
+    def __init__(self, svc, before_swap=None):
+        self._svc = svc
+        self.before_swap = before_swap
+        self.tasks: list[dict] = []
+
+    def mail(self, fn, *args, **kwargs):
+        if fn is store.mail_transition_suggestion and args[1:3] == ("pending", "approving"):
+            hook, self.before_swap = self.before_swap, None
+            if hook:
+                hook()
+        return self._svc.mail(fn, *args, **kwargs)
+
+    def publish_mail_changed(self):
+        pass
+
+    def list_lists(self):
+        return [{"id": "family"}]
+
+    def resolve_list(self, list_id, *, component=None):
+        return "/dav/me/family/" if list_id == "family" and component == "VTODO" else None
+
+    def create_task(self, href, summary, *, edit=None, client_id=None):
+        self.tasks.append({"href": href, "summary": summary, "edit": edit})
+        return {"uid": f"{client_id}@smylted", "summary": summary}
+
+    def get_task(self, href, uid):
+        return None
+
+
+def _ingestor(svc, tmp_path, llm):
+    return Ingestor(svc, make_store(tmp_path), llm=llm, jev=FakeJev(),
+                    clock=lambda: at(2026, 10, 6))
+
+
+def test_approve_writes_what_was_merged_before_its_swap(svc, tmp_path):
+    llm = FakeLlm(extract=[extraction("Bring the team snack list", due=date(2026, 10, 9)),
+                           extraction("Bring cups", due=date(2026, 10, 10),
+                                      notes="Also please bring cups.")])
+    ing = _ingestor(svc, tmp_path, llm)
+    first = ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    # The reply lands between the owner's click and the swap: it moves the due.
+    host = TaskHost(svc, before_swap=lambda: ing.process_message(
+        INBOX, eml("pipe_reply_quoting"), uid=2))
+    result = review.approve(host, first.suggestion_id, config=MailConfig())
+    [task] = host.tasks
+    assert task["edit"].due == date(2026, 10, 10)
+    assert result["suggestion"]["due"] == "2026-10-10"
+
+
+def test_an_approved_task_carries_the_merged_notes(svc, tmp_path):
+    llm = FakeLlm(extract=[extraction("Bring the team snack list", notes="Coach asked."),
+                           extraction("Bring cups", notes="Also please bring cups.")])
+    ing = _ingestor(svc, tmp_path, llm)
+    first = ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    ing.process_message(INBOX, eml("pipe_reply_quoting"), uid=2)
+    host = TaskHost(svc)
+    review.approve(host, first.suggestion_id, config=MailConfig())
+    [task] = host.tasks
+    assert task["edit"].description == (
+        "Coach asked.\n\n"
+        "— Coach Miller, 2026-10-05: Also please bring cups.\n\n"
+        'From Coach Miller <coach@club.example> · "Snacks for Saturday" · 2026-10-05 '
+        "(via email)")
+
+
+def test_reject_records_merged_messages_under_their_own_thread(svc, tmp_path):
+    a = eml("pipe_request")                                            # thread req-1
+    b = a.replace(b"<req-1@club.example>", b"<other-1@club.example>")  # another thread
+    b_reply = eml("pipe_reply_quoting").replace(
+        b"<req-1@club.example>", b"<other-1@club.example>").replace(b"<req-2@", b"<other-2@")
+    llm = FakeLlm(extract=extraction("Bring the team snack list"),
+                  match=Match("duplicate", "S1"))
+    ing = _ingestor(svc, tmp_path, llm)
+    first = ing.process_message(INBOX, a, uid=1)
+    assert ing.process_message(INBOX, b, uid=2).outcome == "attached"
+    review.reject(svc, first.suggestion_id)
+    [row] = svc.mail(store.mail_rejections_for_thread, "mid:other-1@club.example")
+    assert row["message_key"] == "mid:other-1@club.example"
+    # So a reply in that other thread restating it stays dismissed.
+    out = ing.process_message(INBOX, b_reply, uid=3)
+    assert (out.stage, out.outcome) == ("dedup", "suppressed")
 
 
 # ── against the scratch Radicale ──

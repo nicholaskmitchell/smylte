@@ -3,18 +3,19 @@ the mailbox, the model and Jev. No network: the service's Radicale is a
 closed port, and staging a suggestion never needs it."""
 from __future__ import annotations
 
-from datetime import date, datetime
+import hashlib
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from smylted.db import store
-from smylted.mail import pipeline, redact, review
-from smylted.mail.imap import FolderInfo
+from smylted.mail import message, pipeline, redact, review, settings
+from smylted.mail.imap import FolderInfo, MailConnectError
 from smylted.mail.jev import JevError
 from smylted.mail.llm import EXTRACT_TOOL_NAME, LlmError, Match
 from smylted.mail.pipeline import Ingestor
-from smylted.mail.settings import MAIL_STATUS_KEY
+from smylted.mail.settings import MAIL_SETTINGS_KEY, MAIL_STATUS_KEY
 from tests.mail_fakes import (
     TEST_TYPESAFE_KEY,
     FakeJev,
@@ -470,7 +471,7 @@ def test_test_imap_reports_folders_and_authentication_results(svc, secrets):
     assert folders["Labels/School"]["selected"] and folders["INBOX"]["selected"]
     assert result["auth_results"] == {"checked": True, "present": True,
                                       "authserv_ids": ["mailin008.protonmail.ch"],
-                                      "trusted": True}
+                                      "trusted": True, "sampled": 2}
     assert ("fetch_header_fields", 2) in source.calls and source.closed
 
 
@@ -714,3 +715,378 @@ def test_jev_dedup_compares_deadlines_by_day_not_by_string(svc, jev_secrets):
     other_day = [Candidate(label="T1", title="Bring the team snack list", notes="",
                            due="2026-10-12T17:00:00+02:00")]
     assert ing._jev_match(c, ex, other_day) == Match("update", "T1")
+
+
+# ── an interrupted run loses nothing (review fix A1) ──
+
+def _claim_unsettled(svc, raw: bytes, *, uid: int = 1, age: timedelta = timedelta(minutes=5)):
+    """The claim a run left behind when it died mid-message, `age` before NOW."""
+    m = message.parse_message(raw)
+    key = message.ledger_key(m)
+    assert svc.mail(store.mail_claim, key, message_id=m.message_id,
+                    thread_id=message.thread_id(m), folder="INBOX", uid=uid)
+    svc.mail(lambda conn: conn.execute("UPDATE mail_ledger SET claimed_at=? WHERE key=?",
+                                       (pipeline._iso(NOW - age), key)))
+    return key
+
+
+def test_a_claim_left_by_an_interrupted_run_is_read_by_the_next(svc, secrets):
+    raw = eml("pipe_request")
+    svc.mail(store.mail_set_cursor, "INBOX", uidvalidity=1, last_uid=0,
+             last_scan_at=pipeline._iso(NOW - timedelta(minutes=10)))
+    key = _claim_unsettled(svc, raw)
+    llm = FakeLlm(extract=extraction("Bring the team snack list"))
+    report = ingestor(svc, secrets, llm, source=inbox_source({1: raw})).run_once()
+    assert report.ok, report.error
+    assert report.counts == {"staged": 1}
+    assert ledger(svc, key)["outcome"] == "staged"
+    assert len(pending(svc)) == 1
+    assert svc.mail(store.mail_get_cursor, "INBOX")["last_uid"] == 1
+
+
+def test_a_claim_held_by_an_unfinished_run_is_retried_not_a_duplicate(svc, secrets):
+    raw = eml("pipe_request")
+    _claim_unsettled(svc, raw)
+    llm = FakeLlm(extract=extraction("Bring the team snack list"))
+    out = ingestor(svc, secrets, llm).process_message(INBOX, raw, uid=1)
+    assert (out.stage, out.outcome, out.transient) == ("ledger", "retry", True)
+    assert out.detail == "an unfinished run holds this message"
+    assert llm.extract_calls == []
+
+
+def test_an_approval_stuck_for_ten_minutes_is_pending_again(svc, secrets):
+    for sid, age in (("old", timedelta(minutes=11)), ("young", timedelta(minutes=5))):
+        svc.mail(store.mail_insert_suggestion, sid, {
+            "kind": "task", "title": "Pay", "sender": "office@school.example",
+            "message_key": f"mid:{sid}@x", "thread_id": f"mid:{sid}@x"})
+        assert svc.mail(store.mail_transition_suggestion, sid, "pending", "approving")
+        svc.mail(lambda conn, sid=sid, age=age: conn.execute(
+            "UPDATE mail_suggestions SET updated_at=? WHERE id=?",
+            (pipeline._iso(NOW - age), sid)))
+    assert ingestor(svc, secrets, source=inbox_source({})).run_once().ok
+    assert svc.mail(store.mail_get_suggestion, "old")["status"] == "pending"
+    assert svc.mail(store.mail_get_suggestion, "young")["status"] == "approving"
+
+
+def test_request_stop_finishes_the_message_in_hand_and_saves_the_cursor(svc, secrets):
+    source = inbox_source({1: eml("pipe_request"), 2: eml("pipe_no_message_id"),
+                           3: eml("pipe_note_to_self")})
+    holder = {}
+
+    def extract(email):
+        holder["ing"].request_stop()            # shutdown arrives mid-message
+        return extraction("Bring the team snack list")
+
+    llm = FakeLlm(extract=extract)
+    ing = holder["ing"] = ingestor(svc, secrets, llm, source=source)
+    report = ing.run_once()
+    assert report.skipped_reason == "stopping" and report.counts == {"staged": 1}
+    assert len(llm.extract_calls) == 1
+    assert svc.mail(store.mail_get_cursor, "INBOX")["last_uid"] == 1
+    assert source.selected_names() == ["INBOX"]       # no further folder either
+    again = ing.run_once()
+    assert again.skipped_reason == "stopping" and len(llm.extract_calls) == 1
+    assert ing.wait_idle(0.1) is True
+
+
+def test_wait_idle_waits_for_a_running_scan(svc, secrets):
+    ing = ingestor(svc, secrets)
+    ing._run_lock.acquire()
+    try:
+        assert ing.wait_idle(0.05) is False
+    finally:
+        ing._run_lock.release()
+    assert ing.wait_idle(0.05) is True
+
+
+def test_the_service_refuses_mail_work_once_closed(tmp_path):
+    s = make_service(tmp_path)
+    s.close()
+    with pytest.raises(RuntimeError, match="the service is closed"):
+        s.mail(store.mail_get_cursor, "INBOX")
+
+
+def test_a_message_that_cannot_be_parsed_is_settled_and_the_folder_goes_on(
+        svc, secrets, monkeypatch):
+    bad = plain("bad-1@school.example", "Broken", "BOOM")
+    good = eml("pipe_request")
+    real = message.parse_message
+
+    def parse(raw):
+        if b"BOOM" in raw:
+            raise RecursionError("maximum recursion depth exceeded")
+        return real(raw)
+
+    monkeypatch.setattr(message, "parse_message", parse)
+    llm = FakeLlm(extract=extraction("Bring the team snack list"))
+    ing = ingestor(svc, secrets, llm, source=inbox_source({1: bad, 2: good}))
+    report = ing.run_once()
+    assert report.ok, report.error
+    assert report.counts == {"error": 1, "staged": 1}
+    row = ledger(svc, "hash:" + hashlib.sha256(bad).hexdigest())
+    assert (row["stage"], row["outcome"]) == ("error", "error")
+    assert "RecursionError" in row["detail"] and row["settled_at"]
+    assert svc.mail(store.mail_get_cursor, "INBOX")["last_uid"] == 2
+    again = ing.process_message(INBOX, bad, uid=1)
+    assert (again.stage, again.outcome) == ("ledger", "duplicate")
+
+
+# ── the password is bound to its server (review fix A2) ──
+
+def test_a_password_saved_for_other_server_settings_is_never_sent(svc, secrets):
+    source = inbox_source({1: eml("pipe_request")})
+    # Changed behind the binding's back, as a settings edit without a new password is.
+    svc.mail(store.merge_meta_json, MAIL_SETTINGS_KEY, {"imap_host": "imap.attacker.example"})
+    ing = ingestor(svc, secrets, source=source)
+    report = ing.run_once()
+    assert not report.ok and report.error == settings.PASSWORD_BINDING_MESSAGE
+    with pytest.raises(MailConnectError) as e:
+        ing.test_imap()
+    assert e.value.kind == "config" and str(e.value) == settings.PASSWORD_BINDING_MESSAGE
+    assert source.calls == []                          # the factory was never called
+
+
+# ── merge races and rejections (review fixes A3, A4) ──
+
+def test_a_suggestion_rejected_while_a_match_is_in_flight_is_left_alone(svc, secrets):
+    holder = {}
+
+    def match(item, candidates):
+        holder["sid"] = pending(svc)[0]["id"]
+        review.reject(svc, holder["sid"])             # the owner, while the model thinks
+        return Match("update", "S1")
+
+    llm = FakeLlm(extract=[extraction("Bring the team snack list", due=date(2026, 10, 9)),
+                           extraction("Bring the team snack list", due=date(2026, 10, 12))],
+                  match=match)
+    ing = ingestor(svc, secrets, llm)
+    ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    out = ing.process_message(INBOX, eml("pipe_no_message_id"), uid=2)
+    assert (out.stage, out.outcome) == ("stage", "staged")
+    rejected = svc.mail(store.mail_get_suggestion, holder["sid"])
+    assert rejected["status"] == "rejected"
+    assert rejected["updates"] == "[]" and rejected["due"] == "2026-10-09"
+    [new] = pending(svc)
+    assert new["id"] == out.suggestion_id and new["due"] == "2026-10-12"
+    assert svc.mail(store.mail_get_thread, new["thread_id"])["suggestion_id"] == new["id"]
+
+
+def test_merged_updates_carry_their_thread_and_sender_name(svc, secrets):
+    llm = FakeLlm(extract=[extraction("Bring the team snack list"),
+                           extraction("Bring cups", notes="Also cups.")])
+    ing = ingestor(svc, secrets, llm)
+    ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    ing.process_message(INBOX, eml("pipe_reply_quoting"), uid=2)
+    [s] = pending(svc)
+    [u] = pipeline._load_updates(s["updates"])
+    assert u["thread_id"] == "mid:req-1@club.example" and u["sender_name"] == "Coach Miller"
+    assert review.suggestion_dto(s)["updates"][0]["sender_name"] == "Coach Miller"
+
+
+class _TaskHost:
+    """The service, with the thread's task present and open."""
+
+    def __init__(self, svc):
+        self._svc = svc
+
+    def __getattr__(self, name):
+        return getattr(self._svc, name)
+
+    def get_task(self, href, uid):
+        return {"uid": uid, "list": "l", "summary": "Bring the team snack list", "notes": "",
+                "completed": False, "cancelled": False, "due": None}
+
+
+def test_a_dismissed_update_to_the_threads_task_stays_dismissed(svc, secrets):
+    svc.mail(store.mail_upsert_thread, "mid:req-1@club.example", task_list="/c/l/",
+             task_uid="t1")
+    first = eml("pipe_reply_quoting")
+    again = first.replace(b"<req-2@club.example>", b"<req-3@club.example>")
+    llm = FakeLlm(extract=extraction("Bring cups"))
+    ing = ingestor(svc, secrets, llm, host=_TaskHost(svc))
+    out = ing.process_message(INBOX, first, uid=1)
+    assert (out.stage, out.outcome) == ("dedup", "staged")
+    review.reject(svc, out.suggestion_id)
+    out = ing.process_message(INBOX, again, uid=2)
+    assert (out.stage, out.outcome) == ("dedup", "suppressed")
+    assert out.detail.startswith("same as a dismissed suggestion")
+    assert pending(svc) == []
+
+
+# ── invitations (review fix A5) ──
+
+def _invite(n: int, *, start=b"20261014T180000", end=b"20261014T193000") -> bytes:
+    return (eml("pipe_invite").replace(b"<invite-1@school.example>",
+                                       f"<invite-{n}@school.example>".encode())
+            .replace(b"20261014T180000", start).replace(b"20261014T193000", end))
+
+
+def test_a_rescheduled_invitation_updates_the_pending_suggestion(svc, secrets):
+    ing = ingestor(svc, secrets)
+    first = ing.process_message(INBOX, _invite(1), uid=1)
+    out = ing.process_message(INBOX, _invite(2, start=b"20261016T170000",
+                                             end=b"20261016T183000"), uid=2)
+    assert (out.stage, out.outcome, out.detail) == ("fastpath", "attached",
+                                                     "updated the pending invitation")
+    assert out.suggestion_id == first.suggestion_id
+    [s] = pending(svc)
+    assert s["event_start"] == "2026-10-16T17:00:00+02:00"
+    assert s["event_end"] == "2026-10-16T18:30:00+02:00"
+    [u] = pipeline._load_updates(s["updates"])
+    assert u["notes"] == "Changed: 2026-10-16T17:00:00+02:00 at Main hall"
+    assert u["thread_id"] == "mid:invite-2@school.example" and u["sender_name"] == "Ms Smith"
+    # The same version again changes nothing.
+    out = ing.process_message(INBOX, _invite(3, start=b"20261016T170000",
+                                             end=b"20261016T183000"), uid=3)
+    assert (out.outcome, out.detail) == ("duplicate", "event already suggested")
+
+
+def test_a_dismissed_invitation_sent_again_is_not_staged(svc, secrets):
+    ing = ingestor(svc, secrets)
+    first = ing.process_message(INBOX, _invite(1), uid=1)
+    review.reject(svc, first.suggestion_id)
+    out = ing.process_message(INBOX, _invite(2, start=b"20261016T170000",
+                                             end=b"20261016T183000"), uid=2)
+    assert (out.stage, out.outcome) == ("fastpath", "suppressed")
+    assert pending(svc) == []
+
+
+def test_a_changed_invitation_after_approval_is_not_applied(svc, secrets):
+    ing = ingestor(svc, secrets)
+    first = ing.process_message(INBOX, _invite(1), uid=1)
+    svc.mail(store.mail_transition_suggestion, first.suggestion_id, "pending", "approving")
+    out = ing.process_message(INBOX, _invite(2, start=b"20261016T170000"), uid=2)
+    assert (out.outcome, out.detail) == (
+        "duplicate", "already added; changes to an added event are not applied")
+    assert svc.mail(store.mail_get_suggestion, first.suggestion_id)["event_start"] == (
+        "2026-10-14T18:00:00+02:00")
+
+
+# ── date windows (review fix A6) ──
+
+def test_an_old_message_at_a_higher_uid_is_not_read_after_the_window(svc, secrets):
+    source = inbox_source({1: eml("pipe_request"), 2: eml("pipe_no_message_id")},
+                          dates={1: at(2026, 10, 4), 2: at(2026, 8, 1)})
+    llm = FakeLlm(extract=extraction("Bring the team snack list"))
+    ing = ingestor(svc, secrets, llm, source=source)
+    assert ing.run_once().ok
+    cur = svc.mail(store.mail_get_cursor, "INBOX")
+    assert (cur["last_uid"], cur["window_since"]) == (2, None)
+    assert ing.run_once().ok
+    assert len(llm.extract_calls) == 1
+
+
+def test_a_truncated_window_continues_by_date_next_run(svc, secrets, monkeypatch):
+    monkeypatch.setattr(pipeline, "MAX_PER_FOLDER_PER_RUN", 2)
+    msgs = {u: plain(f"w{u}@school.example", f"Note {u}", f"Item {u}") for u in (1, 2, 3, 4)}
+    source = inbox_source(msgs, dates={1: at(2026, 10, 4), 2: at(2026, 10, 4),
+                                       3: at(2026, 8, 1), 4: at(2026, 10, 5)})
+    llm = FakeLlm(extract=extraction(actionable=False))
+    ing = ingestor(svc, secrets, llm, source=source)
+    assert ing.run_once().ok
+    cur = svc.mail(store.mail_get_cursor, "INBOX")
+    since = (NOW - timedelta(days=ing.config().backfill_days)).date().isoformat()
+    assert (cur["last_uid"], cur["window_since"]) == (2, since)
+    assert ing.run_once().ok
+    searches = [arg for name, arg in source.calls if name == "search_uids"]
+    assert searches[-1] == {"after_uid": None, "since": date.fromisoformat(since)}
+    assert [arg for name, arg in source.calls if name == "fetch"][-1] == [4]
+    assert len(llm.extract_calls) == 3                    # 1, 2 and 4; never the old 3
+    cur = svc.mail(store.mail_get_cursor, "INBOX")
+    assert (cur["last_uid"], cur["window_since"]) == (4, None)
+
+
+class _ExpungingSource(FakeMailSource):
+    """Search finds UIDs that are gone by the time they are fetched."""
+
+    def search_uids(self, *, after_uid=None, since=None):
+        super().search_uids(after_uid=after_uid, since=since)
+        return [3, 4]
+
+
+def test_a_window_whose_messages_were_expunged_ends_at_uidnext(svc, secrets):
+    source = _ExpungingSource({"INBOX": {"flags": [], "uidvalidity": 1, "messages": {},
+                                         "uidnext": 10}})
+    report = ingestor(svc, secrets, source=source).run_once()
+    assert report.ok, report.error
+    assert svc.mail(store.mail_get_cursor, "INBOX")["last_uid"] == 9
+
+
+# ── reconnecting (review fix A7) ──
+
+class _DroppingSource(FakeMailSource):
+    """Loses the connection when `fail_folder` is selected, `failures` times."""
+
+    def __init__(self, folders, *, fail_folder: str, failures: int = 1):
+        super().__init__(folders)
+        self.fail_folder, self.failures = fail_folder, failures
+
+    def select(self, folder):
+        if folder.name == self.fail_folder and self.failures:
+            self.failures -= 1
+            self.calls.append(("select", folder.name))
+            raise MailConnectError("the connection was closed", kind="network")
+        return super().select(folder)
+
+
+def _two_folders(**kw) -> _DroppingSource:
+    return _DroppingSource(
+        {"INBOX": {"flags": [], "uidvalidity": 1, "messages": {1: eml("pipe_request")},
+                   "dates": {1: at(2026, 10, 5)}},
+         "Labels/School": {"flags": [], "uidvalidity": 2,
+                           "messages": {5: eml("pipe_note_to_self")},
+                           "dates": {5: at(2026, 10, 5)}}},
+        fail_folder="Labels/School", **kw)
+
+
+def test_a_dropped_connection_is_reopened_once_and_the_folder_retried(svc, secrets):
+    source = _two_folders()
+    llm = FakeLlm(extract=[extraction("Bring the team snack list"), extraction("Buy stamps")])
+    report = ingestor(svc, secrets, llm, source=source).run_once()
+    assert report.ok, report.error
+    assert report.reconnects == 1 and report.counts == {"staged": 2}
+    assert [n for n, _ in source.calls].count("connect") == 2
+    assert source.selected_names() == ["INBOX", "Labels/School", "Labels/School"]
+    assert svc.mail(store.mail_get_cursor, "Labels/School")["last_uid"] == 5
+
+
+def test_a_second_drop_ends_the_run(svc, secrets):
+    source = _two_folders(failures=2)
+    llm = FakeLlm(extract=extraction("Bring the team snack list"))
+    report = ingestor(svc, secrets, llm, source=source).run_once()
+    assert not report.ok and report.error == "the connection was closed"
+    assert report.reconnects == 1
+    assert svc.mail(store.mail_get_cursor, "INBOX")["last_uid"] == 1
+
+
+# ── the connection test samples recent mail (review fix A8) ──
+
+def test_test_imap_samples_the_ten_newest_inbox_messages(svc, secrets):
+    msgs = {u: eml("pipe_request") for u in range(1, 13)}
+    msgs[3] = eml("pipe_school_noreply_dmarc_pass")       # only an older one has headers
+    source = inbox_source(msgs)
+    result = ingestor(svc, secrets, source=source).test_imap()
+    assert result["auth_results"] == {"checked": True, "present": True,
+                                      "authserv_ids": ["mailin008.protonmail.ch"],
+                                      "trusted": True, "sampled": 10}
+    fetched = sorted(arg for name, arg in source.calls if name == "fetch_header_fields")
+    assert fetched == list(range(3, 13))
+
+
+# ── quote stripping is bounded (review fix A9) ──
+
+def test_quote_stripping_reads_a_bounded_prefix_and_the_subject(svc, secrets, monkeypatch):
+    seen = []
+    real = message.strip_quotes
+
+    def strip(text, **kw):
+        seen.append((len(text), kw))
+        return real(text, **kw)
+
+    monkeypatch.setattr(message, "strip_quotes", strip)
+    raw = plain("big-1@school.example", "Fwd: the form", "Sign the form.\n" + "x" * 300_000)
+    ingestor(svc, secrets, FakeLlm(extract=extraction("Sign the form"))).process_message(
+        INBOX, raw, uid=1)
+    [(n, kw)] = seen
+    assert n == pipeline.MAX_STRIP_CHARS == 200_000
+    assert kw == {"subject": "Fwd: the form"}

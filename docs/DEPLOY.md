@@ -621,8 +621,9 @@ which host, port, encryption, pinned certificate and username it was entered
 for. Changing any of those in Settings forgets a stored password, and the next
 scan or test asks for it again, so a changed setting can never send it to a
 different server. A password from `SMYLTE_MAIL_IMAP_PASSWORD` is tied to the
-server settings at startup. After changing the server in Settings, restart the
-service.
+server settings at startup. While that variable is set, Settings refuses to
+change the server or to take a password. To move to another server, unset the
+variable, change the server in Settings, set the variable again and restart.
 
 **Moving to the homelab.** The values are write-only, so the plain path is to
 enter them again in Settings on the new box — the Bridge password changes with a
