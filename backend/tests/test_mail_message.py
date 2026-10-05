@@ -169,6 +169,18 @@ def test_strip_quotes_keeps_every_inline_answer():
     )
 
 
+@pytest.mark.parametrize("text,subject,expected", [
+    ("Am Freitag kann ich nicht.\nAm 05.10.2026 um 10:00 schrieb Coach <c@x>:\n> Kommst du Freitag?\n",
+     "AW: Training", "Am Freitag kann ich nicht."),
+    ("On Friday I can't.\nOn Mon, Oct 5, 2026 at 10:00 AM Coach <c@x> wrote:\n> Are you coming Friday?\n",
+     "Re: Training", "On Friday I can't."),
+], ids=["german", "english"])
+def test_a_one_line_top_post_above_an_attribution_is_kept(text, subject, expected):
+    # The line above the attribution starts like one ("Am …", "On …"), but the
+    # attribution is complete on its own line, so it is not a wrapped one.
+    assert strip_quotes(text, subject=subject) == expected
+
+
 OUTLOOK_FW_PLAIN = (
     "Can you handle this one?\n\n"
     "________________________________\n"
@@ -222,6 +234,53 @@ def test_strip_quotes_does_not_cut_away_everything():
         "Please book a slot for the parent evening by Friday.\n"
     )
     assert strip_quotes(memo) == memo.strip()
+
+
+# An attachment-only Outlook reply: nothing of its own above the quoted request.
+EMPTY_REPLY_PLAIN = (
+    "\n\n"
+    "From: Me <me@proton.me>\n"
+    "Sent: Monday, October 5, 2026 9:00 AM\n"
+    "To: Teacher <t@school.example>\n"
+    "Subject: Form\n\n"
+    "Could you please send me the permission form by Friday?\n"
+)
+EMPTY_REPLY_HTML = (
+    '<html><body><div><br></div><hr style="display:inline-block;width:98%">'
+    '<div id="divRplyFwdMsg" dir="ltr"><b>From:</b> Me &lt;me@proton.me&gt;<br><b>Sent:</b> Monday<br>'
+    "<b>To:</b> Teacher<br><b>Subject:</b> Form</div>"
+    "<div>Could you please send me the permission form by Friday?</div></body></html>"
+)
+
+
+@pytest.mark.parametrize("subject", ["RE: Form", "Re: Fwd: Form", "AW: Form", "Re[2]: Form", "SV: Form",
+                                     "Antw: Form"])
+def test_a_reply_with_no_text_of_its_own_strips_to_nothing(subject):
+    # The quoted original is the owner's own request: it must not reach the
+    # model again just because the reply carried only an attachment.
+    assert strip_quotes(EMPTY_REPLY_PLAIN, subject=subject) == ""
+    assert strip_quotes(html_to_text(EMPTY_REPLY_HTML, reply=True), subject=subject) == ""
+
+
+def test_an_html_reply_with_no_text_of_its_own_renders_to_nothing():
+    assert html_to_text(EMPTY_REPLY_HTML, reply=True) == ""
+    # Not a reply (a note to self, a memo): the quoted block is all there is.
+    assert "permission form" in html_to_text(EMPTY_REPLY_HTML)
+    raw = (
+        "Message-ID: <r1@school.example>\nFrom: Teacher <t@school.example>\nSubject: RE: Form\n"
+        "Content-Type: text/html; charset=utf-8\n\n" + EMPTY_REPLY_HTML + "\n"
+    ).encode()
+    m = parse_message(raw)
+    assert m.html_used is True
+    assert m.text == ""
+    assert "permission form" in parse_message(raw.replace(b"RE: Form", b"Form")).text
+
+
+def test_a_reply_subject_does_not_drop_a_bottom_posted_reply():
+    text = ("On 10/5/26 9:00 AM, Ms Smith wrote:\n> Can you bring the nets on Thursday?\n\n"
+            "Yes, I will bring the nets.\n")
+    assert strip_quotes(text, subject="Re: Nets") == "Yes, I will bring the nets."
+    assert strip_quotes(OUTLOOK_FW_PLAIN, subject="RE: Field trip") == "Can you handle this one?"
 
 
 def test_strip_quotes_is_linear_in_underscore_lines():

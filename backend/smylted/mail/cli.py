@@ -9,9 +9,9 @@ every user on the box in `ps` and lands in shell history. Nothing here prints a
 value — `status` shows the same four-character hint the settings page does.
 
 It opens the same database as the server, only to read and write which store
-holds the secrets (the marker `auto` relies on), and closes it again. Running
-it beside a live server is fine: SQLite in WAL mode with a busy timeout, and a
-one-row write.
+holds the secrets (the marker `auto` relies on) and the Bridge password's
+binding (below), and closes it again. Running it beside a live server is
+fine: SQLite in WAL mode with a busy timeout, and one-row writes.
 
 A shell does not have the service's environment, and a CLI that quietly used
 other paths would store a secret the service never reads. So every command
@@ -19,6 +19,17 @@ first prints the database, store and file paths it is using — from the same
 `Settings` the service builds them from — and only `init-key` creates a key:
 the other commands report a missing one instead of creating a second key
 beside the service's.
+
+The Bridge password is only ever sent to the server it was saved for (see
+`settings.connection_binding`), and the service refuses a stored password with
+no binding. So `set imap_password` binds it to the server settings saved in
+the database at that moment, as saving it in Settings does, and says which
+host and user that was — the shell operator is trusted as much as the
+environment variable, which is bound the same way at startup. Refusing the
+password here and pointing at Settings was the alternative; it would leave
+the documented command storing a password that can never be used. The server
+has to be set in Settings first: changing it afterwards forgets the password.
+`clear imap_password` clears the binding with it.
 """
 from __future__ import annotations
 
@@ -38,7 +49,7 @@ from .secrets import (
     create_key_file,
     default_key_path,
 )
-from .settings import SECRETS_MARKER_KEY
+from .settings import MAIL_SETTINGS_KEY, SECRETS_MARKER_KEY, connection_binding, load
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -106,9 +117,18 @@ def _run(args: argparse.Namespace, settings: Settings) -> int:
                 return 1
             secrets.set(args.name, value)
             print(f"{args.name} stored in {secrets.backend().name}")
+            if args.name == "imap_password":
+                cfg = load(store.get_meta_json(conn, MAIL_SETTINGS_KEY))
+                store.merge_meta_json(conn, MAIL_SETTINGS_KEY,
+                                      {"imap_password_binding": connection_binding(cfg)})
+                print(f"bound to {cfg.imap_host}:{cfg.imap_port} ({cfg.imap_tls}) as "
+                      f"{cfg.imap_username or '(no username)'}; set the server in Settings "
+                      "first — changing it later forgets the password")
             return 0
         if args.cmd == "clear":
             secrets.delete(args.name)
+            if args.name == "imap_password":
+                store.merge_meta_json(conn, MAIL_SETTINGS_KEY, {"imap_password_binding": ""})
             print(f"{args.name} cleared")
             return 0
         if args.cmd == "migrate":

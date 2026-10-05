@@ -1278,7 +1278,7 @@ export const de: Catalogue = {
   'mail.imap.hint': 'Der eigene Benutzername und das Passwort von Bridge aus den Postfach-Einstellungen — nicht dein Proton-Login.',
   'mail.imap.authres.ok': 'Authentication-Results-Header kommen an ({ids}); Absender auf der Erlaubnisliste können den Massenfilter überspringen.',
   'mail.imap.authres.untrusted': 'Authentication-Results-Header stammen von {ids}, das nicht in der Liste vertrauenswürdiger Server unten steht.',
-  'mail.imap.authres.missing': 'Kein Authentication-Results-Header an der neuesten INBOX-Nachricht; Absender auf der Erlaubnisliste werden wie gewöhnliche E-Mails behandelt.',
+  'mail.imap.authres.missing': 'Kein Authentication-Results-Header an den neuesten INBOX-Nachrichten; Absender auf der Erlaubnisliste werden wie gewöhnliche E-Mails behandelt.',
   'mail.folders': 'Ordner',
   'mail.folders.hint': 'Einer pro Zeile. Gesendet, Entwürfe, Alle E-Mails, Spam und Papierkorb werden nie gelesen.',
   'mail.folders.never': 'wird nie gelesen',

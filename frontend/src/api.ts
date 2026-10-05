@@ -1177,7 +1177,7 @@ export interface MailSuggestion {
   }
   /** Later messages in the same thread folded into this suggestion. */
   updates: {
-    message_key: string
+    message_key?: string
     sender: string
     sender_name?: string | null
     subject: string | null

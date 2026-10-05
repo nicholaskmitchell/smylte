@@ -1233,7 +1233,7 @@ export const en = {
   'mail.imap.hint': 'Bridge’s own username and password from its mailbox settings — not your Proton login.',
   'mail.imap.authres.ok': 'Authentication-Results headers come through ({ids}); allow-listed senders can skip the bulk filter.',
   'mail.imap.authres.untrusted': 'Authentication-Results headers come from {ids}, which isn’t in the trusted list below.',
-  'mail.imap.authres.missing': 'No Authentication-Results header on the newest INBOX message; allow-listed senders will be treated as ordinary mail.',
+  'mail.imap.authres.missing': 'No Authentication-Results header on the newest INBOX messages; allow-listed senders will be treated as ordinary mail.',
   'mail.folders': 'Folders',
   'mail.folders.hint': 'One per line. Sent, Drafts, All Mail, Spam and Trash are never read.',
   'mail.folders.never': 'never read',

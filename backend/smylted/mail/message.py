@@ -53,7 +53,12 @@ attribution, the obvious rule, dropped every bottom-posted reply whole. Outlook
 writes the same header block above a forward as above a reply, so a forward
 prefix in the subject (`FW:`, `Fwd:`, `WG:`, …) switches the cut off, as does a
 cut that would leave nothing; the cost is a forward that also carries a reply
-chain reaching the model whole, which beats an empty body.
+chain reaching the model whole, which beats an empty body. That last exception
+is for messages that are not replies (a memo that starts with From:/Date:, a
+note to self). A reply prefix (`Re:`, `AW:`, `SV:`, …) keeps the cut even when
+nothing is left: stripping exists so that a reply does not re-extract the
+original request, and an attachment-only reply would otherwise reach the model
+as the whole original — often the owner's own request, read back as a new one.
 
 **Calendar parts** (`text/calendar`, `application/ics`, `*.ics`) are collected
 whether inline or attached and are never body text: the `.ics` fast path reads
@@ -254,8 +259,8 @@ def _part_text(part: Message) -> str:
         return bytes(payload).decode("utf-8", errors="replace")
 
 
-def _extract_body(root: Message | None, *,
-                  keep_forwarded: bool = False) -> tuple[str, bool, tuple[Attachment, ...]]:
+def _extract_body(root: Message | None, *, keep_forwarded: bool = False,
+                  reply: bool = False) -> tuple[str, bool, tuple[Attachment, ...]]:
     plain: str | None = None
     html: str | None = None
     calendars: list[Attachment] = []
@@ -289,7 +294,7 @@ def _extract_body(root: Message | None, *,
     if plain is not None and (len(plain.strip()) >= 20 or html is None):
         text = plain
     elif html is not None:
-        text = html_to_text(html, keep_forwarded=keep_forwarded)
+        text = html_to_text(html, keep_forwarded=keep_forwarded, reply=reply)
         html_used = True
     else:
         text = ""
@@ -330,7 +335,8 @@ def parse_message(raw: bytes) -> ParsedMessage:
     in_reply_to = next((i for i in parse_id_list(_first(headers, "In-Reply-To"))
                         if not _is_internal(i)), None)
 
-    text, html_used, calendars = _extract_body(root, keep_forwarded=_is_forward(subject))
+    text, html_used, calendars = _extract_body(root, keep_forwarded=_is_forward(subject),
+                                               reply=_is_reply(subject))
     return ParsedMessage(
         message_id=normalize_message_id(_first(headers, "Message-ID")),
         from_name=from_name,
@@ -453,7 +459,7 @@ def _render(root) -> str:
     return _tidy("".join(w.parts))
 
 
-def html_to_text(html: str, *, keep_forwarded: bool = False) -> str:
+def html_to_text(html: str, *, keep_forwarded: bool = False, reply: bool = False) -> str:
     """Readable text of an HTML mail, without the quoted conversation.
 
     Outlook writes the same `divRplyFwdMsg` header block above a forwarded
@@ -462,7 +468,9 @@ def html_to_text(html: str, *, keep_forwarded: bool = False) -> str:
     everything after it, because a forward is *about* the forwarded message.
     And when removing it would leave no text at all — a forward with nothing
     written above it — the forwarded message is what there is to read, so it
-    is kept.
+    is kept. Not for a `reply` (the subject says so): there the quoted message
+    is the original request, and an empty reply staying empty is the point of
+    removing it — otherwise an attachment-only reply re-extracts the original.
 
     Falls back to stripping tags with a regex if lxml cannot make a tree of it.
     """
@@ -482,7 +490,8 @@ def html_to_text(html: str, *, keep_forwarded: bool = False) -> str:
             return _render(root)
         whole = _render(root)
         _drop_outlook_reply(root)
-        return _render(root) or whole
+        text = _render(root)
+        return text if reply else (text or whole)
     except Exception as exc:
         log.debug("mail: html could not be parsed, stripping tags (%s)", type(exc).__name__)
         return _tidy(re.sub(r"<[^>]+>", " ", html))
@@ -513,14 +522,29 @@ def _is_forward(subject: str) -> bool:
     return bool(_FORWARD_SUBJECT.match(subject or ""))
 
 
+_REPLY_SUBJECT = re.compile(r"^\s*(?:re|aw|sv|antw|vs|odp|rif)(?:\[\d+\])?\s*:", re.IGNORECASE)
+
+
+def _is_reply(subject: str) -> bool:
+    """Does the subject start with a reply prefix (Re, AW, SV, Antw, VS, Odp, RIF)?"""
+    return bool(_REPLY_SUBJECT.match(subject or ""))
+
+
 def _attribution_length(lines: list[str], i: int) -> int:
     """How many lines from `i` on are a reply attribution ("On … wrote:",
-    possibly wrapped onto a second line, or "Am … schrieb …:"); 0 if none."""
-    if any(rx.match(lines[i]) for rx in (_ON_WROTE, _AM_SCHRIEB)):
+    possibly wrapped onto a second line, or "Am … schrieb …:"); 0 if none.
+
+    The two-line form is not tried when the next line is a whole attribution
+    by itself: the line above it is then the sender's own one-line answer that
+    happens to start like one ("Am Freitag kann ich nicht.", "On Friday …"),
+    and joining the two would drop the reply with the attribution.
+    """
+    attribution = (_ON_WROTE, _AM_SCHRIEB)
+    if any(rx.match(lines[i]) for rx in attribution):
         return 1
-    if i + 1 < len(lines):
+    if i + 1 < len(lines) and not any(rx.match(lines[i + 1]) for rx in attribution):
         joined = lines[i].rstrip() + " " + lines[i + 1].strip()
-        if any(rx.match(joined) for rx in (_ON_WROTE, _AM_SCHRIEB)):
+        if any(rx.match(joined) for rx in attribution):
             return 2
     return 0
 
@@ -563,7 +587,10 @@ def strip_quotes(text: str, *, subject: str = "") -> str:
       from it on is cut. Not when `subject` marks a forward — the same block
       then introduces the content being passed on — and not when the cut
       would leave nothing, which is a memo that starts with From:/Date: lines
-      or a forward with nothing written above it.
+      or a forward with nothing written above it. That last exception does not
+      hold when `subject` marks a reply: a reply with no text of its own (an
+      attachment-only answer) quotes the original request, and handing that
+      to the model again is what stripping exists to prevent.
     """
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     without_attribution: list[str] = []
@@ -577,7 +604,7 @@ def strip_quotes(text: str, *, subject: str = "") -> str:
         i += 1
     lines = without_attribution
     cut = _cut_index(lines)
-    if not _is_forward(subject) and any(ln.strip() for ln in lines[:cut]):
+    if not _is_forward(subject) and (_is_reply(subject) or any(ln.strip() for ln in lines[:cut])):
         lines = lines[:cut]
     kept = [ln.rstrip() for ln in lines if not ln.lstrip().startswith(">")]
     return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()

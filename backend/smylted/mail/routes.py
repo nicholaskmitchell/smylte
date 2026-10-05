@@ -73,8 +73,8 @@ _KILL_SWITCH = ("email ingestion is disabled for this deployment "
 _ENV_PASSWORD = ("the Bridge password is set by SMYLTE_MAIL_IMAP_PASSWORD, which overrides "
                  "one saved here; unset it to manage the password in Settings")
 _ENV_SERVER = ("the server settings (host, port, encryption, certificate, username) are fixed "
-               "while SMYLTE_MAIL_IMAP_PASSWORD is set; unset it, change them here, then set it "
-               "again and restart")
+               "while SMYLTE_MAIL_IMAP_PASSWORD is set; unset it and restart, change them here, "
+               "then set it again and restart")
 _INSECURE_REMOTE = ("certificate checks can only be switched off for a loopback host "
                     "(127.0.0.1, ::1 or localhost)")
 
