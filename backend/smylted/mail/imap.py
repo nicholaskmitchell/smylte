@@ -59,7 +59,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Protocol
 
-from .redact import redact, redact_exc
+from .redact import redact, redact_exc, register_secret
 from .settings import is_loopback_host
 
 log = logging.getLogger("smylted.mail")
@@ -281,6 +281,10 @@ def connect(cfg: ImapConfig, password: str) -> ImapMailSource:
             ) from None
     if not cfg.username or not password:
         raise MailConnectError("the IMAP username and password must both be set", kind="config")
+    # Registered here as well as by the secret store: a server that echoes the
+    # LOGIN line back in its NO response must not be able to put the password
+    # into an error, whoever called this.
+    register_secret(password)
 
     ctx = build_ssl_context(cfg)
     imap = None
