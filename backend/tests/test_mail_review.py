@@ -384,6 +384,27 @@ def test_an_update_approved_again_after_a_merge_appends_only_the_new_line(svc, t
     assert host.task["notes"] == "Coach asked.\n\n" + block + "\n\n" + merged
 
 
+def test_a_multi_line_update_is_appended_whole_even_when_a_line_is_already_there(svc, tmp_path):
+    llm = FakeLlm(extract=extraction("Bring the team snack list",
+                                     notes="Please bring:\n- cups\n\n- plates"),
+                  match=Match("update", "T1"))
+    host = NotesHost(svc)
+    host.task["notes"] = "Coach asked.\nShopping:\n- cups\n- juice"
+    ing = Ingestor(host, make_store(tmp_path), llm=llm, jev=FakeJev(),
+                   clock=lambda: at(2026, 10, 6))
+    first = ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    review.approve(host, first.suggestion_id, config=MailConfig())
+    # "- cups" is already in the task, and the blank line is the note's own:
+    # neither is dropped, because an entry is only skipped when ALL of it is there.
+    entry = "— Update from Coach Miller, 2026-10-05: Please bring:\n- cups\n\n- plates"
+    assert host.task["notes"] == "Coach asked.\nShopping:\n- cups\n- juice\n\n" + entry
+    # Approved again after a stuck reset, the whole entry is found and nothing is added.
+    assert svc.mail(store.mail_transition_suggestion, first.suggestion_id, "approved", "approving")
+    assert svc.mail(store.mail_reset_stuck_approving, before="2999-01-01T00:00:00.000Z") == 1
+    review.approve(host, first.suggestion_id, config=MailConfig())
+    assert host.task["notes"].count("Please bring:") == 1
+
+
 # ── against the scratch Radicale ──
 
 @pytest.fixture

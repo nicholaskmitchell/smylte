@@ -166,19 +166,35 @@ def _first_id(collections: list[dict]) -> str | None:
     return collections[0]["id"] if collections else None
 
 
-def _update_block(row, notes: str) -> str:
-    """The lines appended to the task an update suggestion targets."""
-    def line(who: str | None, sent_at: str | None, text: str | None) -> str:
+def _update_entries(row, notes: str) -> list[str]:
+    """What an update suggestion appends to its task: one entry per message.
+
+    An entry is its head line and the message's notes, which may run over
+    several lines.
+    """
+    def entry(who: str | None, sent_at: str | None, text: str | None) -> str:
         head = f"— Update from {who or 'unknown sender'}"
         if sent_at:
             head += f", {sent_at[:10]}"
         text = (text or "").strip()
         return f"{head}: {text}" if text else head
 
-    lines = [line(row["sender_name"] or row["sender"], row["sent_at"], notes)]
-    lines += [line(u.get("sender_name") or u.get("sender"), u.get("sent_at"), u.get("notes"))
-              for u in _updates(row)]
-    return "\n".join(lines)
+    entries = [entry(row["sender_name"] or row["sender"], row["sent_at"], notes)]
+    entries += [entry(u.get("sender_name") or u.get("sender"), u.get("sent_at"), u.get("notes"))
+                for u in _updates(row)]
+    return entries
+
+
+def _already_in(notes: str, entry: str) -> bool:
+    """Do the entry's lines appear, consecutively, among the notes' lines?
+
+    Whole lines, not a substring: a head-only entry is a prefix of a longer
+    entry from the same sender and day.
+    """
+    have = [ln.strip() for ln in notes.splitlines()]
+    want = [ln.strip() for ln in entry.splitlines()]
+    n = len(want)
+    return any(have[i:i + n] == want for i in range(len(have) - n + 1))
 
 
 def _merged_notes(row) -> str:
@@ -251,18 +267,17 @@ def approve(host, suggestion_id: str, *, config: MailConfig, title: str | None =
             # A stuck 'approving' is put back to pending after 10 minutes, and
             # the edit may have landed before the process died. Creating a task
             # or an event is idempotent by client_id; appending notes is not,
-            # so a line already in the notes is not appended a second time.
-            # Checked per line, not per block: a reply merged in between the
-            # reset and this approve adds a line, and the block as a whole
-            # would then miss and append the first line again.
-            block = _update_block(row, body)
+            # so an entry already in the notes is not appended a second time.
+            # Checked per entry, not per block: a reply merged in between the
+            # reset and this approve adds an entry, and the block as a whole
+            # would then miss and append the first one again. Nor per line:
+            # a note's own lines ("- cups") may already sit in the task.
             current = task["notes"] or ""
-            existing = {ln.strip() for ln in current.splitlines() if ln.strip()}
-            new = [ln for ln in block.splitlines() if ln.strip() and ln.strip() not in existing]
-            if not new:
+            missing = [e for e in _update_entries(row, body) if not _already_in(current, e)]
+            if not missing:
                 description = UNSET
             else:
-                description = (current.rstrip() + "\n\n" + "\n".join(new)).lstrip()
+                description = (current.rstrip() + "\n\n" + "\n".join(missing)).lstrip()
             edit = TaskEdit(description=description,
                             due=d if d is not None else UNSET)
             created = host.edit_task(row["target_list"], row["target_uid"], edit)
