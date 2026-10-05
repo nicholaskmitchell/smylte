@@ -18,7 +18,7 @@ from typing import Any
 
 from smylted.db import store
 from smylted.mail.imap import FetchedMessage, FolderInfo, FolderState
-from smylted.mail.jev import JevError, KindVerdict
+from smylted.mail.jev import JevError, JevMatch, KindVerdict
 from smylted.mail.llm import EXTRACT_TOOL_NAME, MATCH_TOOL_NAME, Extraction, LlmClient, Match
 from smylted.mail.secrets import EncryptedFileBackend, KeyringBackend, SecretStore
 from smylted.mail.settings import MAIL_SETTINGS_KEY
@@ -26,6 +26,7 @@ from tests.conftest import api_settings
 
 TEST_API_KEY = "sk-ant-api03-TESTKEYTESTKEY"
 TEST_PASSWORD = "bridge-pass-1234"
+TEST_TYPESAFE_KEY = "ts-live-TESTKEYTESTKEY"
 
 
 # ── mailbox ──
@@ -217,15 +218,21 @@ def make_llm_client(responses, *, model_provider: Callable[[], str] = lambda: "c
 # ── Jev ──
 
 class FakeJev:
-    """`decide_kind` answered from a script; records every call's keyword arguments."""
+    """`decide_kind` and `match` answered from scripts; records what each was asked."""
 
-    def __init__(self, script=None):
+    def __init__(self, script=None, match=None):
         self.script = script if script is not None else JevError("not scripted", kind="config")
+        self.match_script = match if match is not None else JevError("not scripted", kind="config")
         self.calls: list[dict] = []
+        self.match_calls: list[tuple[dict, list[dict]]] = []
 
     def decide_kind(self, **kwargs) -> KindVerdict:
         self.calls.append(kwargs)
         return _answer(self.script, kwargs)
+
+    def match(self, item, candidates) -> JevMatch:
+        self.match_calls.append((item, list(candidates)))
+        return _answer(self.match_script, item, candidates)
 
     def test_key(self) -> str:
         return "The TypeSafe key works; models: jev-latest."
@@ -239,6 +246,11 @@ def verdict(kind: str, *, confidence: float = 0.9, agreed: bool = True,
     other = "task" if kind == "event" else "event"
     return KindVerdict(kind=kind, confidence=confidence if agreed else 0.0,
                        probabilities={kind: 0.9, other: 0.1}, model=model, agreed=agreed)
+
+
+def jev_match(target: str | None, p: float, *, changed: float | None = None,
+              unsure: bool = False, model: str = "jev-1.13.0") -> JevMatch:
+    return JevMatch(target=target, p=p, unsure=unsure, changed=changed, model=model)
 
 
 # ── service, secrets, settings ──

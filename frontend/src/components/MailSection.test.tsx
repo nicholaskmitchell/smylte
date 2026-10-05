@@ -32,8 +32,8 @@ function payload(
       never_parse: [], capture_notes_to_self: true, poll_minutes: 5, body_max_chars: 8000,
       backfill_days: 7, task_list: null, event_calendar: null,
       trusted_authserv_ids: ['protonmail.ch', '*.protonmail.ch'],
-      auto_accept_min_confidence: null, kind_decider: 'model', kind_rules: [],
-      jev_model: 'jev-latest', anthropic_workspace_id: '', ...over.settings,
+      auto_accept_min_confidence: null, kind_decider: 'jev', kind_rules: [],
+      jev_model: 'jev-latest', dedup_decider: 'jev', anthropic_workspace_id: '', ...over.settings,
     },
     secrets: {
       anthropic_api_key: unset, imap_password: unset, typesafe_api_key: unset, ...over.secrets,
@@ -404,22 +404,37 @@ describe('task or event', () => {
   it('shows the rules box only when rules decide', async () => {
     const user = userEvent.setup()
     m.putMailSettings.mockResolvedValue(payload({ settings: { kind_decider: 'rules' } }))
-    await show()
+    await show(payload({ settings: { kind_decider: 'model' } }))
     expect(document.getElementById('mail-kind-rules')).toBeNull()
     await user.selectOptions(el('mail-kind-decider'), 'rules')
     expect(m.putMailSettings).toHaveBeenCalledWith({ kind_decider: 'rules' })
     expect(await screen.findByLabelText('Rules')).toBe(el('mail-kind-rules'))
   })
 
-  it('choosing TypeSafe Jev writes it and reveals its key', async () => {
-    const user = userEvent.setup()
-    m.putMailSettings.mockResolvedValue(payload({ settings: { kind_decider: 'jev' } }))
-    await show()
-    expect(document.getElementById('mail-typesafe-key')).toBeNull()
-    await user.selectOptions(el('mail-kind-decider'), 'jev')
-    expect(m.putMailSettings).toHaveBeenCalledWith({ kind_decider: 'jev' })
+  it('shows the TypeSafe fields whichever decider is chosen', async () => {
+    await show(payload({ settings: { kind_decider: 'model', dedup_decider: 'model' } }))
     expect(await screen.findByLabelText('TypeSafe API key')).toBe(el('mail-typesafe-key'))
     expect(el('mail-jev-model')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Test TypeSafe key' })).toBeInTheDocument()
+  })
+
+  it('choosing TypeSafe Jev writes it', async () => {
+    const user = userEvent.setup()
+    m.putMailSettings.mockResolvedValue(payload({ settings: { kind_decider: 'jev' } }))
+    await show(payload({ settings: { kind_decider: 'model' } }))
+    expect((el('mail-kind-decider') as HTMLSelectElement).value).toBe('model')
+    await user.selectOptions(el('mail-kind-decider'), 'jev')
+    expect(m.putMailSettings).toHaveBeenCalledWith({ kind_decider: 'jev' })
+  })
+
+  it('writes the duplicate-check decider', async () => {
+    const user = userEvent.setup()
+    m.putMailSettings.mockResolvedValue(payload({ settings: { dedup_decider: 'model' } }))
+    await show()
+    expect((el('mail-dedup-decider') as HTMLSelectElement).value).toBe('jev')
+    expect(screen.getByRole('option', { name: 'TypeSafe Jev, Claude when unsure' })).toBeInTheDocument()
+    await user.selectOptions(el('mail-dedup-decider'), 'model')
+    expect(m.putMailSettings).toHaveBeenCalledWith({ dedup_decider: 'model' })
   })
 
   it('stores the TypeSafe key write-only', async () => {

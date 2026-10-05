@@ -43,15 +43,22 @@ Why it is built this way:
 - **Cheap checks first.** Everything before stage 8 is local and
   deterministic, and most mail ends there: the model is called only for
   person-to-person mail that is not obviously bulk.
-- **Dedup asks the model only when there is something to compare with.** Open
-  tasks are retrieved by full-text search on the extraction's words, pending
-  suggestions by word overlap; only when either turns up a candidate does the
-  model decide "new", "duplicate" or "update". A possible duplicate the owner
-  can reject beats a lost task, so every unclear answer means "new".
+- **Dedup asks only when there is something to compare with.** Open tasks
+  are retrieved by full-text search on the extraction's words, pending
+  suggestions by word overlap; only when either turns up a candidate is
+  "new", "duplicate" or "update" decided — by TypeSafe's Jev, with Claude
+  deciding whenever Jev is unsure or unreachable, or by Claude alone, as
+  Settings says. Measured on labelled mail (`dev/mail_eval/README.md`), Jev
+  this way never merged new work into an existing task where Claude alone
+  did; a merge is a request the owner never sees. A possible duplicate the
+  owner can reject beats a lost task, so every unclear answer means "new".
 - **Task or event** is decided after extraction, by the model, the owner's
-  rules (`kindrules`) or TypeSafe's Jev (`jev`), as Settings says. Jev failing
-  never stops the pipeline: the extraction model's choice stands and the
-  ledger says so.
+  rules (`kindrules`) or Jev, as Settings says. Jev failing never stops the
+  pipeline: the extraction model's choice stands and the ledger says so.
+- **Jev needs a key to be asked at all.** "jev" is the default for both
+  decisions, but without a TypeSafe key the model decides, silently: the
+  key's presence is the owner's opt-in to sending email text to TypeSafe,
+  and an unset key is not news worth a ledger note on every message.
 
 Nothing here logs a subject or a body: logs carry folder names, UIDs, ledger
 keys, stages and outcomes, and every error string passes through `redact`.
@@ -72,6 +79,7 @@ from typing import Any
 from ..db import store
 from . import addresses, authres, fastpaths, imap, kindrules, message, review, settings
 from .imap import FolderInfo, ImapConfig, MailConnectError
+from .jev import CHANGED_T as JEV_CHANGED_T
 from .jev import MIN_CONFIDENCE as JEV_MIN_CONFIDENCE
 from .jev import JevClient, JevError
 from .llm import Candidate, EmailForExtraction, Extraction, LlmClient, LlmError, Match
@@ -599,9 +607,13 @@ class Ingestor:
             return "no-reply sender"
         return None
 
+    def _jev_ready(self, decider: str) -> bool:
+        """Is `decider` "jev" and a TypeSafe key set? Otherwise the model decides."""
+        return decider == "jev" and self._secrets.status("typesafe_api_key").set
+
     def _decide_kind(self, c: _Msg, ex: Extraction, body: str) -> tuple[str, str]:
         cfg, msg = c.cfg, c.msg
-        if cfg.kind_decider == "jev":
+        if self._jev_ready(cfg.kind_decider):
             try:
                 v = self.jev.decide_kind(
                     subject=msg.subject, sender=msg.from_addr or "", body=body, title=ex.title,
@@ -617,6 +629,7 @@ class Ingestor:
                     self._log.warning("mail: asking Jev about %s failed: %s", c.key, reason)
                 kind, why = ex.kind, f"Jev unavailable ({reason}); kept the model's {ex.kind}"
         else:
+            # "jev" without a key lands here too; kindrules treats it as "model".
             facts = kindrules.KindFacts(
                 sender=msg.from_addr, subject=msg.subject, body=body, model_kind=ex.kind,
                 has_time=isinstance(ex.event_start, datetime),
@@ -654,7 +667,7 @@ class Ingestor:
         if rejected and any(_same_item(ex, r) for r in rejected):
             return self._settle(c, "dedup", "suppressed", "same as a dismissed suggestion")
 
-        # d. ask the model about whatever looks similar
+        # d. ask Jev or the model about whatever looks similar
         candidates: list[Candidate] = []
         targets: dict[str, Any] = {}
         if kind == "task":
@@ -678,14 +691,16 @@ class Ingestor:
         if not candidates:
             return self._stage_new(c, ex, kind)
 
-        try:
-            m = self.llm.match(ex, candidates)
-        except LlmError as e:
-            if e.kind in ("transient", "config"):
-                return self._llm_failed(c, "dedup", e)
-            self._log.warning("mail: dedup check for %s failed (%s); treating it as new",
-                              c.key, e)
-            m = Match("new", None)
+        m = self._jev_match(c, ex, candidates) if self._jev_ready(c.cfg.dedup_decider) else None
+        if m is None:
+            try:
+                m = self.llm.match(ex, candidates)
+            except LlmError as e:
+                if e.kind in ("transient", "config"):
+                    return self._llm_failed(c, "dedup", e)
+                self._log.warning("mail: dedup check for %s failed (%s); treating it as new",
+                                  c.key, e)
+                m = Match("new", None)
 
         target = m.target
         if m.decision == "new" or target not in targets:
@@ -715,6 +730,40 @@ class Ingestor:
         if m.decision == "duplicate":
             return self._merge(c, s, ex, keep_due=True, detail="same as a pending suggestion")
         return self._merge(c, s, ex, keep_due=False, detail="update to a pending suggestion")
+
+    def _jev_match(self, c: _Msg, ex: Extraction, candidates: list[Candidate]) -> Match | None:
+        """Jev's answer to the dedup question as a `Match`, or None when Claude should decide.
+
+        The same decision as `dev/mail_eval.py::decide_dedup`: in the unsure band
+        Claude decides; below `SAME_T` it is new work; otherwise the deadline is
+        compared here (Jev is weak at dates) and Jev's "changed" settles the rest.
+        Either way the reason goes on the ledger detail.
+        """
+        item = {"label": "new", "title": ex.title, "notes": ex.notes,
+                "due": ex.due.isoformat() if ex.due else None}
+        cands = [{"label": x.label, "title": x.title, "notes": x.notes, "due": x.due}
+                 for x in candidates]
+        try:
+            jm = self.jev.match(item, cands)
+        except Exception as e:  # noqa: BLE001 — Jev failing never stops the pipeline
+            reason = str(e) if isinstance(e, JevError) else redact_exc(e)
+            level = logging.INFO if isinstance(e, JevError) else logging.WARNING
+            self._log.log(level, "mail: Jev dedup check for %s failed (%s); asking Claude",
+                          c.key, reason)
+            c.extra.append(f"Jev unavailable ({reason}); asked Claude")
+            return None
+        if jm.unsure:
+            c.extra.append(f"Jev unsure (p={jm.p:.2f}); asked Claude")
+            return None
+        c.extra.append(f"Jev p={jm.p:.2f} ({jm.model})")
+        if jm.target is None:
+            return Match("new", None)
+        cand = next(x for x in cands if x["label"] == jm.target)
+        # Compared by DAY: an email names a date, while an open task's due may be
+        # timed ("2026-10-09T17:00:00+02:00"), and that is not a moved deadline.
+        moved = item["due"] is not None and item["due"][:10] != (cand["due"] or "")[:10]
+        changed = (jm.changed or 0.0) >= JEV_CHANGED_T
+        return Match("update" if moved or changed else "duplicate", jm.target)
 
     def _merge(self, c: _Msg, s, ex: Extraction, *, keep_due: bool, detail: str) -> Outcome:
         """Record this message on pending suggestion `s` instead of staging a new one."""

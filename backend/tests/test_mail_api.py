@@ -261,6 +261,9 @@ def test_a_bad_rule_is_refused_with_its_number(tmp_path):
         assert r.status_code == 200
         assert r.json()["settings"]["kind_rules"] == ["subject:invoice -> task"]
         assert _put(c, kind_decider="jev", jev_model="jev-preview").status_code == 200
+        r = _put(c, dedup_decider="model")
+        assert r.status_code == 200 and r.json()["settings"]["dedup_decider"] == "model"
+        assert _put(c, dedup_decider="rules").status_code == 422
 
 
 def test_insecure_tls_is_only_for_loopback(tmp_path):
