@@ -607,9 +607,10 @@ and fail.
 are set (never their values). `secrets set NAME` reads one from the terminal
 without echo, and `secrets clear NAME` removes it. `secrets set imap_password`
 ties the password to the server settings already saved in the database, and
-says which. So save Bridge's host, port, certificate and username in Settings
-first. Every command first prints the
-database, the store and the key file it is using. Those must be the service's,
+says which. So save Bridge's host, port, encryption, certificate and username in
+Settings first. While `SMYLTE_MAIL_IMAP_PASSWORD` is set, `set` and `clear`
+refuse `imap_password`: the variable is what counts. Every command first prints
+the database, the store and the key file it is using. Those must be the service's,
 so run the CLI with the service's user, environment and credential, not from a
 plain shell (which would read `~/.config` and the default database):
 
