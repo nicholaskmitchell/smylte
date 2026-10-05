@@ -28,6 +28,8 @@ bought with a thin margin against the one failure a filter must not have.
 **Task or event — Jev when confident, else Claude.** On 66 clean actionable
 emails: Jev alone 61–62, Claude alone 62–63, Jev at confidence ≥ 0.7 with
 Claude deciding the rest 65 (both runs). `jev.MIN_CONFIDENCE` is 0.7.
+Production sends Jev the same state as `email_state` (sender with name,
+subject, sent date, body), so the threshold describes what runs.
 
 **Duplicate check — Jev, Claude when unsure.** Raw accuracy is a wash (Claude
 alone 91–93 of 98, Jev with Claude in the 0.35–0.65 band 92), but the errors

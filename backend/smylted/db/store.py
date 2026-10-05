@@ -2374,27 +2374,14 @@ def mail_release(conn: sqlite3.Connection, key: str) -> None:
     conn.execute("DELETE FROM mail_ledger WHERE key=? AND settled_at IS NULL", (key,))
 
 
-def mail_release_stale(conn: sqlite3.Connection, *, before: str) -> int:
-    """Drop unsettled claims older than `before` (an ISO stamp).
-
-    A claim that never settled means the process died mid-message. Unlike a
-    notification, nothing has left the building, so it is safe — and right — to
-    let the next scan try the message again.
-    """
-    cur = conn.execute(
-        "DELETE FROM mail_ledger WHERE settled_at IS NULL AND claimed_at < ?", (before,)
-    )
-    return cur.rowcount or 0
-
-
 def mail_release_unsettled(conn: sqlite3.Connection) -> int:
     """Drop every unsettled claim, whatever its age.
 
     Called at the start of a run, under the run lock: this process is then the
     only claimer, so a claim nobody settled belongs to a run that never
     finished (a crash, a kill, a restart). Waiting an hour for it to go stale,
-    as `mail_release_stale` does, let the restarted scan move the cursor past
-    the message and lose it.
+    as an earlier version did, let the restarted scan move the cursor past the
+    message and lose it.
     """
     cur = conn.execute("DELETE FROM mail_ledger WHERE settled_at IS NULL")
     return cur.rowcount or 0

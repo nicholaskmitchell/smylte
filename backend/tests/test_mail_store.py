@@ -65,18 +65,6 @@ def test_release_only_removes_unsettled_claims(db):
     assert _claim(db, "mid:open@x") is True  # released, so claimable again
 
 
-def test_release_stale_goes_by_age_and_spares_settled_rows(db):
-    for key in ("mid:old@x", "mid:new@x", "mid:oldsettled@x"):
-        _claim(db, key)
-    store.mail_settle(db, "mid:oldsettled@x", stage="s", outcome="skipped")
-    db.execute("UPDATE mail_ledger SET claimed_at='2026-01-01T00:00:00.000Z' "
-               "WHERE key IN ('mid:old@x','mid:oldsettled@x')")
-    assert store.mail_release_stale(db, before="2026-06-01T00:00:00.000Z") == 1
-    assert store.mail_ledger_get(db, "mid:old@x") is None
-    assert store.mail_ledger_get(db, "mid:new@x") is not None
-    assert store.mail_ledger_get(db, "mid:oldsettled@x") is not None
-
-
 def test_release_unsettled_drops_every_unsettled_claim_whatever_its_age(db):
     for key in ("mid:old@x", "mid:new@x", "mid:settled@x"):
         _claim(db, key)

@@ -59,9 +59,8 @@ def _client(responses, *, key=KEY, model="jev-latest", max_attempts=3):
 
 
 def _decide(client, **over):
-    fields = dict(subject="Parent evening", sender="office@school.example",
-                  body="Parent evening on Thursday at 18:00 in the hall.",
-                  title="Parent evening", start="2026-10-08T18:00", due=None)
+    fields = dict(sender="Ms Smith <office@school.example>", subject="Parent evening",
+                  sent="2026-10-05", body="Parent evening on Thursday at 18:00 in the hall.")
     fields.update(over)
     return client.decide_kind(**fields)
 
@@ -70,7 +69,7 @@ def test_request_shape():
     models = iter(["jev-latest", "jev-preview"])
     client, seen, _ = _client([AGREE_EVENT, AGREE_EVENT], model=lambda: next(models))
     _decide(client)
-    _decide(client, start=None, due="2026-10-09")
+    _decide(client, body="Bring the form. " + "x" * 9000)
     first, second = seen
     assert first.method == "POST"
     assert str(first.url) == "https://api.typesafe.ai/v1/systemone"
@@ -79,12 +78,14 @@ def test_request_shape():
     body = json.loads(first.content)
     assert body["model"] == "jev-latest"
     assert json.loads(second.content)["model"] == "jev-preview"      # read on every call
+    # Exactly dev/mail_eval.py::email_state, the shape MIN_CONFIDENCE was
+    # measured on: no "extracted" block from the model Jev is checking.
     assert body["state"] == {
-        "email": {"from": "office@school.example", "subject": "Parent evening",
-                  "body": "Parent evening on Thursday at 18:00 in the hall."},
-        "extracted": {"title": "Parent evening", "start": "2026-10-08T18:00", "due": None}}
-    assert json.loads(second.content)["state"]["extracted"] == {
-        "title": "Parent evening", "start": None, "due": "2026-10-09"}
+        "email": {"from": "Ms Smith <office@school.example>", "subject": "Parent evening",
+                  "sent": "2026-10-05",
+                  "body": "Parent evening on Thursday at 18:00 in the hall."}}
+    long_body = json.loads(second.content)["state"]["email"]["body"]
+    assert long_body == ("Bring the form. " + "x" * 9000)[:8000]
     qa, qb = body["questions"]["kind_a"], body["questions"]["kind_b"]
     for q in (qa, qb):
         assert q["type"] == "choice" and q["instructions"] == jev.KIND_INSTRUCTIONS

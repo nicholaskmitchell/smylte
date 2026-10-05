@@ -319,14 +319,21 @@ class JevClient:
             self._sleep(delay)
         raise JevError(failure, kind="transient")
 
-    def decide_kind(self, *, subject: str, sender: str, body: str, title: str,
-                    start: str | None, due: str | None) -> KindVerdict:
-        """Ask Jev whether this email is a task or an event (both option orders, one call)."""
+    def decide_kind(self, *, sender: str, subject: str, sent: str, body: str) -> KindVerdict:
+        """Ask Jev whether this email is a task or an event (both option orders, one call).
+
+        The state is the email alone — sender with name, subject, sent date,
+        body cut at 8000 characters — exactly `dev/mail_eval.py::email_state`,
+        because `MIN_CONFIDENCE` was measured on that shape and says nothing
+        about another. The extraction model's reading (title, start, due) is
+        deliberately left out: Jev is here to check that model's choice, and a
+        judge shown the answer it is checking is no longer independent of it.
+        """
         model = self._model_provider()
         request = {
             "model": model,
-            "state": {"email": {"from": sender, "subject": subject, "body": body},
-                      "extracted": {"title": title, "start": start, "due": due}},
+            "state": {"email": {"from": sender, "subject": subject, "sent": sent,
+                                "body": body[:8000]}},
             "questions": {
                 "kind_a": {"type": "choice", "instructions": KIND_INSTRUCTIONS,
                            "criteria": {"event": KIND_CRITERIA["event"],

@@ -176,7 +176,8 @@ def _update_block(row, notes: str) -> str:
         return f"{head}: {text}" if text else head
 
     lines = [line(row["sender_name"] or row["sender"], row["sent_at"], notes)]
-    lines += [line(u.get("sender"), u.get("sent_at"), u.get("notes")) for u in _updates(row)]
+    lines += [line(u.get("sender_name") or u.get("sender"), u.get("sent_at"), u.get("notes"))
+              for u in _updates(row)]
     return "\n".join(lines)
 
 
@@ -300,6 +301,11 @@ def approve(host, suggestion_id: str, *, config: MailConfig, title: str | None =
             if kind == "task":
                 store.mail_upsert_thread(conn, tid, task_list=result[0], task_uid=result[1],
                                          **unhook)
+            elif kind == "update":
+                # The thread now feeds that task: a later reply is an update to
+                # it without asking the dedup question again.
+                store.mail_upsert_thread(conn, tid, task_list=row["target_list"],
+                                         task_uid=row["target_uid"], **unhook)
             elif unhook:
                 store.mail_upsert_thread(conn, tid, **unhook)
             return store.mail_get_suggestion(conn, suggestion_id)
