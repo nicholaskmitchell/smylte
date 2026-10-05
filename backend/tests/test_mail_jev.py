@@ -1,4 +1,4 @@
-"""TypeSafe's Jev — request shape, verdict math, status handling, and the key never leaking.
+"""TypeSafe's Jev — request shapes, verdict and match math, status handling, no key leaks.
 
 No network: every request goes to an `httpx.MockTransport`, and the retry
 sleep is a recorder that does not wait.
@@ -12,7 +12,7 @@ import httpx
 import pytest
 
 from smylted.mail import jev, redact
-from smylted.mail.jev import JevClient, JevError, KindVerdict
+from smylted.mail.jev import JevClient, JevError, JevMatch, KindVerdict
 
 KEY = "ts-live-TESTKEYTESTKEYTESTKEY"
 
@@ -304,3 +304,141 @@ def test_test_key_errors():
 def test_close():
     client, _, _ = _client([])
     client.close()
+
+
+# ── the duplicate check (addendum ZD) ──
+
+ITEM = {"label": "new", "title": "Return the signed field-trip form",
+        "notes": "Sign and send back.", "due": "2026-10-09"}
+CANDS = [
+    {"label": "T1", "title": "Book dentist appointment", "notes": "", "due": None},
+    {"label": "S1", "title": "Sign permission slip for zoo trip", "notes": "Return to teacher",
+     "due": "2026-10-09"},
+]
+
+
+def _same(model="jev-1.13.0", **p):
+    return httpx.Response(200, json={"model": model, "answers": {
+        f"same_{label}": {"type": "noul", "noul": v} for label, v in p.items()}})
+
+
+def _changed(a, b):
+    def answer(p_changed):
+        return {"type": "choice", "choice": "changed" if p_changed >= 0.5 else "same",
+                "confidence": 0.9, "probabilities": {"same": 1 - p_changed, "changed": p_changed}}
+    return httpx.Response(200, json={"model": "jev-1.13.0",
+                                     "answers": {"changed_a": answer(a), "changed_b": answer(b)}})
+
+
+def test_match_request_shapes():
+    client, seen, _ = _client([_same(T1=0.02, S1=0.93), _changed(0.8, 0.6)])
+    m = client.match(ITEM, CANDS)
+    assert m == JevMatch(target="S1", p=0.93, unsure=False, changed=pytest.approx(0.7),
+                         model="jev-1.13.0")
+    first, second = seen
+    for r in seen:
+        assert str(r.url) == "https://api.typesafe.ai/v1/systemone"
+        assert r.headers["Authorization"] == f"Bearer {KEY}"
+    one = json.loads(first.content)
+    assert one["model"] == "jev-latest"
+    assert one["state"] == {
+        "new_item": {"title": "Return the signed field-trip form", "notes": "Sign and send back.",
+                     "due": "2026-10-09"},
+        "candidates": {
+            "T1": {"title": "Book dentist appointment", "notes": "", "due": None},
+            "S1": {"title": "Sign permission slip for zoo trip", "notes": "Return to teacher",
+                   "due": "2026-10-09"}}}
+    assert one["questions"] == {
+        f"same_{label}": {
+            "type": "noul",
+            "instructions": f"Is `new_item` the same piece of work as `candidates.{label}` "
+                            "(the same action on the same thing for the same period)?"}
+        for label in ("T1", "S1")}
+    two = json.loads(second.content)
+    assert two["model"] == "jev-latest"
+    assert two["state"] == {"existing": one["state"]["candidates"]["S1"],
+                            "new": one["state"]["new_item"]}
+    qa, qb = two["questions"]["changed_a"], two["questions"]["changed_b"]
+    for q in (qa, qb):
+        assert q["type"] == "choice" and q["instructions"] == jev.CHANGED_INSTRUCTIONS
+        assert q["criteria"] == jev.CHANGED_CRITERIA
+    assert list(qa["criteria"]) == ["same", "changed"]
+    assert list(qb["criteria"]) == ["changed", "same"]
+
+
+def test_match_below_the_threshold_is_new_without_a_second_request():
+    client, seen, _ = _client([_same(T1=0.02, S1=0.2)])
+    m = client.match(ITEM, CANDS)
+    assert (m.target, m.p, m.unsure, m.changed) == (None, 0.2, False, None)
+    assert len(seen) == 1
+
+
+@pytest.mark.parametrize("p,target", [(0.35, None), (0.49, None), (0.5, "S1"), (0.64, "S1")])
+def test_match_unsure_band_asks_nothing_more(p, target):
+    client, seen, _ = _client([_same(T1=0.1, S1=p)])
+    m = client.match(ITEM, CANDS)
+    assert m.unsure is True and m.target == target and m.changed is None
+    assert len(seen) == 1
+
+
+def test_match_at_the_top_of_the_band_is_sure():
+    client, seen, _ = _client([_same(T1=0.65, S1=0.1), _changed(0.1, 0.3)])
+    m = client.match(ITEM, CANDS)
+    assert (m.target, m.unsure, m.changed) == ("T1", False, pytest.approx(0.2))
+    assert len(seen) == 2
+
+
+def test_match_tie_takes_the_first_candidate():
+    client, _, _ = _client([_same(T1=0.9, S1=0.9), _changed(0.1, 0.1)])
+    assert client.match(ITEM, CANDS).target == "T1"
+
+
+@pytest.mark.parametrize("answers", [
+    {},
+    {"same_T1": {"type": "noul", "noul": 0.1}},
+    {"same_T1": {"type": "noul", "noul": 0.1}, "same_S1": {"type": "noul", "noul": "high"}},
+    {"same_T1": {"type": "noul", "noul": 0.1}, "same_S1": {"type": "noul", "noul": 1.5}},
+    {"same_T1": {"type": "noul", "noul": 0.1}, "same_S1": {"type": "noul", "noul": True}},
+    {"same_T1": {"type": "noul", "noul": 0.1}, "same_S1": 0.9},
+])
+def test_match_malformed_same_answer_is_permanent(answers):
+    client, _, _ = _client([httpx.Response(200, json={"model": "jev-1", "answers": answers})])
+    with pytest.raises(JevError) as info:
+        client.match(ITEM, CANDS)
+    assert info.value.kind == "permanent"
+    assert str(info.value) == "TypeSafe returned an answer this code does not understand"
+
+
+@pytest.mark.parametrize("answers", [
+    {},
+    {"changed_a": {"type": "choice", "probabilities": {"same": 0.2, "changed": 0.8}}},
+    {"changed_a": {"type": "choice", "probabilities": {"same": 0.2, "changed": 0.8}},
+     "changed_b": {"type": "choice", "probabilities": {"same": 0.2}}},
+    {"changed_a": {"type": "choice", "probabilities": {"same": 0.2, "changed": 0.8}},
+     "changed_b": {"type": "noul", "probabilities": {"same": 0.2, "changed": 0.8}}},
+    {"changed_a": {"type": "choice", "probabilities": {"same": 0.2, "changed": 0.8}},
+     "changed_b": {"type": "choice", "probabilities": {"same": 0.2, "changed": -0.1}}},
+])
+def test_match_malformed_changed_answer_is_permanent(answers):
+    client, _, _ = _client([_same(T1=0.1, S1=0.9),
+                            httpx.Response(200, json={"model": "jev-1", "answers": answers})])
+    with pytest.raises(JevError) as info:
+        client.match(ITEM, CANDS)
+    assert info.value.kind == "permanent"
+
+
+def test_match_needs_one_to_fifteen_candidates():
+    client, seen, _ = _client([])
+    with pytest.raises(ValueError):
+        client.match(ITEM, [])
+    many = [{"label": f"T{i}", "title": "x", "notes": "", "due": None} for i in range(16)]
+    with pytest.raises(ValueError):
+        client.match(ITEM, many)
+    assert seen == []
+
+
+def test_match_errors_are_jev_errors():
+    client, _, _ = _client([httpx.Response(401)])
+    with pytest.raises(JevError) as info:
+        client.match(ITEM, CANDS)
+    assert info.value.kind == "config"

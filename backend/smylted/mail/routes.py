@@ -83,6 +83,7 @@ class MailSettingsPatch(BaseModel):
     auto_accept_min_confidence: float | None = Field(default=None, ge=0, le=1)
     kind_decider: Literal["model", "jev", "rules"] | None = None
     kind_rules: list[str] | None = Field(default=None, max_length=100)
+    dedup_decider: Literal["model", "jev"] | None = None
     jev_model: str | None = Field(default=None, max_length=100)
     anthropic_workspace_id: str | None = Field(default=None, max_length=100)
     # WRITE-ONLY. Non-empty stores, "" clears. Never returned by any endpoint.

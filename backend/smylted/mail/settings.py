@@ -53,6 +53,7 @@ HARD_EXCLUDED_NAMES = frozenset({"sent", "sent items", "sent mail", "sent messag
 IMAP_TLS_MODES = ("starttls", "ssl")
 IMAP_CERT_MODES = ("system", "pinned", "insecure_localhost")
 KIND_DECIDERS = ("model", "jev", "rules")
+DEDUP_DECIDERS = ("model", "jev")
 
 MAX_FOLDERS = 50
 MAX_FOLDER_CHARS = 200
@@ -91,9 +92,12 @@ class MailConfig:
     event_calendar: str | None = None           # calendar id (slug) or None → first calendar
     trusted_authserv_ids: tuple[str, ...] = DEFAULT_TRUSTED
     auto_accept_min_confidence: float | None = None   # hook; None = disabled (the default)
-    kind_decider: str = "model"                 # "model" | "jev" | "rules" (see kindrules, jev)
+    # "jev" in either decider means "Jev when a TypeSafe key is set, else the
+    # model": the key's presence is the owner's opt-in to sending text there.
+    kind_decider: str = "jev"                   # "model" | "jev" | "rules" (see kindrules, jev)
     kind_rules: tuple[str, ...] = ()            # canonical rule texts
-    jev_model: str = DEFAULT_JEV_MODEL          # TypeSafe model when kind_decider is "jev"
+    dedup_decider: str = "jev"                  # "model" | "jev" (Claude when Jev is unsure)
+    jev_model: str = DEFAULT_JEV_MODEL          # TypeSafe model for either decider
     anthropic_workspace_id: str = ""            # only for keys not scoped to a workspace
 
 
@@ -349,6 +353,7 @@ def load(stored: Mapping | None) -> MailConfig:
         vals["auto_accept_min_confidence"] = float(conf)
     choice("kind_decider", KIND_DECIDERS)
     listing("kind_rules", _rule, kindrules.MAX_RULES)
+    choice("dedup_decider", DEDUP_DECIDERS)
     text("jev_model", check_model)
     text("anthropic_workspace_id", check_workspace_id)
     return dataclasses.replace(d, **vals)

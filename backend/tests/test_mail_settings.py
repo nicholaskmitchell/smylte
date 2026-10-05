@@ -33,8 +33,9 @@ def test_load_defaults():
     assert S.load({}) == MailConfig()
     assert S.load(None) == MailConfig()
     assert S.load("not a mapping") == MailConfig()
-    assert S.FIELDS[0] == "enabled" and S.FIELDS[-4:] == (
-        "kind_decider", "kind_rules", "jev_model", "anthropic_workspace_id")
+    assert S.FIELDS[0] == "enabled" and S.FIELDS[-5:] == (
+        "kind_decider", "kind_rules", "dedup_decider", "jev_model", "anthropic_workspace_id")
+    assert (MailConfig().kind_decider, MailConfig().dedup_decider) == ("jev", "jev")
     assert set(S.public(MailConfig())) == set(S.FIELDS)
 
 
@@ -48,7 +49,8 @@ def test_load_good_values():
         "backfill_days": 0, "task_list": "school", "event_calendar": "family",
         "trusted_authserv_ids": ["mx.example.org"], "auto_accept_min_confidence": 1,
         "kind_decider": "rules", "kind_rules": ["Subject:Invoice => TASK"],
-        "jev_model": " jev-preview ", "anthropic_workspace_id": " wrkspc_01AbC-d ",
+        "dedup_decider": "model", "jev_model": " jev-preview ",
+        "anthropic_workspace_id": " wrkspc_01AbC-d ",
     })
     assert cfg.enabled is True
     assert cfg.model == "claude-sonnet-4-5"
@@ -65,9 +67,11 @@ def test_load_good_values():
     assert cfg.auto_accept_min_confidence == 1.0
     assert cfg.kind_decider == "rules"
     assert cfg.kind_rules == ("subject:invoice -> task",)
+    assert cfg.dedup_decider == "model"
     assert cfg.jev_model == "jev-preview"
     assert cfg.anthropic_workspace_id == "wrkspc_01AbC-d"
-    assert S.load({"kind_decider": "jev"}).kind_decider == "jev"
+    assert S.load({"kind_decider": "model"}).kind_decider == "model"
+    assert S.load({"dedup_decider": "jev"}).dedup_decider == "jev"
     pub = S.public(cfg)
     assert pub["folders"] == ["INBOX", "Labels/School"] and isinstance(pub["kind_rules"], list)
 
@@ -83,7 +87,7 @@ def test_load_bad_values_fall_back_per_field():
         "capture_notes_to_self": 0, "poll_minutes": 0, "body_max_chars": 100001,
         "backfill_days": 91.0, "task_list": "", "event_calendar": 3,
         "trusted_authserv_ids": ["someone@protonmail.ch", "*.protonmail.ch"],
-        "auto_accept_min_confidence": True, "kind_decider": "script",
+        "auto_accept_min_confidence": True, "kind_decider": "script", "dedup_decider": "rules",
         "kind_rules": ["subject:x -> task", "nope -> task", "# comment", "has:time -> event"],
         "jev_model": "jev latest", "anthropic_workspace_id": "wrkspc 1",
     })
@@ -102,7 +106,7 @@ def test_load_bad_values_fall_back_per_field():
     assert (cfg.task_list, cfg.event_calendar) == (None, None)
     assert cfg.trusted_authserv_ids == ("*.protonmail.ch",)
     assert cfg.auto_accept_min_confidence is None
-    assert cfg.kind_decider == "model"
+    assert (cfg.kind_decider, cfg.dedup_decider) == ("jev", "jev")
     assert cfg.kind_rules == ("subject:x -> task", "has:time -> event")
     assert (cfg.jev_model, cfg.anthropic_workspace_id) == ("jev-latest", "")
     for bad in (-0.1, 1.5, float("nan"), "0.5"):

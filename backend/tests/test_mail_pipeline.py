@@ -16,6 +16,7 @@ from smylted.mail.llm import EXTRACT_TOOL_NAME, LlmError, Match
 from smylted.mail.pipeline import Ingestor
 from smylted.mail.settings import MAIL_STATUS_KEY
 from tests.mail_fakes import (
+    TEST_TYPESAFE_KEY,
     FakeJev,
     FakeLlm,
     FakeMailSource,
@@ -24,6 +25,7 @@ from tests.mail_fakes import (
     at,
     extraction,
     extraction_response,
+    jev_match,
     make_llm_client,
     make_service,
     make_store,
@@ -96,6 +98,12 @@ def svc(tmp_path):
 @pytest.fixture
 def secrets(tmp_path):
     return make_store(tmp_path)
+
+
+@pytest.fixture
+def jev_secrets(tmp_path):
+    # A TypeSafe key is the owner's opt-in to Jev; without one the model decides.
+    return make_store(tmp_path, typesafe_key=TEST_TYPESAFE_KEY)
 
 
 def ingestor(svc, secrets, llm=None, *, jev=None, source=None, host=None) -> Ingestor:
@@ -522,13 +530,14 @@ def test_event_without_a_start_is_kept_as_a_task(svc, secrets):
 
 # ── TypeSafe Jev (addendum ZJ) ──
 
-def test_jev_choosing_event_overrides_the_model(svc, secrets):
+def test_jev_choosing_event_overrides_the_model(svc, jev_secrets):
     set_config(svc, kind_decider="jev")
     jev = FakeJev(verdict("event", confidence=0.9))
     llm = FakeLlm(extract=extraction("Match on Saturday", kind="task",
                                      event_start=datetime(2026, 10, 10, 10, 0),
                                      due=date(2026, 10, 9)))
-    out = ingestor(svc, secrets, llm, jev=jev).process_message(INBOX, eml("pipe_request"), uid=1)
+    out = ingestor(svc, jev_secrets, llm, jev=jev).process_message(
+        INBOX, eml("pipe_request"), uid=1)
     assert [s["kind"] for s in pending(svc)] == ["event"]
     assert "Jev chose event (0.90, jev-1.13.0)" in out.detail
     [call] = jev.calls
@@ -536,23 +545,172 @@ def test_jev_choosing_event_overrides_the_model(svc, secrets):
     assert call["title"] == "Match on Saturday" and call["sender"] == "coach@club.example"
 
 
-def test_jev_disagreeing_with_itself_keeps_the_models_kind(svc, secrets):
+def test_jev_disagreeing_with_itself_keeps_the_models_kind(svc, jev_secrets):
     set_config(svc, kind_decider="jev")
     jev = FakeJev(verdict("event", agreed=False))
     llm = FakeLlm(extract=extraction("Match on Saturday", kind="task",
                                      event_start=datetime(2026, 10, 10, 10, 0)))
-    out = ingestor(svc, secrets, llm, jev=jev).process_message(INBOX, eml("pipe_request"), uid=1)
+    out = ingestor(svc, jev_secrets, llm, jev=jev).process_message(
+        INBOX, eml("pipe_request"), uid=1)
     assert [s["kind"] for s in pending(svc)] == ["task"]
     assert "Jev unsure (0.00); kept the model's task" in out.detail
 
 
-def test_jev_failing_keeps_the_models_kind(svc, secrets):
+def test_jev_failing_keeps_the_models_kind(svc, jev_secrets):
     set_config(svc, kind_decider="jev")
     jev = FakeJev(JevError("TypeSafe is unavailable (529)", kind="transient"))
     llm = FakeLlm(extract=extraction("Match on Saturday", kind="event",
                                      event_start=datetime(2026, 10, 10, 10, 0)))
-    out = ingestor(svc, secrets, llm, jev=jev).process_message(INBOX, eml("pipe_request"), uid=1)
+    out = ingestor(svc, jev_secrets, llm, jev=jev).process_message(
+        INBOX, eml("pipe_request"), uid=1)
     assert out.outcome == "staged"
     assert [s["kind"] for s in pending(svc)] == ["event"]
     detail = ledger(svc, "mid:req-1@club.example")["detail"]
     assert "Jev unavailable (TypeSafe is unavailable (529)); kept the model's event" in detail
+
+
+def test_jev_without_a_key_leaves_the_kind_to_the_model(svc, secrets):
+    set_config(svc, kind_decider="jev")
+    jev = FakeJev(verdict("event", confidence=0.9))
+    llm = FakeLlm(extract=extraction("Match on Saturday", kind="task",
+                                     event_start=datetime(2026, 10, 10, 10, 0)))
+    out = ingestor(svc, secrets, llm, jev=jev).process_message(INBOX, eml("pipe_request"), uid=1)
+    assert [s["kind"] for s in pending(svc)] == ["task"]
+    assert out.detail == "the model chose task"           # silently: no Jev note
+    assert jev.calls == []
+
+
+def test_jev_below_the_measured_confidence_keeps_the_models_kind(svc, jev_secrets):
+    set_config(svc, kind_decider="jev")
+    jev = FakeJev(verdict("event", confidence=0.65))
+    llm = FakeLlm(extract=extraction("Match on Saturday", kind="task",
+                                     event_start=datetime(2026, 10, 10, 10, 0)))
+    out = ingestor(svc, jev_secrets, llm, jev=jev).process_message(
+        INBOX, eml("pipe_request"), uid=1)
+    assert [s["kind"] for s in pending(svc)] == ["task"]
+    assert "Jev unsure (0.65); kept the model's task" in out.detail
+
+
+# ── Jev for the duplicate check (addendum ZD) ──
+
+def _dedup_pair(svc, secrets, jev, *, second_due=date(2026, 10, 9), match=None):
+    """Stage a pending suggestion, then process a second message that finds it as S1."""
+    set_config(svc, kind_decider="model")
+    llm = FakeLlm(extract=[extraction("Bring the team snack list", due=date(2026, 10, 9)),
+                           extraction("Team snack list", due=second_due, notes="Again.")],
+                  match=match if match is not None else Match("new", None))
+    ing = ingestor(svc, secrets, llm, jev=jev)
+    first = ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    out = ing.process_message(INBOX, eml("pipe_no_message_id"), uid=2)
+    return first, out, llm
+
+
+def test_jev_dedup_target_that_changes_something_is_an_update(svc, jev_secrets):
+    jev = FakeJev(match=jev_match("S1", 0.93, changed=0.8))
+    first, out, llm = _dedup_pair(svc, jev_secrets, jev)
+    assert (out.stage, out.outcome, out.suggestion_id) == ("dedup", "attached", first.suggestion_id)
+    assert out.detail.startswith("update to a pending suggestion")
+    assert "Jev p=0.93 (jev-1.13.0)" in out.detail
+    assert llm.match_calls == []
+    [(item, candidates)] = jev.match_calls
+    assert item == {"label": "new", "title": "Team snack list", "notes": "Again.",
+                    "due": "2026-10-09"}
+    assert [(x["label"], x["title"], x["due"]) for x in candidates] == [
+        ("S1", "Bring the team snack list", "2026-10-09")]
+    [u] = review.suggestion_dto(pending(svc)[0])["updates"]
+    assert u["notes"] == "Again."
+
+
+def test_jev_dedup_target_that_changes_nothing_is_a_duplicate(svc, jev_secrets):
+    jev = FakeJev(match=jev_match("S1", 0.93, changed=0.2))
+    first, out, llm = _dedup_pair(svc, jev_secrets, jev)
+    assert (out.stage, out.outcome, out.suggestion_id) == ("dedup", "attached", first.suggestion_id)
+    assert out.detail.startswith("same as a pending suggestion")
+    assert llm.match_calls == []
+
+
+def test_jev_dedup_moved_deadline_is_an_update_whatever_jev_says(svc, jev_secrets):
+    jev = FakeJev(match=jev_match("S1", 0.93, changed=0.1))
+    _, out, llm = _dedup_pair(svc, jev_secrets, jev, second_due=date(2026, 10, 20))
+    assert out.detail.startswith("update to a pending suggestion")
+    [s] = pending(svc)
+    assert s["due"] == "2026-10-20"
+    assert llm.match_calls == []
+
+
+def test_jev_dedup_no_same_candidate_is_new(svc, jev_secrets):
+    jev = FakeJev(match=jev_match(None, 0.1))
+    _, out, llm = _dedup_pair(svc, jev_secrets, jev)
+    assert (out.stage, out.outcome) == ("stage", "staged")
+    assert "Jev p=0.10 (jev-1.13.0)" in out.detail
+    assert len(pending(svc)) == 2 and llm.match_calls == []
+
+
+def test_jev_dedup_unsure_asks_claude(svc, jev_secrets):
+    jev = FakeJev(match=jev_match(None, 0.4, unsure=True))
+    first, out, llm = _dedup_pair(svc, jev_secrets, jev, match=Match("duplicate", "S1"))
+    assert (out.outcome, out.suggestion_id) == ("attached", first.suggestion_id)
+    assert "Jev unsure (p=0.40); asked Claude" in out.detail
+    assert len(llm.match_calls) == 1 and len(jev.match_calls) == 1
+
+
+def test_jev_dedup_failing_asks_claude(svc, jev_secrets):
+    jev = FakeJev(match=JevError("TypeSafe is unavailable (529)", kind="transient"))
+    first, out, llm = _dedup_pair(svc, jev_secrets, jev, match=Match("duplicate", "S1"))
+    assert (out.outcome, out.suggestion_id) == ("attached", first.suggestion_id)
+    assert "Jev unavailable (TypeSafe is unavailable (529)); asked Claude" in out.detail
+    assert len(llm.match_calls) == 1
+
+
+def test_jev_dedup_without_a_key_asks_claude_and_not_jev(svc, secrets):
+    jev = FakeJev(match=jev_match("S1", 0.93, changed=0.8))
+    first, out, llm = _dedup_pair(svc, secrets, jev, match=Match("duplicate", "S1"))
+    assert (out.outcome, out.suggestion_id) == ("attached", first.suggestion_id)
+    assert "Jev" not in out.detail
+    assert len(llm.match_calls) == 1
+    assert jev.match_calls == [] and jev.calls == []
+
+
+def test_dedup_decider_model_asks_claude_even_with_a_key(svc, jev_secrets):
+    set_config(svc, dedup_decider="model", kind_decider="model")
+    jev = FakeJev(match=jev_match("S1", 0.93, changed=0.8))
+    llm = FakeLlm(extract=[extraction("Bring the team snack list"), extraction("Team snack list")],
+                  match=Match("duplicate", "S1"))
+    ing = ingestor(svc, jev_secrets, llm, jev=jev)
+    ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    out = ing.process_message(INBOX, eml("pipe_no_message_id"), uid=2)
+    assert out.outcome == "attached"
+    assert len(llm.match_calls) == 1 and jev.match_calls == []
+
+
+def test_jev_dedup_rejected_candidate_is_suppressed(svc, jev_secrets):
+    set_config(svc, kind_decider="model")
+    llm = FakeLlm(extract=[extraction("Bring the team snack list", due=date(2026, 10, 9)),
+                           extraction("Book the minibus", due=date(2026, 10, 10))])
+    jev = FakeJev(match=jev_match("R1", 0.9, changed=0.1))
+    ing = ingestor(svc, jev_secrets, llm, jev=jev)
+    ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    [s] = pending(svc)
+    review.reject(svc, s["id"])
+    out = ing.process_message(INBOX, reply(1, "Could you also book the minibus?"), uid=2)
+    assert (out.stage, out.outcome) == ("dedup", "suppressed")
+    assert "Jev p=0.90" in out.detail
+    [(_, candidates)] = jev.match_calls
+    assert [x["label"] for x in candidates] == ["R1"]
+    assert llm.match_calls == []
+
+
+def test_jev_dedup_compares_deadlines_by_day_not_by_string(svc, jev_secrets):
+    """An open task's due may be timed; the email's is a date. Same day ≠ moved."""
+    from types import SimpleNamespace
+    from smylted.mail.llm import Candidate
+    jev = FakeJev(match=jev_match("T1", 0.93, changed=0.1))
+    ing = ingestor(svc, jev_secrets, FakeLlm(), jev=jev)
+    c = SimpleNamespace(key="mid:x@club.example", extra=[])
+    ex = extraction("Team snack list", due=date(2026, 10, 9))
+    same_day = [Candidate(label="T1", title="Bring the team snack list", notes="",
+                          due="2026-10-09T17:00:00+02:00")]
+    assert ing._jev_match(c, ex, same_day) == Match("duplicate", "T1")
+    other_day = [Candidate(label="T1", title="Bring the team snack list", notes="",
+                           due="2026-10-12T17:00:00+02:00")]
+    assert ing._jev_match(c, ex, other_day) == Match("update", "T1")
