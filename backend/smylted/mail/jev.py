@@ -31,9 +31,10 @@ What is known about Jev shapes how it is asked:
   When they disagree the kind verdict's confidence is 0 and the pipeline keeps
   the extraction model's choice; asking once would hide that disagreement
   behind a confident-looking number.
-- **It is weaker at date arithmetic**, so it is shown the dates the extraction
-  already resolved and never asked to compare them; dates stay with the
-  extraction model and our code.
+- **It is weaker at date arithmetic**, so it is never asked to compare dates.
+  The duplicate check shows it the deadlines the extraction already resolved,
+  and our code decides whether one moved. The task-or-event question gets the
+  email alone, as measured.
 - **It does not treat the state as hostile**, which the closed answer sets
   above make tolerable.
 
