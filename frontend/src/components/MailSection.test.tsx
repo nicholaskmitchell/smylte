@@ -246,6 +246,27 @@ describe('saving', () => {
     expect(m.putMailSettings).toHaveBeenCalledWith({ enabled: true })
   })
 
+  it('puts the switch just above Status, with the first-scan hint', async () => {
+    await show()
+    const toggle = el('mail-enabled')
+    const status = screen.getByText('Status')
+    expect(toggle.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // Nothing but its own hint sits between the switch and the Status head.
+    const hint = toggle.closest('.menu-row')!.nextElementSibling!
+    expect(hint).toHaveTextContent(
+      'The first check reads the last 7 days. Turn this on once the connection test passes and your sender lists are set.')
+    expect(hint.nextElementSibling).toBe(status)
+    // And it is no longer the first thing in the section.
+    expect(document.querySelector('.menu-row')!.contains(toggle)).toBe(false)
+  })
+
+  it('says under the Bridge head that a changed server forgets the password', async () => {
+    await show()
+    const head = screen.getByText('Proton Mail Bridge (IMAP)')
+    expect(head.nextElementSibling).toHaveTextContent(
+      'Changing the server, port, encryption, certificate or username forgets the saved password')
+  })
+
   it('warns when the deployment has it switched off', async () => {
     const p = payload()
     p.deployment_enabled = false
@@ -356,6 +377,16 @@ describe('the model picker', () => {
       .toEqual(['claude-haiku-4-5', 'claude-sonnet-4-5', '__other__'])
     expect(select.value).toBe('claude-haiku-4-5')
     expect(screen.getByRole('option', { name: 'Claude Haiku 4.5 — claude-haiku-4-5' })).toBeInTheDocument()
+  })
+
+  it('does not ask for the model list when the deployment has email switched off', async () => {
+    const p = withKey()
+    p.deployment_enabled = false
+    await show(p)
+    // The effect has had its chance: the key is set, only the kill switch differs.
+    await waitFor(() => expect(m.mailStatus).toHaveBeenCalled())
+    expect(m.mailModels).not.toHaveBeenCalled()
+    expect(el('mail-model').tagName).toBe('INPUT')
   })
 
   it('writes the model that was picked', async () => {

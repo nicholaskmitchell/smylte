@@ -70,13 +70,20 @@ function Row({ s, lists, calendars, onApprove, onReject }: {
 }) {
   const { locale, lang, t: tr } = useI18n()
   const tf = useTimeFormat()
-  const [title, setTitle] = useState(s.title)
-  const [due, setDue] = useState(s.due ? dayKey(s.due) : '')
+  // What the owner typed, or null while they have not touched the field. An
+  // untouched field shows — and is not sent as — the latest the server said: a
+  // later reply can move the date or retitle the row, and a copy taken at mount
+  // would put the old one back on approve.
+  const [titleEdit, setTitleEdit] = useState<string | null>(null)
+  const [dueEdit, setDueEdit] = useState<string | null>(null)
+  const title = titleEdit ?? s.title
+  const due = dueEdit ?? (s.due ? dayKey(s.due) : '')
   const [list, setList] = useState('')
   const [calendar, setCalendar] = useState('')
   const [busy, setBusy] = useState(false)
 
   const isEvent = s.kind === 'event'
+  const isUpdate = s.kind === 'update'
   const dated = !isEvent
 
   // A request that fails puts the row back (see `useMailSuggestions`), which
@@ -88,12 +95,12 @@ function Row({ s, lists, calendars, onApprove, onReject }: {
   }
 
   const approve = () => {
-    // A task and an update send the title and the date as they now read, so
-    // clearing the date is a statement (`null`), not an omission. An event
-    // sends only the title: its time is the email's and is not edited here.
-    const body: ApproveSuggestionBody = isEvent
-      ? { title: title.trim() }
-      : { title: title.trim(), due: due || null }
+    // Only what the owner edited is sent, so the server's current values win
+    // for the rest. A cleared date is a statement (`null`), not an omission. An
+    // event has no date to edit: its time is the email's.
+    const body: ApproveSuggestionBody = {}
+    if (titleEdit !== null) body.title = titleEdit.trim()
+    if (dated && dueEdit !== null) body.due = dueEdit || null
     if (s.kind === 'task' && list) body.list = list
     if (isEvent && calendar) body.calendar = calendar
     return run(() => onApprove(s.id, body))
@@ -107,14 +114,20 @@ function Row({ s, lists, calendars, onApprove, onReject }: {
     <div className="mail-sug" data-kind={s.kind}>
       <div className="mail-sug-head">
         <span className="mail-kind">{tr(`mail.sug.kind.${s.kind}`)}</span>
-        <input className="input mail-sug-title" value={title}
-          aria-label={tr('mail.sug.titleAria')}
-          onChange={(e) => setTitle(e.target.value)} />
+        {isUpdate ? (
+          // The title of an update is the task's own and is not changed by
+          // approving: only the date and the notes are applied.
+          <span className="mail-sug-title">{s.title}</span>
+        ) : (
+          <input className="input mail-sug-title" value={title}
+            aria-label={tr('mail.sug.titleAria')}
+            onChange={(e) => setTitleEdit(e.target.value)} />
+        )}
         {dated && (
           <DateTimeInput type="date" className="input mail-sug-due"
             lang={inputLang(tf, lang)} value={due}
             aria-label={tr('mail.sug.dueAria')}
-            onChange={(e) => setDue(e.target.value)} />
+            onChange={(e) => setDueEdit(e.target.value)} />
         )}
       </div>
 
@@ -136,6 +149,24 @@ function Row({ s, lists, calendars, onApprove, onReject }: {
           <summary>{tr('mail.sug.notes')}</summary>
           <p>{s.notes}</p>
         </details>
+      )}
+
+      {s.updates.length > 0 && (
+        <div className="mail-sug-later">
+          <div className="hintline">{tr('mail.sug.updatesHead')}</div>
+          <ul className="mail-sug-updates">
+            {s.updates.map((u, i) => {
+              const date = u.sent_at ? fmtDue(u.sent_at, true, tf, locale) : ''
+              const head = [u.sender_name || u.sender, date].filter(Boolean).join(' · ')
+              return (
+                <li key={u.message_key || i}>
+                  {u.notes ? `${head} — ${u.notes}` : head}
+                  {u.due && ` · ${tr('mail.sug.newDue', { date: fmtDue(u.due, true, tf, locale) })}`}
+                </li>
+              )
+            })}
+          </ul>
+        </div>
       )}
 
       <div className="mail-sug-src">

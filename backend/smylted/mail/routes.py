@@ -24,6 +24,15 @@ the unattended pipeline. One rule spans fields and is checked on the would-be
 merged configuration: certificate checks may only be switched off for a
 loopback host, because a Bridge on another machine is reached over a network
 where a forged certificate is the attack the check exists for.
+
+The stored Bridge password is bound to the server settings it was entered for
+(`settings.connection_binding`). A save that changes the host, port,
+encryption, certificate or username without a new password deletes a stored
+one and clears the binding, so a session that can edit the settings cannot
+point them at its own server and press "Test" to receive the password. Only
+deleting would not be enough for a password from the environment, which no
+route can delete: there the cleared binding makes the pipeline refuse to log
+in until a restart binds it again (`runtime.build_runtime`).
 """
 from __future__ import annotations
 
@@ -219,6 +228,13 @@ def _insecure_remote(svc, data: dict) -> bool:
             and not settings.is_loopback_host(cfg.imap_host))
 
 
+def _bindings(svc, data: dict) -> tuple[str, str]:
+    """The password binding of the stored settings, and of them with `data` saved."""
+    stored = svc.mail(store.get_meta_json, MAIL_SETTINGS_KEY)
+    return (settings.connection_binding(settings.load(stored)),
+            settings.connection_binding(settings.load({**stored, **data})))
+
+
 def _check_sid(sid: str) -> None:
     # Ids are uuid4().hex; anything else cannot exist, and refusing it here
     # keeps arbitrary path text out of the database query and the logs.
@@ -247,13 +263,27 @@ def register(api: APIRouter) -> None:
         # leaves the stored state exactly as it was.
         if data and await asyncio.to_thread(_insecure_remote, svc, data):
             raise HTTPException(422, _INSECURE_REMOTE)
-        for name, value in secrets.items():
-            if value is None:
-                continue
-            try:
+        old, new = await asyncio.to_thread(_bindings, svc, data)
+        password = secrets.get("imap_password")
+        try:
+            if password is not None:
+                # A password saved now is for the server settings saved with it.
+                data["imap_password_binding"] = new if password.strip() else ""
+            elif new != old:
+                # The server changed under a stored password: forget it rather
+                # than send it somewhere it was never entered for. An env
+                # password cannot be deleted; the cleared binding holds it back
+                # until a restart.
+                held = await asyncio.to_thread(rt.secrets.status, "imap_password")
+                if held.source == "store":
+                    await asyncio.to_thread(rt.secrets.delete, "imap_password")
+                data["imap_password_binding"] = ""
+            for name, value in secrets.items():
+                if value is None:
+                    continue
                 await asyncio.to_thread(rt.secrets.set, name, value)
-            except SecretStoreError as e:
-                raise _conflict(e) from None
+        except SecretStoreError as e:
+            raise _conflict(e) from None
         if data:
             await asyncio.to_thread(svc.mail, store.merge_meta_json, MAIL_SETTINGS_KEY, data)
         # A new interval, folder list or credential applies now, not after the
@@ -294,6 +324,7 @@ def register(api: APIRouter) -> None:
     @api.get("/mail/models")
     async def get_mail_models(request: Request):
         rt = _rt(request)
+        _require_deployment(rt)
         try:
             models = await asyncio.to_thread(rt.ingestor.llm.list_models)
         except (LlmError, SecretStoreError) as e:

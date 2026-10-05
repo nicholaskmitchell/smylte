@@ -99,9 +99,22 @@ class MailConfig:
     dedup_decider: str = "jev"                  # "model" | "jev" (Claude when Jev is unsure)
     jev_model: str = DEFAULT_JEV_MODEL          # TypeSafe model for either decider
     anthropic_workspace_id: str = ""            # only for keys not scoped to a workspace
+    # Server-maintained, never in `public()` or the settings patch: the
+    # `connection_binding` the stored IMAP password was saved (or, for an env
+    # password, the service started) under. See `password_binding_ok`.
+    imap_password_binding: str = ""
 
 
 FIELDS: tuple[str, ...] = tuple(f.name for f in dataclasses.fields(MailConfig))
+
+# The settings that decide where the IMAP password is sent and as whom.
+BOUND_FIELDS: tuple[str, ...] = ("imap_host", "imap_port", "imap_tls", "imap_cert_mode",
+                                 "imap_pinned_cert", "imap_username")
+PASSWORD_BINDING_MESSAGE = (
+    "the Bridge password was saved for different server settings (host, port, encryption, "
+    "certificate or username); enter it again. A password from SMYLTE_MAIL_IMAP_PASSWORD "
+    "is bound at startup: restart the service after changing the server.")
+_BINDING = re.compile(r"^[0-9a-f]{64}$")
 
 
 def utcnow_iso() -> str:
@@ -255,6 +268,26 @@ def pem_fingerprint(pem: str) -> str | None:
     return ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))
 
 
+def connection_binding(cfg: MailConfig) -> str:
+    """A digest of the `BOUND_FIELDS` of `cfg`: which server the password goes to.
+
+    The password is bound to the server it was entered for so that a changed
+    host, port, encryption, certificate or username cannot carry the stored
+    password to somewhere the owner never typed it for — a session that can
+    edit the settings could otherwise point them at its own server and press
+    "Test". The certificate enters as its fingerprint, so re-pasting the same
+    certificate with different line breaks is not a change.
+    """
+    parts = [cfg.imap_host.lower(), str(cfg.imap_port), cfg.imap_tls, cfg.imap_cert_mode,
+             pem_fingerprint(cfg.imap_pinned_cert) or "", cfg.imap_username]
+    return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
+
+
+def password_binding_ok(cfg: MailConfig) -> bool:
+    """Was the IMAP password saved (or bound at startup) for `cfg`'s server settings?"""
+    return bool(cfg.imap_password_binding) and cfg.imap_password_binding == connection_binding(cfg)
+
+
 # --- tolerant load, for the pipeline -----------------------------------------
 
 def _is_int(v: object) -> bool:
@@ -356,13 +389,17 @@ def load(stored: Mapping | None) -> MailConfig:
     choice("dedup_decider", DEDUP_DECIDERS)
     text("jev_model", check_model)
     text("anthropic_workspace_id", check_workspace_id)
+    binding = stored.get("imap_password_binding")
+    if isinstance(binding, str) and _BINDING.match(binding):
+        vals["imap_password_binding"] = binding
     return dataclasses.replace(d, **vals)
 
 
 def public(cfg: MailConfig) -> dict:
-    """`cfg` as a JSON-ready dict (tuples become lists)."""
+    """`cfg` as a JSON-ready dict (tuples become lists), without the
+    server-maintained password binding."""
     return {k: list(v) if isinstance(v, tuple) else v
-            for k, v in dataclasses.asdict(cfg).items()}
+            for k, v in dataclasses.asdict(cfg).items() if k != "imap_password_binding"}
 
 
 # --- folders and hosts ---------------------------------------------------------
