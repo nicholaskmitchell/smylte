@@ -48,11 +48,18 @@ The key is read through a provider on every call, so a key saved in Settings
 applies to the next email. It is registered with `redact` before it is used,
 and every error message leaving this module passes through `redact`. Nothing
 here logs the key, the email, or a response body.
+
+An error message carries the HTTP status and, when the answer has one, the
+`detail.error_type` identifier — never the `message` or any other response
+text. A 422 echoes the request, which holds the email, and the error lands in
+the ledger, the logs and the status page; `redact` only knows the secrets,
+not the mail.
 """
 from __future__ import annotations
 
 import logging
 import math
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -85,10 +92,10 @@ CHANGED_CRITERIA = {
 MAX_CANDIDATES = 15
 
 KINDS = ("task", "event")
-DETAIL_MAX = 300
 MAX_RETRY_AFTER_S = 10.0
 
 _RETRYABLE = frozenset({429, 529})
+_ERROR_TYPE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 _NOT_UNDERSTOOD = "TypeSafe returned an answer this code does not understand"
 _BAD_KEY_CHARS = "the TypeSafe key contains a character that cannot go in a header; paste it again"
 
@@ -213,14 +220,24 @@ def _item(x: Mapping) -> dict:
     return {"title": x["title"], "notes": x["notes"], "due": x["due"]}
 
 
-def _detail(response: httpx.Response) -> str:
-    """The `detail` of an error answer as text, at most DETAIL_MAX characters."""
+def _error_type(response: httpx.Response) -> str | None:
+    """`detail.error_type` of an error answer when it is an identifier, else None."""
     try:
         body = response.json()
     except ValueError:
-        return redact(response.text[:DETAIL_MAX])
-    detail = body.get("detail", body) if isinstance(body, Mapping) else body
-    return redact(str(detail)[:DETAIL_MAX])
+        return None
+    detail = body.get("detail") if isinstance(body, Mapping) else None
+    error_type = detail.get("error_type") if isinstance(detail, Mapping) else None
+    if isinstance(error_type, str) and _ERROR_TYPE.match(error_type):
+        return error_type
+    return None
+
+
+def _refused(response: httpx.Response) -> str:
+    """"TypeSafe refused the request (422: error_type)", from the status and error type only."""
+    error_type = _error_type(response)
+    suffix = f": {error_type}" if error_type else ""
+    return f"TypeSafe refused the request ({response.status_code}{suffix})"
 
 
 def _retry_after(response: httpx.Response | None) -> float | None:
@@ -288,11 +305,8 @@ class JevClient:
                     if model is not None:
                         raise JevError(f"TypeSafe does not know the model {model!r}", kind="config")
                     raise JevError(f"TypeSafe does not know {path} (404)", kind="config")
-                if status == 422:
-                    raise JevError(f"TypeSafe refused the request: {_detail(response)}",
-                                   kind="permanent")
                 if status not in _RETRYABLE and status < 500:
-                    raise JevError(f"TypeSafe refused the request ({status})", kind="permanent")
+                    raise JevError(_refused(response), kind="permanent")
                 failure = (f"TypeSafe is rate limiting requests ({status})" if status == 429
                            else f"TypeSafe is unavailable ({status})")
             if attempt == self._max_attempts:
