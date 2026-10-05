@@ -131,61 +131,66 @@ def _item_text(x: dict) -> str:
     return f"{x['title']} (due {due})" + (f" — {notes[:300]}" if notes else "")
 
 
-def run_dedup(jev: Jev, cases: list[dict]) -> list[dict]:
-    NONE = "none of them: different work from every candidate"
+SAME_T = 0.5            # a candidate is "the same work" at p >= this
+UNSURE = (0.35, 0.65)   # best match in this band → ask Claude instead (hybrid mode)
+CHANGED_T = 0.5         # the direct comparison says "changed" at p >= this
 
+CHANGED_INSTRUCTIONS = "`new` and `existing` describe the same piece of work. Does `new` change anything about it?"
+CHANGED_CRITERIA = {
+    "same": "Nothing changes: `new` only rewords `existing`, or repeats details `existing` already has.",
+    "changed": "Something changes or is added: a different or newly stated deadline, amount, place, time, quantity, recipient, or an extra requirement.",
+}
+
+
+def _item(x: dict) -> dict:
+    return {"title": x["title"], "notes": x["notes"], "due": x["due"]}
+
+
+def run_dedup(jev: Jev, cases: list[dict]) -> list[dict]:
+    """Two Jev requests per case, mirroring smylted/mail/jev.py.
+
+    1. One "same piece of work?" Noul per candidate, all in one request.
+    2. Only when a candidate clears SAME_T: a direct Choice between `existing`
+       and `new` — "same" or "changed" — asked in both option orders. An
+       earlier variant asked "does `new_item` add details not in
+       `candidates.Ck`?" inside the big state; Jev answered that poorly (it
+       fired on rewordings), as its docs predict for indirection.
+    The deadline comparison is code, never Jev.
+    """
     def one(c):
         cands = c["candidates"]
-        state = {"new_item": {"title": c["new_item"]["title"], "notes": c["new_item"]["notes"],
-                              "due": c["new_item"]["due"]},
-                 "candidates": {x["id"]: {"title": x["title"], "notes": x["notes"], "due": x["due"]} for x in cands}}
-        instr = ("Which item in `candidates` is the same piece of work as `new_item`? The same piece of "
-                 "work means the same action on the same thing for the same period; a different month of a "
-                 "recurring bill, or a different action on the same thing, is different work.")
-        fwd = {x["id"]: _item_text(x) for x in cands}
-        fwd["none"] = NONE
-        rev = {"none": NONE}
-        rev.update({x["id"]: _item_text(x) for x in reversed(cands)})
-        qs = {"match_a": {"type": "choice", "instructions": instr, "criteria": fwd},
-              "match_b": {"type": "choice", "instructions": instr, "criteria": rev}}
-        for x in cands:
-            cid = x["id"]
-            qs[f"same_{cid}"] = {"type": "noul",
-                                 "instructions": f"Is `new_item` the same piece of work as `candidates.{cid}` (the same action on the same thing for the same period)?"}
-            qs[f"adds_{cid}"] = {"type": "noul",
-                                 "instructions": f"Does `new_item` add details that `candidates.{cid}` does not have, such as a changed amount, place, time or a new requirement? Ignore the due dates."}
+        state = {"new_item": _item(c["new_item"]),
+                 "candidates": {x["id"]: _item(x) for x in cands}}
+        qs = {f"same_{x['id']}": {
+            "type": "noul",
+            "instructions": f"Is `new_item` the same piece of work as `candidates.{x['id']}` (the same action on the same thing for the same period)?"}
+            for x in cands}
         a = jev.ask(state, qs)
-        ma, mb = a["match_a"], a["match_b"]
-        probs = {k: (ma["probabilities"].get(k, 0) + mb["probabilities"].get(k, 0)) / 2 for k in fwd}
         same = {x["id"]: a[f"same_{x['id']}"]["noul"] for x in cands}
-        adds = {x["id"]: a[f"adds_{x['id']}"]["noul"] for x in cands}
-        return {"id": c["id"], "choice_a": ma["choice"], "choice_b": mb["choice"],
-                "conf": min(ma["confidence"], mb["confidence"]) if ma["choice"] == mb["choice"] else 0.0,
-                "probs": probs, "same": same, "adds": adds}
+        best, p = max(same.items(), key=lambda kv: kv[1])
+        changed = None
+        if p >= SAME_T:
+            cand = next(x for x in cands if x["id"] == best)
+            rev = dict(reversed(list(CHANGED_CRITERIA.items())))
+            b = jev.ask({"existing": _item(cand), "new": _item(c["new_item"])}, {
+                "changed_a": {"type": "choice", "instructions": CHANGED_INSTRUCTIONS, "criteria": CHANGED_CRITERIA},
+                "changed_b": {"type": "choice", "instructions": CHANGED_INSTRUCTIONS, "criteria": rev}})
+            changed = (b["changed_a"]["probabilities"]["changed"] + b["changed_b"]["probabilities"]["changed"]) / 2
+        return {"id": c["id"], "same": same, "best": best, "p": p, "changed": changed}
     with ThreadPoolExecutor(8) as ex:
         return list(ex.map(one, cases))
 
 
-def decide_dedup(c: dict, r: dict, *, variant: str, same_t: float = 0.5, adds_t: float = 0.5,
-                 conf_t: float = 0.0) -> tuple[str, str | None, bool]:
-    """(label, target, confident) from Jev's answers plus code for the dates."""
-    if variant == "choice":
-        best = max(r["probs"], key=r["probs"].get)
-        confident = r["choice_a"] == r["choice_b"] and r["conf"] >= conf_t
-        target = None if best == "none" else best
-    else:  # nouls
-        cid, p = max(r["same"].items(), key=lambda kv: kv[1]) if r["same"] else (None, 0.0)
-        target = cid if p >= same_t else None
-        confident = abs(p - 0.5) * 2 >= conf_t
-    if target is None:
-        return "new", None, confident
-    cand = next(x for x in c["candidates"] if x["id"] == target)
-    new_due, old_due = c["new_item"]["due"], cand.get("due")
-    if new_due and new_due != old_due:
-        return "update", target, confident
-    if r["adds"].get(target, 0.0) >= adds_t:
-        return "update", target, confident
-    return "duplicate", target, confident
+def decide_dedup(c: dict, r: dict, claude: dict | None = None) -> tuple[str, str | None, str]:
+    """(label, target, who decided). `claude` is that case's Claude match, for the hybrid."""
+    if claude is not None and UNSURE[0] <= r["p"] < UNSURE[1]:
+        return claude.get("label"), claude.get("target"), "claude"
+    if r["p"] < SAME_T:
+        return "new", None, "jev"
+    cand = next(x for x in c["candidates"] if x["id"] == r["best"])
+    if c["new_item"]["due"] and c["new_item"]["due"] != cand.get("due"):
+        return "update", r["best"], "jev"
+    return ("update" if (r["changed"] or 0.0) >= CHANGED_T else "duplicate"), r["best"], "jev"
 
 
 # ── optional Claude baseline through the production client ───────────────────
@@ -246,19 +251,50 @@ def run_claude(emails: list[dict], dedup: list[dict]) -> dict | None:
     return out
 
 
-# ── metrics ──────────────────────────────────────────────────────────────────
-def prefilter_metrics(cases, results, field):
-    by = {r["id"]: r for r in results}
-    act = [c for c in cases if c["gold"] == "actionable"]
-    non = [c for c in cases if c["gold"] == "not_actionable"]
-    rows = []
-    for t in (0.01, 0.02, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5):
-        dropped = [c["id"] for c in act if by[c["id"]][field] < t]
-        skipped = [c for c in non if by[c["id"]][field] < t]
-        rows.append({"skip_below": t, "actionable_dropped": len(dropped), "dropped_ids": dropped,
-                     "non_actionable_skipped": len(skipped),
-                     "skip_rate": round(len(skipped) / max(1, len(non)), 3)})
-    return {"n_actionable": len(act), "n_non_actionable": len(non), "thresholds": rows}
+# ── report ───────────────────────────────────────────────────────────────────
+def report(out: dict, emails: list[dict], dedup: list[dict]) -> str:
+    pre = {r["id"]: r for r in out["prefilter_raw"]}
+    dd = {r["id"]: r for r in out["dedup_raw"]}
+    cl = out.get("claude")
+    lines = []
+    for name, cs in (("clean", [e for e in emails if e["clean"]]), ("all", emails)):
+        act = [e for e in cs if e["gold"] == "actionable"]
+        non = [e for e in cs if e["gold"] == "not_actionable"]
+        lines.append(f"PRE-FILTER ({name}: {len(act)} actionable, {len(non)} not)")
+        for t in (0.02, 0.05, 0.1, 0.2):
+            drop = [e["id"] for e in act if pre[e["id"]]["p_noul"] < t]
+            skip = sum(1 for e in non if pre[e["id"]]["p_noul"] < t)
+            lines.append(f"  skip when p(yes) < {t}: drops {len(drop)} actionable {drop}, skips {skip}/{len(non)} non-actionable")
+        if cl:
+            miss = [e["id"] for e in act if not cl["extract"][e["id"]].get("actionable")]
+            junk = [e["id"] for e in non if cl["extract"][e["id"]].get("actionable")]
+            lines.append(f"  Claude extraction alone: misses {len(miss)} {miss}, junk suggestions {len(junk)}")
+    act = [e for e in emails if e["clean"] and e["gold"] == "actionable"]
+    lines.append(f"KIND (clean actionable: {len(act)})")
+    lines.append(f"  Jev alone: {sum(1 for e in act if pre[e['id']]['kind'] == e['gold_kind'])}")
+    if cl:
+        lines.append(f"  Claude alone: {sum(1 for e in act if cl['extract'][e['id']].get('kind') == e['gold_kind'])}")
+        for conf in (0.5, 0.7, 0.9):
+            hyb = sum(1 for e in act if (pre[e['id']]['kind'] if pre[e['id']]['kind_agreed'] and pre[e['id']]['kind_conf'] >= conf
+                                         else cl['extract'][e['id']].get('kind')) == e['gold_kind'])
+            lines.append(f"  Jev when confidence >= {conf}, else Claude: {hyb}")
+    for name, cs in (("clean", [c for c in dedup if c["clean"]]), ("all", dedup)):
+        lines.append(f"DEDUP ({name}: {len(cs)})")
+        modes = [("Jev alone", None)]
+        if cl:
+            modes.append(("Jev, Claude when unsure", "hybrid"))
+        for label, mode in modes:
+            res = [(c, *decide_dedup(c, dd[c["id"]], cl["match"][c["id"]] if mode else None)) for c in cs]
+            ok = sum(1 for c, lab, t, _ in res if lab == c["gold"] and (t or None) == (c["gold_target"] or None))
+            sw = sum(1 for c, _, t, _ in res if c["gold"] == "new" and t)
+            fb = sum(1 for *_, who in res if who == "claude")
+            lines.append(f"  {label}: {ok}/{len(cs)} right, {sw} new items swallowed, {fb} handed to Claude")
+        if cl:
+            ok = sum(1 for c in cs if cl["match"][c["id"]].get("label") == c["gold"]
+                     and (cl["match"][c["id"]].get("target") or None) == (c["gold_target"] or None))
+            sw = sum(1 for c in cs if c["gold"] == "new" and cl["match"][c["id"]].get("target"))
+            lines.append(f"  Claude alone: {ok}/{len(cs)} right, {sw} new items swallowed")
+    return "\n".join(lines)
 
 
 def main() -> int:
@@ -267,7 +303,13 @@ def main() -> int:
     ap.add_argument("--dedup", default=str(HERE / "mail_eval" / "dedup.jsonl"))
     ap.add_argument("--out", default=str(HERE / "mail_eval" / "results.json"))
     ap.add_argument("--claude", action="store_true")
+    ap.add_argument("--report-only", action="store_true", help="re-print the report from --out")
     args = ap.parse_args()
+    if args.report_only:
+        emails = [json.loads(l) for l in open(args.emails, encoding="utf-8") if l.strip()]
+        dedup = [json.loads(l) for l in open(args.dedup, encoding="utf-8") if l.strip()]
+        print(report(json.loads(Path(args.out).read_text(encoding="utf-8")), emails, dedup))
+        return 0
     key = _key("SMYLTE_TYPESAFE_API_KEY", "TYPESAFE_API_KEY")
     if not key:
         print("set TYPESAFE_API_KEY", file=sys.stderr)
@@ -287,6 +329,7 @@ def main() -> int:
         out["claude"] = run_claude(emails, dedup)
     Path(args.out).write_text(json.dumps(out, indent=1, ensure_ascii=False), encoding="utf-8")
     print(f"wrote {args.out}: {jev.calls} Jev calls, {jev.input_tokens} input tokens")
+    print(report(out, emails, dedup))
     return 0
 
 
