@@ -55,6 +55,8 @@ from .ical.read import normalize_offset
 from .ical import PRIORITY, EventEdit, TaskEdit, rrule_from_spec
 from .csp import CSPMiddleware, policy_for_index
 from .limits import BodySizeLimitMiddleware
+from .mail.redact import redact_exc
+from .mail.runtime import build_runtime as build_mail_runtime
 from .scheduling import SlotTaken
 from .service import (
     SmylteService, day_key, priority_from_label,
@@ -1336,9 +1338,48 @@ async def _notification_loop(app: FastAPI) -> None:
             log.warning("notification loop error: %s", e)
 
 
+# ── background mail scan ───────────────────────────────────────────────────────
+
+async def _mail_loop(app: FastAPI) -> None:
+    """Scan the mailbox on a timer, once at startup, and whenever poked.
+
+    Scans BEFORE the first wait, like `_notification_loop`: mail that arrived
+    while the process was down is read on startup rather than one poll interval
+    later. A switched-off deployment or account makes `run_once` a cheap no-op
+    (it returns a "skipped" report without touching the mailbox), so the loop
+    itself does not need to know about either switch.
+
+    The interval is re-read from the account settings after every scan, and
+    `mail_trigger` (set by "Scan now" and by every settings save) cuts the wait
+    short, so a changed poll interval or freshly entered credentials take
+    effect without a restart. The 30 s floor keeps a bad stored value from
+    turning the loop into a busy one.
+    """
+    rt = getattr(app.state, "mail", None)
+    if rt is None:
+        return
+    trigger: asyncio.Event = app.state.mail_trigger
+    while True:
+        try:
+            await asyncio.to_thread(rt.ingestor.run_once)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            log.warning("mail loop error: %s", redact_exc(e))
+        interval = await asyncio.to_thread(rt.ingestor.poll_interval_s)
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(trigger.wait(), timeout=max(30.0, interval))
+        trigger.clear()
+
+
 # ── app factory ───────────────────────────────────────────────────────────────
 
 def create_app(settings: Settings | None = None) -> FastAPI:
+    # First, before anything can log: from here on every record from every
+    # logger is scrubbed of the mail credentials. See smylted/mail/redact.py.
+    from .mail.redact import install_log_redaction
+
+    install_log_redaction()
     settings = settings or Settings.from_env()
     if settings.access_required and not (settings.access_team_domain and settings.access_aud):
         raise RuntimeError(
@@ -1431,6 +1472,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.sync_trigger = asyncio.Event()
         app.state.notify_trigger = asyncio.Event()
         app.state.notifier = _build_notifier(settings, svc)
+        app.state.mail_trigger = asyncio.Event()
+        app.state.mail = build_mail_runtime(settings, svc)
         if authenticator is not None:
             # Sessions ended before this process started stay ended.
             authenticator.load_revocations(await asyncio.to_thread(svc.live_revocations))
@@ -1438,20 +1481,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await asyncio.to_thread(svc.bootstrap)
         loop_task = asyncio.create_task(_sync_loop(app))
         notify_task = asyncio.create_task(_notification_loop(app))
+        mail_task = asyncio.create_task(_mail_loop(app))
         try:
             yield
         finally:
-            # Both loops go down BEFORE svc.close(), or the survivor's next
+            # Every loop goes down BEFORE svc.close(), or the survivor's next
             # iteration writes to a closed SQLite connection and asyncio logs an
             # unretrieved exception on every restart.
-            for task in (loop_task, notify_task):
+            for task in (loop_task, notify_task, mail_task):
                 task.cancel()
-            for task in (loop_task, notify_task):
+            for task in (loop_task, notify_task, mail_task):
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
             notifier = getattr(app.state, "notifier", None)
             if notifier is not None:
                 notifier.close()
+            mail_rt = getattr(app.state, "mail", None)
+            if mail_rt is not None:
+                mail_rt.ingestor.jev.close()
             svc.close()
 
     app = FastAPI(title="smylted", version="0.1.0-phase1", lifespan=lifespan)
@@ -2500,6 +2547,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    # -- email ingestion (settings, tests, scan, suggestions) --
+    # Lives in its own module; registered here so it sits behind require_auth
+    # with every other /api route.
+    from .mail.routes import register as _register_mail
+
+    _register_mail(api)
 
     app.include_router(api)
 
