@@ -470,6 +470,130 @@ server captures nothing of the reply side: treat every notification as a
 postcard, which is why the sync-failure alert names the collection and points at
 the log rather than carrying the error text.
 
+## Email → suggested tasks (optional, off by default)
+The pipeline is described in `backend/smylted/mail/pipeline.py`; this section is
+how to run it. Everything that configures it — on/off, the model, Bridge's host,
+the folders, the sender lists — is in **Settings → Email** and applies on the
+next scan without a restart. Nothing reaches Anthropic until the switch is on and
+both secrets are set. `SMYLTE_MAIL_ENABLED=false` is an operator kill switch: the
+loop never scans and the test buttons refuse, whatever the settings say.
+
+### Where it runs
+The pipeline is part of `smylted`, so it runs wherever `smylted` runs, and it has
+to be able to open an IMAP connection to Bridge. Two shapes work:
+
+1. **On the desktop that runs Bridge (today).** Run `smylted` there as an
+   ordinary user process with its own `SMYLTE_DB`, pointed at the same Radicale
+   (`RADICALE_URL` must be Radicale's own origin — the DAV client builds
+   server-absolute paths, so a `/dav` path prefix does not work; an SSH tunnel
+   `ssh -N -L 5232:127.0.0.1:5232 <server>` and `RADICALE_URL=http://127.0.0.1:5232`
+   is the simplest). Approve suggestions in that instance's UI; approved tasks
+   are ordinary VTODOs on Radicale and show up everywhere within a sync. Bridge
+   is at `127.0.0.1:1143`.
+2. **On the server, with Bridge tunnelled to it (the homelab shape).** Keep the
+   one `smylted` and give it a path to Bridge — `ssh -N -R 1143:127.0.0.1:1143
+   <server>` from the desktop makes Bridge appear on the server's loopback, which
+   the unit's `IPAddressAllow=localhost` already admits; a headless Bridge on the
+   homelab itself is the same thing without the tunnel. Host and port are
+   settings, and a pinned certificate is checked by fingerprint, not by
+   hostname, so a tunnel or a LAN address needs nothing special.
+
+### Bridge
+1. In Bridge, open the account's **mailbox configuration** and note the IMAP
+   username and password. They are Bridge's own, not your Proton login.
+2. **Settings → Advanced settings → Export TLS certificates** and keep `cert.pem`.
+   Bridge's certificate is self-signed; paste `cert.pem` into Settings → Email →
+   Certificate → **Pinned certificate**. The app compares the SHA-256 of what
+   the server presents against it before sending the password, and refuses on a
+   mismatch (re-export if Bridge ever regenerates it). "Don't check" exists for a
+   loopback host only and the page says why in red; it is refused for any other
+   host.
+3. Port `1143`, **STARTTLS** (Bridge's defaults), then **Test connection**. The
+   result lists the folders — Bridge shows Proton labels as `Labels/…` and
+   folders as `Folders/…`, and the same message can sit in several of them and in
+   All Mail at once, which is what the ledger is for — and says whether the
+   newest INBOX message carries `Authentication-Results` from a trusted server
+   (see below).
+
+It coexists with Thunderbird: Bridge serves several IMAP clients at once, folders
+are opened with `EXAMINE` (read-only) and bodies fetched with `BODY.PEEK[]`, so
+nothing is marked read, moved, flagged or deleted, and Thunderbird's own account
+setup is untouched.
+
+### What Bridge passes through (and what the code assumes)
+Checked against Bridge's source and published Proton headers, not against a
+running Bridge (none was reachable from where this was built):
+- Bridge rebuilds each message's header from the headers Proton stored for it
+  (`pkg/message/build.go`, `toMessageHeader(msg.ParsedHeaders)`), in their
+  original order, so the `Authentication-Results` Proton's inbound servers wrote
+  arrive over IMAP. Proton writes one per method — `arc`, `dkim`, `spf`, `dmarc` —
+  with authserv-id `mailinNNN.protonmail.ch` (ARC sets use `mail.protonmail.ch`).
+  The trusted list defaults to `protonmail.ch` and `*.protonmail.ch`; only those
+  headers are believed, `ARC-Authentication-Results` never is, and every trusted
+  DMARC result must say `pass`, so a forged "pass" cannot outvote Proton's own.
+- When a message has no `Message-ID`, Bridge invents `<id@protonmail.internalid>`,
+  and it appends `<id@protonmail.internalid>` to `References`. Thread identity
+  ignores those, or every new thread would be its own root and a reply would
+  never find its request.
+**Test connection** prints which authserv-ids it saw on your newest INBOX
+message: if that line says none came through, allow-listed senders are treated
+as ordinary mail (the safe failure), and that is worth reporting.
+
+### Egress
+`deploy/smylte.service` is loopback-only. Anthropic publishes fixed ranges for
+`api.anthropic.com`; add them above the deny, as for Telegram:
+
+    IPAddressAllow=160.79.104.0/23
+    IPAddressAllow=2607:6bc0::/48
+
+Bridge on the same host (or tunnelled to it) is covered by `localhost`; a Bridge
+on another machine needs its address allowed too.
+
+### The two secrets
+The Anthropic key and the Bridge password are **write-only**: Settings shows
+`{set, hint: "…last4"}` and nothing more, the value is never returned by any
+endpoint, and every log record is scrubbed of both (`smylted/mail/redact.py`).
+They are never written to `smylte.db`, the settings blob, or any config file in
+the repository. One store holds both:
+
+- **The OS keyring** when the process can reach one (Secret Service on a desktop
+  session, Credential Manager on Windows).
+- Otherwise **an encrypted file**: `secrets.enc` next to the database
+  (`/var/lib/smylte/secrets.enc`), AES-256-GCM under a key read from
+  `SMYLTE_SECRETS_KEY_FILE` (default `~/.config/smylte/secrets.key`, or the
+  systemd credential `smylte-secrets-key` when the unit loads one). The key file
+  is refused if group or others can read it, if another user owns it, or if it
+  sits inside the source tree.
+
+Which one is used is decided once and recorded (`meta.secrets_backend`, a name,
+not a secret), so a desktop whose keyring is locked one morning reports "secrets
+unavailable" instead of silently writing the next key somewhere else.
+`SMYLTE_SECRETS_BACKEND=keyring|file` forces the choice. `SMYLTE_ANTHROPIC_API_KEY`
+and `SMYLTE_MAIL_IMAP_PASSWORD` override the stored values (Settings then says
+"set by the environment") and never touch either store.
+
+Under the hardened unit the home directory is read-only, so give the key to the
+service as a credential:
+
+    sudo /home/<user>/smylte/backend/.venv/bin/python -m smylted secrets init-key --path /etc/smylte/secrets.key
+    # in deploy/smylte.service, [Service]:
+    LoadCredential=smylte-secrets-key:/etc/smylte/secrets.key
+
+`python -m smylted secrets status` shows which store is in use and which secrets
+are set (never their values); `secrets set NAME` reads one from the terminal
+without echo, `secrets clear NAME` removes it.
+
+**Moving to the homelab.** The values are write-only, so the plain path is to
+enter them again in Settings on the new box — the Bridge password changes with a
+new Bridge install anyway. To carry the Anthropic key over instead: on the
+desktop `python -m smylted secrets migrate --to file` (moves both from the
+keyring into `secrets.enc` under the key file), copy `secrets.enc` and the key
+file across separately (`scp`, keep them `0600`), point `SMYLTE_SECRETS_FILE` and
+`SMYLTE_SECRETS_KEY_FILE` (or `LoadCredential=`) at them, and check with
+`secrets status`. Bring the mail tables (Backups, below) along too, or the first
+scan on the new box proposes the last week of mail again, including what you
+had already dismissed.
+
 ## Displays (the passive screens)
 
 > **Previewing one without owning the panel.** Settings → Developer renders
@@ -666,7 +790,12 @@ Back up **both**:
   **`displays`** (the passive screens: each one's token, what it shows, and the
   panel it is drawn for — losing it does not lose data, it UN-PAIRS every screen
   in the house, which is recoverable only by walking round and pointing each one
-  at a new URL). All of
+  at a new URL), and the email pipeline's **`mail_ledger`**, **`mail_cursors`**,
+  **`mail_suggestions`**, **`mail_threads`** and **`mail_rejections`** (what has
+  been read, how far each folder was scanned, what is waiting for approval, which
+  thread became which task, and what you dismissed — without them the next scan
+  proposes the last week of mail again, dismissed suggestions included; the
+  secrets are NOT here and must be carried separately, see above). All of
   these are app-only
   state that a resync CANNOT rebuild (see docs/phase0-findings.md). Only the
   *cache* tables (items/collections/sync_state/FTS) are disposable — "the DB is a disposable

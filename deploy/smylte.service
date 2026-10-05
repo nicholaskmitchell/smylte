@@ -85,6 +85,18 @@ UMask=0077
 # already covered by `localhost`, but a deployment pointing /etc/resolv.conf at
 # a LAN or public resolver must allow that address too, or the name never
 # resolves and the failure looks exactly like Telegram being down.
+#
+# EMAIL INGESTION needs api.anthropic.com, which Anthropic publishes as fixed
+# ranges (docs.claude.com → API → IP addresses):
+#
+#   IPAddressAllow=160.79.104.0/23
+#   IPAddressAllow=2607:6bc0::/48
+#
+# Bridge on this host, or tunnelled onto its loopback, is already covered by
+# `localhost`. Its secrets key belongs here as a credential rather than under the
+# read-only /home (see docs/DEPLOY.md):
+#
+#   LoadCredential=smylte-secrets-key:/etc/smylte/secrets.key
 IPAddressAllow=localhost
 IPAddressDeny=any
 
