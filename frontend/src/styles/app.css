@@ -3616,3 +3616,49 @@ button.menu-toggle:active { scale: var(--press-scale); }
 @keyframes scrim-in {
   from { opacity: 0; }
 }
+
+/* ── email ingestion ── */
+/* A suggestion is a task-row-sized card, but stacked: it carries a title field,
+   a date, a source line and two buttons, none of which fit the one-line grid
+   `.task-row` gives a task. The rule under it is the list's own. */
+.mail-sug {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-inline: var(--row-inset); padding: var(--row-y) calc(var(--gutter) - var(--row-inset));
+  border-bottom: 1px solid var(--rule);
+}
+.mail-sug-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* What kind of thing this would become, in the same small mono as a section
+   subhead — a label, not a control. */
+.mail-sug .mail-kind {
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale));
+  text-transform: var(--label-case); letter-spacing: calc(0.1em * var(--tracking));
+  color: var(--fg-faint); flex: none;
+}
+.mail-sug .mail-sug-title { flex: 1 1 12rem; width: auto; }
+.mail-sug .mail-sug-due { flex: none; width: auto; }
+.mail-sug-notes { font-size: calc(13px * var(--fs-scale)); color: var(--fg-muted); }
+.mail-sug-notes summary { cursor: pointer; color: var(--fg-faint); }
+.mail-sug-notes p { margin: 4px 0 0; white-space: pre-wrap; }
+.mail-sug-src { font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); line-height: 1.4; }
+.mail-sug-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.mail-sug .mail-sug-pick { width: auto; max-width: 12rem; margin-right: auto; }
+/* The settings section. A list of folder chips under the folders box, which
+   wraps rather than scrolling: there can be dozens. */
+.mail-folders { display: flex; flex-wrap: wrap; gap: 6px; }
+.mail-folders .chip[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.mail-folders .chip:disabled { opacity: 0.55; cursor: default; }
+.mail-folders .mail-never { margin-left: 4px; color: var(--fg-faint); }
+/* A multi-line box under its label rather than beside it: a list of addresses
+   or a pasted certificate is a block, not a value. */
+.set-panel .mail-area, .set-panel .mail-pem { width: 100%; max-width: none; resize: vertical; }
+.mail-pem {
+  font-family: var(--mono); font-size-adjust: none; min-height: 6rem;
+}
+.set-panel .menu-row .mail-secret { max-width: min(240px, 60%); }
+.mail-secret-actions { gap: 8px; }
+.set-panel .menu-row select.mail-select { max-width: 60%; }
+.side-badge {
+  display: inline-block; min-width: 1.4em; margin-left: 6px; padding: 1px 6px;
+  border-radius: var(--r-pill); background: var(--accent); color: var(--bg);
+  font-size: calc(11px * var(--fs-scale)); line-height: 1.4; text-align: center;
+}
