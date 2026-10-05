@@ -1077,6 +1077,8 @@ export interface MailSettingsValues {
   /** Rules for `kind_decider: 'rules'`, one per entry, in canonical form. */
   kind_rules: string[]
   jev_model: string
+  /** Only for an Anthropic key that is not scoped to a workspace; empty otherwise. */
+  anthropic_workspace_id: string
 }
 
 export interface MailSettingsPayload {

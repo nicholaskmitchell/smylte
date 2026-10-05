@@ -1,0 +1,31 @@
+Message-ID: <invite-1@school.example>
+Date: Mon, 05 Oct 2026 09:30:00 +0200
+From: Ms Smith <office@school.example>
+To: me@proton.me
+Subject: Invitation: Parent evening
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="BOUNDARY"
+
+--BOUNDARY
+Content-Type: text/plain; charset=utf-8
+
+You are invited to the parent evening. Details are in the attached invitation.
+--BOUNDARY
+Content-Type: text/calendar; charset=utf-8; method=REQUEST
+Content-Disposition: attachment; filename="invite.ics"
+
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//school.example//EN
+METHOD:REQUEST
+BEGIN:VEVENT
+UID:parent-evening-2026@school.example
+DTSTAMP:20261005T073000Z
+DTSTART;TZID=Europe/Berlin:20261014T180000
+DTEND;TZID=Europe/Berlin:20261014T193000
+SUMMARY:Parent evening
+LOCATION:Main hall
+DESCRIPTION:Meet the class teacher.
+END:VEVENT
+END:VCALENDAR
+--BOUNDARY--

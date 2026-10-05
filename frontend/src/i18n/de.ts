@@ -1249,6 +1249,8 @@ export const de: Catalogue = {
   'mail.secret.cancel': 'Abbrechen',
   'mail.secret.placeholder': 'Hier einfügen',
   'mail.secret.hint': 'Nur zum Schreiben: Einmal gespeichert, wird der Wert nie wieder angezeigt, weder auf dieser Seite noch auf einer anderen.',
+  'mail.workspace': 'Workspace-ID (nur für Schlüssel ohne Workspace)',
+  'mail.workspace.hint': 'Leer lassen, außer Anthropic meldet, dass der Schlüssel eine anthropic-workspace-id braucht.',
   'mail.model': 'Modell',
   'mail.model.other': 'Andere…',
   'mail.model.needKey': 'Speichere einen API-Schlüssel, um aus Anthropics Liste zu wählen.',

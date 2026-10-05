@@ -42,6 +42,14 @@ is retried once with `tool_choice: auto` — the alternative, never forcing, giv
 up the strongest guarantee that the answer is a tool call for every model that
 does accept it.
 
+A key that is not scoped to a workspace needs an `anthropic-workspace-id`
+header on every request; the workspace is read through its own provider and
+set as a default header on the SDK client. A 400 that names the workspace or
+the key is a configuration problem, not a bad email: `classify` reports it as
+"config" so the run stops, where "permanent" would settle every message in the
+inbox as an error, one missing header at a time. The API origin is left to
+the SDK, which honours `ANTHROPIC_BASE_URL` when it is set.
+
 The SDK is imported lazily (in the default client factory and in `classify`)
 so that importing this module, and running every test that does not talk to
 Anthropic, never needs the SDK. Every error string leaving this module passes
@@ -87,6 +95,8 @@ _FUTURE_WINDOW = timedelta(days=5 * 366)
 _WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
 _DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# Words in a 400's message that mean the owner's setup is wrong, not the email.
+_CONFIG_400 = re.compile(r"workspace|api[ -]key|x-api-key|authentication", re.I)
 _WS = re.compile(r"\s+")
 
 SYSTEM_EXTRACT = """You read one email and decide whether it asks the mailbox owner to do something, for the owner's to-do list.
@@ -475,7 +485,8 @@ def classify(exc: BaseException) -> LlmError:
                         kind="config", status_code=404)
     if isinstance(exc, anthropic.BadRequestError):
         message = redact(getattr(exc, "message", None) or str(exc))
-        return LlmError(f"Anthropic refused the request (400): {message}", kind="permanent",
+        kind = "config" if _CONFIG_400.search(message) else "permanent"
+        return LlmError(f"Anthropic refused the request (400): {message}", kind=kind,
                         status_code=400, detail=message)
     if isinstance(exc, anthropic.RateLimitError):
         return LlmError("rate limited (429)", kind="transient", status_code=429)
@@ -497,47 +508,53 @@ def _refuses_forced_tool_use(err: LlmError) -> bool:
 
 # ── client ──
 
-def _default_factory(key: str) -> Any:
+def _default_factory(key: str, workspace: str | None) -> Any:
     import anthropic
 
     # The SDK retries 429/5xx/connection errors itself (twice); beyond that the
     # pipeline releases the message and the next run tries again.
-    return anthropic.Anthropic(api_key=key, max_retries=2, timeout=60.0)
+    headers = {"anthropic-workspace-id": workspace} if workspace else None
+    return anthropic.Anthropic(api_key=key, max_retries=2, timeout=60.0,
+                               default_headers=headers)
 
 
 class LlmClient:
     """The pipeline's handle on Anthropic.
 
-    The key and the model are read through providers on every call, so a key
-    or model saved in Settings applies to the next email. The SDK client is
-    cached per key (by its SHA-256, so the cache never holds the key as a
-    dictionary key) and rebuilt when the key changes.
+    The key, the workspace and the model are read through providers on every
+    call, so a key, workspace or model saved in Settings applies to the next
+    email. The SDK client is cached per key and workspace (the key by its
+    SHA-256, so the cache never holds the key as a dictionary key) and rebuilt
+    when either changes.
 
-    `client_factory` (`key -> SDK client`) is a public, assignable attribute:
-    the documented test seam. Tests replace it with one that returns a fake
-    SDK; assigning a new factory drops the cached client.
+    `client_factory` (`(key, workspace) -> SDK client`, workspace None when
+    unset) is a public, assignable attribute: the documented test seam. Tests
+    replace it with one that returns a fake SDK; assigning a new factory drops
+    the cached client.
     """
 
     def __init__(self, *, api_key_provider: Callable[[], str | None],
                  model_provider: Callable[[], str],
-                 client_factory: Callable[[str], Any] | None = None,
-                 nonce_factory: Callable[[], str] = lambda: secrets.token_hex(8)) -> None:
+                 client_factory: Callable[[str, str | None], Any] | None = None,
+                 nonce_factory: Callable[[], str] = lambda: secrets.token_hex(8),
+                 workspace_provider: Callable[[], str | None] = lambda: None) -> None:
         self._api_key_provider = api_key_provider
         self._model_provider = model_provider
-        self.client_factory: Callable[[str], Any] = client_factory or _default_factory
+        self._workspace_provider = workspace_provider
+        self.client_factory: Callable[[str, str | None], Any] = client_factory or _default_factory
         self._nonce_factory = nonce_factory
         self._lock = threading.Lock()
-        self._cached: tuple[str, Callable[[str], Any], Any] | None = None
+        self._cached: tuple[str, str | None, Callable[[str, str | None], Any], Any] | None = None
         self._no_forced: set[str] = set()
 
     # The planner's wiring notes refer to the seam as `_client_factory`; both
     # names reach the same attribute.
     @property
-    def _client_factory(self) -> Callable[[str], Any]:
+    def _client_factory(self) -> Callable[[str, str | None], Any]:
         return self.client_factory
 
     @_client_factory.setter
-    def _client_factory(self, factory: Callable[[str], Any]) -> None:
+    def _client_factory(self, factory: Callable[[str, str | None], Any]) -> None:
         self.client_factory = factory
 
     def _client(self) -> Any:
@@ -545,18 +562,20 @@ class LlmClient:
         if not key:
             raise LlmError("no Anthropic API key is set", kind="config")
         register_secret(key)
+        workspace = (self._workspace_provider() or "").strip() or None
         digest = hashlib.sha256(key.encode()).hexdigest()
         factory = self.client_factory
         with self._lock:
             cached = self._cached
-            if cached is not None and cached[0] == digest and cached[1] is factory:
-                return cached[2]
+            if (cached is not None and cached[0] == digest and cached[1] == workspace
+                    and cached[2] is factory):
+                return cached[3]
         try:
-            client = factory(key)
+            client = factory(key, workspace)
         except Exception as exc:  # noqa: BLE001 — a bad key shape can fail in the constructor
             raise classify(exc) from None
         with self._lock:
-            self._cached = (digest, factory, client)
+            self._cached = (digest, workspace, factory, client)
         return client
 
     def _create(self, build: Callable[[bool], dict], model: str) -> Any:

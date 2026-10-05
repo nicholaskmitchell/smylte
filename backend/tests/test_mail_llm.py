@@ -117,18 +117,21 @@ class FakeSdk:
         return SimpleNamespace(id=model)
 
 
-def _client(sdk, *, model="claude-test", key=KEY):
+def _client(sdk, *, model="claude-test", key=KEY, workspace=lambda: None, workspaces=None):
     built: list[str] = []
 
-    def factory(k):
+    def factory(k, ws):
         built.append(k)
+        if workspaces is not None:
+            workspaces.append(ws)
         return sdk
 
     keys = [key] if not callable(key) else None
     models = [model] if not callable(model) else None
     c = LlmClient(api_key_provider=key if keys is None else (lambda: keys[0]),
                   model_provider=model if models is None else (lambda: models[0]),
-                  client_factory=factory, nonce_factory=lambda: "n0nce42")
+                  client_factory=factory, nonce_factory=lambda: "n0nce42",
+                  workspace_provider=workspace)
     return c, built
 
 
@@ -391,9 +394,31 @@ def test_client_factory_is_an_assignable_seam():
     second = FakeSdk([_resp(_tool(**_extraction_input()))])
     client, _ = _client(first)
     client.extract(_email())
-    client.client_factory = lambda key: second
+    client.client_factory = lambda key, ws: second
     client.extract(_email())
     assert len(first.create_calls) == len(second.create_calls) == 1
+
+
+def test_workspace_reaches_the_factory_and_a_change_rebuilds_the_client():
+    sdk = FakeSdk([_resp(_tool(**_extraction_input()))] * 4)
+    ws = [""]
+    seen: list = []
+    client, built = _client(sdk, workspace=lambda: ws[0], workspaces=seen)
+    client.extract(_email())
+    client.extract(_email())
+    assert seen == [None]                    # empty means no header, and the client is reused
+    ws[0] = " wrkspc_01ABC "
+    client.extract(_email())
+    client.extract(_email())
+    assert seen == [None, "wrkspc_01ABC"]
+    assert built == [KEY, KEY]
+
+
+def test_default_factory_sets_the_workspace_header():
+    with_ws = llm._default_factory(KEY, "wrkspc_01ABC")
+    without = llm._default_factory(KEY, None)
+    assert with_ws.default_headers["anthropic-workspace-id"] == "wrkspc_01ABC"
+    assert "anthropic-workspace-id" not in without.default_headers
 
 
 def test_missing_key_is_config():
@@ -432,6 +457,31 @@ def test_classify_status_errors(cls, status, kind, needle):
     assert isinstance(err, LlmError)
     assert err.kind == kind
     assert needle in str(err)
+
+
+@pytest.mark.parametrize("message", [
+    "This API key is not scoped to a workspace, so this request must include the "
+    "anthropic-workspace-id header",
+    "invalid x-api-key",
+    "Invalid API-key format",
+    "authentication method not supported",
+])
+def test_classify_bad_request_about_the_setup_is_config(message):
+    err = llm.classify(_status_error(anthropic.BadRequestError, 400, message))
+    assert err.kind == "config"
+    assert err.status_code == 400
+    assert err.detail == message
+    assert "refused the request (400)" in str(err)
+
+
+def test_workspace_bad_request_stops_the_client_call():
+    sdk = FakeSdk([_status_error(anthropic.BadRequestError, 400,
+                                 "This API key is not scoped to a workspace")])
+    client, _ = _client(sdk)
+    with pytest.raises(LlmError) as info:
+        client.extract(_email())
+    assert info.value.kind == "config"
+    assert len(sdk.create_calls) == 1
 
 
 def test_classify_bad_request_exposes_detail():

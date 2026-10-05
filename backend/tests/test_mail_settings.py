@@ -33,7 +33,8 @@ def test_load_defaults():
     assert S.load({}) == MailConfig()
     assert S.load(None) == MailConfig()
     assert S.load("not a mapping") == MailConfig()
-    assert S.FIELDS[0] == "enabled" and S.FIELDS[-2:] == ("kind_decider", "kind_rules")
+    assert S.FIELDS[0] == "enabled" and S.FIELDS[-4:] == (
+        "kind_decider", "kind_rules", "jev_model", "anthropic_workspace_id")
     assert set(S.public(MailConfig())) == set(S.FIELDS)
 
 
@@ -47,6 +48,7 @@ def test_load_good_values():
         "backfill_days": 0, "task_list": "school", "event_calendar": "family",
         "trusted_authserv_ids": ["mx.example.org"], "auto_accept_min_confidence": 1,
         "kind_decider": "rules", "kind_rules": ["Subject:Invoice => TASK"],
+        "jev_model": " jev-preview ", "anthropic_workspace_id": " wrkspc_01AbC-d ",
     })
     assert cfg.enabled is True
     assert cfg.model == "claude-sonnet-4-5"
@@ -63,6 +65,9 @@ def test_load_good_values():
     assert cfg.auto_accept_min_confidence == 1.0
     assert cfg.kind_decider == "rules"
     assert cfg.kind_rules == ("subject:invoice -> task",)
+    assert cfg.jev_model == "jev-preview"
+    assert cfg.anthropic_workspace_id == "wrkspc_01AbC-d"
+    assert S.load({"kind_decider": "jev"}).kind_decider == "jev"
     pub = S.public(cfg)
     assert pub["folders"] == ["INBOX", "Labels/School"] and isinstance(pub["kind_rules"], list)
 
@@ -80,6 +85,7 @@ def test_load_bad_values_fall_back_per_field():
         "trusted_authserv_ids": ["someone@protonmail.ch", "*.protonmail.ch"],
         "auto_accept_min_confidence": True, "kind_decider": "script",
         "kind_rules": ["subject:x -> task", "nope -> task", "# comment", "has:time -> event"],
+        "jev_model": "jev latest", "anthropic_workspace_id": "wrkspc 1",
     })
     assert cfg.enabled is d.enabled
     assert cfg.model == d.model
@@ -98,6 +104,7 @@ def test_load_bad_values_fall_back_per_field():
     assert cfg.auto_accept_min_confidence is None
     assert cfg.kind_decider == "model"
     assert cfg.kind_rules == ("subject:x -> task", "has:time -> event")
+    assert (cfg.jev_model, cfg.anthropic_workspace_id) == ("jev-latest", "")
     for bad in (-0.1, 1.5, float("nan"), "0.5"):
         assert S.load({"auto_accept_min_confidence": bad}).auto_accept_min_confidence is None
     assert S.load({"folders": []}).folders == ()
@@ -109,6 +116,11 @@ def test_check_model_host_username():
     for bad in ("", "-x", "a b", "x" * 101):
         with pytest.raises(ValueError, match="claude-haiku-4-5"):
             S.check_model(bad)
+    assert S.check_workspace_id("") == ""
+    assert S.check_workspace_id(" wrkspc_01AbC-d ") == "wrkspc_01AbC-d"
+    for bad in ("wrkspc 1", "wrkspc/1", "x" * 101):
+        with pytest.raises(ValueError, match="workspace id must look like wrkspc_"):
+            S.check_workspace_id(bad)
     assert S.check_host(" bridge.local ") == "bridge.local"
     assert S.check_host("[::1]") == "::1"
     assert S.check_host("127.0.0.1") == "127.0.0.1"

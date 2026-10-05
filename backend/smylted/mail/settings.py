@@ -20,8 +20,9 @@ owner's own mail, or duplicates, or junk, into suggestions), and
 `folder_selected` is the one place a configured name is compared with a
 server's.
 
-No secret lives in this configuration. The IMAP password and the API key are
-in the secret store; the pinned certificate is public by nature.
+No secret lives in this configuration. The IMAP password and the API keys
+are in the secret store; the pinned certificate and the Anthropic workspace id
+are public by nature.
 """
 from __future__ import annotations
 
@@ -42,6 +43,7 @@ MAIL_SETTINGS_KEY = "mail_settings"
 MAIL_STATUS_KEY = "mail_status"
 SECRETS_MARKER_KEY = "secrets_backend"
 DEFAULT_MODEL = "claude-haiku-4-5"
+DEFAULT_JEV_MODEL = "jev-latest"
 
 HARD_EXCLUDED_FLAGS = frozenset({"\\sent", "\\drafts", "\\all", "\\junk", "\\trash"})
 HARD_EXCLUDED_NAMES = frozenset({"sent", "sent items", "sent mail", "sent messages", "drafts",
@@ -50,7 +52,7 @@ HARD_EXCLUDED_NAMES = frozenset({"sent", "sent items", "sent mail", "sent messag
 
 IMAP_TLS_MODES = ("starttls", "ssl")
 IMAP_CERT_MODES = ("system", "pinned", "insecure_localhost")
-KIND_DECIDERS = ("model", "rules")
+KIND_DECIDERS = ("model", "jev", "rules")
 
 MAX_FOLDERS = 50
 MAX_FOLDER_CHARS = 200
@@ -61,6 +63,7 @@ MAX_PEM_CHARS = 20000
 MAX_SLUG_CHARS = 200
 
 _MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]*$")
+_WORKSPACE_ID = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 _PEM_BLOCK = re.compile(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", re.S)
 _PEM_ERROR = ("that is not a PEM certificate (export it from Bridge: "
               "Settings → Advanced → Export TLS certificates)")
@@ -88,8 +91,10 @@ class MailConfig:
     event_calendar: str | None = None           # calendar id (slug) or None → first calendar
     trusted_authserv_ids: tuple[str, ...] = DEFAULT_TRUSTED
     auto_accept_min_confidence: float | None = None   # hook; None = disabled (the default)
-    kind_decider: str = "model"                 # "model" | "rules" (see kindrules)
+    kind_decider: str = "model"                 # "model" | "jev" | "rules" (see kindrules, jev)
     kind_rules: tuple[str, ...] = ()            # canonical rule texts
+    jev_model: str = DEFAULT_JEV_MODEL          # TypeSafe model when kind_decider is "jev"
+    anthropic_workspace_id: str = ""            # only for keys not scoped to a workspace
 
 
 FIELDS: tuple[str, ...] = tuple(f.name for f in dataclasses.fields(MailConfig))
@@ -106,6 +111,15 @@ def check_model(v: str) -> str:
     if not (1 <= len(m) <= 100) or not _MODEL.match(m):
         raise ValueError("model must be a model id such as claude-haiku-4-5")
     return m
+
+
+def check_workspace_id(v: str) -> str:
+    # An id, not a secret: it names the workspace a key without one bills to,
+    # and is sent as the anthropic-workspace-id header (see llm.LlmClient).
+    w = (v or "").strip()
+    if w and not _WORKSPACE_ID.match(w):
+        raise ValueError("workspace id must look like wrkspc_…")
+    return w
 
 
 def check_host(v: str) -> str:
@@ -335,6 +349,8 @@ def load(stored: Mapping | None) -> MailConfig:
         vals["auto_accept_min_confidence"] = float(conf)
     choice("kind_decider", KIND_DECIDERS)
     listing("kind_rules", _rule, kindrules.MAX_RULES)
+    text("jev_model", check_model)
+    text("anthropic_workspace_id", check_workspace_id)
     return dataclasses.replace(d, **vals)
 
 
