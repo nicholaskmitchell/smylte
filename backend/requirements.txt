@@ -34,3 +34,19 @@ pytest-asyncio>=0.23
 # the hole where a compromised npm/NuGet install script sits on a write-scoped
 # release token. A supply-chain guard must not depend on a transitive dependency.
 pyyaml>=6.0
+# Email ingestion (smylted/mail/). The official SDK rather than raw httpx, for
+# its typed errors (the pipeline's whole retry policy keys on which exception it
+# got) and its Models API pagination. 1.x rides on `httpx2`, a separate package
+# from the `httpx` above, so the two do not fight over a version. Imported
+# lazily by smylted/mail/llm.py, but declared here like Pillow: what a
+# deployment can do should not depend on what pip happened to install.
+anthropic>=1.11,<2
+# The OS keyring (Secret Service on a Linux desktop, Credential Manager on
+# Windows, Keychain on macOS) for the two write-only secrets. A headless box has
+# none of those, and smylted/mail/secrets.py falls back to an AES-GCM file
+# under a 0600 key; see that module for why the choice is pinned once made.
+keyring>=25,<26
+# Declared, not inherited, for the same reason as pyyaml: the encrypted-file
+# secret store (smylted/mail/secrets.py) is AES-GCM from this package, which
+# today arrives only as an extra of pyjwt[crypto].
+cryptography>=43
