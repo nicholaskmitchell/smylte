@@ -792,6 +792,51 @@ def test_a_message_that_kills_the_process_is_given_up_after_three_interrupted_sc
     assert svc.mail(store.mail_get_cursor, "INBOX")["last_uid"] == 2
 
 
+def test_a_message_that_kills_the_process_while_parsed_is_given_up_too(
+        svc, secrets, monkeypatch):
+    poison = plain("poison-2@school.example", "Hi", "PARSEPOISON")
+    good = eml("pipe_request")
+    source = inbox_source({1: poison, 2: good})
+    real = message.parse_message
+    attempts = []
+
+    def parse(raw):
+        if b"PARSEPOISON" in raw:
+            attempts.append(1)
+            raise _Died()
+        return real(raw)
+
+    monkeypatch.setattr(message, "parse_message", parse)
+    for start in range(3):                      # three service starts, each killed by it
+        ing = ingestor(svc, secrets, FakeLlm(extract=extraction("Bring the team snack list")),
+                       source=source)
+        with pytest.raises(_Died):
+            ing.run_once()
+        assert len(attempts) == start + 1
+        assert svc.mail(store.mail_get_cursor, "INBOX") is None
+    report = ingestor(svc, secrets, FakeLlm(extract=extraction("Bring the team snack list")),
+                      source=source).run_once()
+    assert report.ok, report.error
+    assert len(attempts) == 3                    # the fourth start does not parse it again
+    row = ledger(svc, "hash:" + hashlib.sha256(poison).hexdigest())
+    assert (row["stage"], row["outcome"], row["interrupted"]) == ("error", "error", 3)
+    assert report.counts == {"duplicate": 1, "staged": 1}
+    assert ledger(svc, "mid:req-1@club.example")["outcome"] == "staged"
+    assert svc.mail(store.mail_get_cursor, "INBOX")["last_uid"] == 2
+
+
+def test_a_parsed_message_leaves_only_its_own_key_in_the_ledger(svc, secrets):
+    raws = [eml("pipe_request"), eml("pipe_no_message_id")]
+    llm = FakeLlm(extract=[extraction("Bring the team snack list"),
+                           extraction("Call Sam about the car pool")])
+    report = ingestor(svc, secrets, llm, source=inbox_source(dict(enumerate(raws, 1)))).run_once()
+    assert report.ok, report.error
+    keys = {r["key"] for r in svc.mail(store.mail_ledger_recent)}
+    # The claim on the raw bytes' hash is swapped for the message's own key.
+    assert keys == {message.ledger_key(message.parse_message(r)) for r in raws}
+    assert not keys & {"hash:" + hashlib.sha256(r).hexdigest() for r in raws}
+
+
 def test_an_approval_stuck_for_ten_minutes_is_pending_again(svc, secrets):
     for sid, age in (("old", timedelta(minutes=11)), ("young", timedelta(minutes=5))):
         svc.mail(store.mail_insert_suggestion, sid, {

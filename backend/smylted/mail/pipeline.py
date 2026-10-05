@@ -38,9 +38,11 @@ Why it is built this way:
   the process would otherwise be read first on every start, looping the
   service and stopping its folder for good. A claim found held mid-run is
   retried later, never called a duplicate. Shutdown asks the scan to stop after the message in hand and
-  waits for it, so the cursor is saved before the database closes. A message
-  that cannot even be parsed is settled as an error under a hash of its
-  bytes: one message never stops a folder or a run.
+  waits for it, so the cursor is saved before the database closes. The claim
+  is taken on a hash of the message's bytes before it is parsed, and swapped
+  for its own key after, so a message that dies in the parser earns strikes
+  too; one that cannot be parsed at all is settled as an error under that
+  hash: one message never stops a folder or a run.
 - **A date window ends at UIDNEXT.** The first scan of a folder (and a rescan
   after the server renumbered it) searches by date. Once that window is done
   the cursor jumps to the folder's UIDNEXT, so an old message sitting at a
@@ -592,17 +594,38 @@ class Ingestor:
         """Decide what one message becomes, and record it in the ledger.
 
         Raises only `RunAbort`; every other failure is an `Outcome`.
+
+        The raw bytes' hash is claimed before the message is parsed, and
+        swapped for the message's own key once it is. Parsing is the code that
+        meets the rawest hostile input (the stdlib parser, header decoding,
+        lxml), and a death inside it used to leave no ledger row, so
+        `mail_recover_unsettled` could never strike it and the folder stopped
+        at it on every start. A held claim on the hash earns strikes like any
+        other; a settled one (unreadable, or given up) skips the message
+        without parsing it again.
         """
         cfg = config or self.config()
+        raw_key = "hash:" + hashlib.sha256(raw).hexdigest()
+        if not self._host.mail(store.mail_claim, raw_key, message_id=None, thread_id=raw_key,
+                               folder=folder.name, uid=uid):
+            return self._claim_lost(raw_key)
         try:
             msg = message.parse_message(raw)
             key = message.ledger_key(msg)
             tid = message.thread_id(msg)
         except Exception as exc:  # noqa: BLE001 — one bad message must not stall the folder
-            return self._unreadable(folder, raw, uid, exc)
-        claimed = self._host.mail(store.mail_claim, key, message_id=msg.message_id,
-                                  thread_id=tid, folder=folder.name, uid=uid)
-        if not claimed:
+            return self._unreadable(folder, raw_key, exc)
+
+        def swap(conn):
+            # One transaction: the message is never without a claim, and never
+            # holds two. A key equal to the hash is the claim already held.
+            with store.tx(conn):
+                if key == raw_key:
+                    return True
+                store.mail_release(conn, raw_key)
+                return store.mail_claim(conn, key, message_id=msg.message_id, thread_id=tid,
+                                        folder=folder.name, uid=uid)
+        if not self._host.mail(swap):
             return self._claim_lost(key)
         c = _Msg(folder=folder, msg=msg, key=key, tid=tid, internaldate=internaldate, cfg=cfg)
         try:
@@ -629,26 +652,16 @@ class Ingestor:
                            transient=True)
         return Outcome("ledger", "duplicate", "already processed")
 
-    def _unreadable(self, folder: FolderInfo, raw: bytes, uid: int | None,
-                    exc: Exception) -> Outcome:
-        """Settle a message that could not even be parsed, under a hash of its bytes.
+    def _unreadable(self, folder: FolderInfo, raw_key: str, exc: Exception) -> Outcome:
+        """Settle a message that could not even be parsed, under the claim on
+        a hash of its bytes that `process_message` holds.
 
         There is no Message-ID to key it by, and leaving it unsettled would
         stop the folder at it on every run.
         """
-        key = "hash:" + hashlib.sha256(raw).hexdigest()
         detail = redact_exc(exc)[:300]
-        self._log.warning("mail: %s in %s could not be read: %s", key, folder.name, detail)
-
-        def write(conn):
-            with store.tx(conn):
-                if not store.mail_claim(conn, key, message_id=None, thread_id=key,
-                                        folder=folder.name, uid=uid):
-                    return False
-                store.mail_settle(conn, key, stage="error", outcome="error", detail=detail)
-                return True
-        if not self._host.mail(write):
-            return self._claim_lost(key)
+        self._log.warning("mail: %s in %s could not be read: %s", raw_key, folder.name, detail)
+        self._host.mail(store.mail_settle, raw_key, stage="error", outcome="error", detail=detail)
         return Outcome("error", "error", detail)
 
     def _settle(self, c: _Msg, stage: str, outcome: str, detail: str = "", *,
