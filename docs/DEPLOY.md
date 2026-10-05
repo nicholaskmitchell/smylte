@@ -474,7 +474,9 @@ the log rather than carrying the error text.
 The pipeline is described in `backend/smylted/mail/pipeline.py`; this section is
 how to run it. Everything that configures it — on/off, the model, Bridge's host,
 the folders, the sender lists — is in **Settings → Email** and applies on the
-next scan without a restart. Nothing reaches Anthropic until the switch is on and
+next scan without a restart. (The one exception: while `SMYLTE_MAIL_IMAP_PASSWORD`
+is set, Bridge's host, port, encryption, certificate and username are fixed; see
+*The secrets*.) Nothing reaches Anthropic until the switch is on and
 both secrets are set. `SMYLTE_MAIL_ENABLED=false` is an operator kill switch: the
 loop never scans and the test buttons refuse, whatever the settings say.
 
@@ -511,9 +513,9 @@ to be able to open an IMAP connection to Bridge. Two shapes work:
 3. Port `1143`, **STARTTLS** (Bridge's defaults), then **Test connection**. The
    result lists the folders — Bridge shows Proton labels as `Labels/…` and
    folders as `Folders/…`, and the same message can sit in several of them and in
-   All Mail at once, which is what the ledger is for — and says whether the
-   newest INBOX message carries `Authentication-Results` from a trusted server
-   (see below).
+   All Mail at once, which is what the ledger is for. It also says whether the
+   newest INBOX messages (up to 10) carry `Authentication-Results` from a
+   trusted server (see below).
 
 It coexists with Thunderbird: Bridge serves several IMAP clients at once, folders
 are opened with `EXAMINE` (read-only) and bodies fetched with `BODY.PEEK[]`, so
@@ -539,7 +541,7 @@ running Bridge (none was reachable from where this was built):
   ignores those, or every new thread would be its own root and a reply would
   never find its request.
 **Test connection** prints which authserv-ids it saw on your newest INBOX
-message: if that line says none came through, allow-listed senders are treated
+messages (up to 10). If that line says none came through, allow-listed senders are treated
 as ordinary mail (the safe failure), and that is worth reporting.
 
 ### Egress
@@ -603,7 +605,10 @@ and fail.
 
 `python -m smylted secrets status` shows which store is in use and which secrets
 are set (never their values). `secrets set NAME` reads one from the terminal
-without echo, and `secrets clear NAME` removes it. Every command first prints the
+without echo, and `secrets clear NAME` removes it. `secrets set imap_password`
+ties the password to the server settings already saved in the database, and
+says which. So save Bridge's host, port, certificate and username in Settings
+first. Every command first prints the
 database, the store and the key file it is using. Those must be the service's,
 so run the CLI with the service's user, environment and credential, not from a
 plain shell (which would read `~/.config` and the default database):
@@ -622,8 +627,10 @@ for. Changing any of those in Settings forgets a stored password, and the next
 scan or test asks for it again, so a changed setting can never send it to a
 different server. A password from `SMYLTE_MAIL_IMAP_PASSWORD` is tied to the
 server settings at startup. While that variable is set, Settings refuses to
-change the server or to take a password. To move to another server, unset the
-variable, change the server in Settings, set the variable again and restart.
+change the server or to take a password. To move to another server: unset the
+variable and restart, change the server in Settings, then set the variable again
+and restart. On a new install, save the server settings before setting the
+variable.
 
 **Moving to the homelab.** The values are write-only, so the plain path is to
 enter them again in Settings on the new box — the Bridge password changes with a
