@@ -38,8 +38,8 @@ next deploy, which would then bind it to whatever server the UI last named. So
 while `SMYLTE_MAIL_IMAP_PASSWORD` is set the route refuses both a password
 (which would never be used) and any save that changes the server settings;
 bound fields resent unchanged, and every other setting, still save. The
-operator changes the server by unsetting the variable, saving, setting it again
-and restarting.
+operator changes the server by unsetting the variable and restarting, saving,
+then setting it again and restarting.
 """
 from __future__ import annotations
 

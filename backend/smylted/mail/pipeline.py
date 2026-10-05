@@ -30,11 +30,14 @@ Why it is built this way:
   folder stops there so the cursor does not move past a message that was never
   read. The alternative — settle every failure — silently loses mail on every
   Anthropic outage.
-- **An interrupted run loses nothing.** A run starts by releasing every claim
-  nobody settled: the run lock makes this process the only claimer, so such a
-  claim belongs to a run that died (crash, kill, restart), and its message is
-  read again. A claim found unsettled mid-run is retried later, never called
-  a duplicate. Shutdown asks the scan to stop after the message in hand and
+- **An interrupted run loses nothing, three times.** A run starts by
+  releasing every claim nobody settled: the run lock makes this process the
+  only claimer, so such a claim belongs to a run that died (crash, kill,
+  restart), and its message is read again. Each such death is a strike, and
+  at the third the message is settled as an error: one that kills or hangs
+  the process would otherwise be read first on every start, looping the
+  service and stopping its folder for good. A claim found held mid-run is
+  retried later, never called a duplicate. Shutdown asks the scan to stop after the message in hand and
   waits for it, so the cursor is saved before the database closes. A message
   that cannot even be parsed is settled as an error under a hash of its
   bytes: one message never stops a folder or a run.
@@ -108,6 +111,9 @@ from .settings import MAIL_SETTINGS_KEY, MAIL_STATUS_KEY, MailConfig
 log = logging.getLogger("smylted.mail")
 
 MAX_PER_FOLDER_PER_RUN = 100
+# Runs that may die holding one message before it is given up (see the module
+# docstring): enough to ride out a restart or two, few enough to stop a loop.
+MAX_INTERRUPTED = 3
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 # Long enough for any approval's CalDAV write to finish (its timeout is 30 s).
 STUCK_APPROVING_AGE = timedelta(minutes=10)
@@ -375,8 +381,13 @@ class Ingestor:
         now = self._clock()
         # The run lock makes this process the only claimer, so an unsettled
         # claim at the start of a run belongs to a run that never finished —
-        # crash, kill, restart — and its message must be read again.
-        self._host.mail(store.mail_release_unsettled)
+        # crash, kill, restart — and its message must be read again, unless it
+        # has now done that MAX_INTERRUPTED times.
+        _released, gave_up = self._host.mail(store.mail_recover_unsettled,
+                                             max_interrupted=MAX_INTERRUPTED)
+        if gave_up:
+            self._log.warning("mail: gave up on %d message(s) that interrupted %d scans",
+                              gave_up, MAX_INTERRUPTED)
         # An approve interrupted after its compare-and-swap; the deterministic
         # client_id makes the retried create idempotent.
         self._host.mail(store.mail_reset_stuck_approving,
