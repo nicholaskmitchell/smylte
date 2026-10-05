@@ -2236,3 +2236,392 @@ def touch_display(conn: sqlite3.Connection, token: str) -> None:
         )
     except sqlite3.Error:
         log.warning("could not stamp last_seen_at for a display", exc_info=True)
+
+
+# ── email ingestion (SIDECAR: what the mail pipeline has seen and proposed) ──
+#
+# The mail pipeline reads a mailbox over IMAP and stages suggestions for the
+# owner to approve. Everything it needs to remember between runs lives in the
+# tables at the bottom of schema.sql, and the functions below are the only
+# readers and writers of them. The pipeline's own logic (what counts as a task,
+# which sender is trusted) is not here: these are the storage primitives, kept
+# free of policy so the pipeline can be tested against a plain `db` fixture.
+#
+# The ledger uses the same claim/settle split as the notification ledger above,
+# and for the same reason: the row is written BEFORE the slow work (an Anthropic
+# call, a CalDAV write) so that two overlapping scans cannot both process one
+# message, and the work itself happens outside the service lock.
+
+# The columns a caller may write on a suggestion. `id` is the key and
+# `created_at` is stamped once by the schema default; everything else is fair
+# game. A frozenset, not a free-for-all f-string over `fields.keys()`, because
+# these names are interpolated into SQL.
+_MAIL_SUGGESTION_COLUMNS = frozenset({
+    "kind", "status", "title", "notes", "due", "confidence", "event_start", "event_end",
+    "event_all_day", "location", "ics_uid", "event_rrule", "target_list", "target_uid",
+    "sender", "sender_name", "subject", "sent_at", "message_key", "message_id",
+    "thread_id", "folder", "updates", "updated_at", "decided_at",
+})
+_MAIL_THREAD_COLUMNS = frozenset({"suggestion_id", "task_list", "task_uid"})
+_MAIL_NOW = "strftime('%Y-%m-%dT%H:%M:%fZ','now')"
+
+
+def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    return None if row is None else row["value"]
+
+
+def set_meta(conn: sqlite3.Connection, key: str, value: str | None) -> None:
+    """Write one `meta` value; None removes the row, so "unset" and "never set"
+    are the same state."""
+    if value is None:
+        conn.execute("DELETE FROM meta WHERE key=?", (key,))
+        return
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, value),
+    )
+
+
+def get_meta_json(conn: sqlite3.Connection, key: str) -> dict:
+    """A JSON object stored under `key`; {} for a missing, unparseable or
+    non-object value (the same tolerance `get_settings` has)."""
+    raw = get_meta(conn, key)
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def set_meta_json(conn: sqlite3.Connection, key: str, value: dict) -> None:
+    set_meta(conn, key, json.dumps(value))
+
+
+def merge_meta_json(conn: sqlite3.Connection, key: str, patch: dict) -> dict:
+    """Shallow-merge `patch` into the stored object and return the result.
+
+    Unlike `update_settings`, a None value is STORED rather than skipped: in the
+    mail settings None means "back to the default" (an unset task list), which
+    is a different statement from "this key was not mentioned".
+    """
+    merged = get_meta_json(conn, key)
+    merged.update(patch)
+    set_meta_json(conn, key, merged)
+    return merged
+
+
+def mail_claim(
+    conn: sqlite3.Connection,
+    key: str,
+    *,
+    message_id: str | None,
+    thread_id: str,
+    folder: str,
+    uid: int | None,
+) -> bool:
+    """Reserve one message for processing. True when this caller won it.
+
+    False means the ledger already has the key — settled by an earlier scan, or
+    claimed by a concurrent one — and the caller must skip the message. One
+    statement, so atomic on its own.
+    """
+    cur = conn.execute(
+        "INSERT INTO mail_ledger (key, message_id, thread_id, folder, uid) "
+        "VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+        (key, message_id, thread_id, folder, uid),
+    )
+    return bool(cur.rowcount)
+
+
+def mail_settle(
+    conn: sqlite3.Connection,
+    key: str,
+    *,
+    stage: str,
+    outcome: str,
+    detail: str | None = None,
+    suggestion_id: str | None = None,
+) -> None:
+    """Record what the pipeline decided about a claimed message.
+
+    `detail` must already be redacted and must never be body text: it is read
+    back by the Settings screen and sits in every backup of this file.
+    """
+    conn.execute(
+        "UPDATE mail_ledger SET settled_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), "
+        "stage=?, outcome=?, detail=?, suggestion_id=? WHERE key=?",
+        (stage, outcome, detail, suggestion_id, key),
+    )
+
+
+def mail_release(conn: sqlite3.Connection, key: str) -> None:
+    """Hand a claim back so the message is tried again on the next scan.
+
+    Only an UNSETTLED claim is deleted: a settled row is a decision, and
+    removing it would re-propose mail the owner has already dealt with.
+    """
+    conn.execute("DELETE FROM mail_ledger WHERE key=? AND settled_at IS NULL", (key,))
+
+
+def mail_release_stale(conn: sqlite3.Connection, *, before: str) -> int:
+    """Drop unsettled claims older than `before` (an ISO stamp).
+
+    A claim that never settled means the process died mid-message. Unlike a
+    notification, nothing has left the building, so it is safe — and right — to
+    let the next scan try the message again.
+    """
+    cur = conn.execute(
+        "DELETE FROM mail_ledger WHERE settled_at IS NULL AND claimed_at < ?", (before,)
+    )
+    return cur.rowcount or 0
+
+
+def mail_ledger_get(conn: sqlite3.Connection, key: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM mail_ledger WHERE key=?", (key,)).fetchone()
+
+
+def mail_ledger_recent(conn: sqlite3.Connection, *, limit: int = 50) -> list[dict]:
+    """The last `limit` ledger rows, newest first — what Settings shows so the
+    owner can see why a message did or did not become a suggestion."""
+    rows = conn.execute(
+        "SELECT * FROM mail_ledger ORDER BY claimed_at DESC, key LIMIT ?",
+        (max(1, min(limit, 500)),),
+    )
+    return [dict(r) for r in rows]
+
+
+def mail_ledger_counts(conn: sqlite3.Connection, *, since: str | None = None) -> dict[str, int]:
+    """Settled messages per outcome, optionally only those claimed at or after
+    `since`. Unsettled claims are in flight, not an outcome, so they are left out."""
+    sql = "SELECT outcome, COUNT(*) AS n FROM mail_ledger WHERE settled_at IS NOT NULL"
+    params: tuple = ()
+    if since is not None:
+        sql += " AND claimed_at >= ?"
+        params = (since,)
+    sql += " GROUP BY outcome"
+    return {r["outcome"]: r["n"] for r in conn.execute(sql, params)}
+
+
+def mail_get_cursor(conn: sqlite3.Connection, folder: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM mail_cursors WHERE folder=?", (folder,)).fetchone()
+
+
+def mail_set_cursor(
+    conn: sqlite3.Connection,
+    folder: str,
+    *,
+    uidvalidity: int,
+    last_uid: int,
+    last_scan_at: str,
+) -> None:
+    conn.execute(
+        "INSERT INTO mail_cursors (folder, uidvalidity, last_uid, last_scan_at) "
+        "VALUES (?, ?, ?, ?) ON CONFLICT(folder) DO UPDATE SET "
+        "uidvalidity=excluded.uidvalidity, last_uid=excluded.last_uid, "
+        "last_scan_at=excluded.last_scan_at",
+        (folder, uidvalidity, last_uid, last_scan_at),
+    )
+
+
+def mail_list_cursors(conn: sqlite3.Connection) -> list[dict]:
+    return [dict(r) for r in conn.execute("SELECT * FROM mail_cursors ORDER BY folder")]
+
+
+def _mail_suggestion_values(fields: dict) -> dict:
+    """Vet column names against the whitelist and JSON-encode `updates`."""
+    bad = set(fields) - _MAIL_SUGGESTION_COLUMNS
+    if bad:
+        raise ValueError(f"unknown suggestion fields: {bad}")
+    values = dict(fields)
+    if "updates" in values and not isinstance(values["updates"], str):
+        values["updates"] = json.dumps(values["updates"])
+    return values
+
+
+def mail_insert_suggestion(conn: sqlite3.Connection, id: str, fields: dict) -> sqlite3.Row:
+    values = _mail_suggestion_values(fields)
+    cols = ["id", *values.keys()]
+    conn.execute(
+        # cols are vetted against _MAIL_SUGGESTION_COLUMNS above — not attacker input.
+        f"INSERT INTO mail_suggestions ({', '.join(cols)}) "  # nosec B608
+        f"VALUES ({', '.join('?' * len(cols))})",
+        (id, *values.values()),
+    )
+    return mail_get_suggestion(conn, id)
+
+
+def mail_get_suggestion(conn: sqlite3.Connection, id: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM mail_suggestions WHERE id=?", (id,)).fetchone()
+
+
+def mail_list_suggestions(
+    conn: sqlite3.Connection, *, status: str | None = None, limit: int = 100
+) -> list[sqlite3.Row]:
+    """Suggestions newest first; `status` None means every status."""
+    limit = max(1, min(limit, 1000))
+    if status is None:
+        return list(conn.execute(
+            "SELECT * FROM mail_suggestions ORDER BY created_at DESC, id LIMIT ?", (limit,)
+        ))
+    return list(conn.execute(
+        "SELECT * FROM mail_suggestions WHERE status=? ORDER BY created_at DESC, id LIMIT ?",
+        (status, limit),
+    ))
+
+
+def mail_update_suggestion(conn: sqlite3.Connection, id: str, **fields) -> sqlite3.Row | None:
+    """Patch a suggestion's columns and stamp `updated_at`; None for an unknown id."""
+    values = _mail_suggestion_values(fields)
+    sets = [f"{k}=?" for k in values]
+    if "updated_at" not in values:
+        sets.append(f"updated_at={_MAIL_NOW}")
+    cur = conn.execute(
+        # The column names are vetted against _MAIL_SUGGESTION_COLUMNS — not
+        # attacker input; the values are bound.
+        f"UPDATE mail_suggestions SET {', '.join(sets)} WHERE id=?",  # nosec B608
+        (*values.values(), id),
+    )
+    if not cur.rowcount:
+        return None
+    return mail_get_suggestion(conn, id)
+
+
+def mail_transition_suggestion(
+    conn: sqlite3.Connection, id: str, from_status: str, to_status: str, **fields
+) -> bool:
+    """Compare-and-swap a suggestion's status; True when this caller made the move.
+
+    The `WHERE status=?` is the lock: two approvals of one suggestion race here,
+    one gets rowcount 1 and creates the task, the other gets False and must not.
+    `decided_at` is stamped when the destination is a final state.
+    """
+    if "status" in fields:
+        raise ValueError("pass the new status as to_status, not as a field")
+    values = _mail_suggestion_values(fields)
+    sets = ["status=?", *(f"{k}=?" for k in values)]
+    if "updated_at" not in values:
+        sets.append(f"updated_at={_MAIL_NOW}")
+    if to_status in ("approved", "rejected") and "decided_at" not in values:
+        sets.append(f"decided_at={_MAIL_NOW}")
+    cur = conn.execute(
+        # Column names vetted against _MAIL_SUGGESTION_COLUMNS; values bound.
+        f"UPDATE mail_suggestions SET {', '.join(sets)} WHERE id=? AND status=?",  # nosec B608
+        (to_status, *values.values(), id, from_status),
+    )
+    return cur.rowcount == 1
+
+
+def mail_count_suggestions(conn: sqlite3.Connection, status: str) -> int:
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM mail_suggestions WHERE status=?", (status,)
+    ).fetchone()["n"]
+
+
+def mail_suggestions_for_thread(conn: sqlite3.Connection, thread_id: str) -> list[sqlite3.Row]:
+    return list(conn.execute(
+        "SELECT * FROM mail_suggestions WHERE thread_id=? ORDER BY created_at, id", (thread_id,)
+    ))
+
+
+def mail_find_suggestion_by_ics_uid(conn: sqlite3.Connection, ics_uid: str) -> sqlite3.Row | None:
+    """The live suggestion for a calendar invite's UID, if any — a re-sent invite
+    must update it, not stage a second copy. Rejected ones do not count: that is
+    the owner's "no", handled through the rejections table."""
+    return conn.execute(
+        "SELECT * FROM mail_suggestions WHERE ics_uid=? "
+        "AND status IN ('pending','approving','approved') ORDER BY created_at DESC, id LIMIT 1",
+        (ics_uid,),
+    ).fetchone()
+
+
+def mail_get_thread(conn: sqlite3.Connection, thread_id: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM mail_threads WHERE thread_id=?", (thread_id,)).fetchone()
+
+
+def mail_upsert_thread(conn: sqlite3.Connection, thread_id: str, **fields) -> None:
+    """Create or patch a thread row. A key present with None sets NULL; a key
+    left out is untouched — "this thread no longer feeds a suggestion" and "I
+    have nothing to say about the suggestion" are different statements."""
+    bad = set(fields) - _MAIL_THREAD_COLUMNS
+    if bad:
+        raise ValueError(f"unknown thread fields: {bad}")
+    cols = ["thread_id", *fields.keys()]
+    # Column names are vetted against _MAIL_THREAD_COLUMNS — not attacker input.
+    updates = ", ".join([*(f"{k}=excluded.{k}" for k in fields), f"updated_at={_MAIL_NOW}"])
+    conn.execute(
+        f"INSERT INTO mail_threads ({', '.join(cols)}) "  # nosec B608
+        f"VALUES ({', '.join('?' * len(cols))}) "
+        f"ON CONFLICT(thread_id) DO UPDATE SET {updates}",
+        (thread_id, *fields.values()),
+    )
+
+
+def mail_add_rejection(
+    conn: sqlite3.Connection,
+    *,
+    suggestion_id: str,
+    message_key: str,
+    message_id: str | None,
+    thread_id: str,
+    title: str,
+    due: str | None,
+) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO mail_rejections "
+        "(suggestion_id, message_key, message_id, thread_id, title, due) VALUES (?,?,?,?,?,?)",
+        (suggestion_id, message_key, message_id, thread_id, title, due),
+    )
+
+
+def mail_rejections_for_thread(conn: sqlite3.Connection, thread_id: str) -> list[sqlite3.Row]:
+    return list(conn.execute(
+        "SELECT * FROM mail_rejections WHERE thread_id=? ORDER BY rejected_at, suggestion_id",
+        (thread_id,),
+    ))
+
+
+def mail_is_rejected_message(conn: sqlite3.Connection, message_key: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM mail_rejections WHERE message_key=? LIMIT 1", (message_key,)
+    ).fetchone() is not None
+
+
+def search_open_tasks_any(
+    conn: sqlite3.Connection, terms: list[str], *, limit: int = 5
+) -> list[sqlite3.Row]:
+    """Open tasks sharing ANY of `terms`, best match first — candidate retrieval
+    for de-duplicating a new suggestion against what is already on the list.
+
+    `search` ANDs its terms, which is right for a person narrowing a query and
+    wrong here: the words come from an email and a task titled differently from
+    its subject line still shares one or two of them. OR casts the wide net and
+    the model, not FTS, decides whether a candidate is really the same task.
+
+    Terms are reduced to plain alphanumeric words of three letters or more
+    before they reach MATCH, which also makes quoting unnecessary: FTS5
+    operator characters cannot survive the filter. A malformed MATCH still
+    must never break ingestion, so an OperationalError is an empty result.
+    """
+    clean = list(dict.fromkeys(
+        t.lower() for t in terms if len(t) >= 3 and t.isalnum()
+    ))[:12]
+    if not clean:
+        return []
+    match = " OR ".join(f'"{t}"*' for t in clean)
+    try:
+        return list(conn.execute(
+            """SELECT i.* FROM items_fts f
+               JOIN items i ON i.collection_href=f.collection_href AND i.uid=f.uid
+               WHERE items_fts MATCH ? AND i.component='VTODO' AND i.completed IS NULL
+                 AND (i.status IS NULL OR i.status NOT IN ('COMPLETED','CANCELLED'))
+               ORDER BY rank LIMIT ?""",
+            (match, max(1, min(limit, 50))),
+        ))
+    except sqlite3.OperationalError:
+        # No exc_info: the terms came from an email, and SQLite's message can quote them.
+        log.warning("mail: candidate search failed")
+        return []

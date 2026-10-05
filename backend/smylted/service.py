@@ -3475,6 +3475,27 @@ class SmylteService:
         with self._lock:
             return fn(self._conn, *args, **kwargs)
 
+    def mail(self, fn, *args, **kwargs):
+        """Run one store function against the connection, under the lock.
+
+        The same borrow `notifications` performs, for the mail pipeline's
+        ledger and suggestions. Never held across IMAP or Anthropic I/O: the
+        pipeline claims, releases the lock, does the slow work, then settles.
+        """
+        with self._lock:
+            return fn(self._conn, *args, **kwargs)
+
+    def publish_mail_changed(self) -> None:
+        """Tell open tabs the Suggested list or the mail status changed."""
+        self._publish({"type": "mail_updated"})
+
+    def search_open_tasks_any(self, terms: list[str], *, limit: int = 5) -> list[dict[str, Any]]:
+        """Open tasks whose text shares any of `terms`, best first, as task DTOs."""
+        with self._lock:
+            rows = store.search_open_tasks_any(self._conn, terms, limit=limit)
+            found = [self.get_task(r["collection_href"], r["uid"]) for r in rows]
+        return [t for t in found if t is not None]
+
     def sync_health(self) -> list[dict[str, Any]]:
         """Collections with a sync error standing — see `store.sync_health`."""
         with self._lock:
