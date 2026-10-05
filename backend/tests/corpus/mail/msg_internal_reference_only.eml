@@ -1,0 +1,10 @@
+Message-ID: <new-003@school.example>
+Date: Tue, 06 Oct 2026 09:30:00 +0000
+From: Ms Smith <office@school.example>
+To: me@proton.me
+Subject: A brand new conversation
+References: <abc@protonmail.internalid>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+This starts a new thread even though Bridge added a reference.
