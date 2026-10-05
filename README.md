@@ -373,13 +373,17 @@ cannot forge. A reply in a thread that already has a task becomes an update to i
 not a second task; anything else is compared against your open tasks before it is
 proposed.
 
-Whether a message is a task or an event is the model's call by default, or
-yours: a few lines of rules in Settings (`subject:"parent evening" -> event`)
-decide instead, checked when you save them rather than run as code.
+Whether a message is a task or an event is the extraction model's call by
+default. Two alternatives sit behind one setting: **TypeSafe's Jev**, a decision
+model asked exactly one closed question — task or event? — whose answer comes
+with a calibrated confidence, and which is overruled by the extraction model
+whenever it is unsure or unreachable; or **your own rules**, a few lines in
+Settings (`subject:"parent evening" -> event`) checked when you save them rather
+than run as code.
 
-The Anthropic key and the Bridge password are write-only. Settings shows that one
+The Anthropic key, the TypeSafe key and the Bridge password are write-only. Settings shows that one
 is stored and its last four characters, and no endpoint, export or log line will
-give either back; they live in the OS keyring, or encrypted under a key file
+give one back; they live in the OS keyring, or encrypted under a key file
 outside the repository on a headless box, never in `smylte.db`. Setup — Bridge's
 certificate, the egress rule, and moving the secrets to another machine — is in
 `docs/DEPLOY.md`; the stages are in `backend/smylted/mail/pipeline.py`.
