@@ -12,11 +12,19 @@ It opens the same database as the server, only to read and write which store
 holds the secrets (the marker `auto` relies on), and closes it again. Running
 it beside a live server is fine: SQLite in WAL mode with a busy timeout, and a
 one-row write.
+
+A shell does not have the service's environment, and a CLI that quietly used
+other paths would store a secret the service never reads. So every command
+first prints the database, store and file paths it is using — from the same
+`Settings` the service builds them from — and only `init-key` creates a key:
+the other commands report a missing one instead of creating a second key
+beside the service's.
 """
 from __future__ import annotations
 
 import argparse
 import getpass
+import os
 import sys
 
 from ..config import Settings
@@ -24,6 +32,7 @@ from ..db import store
 from .redact import redact
 from .secrets import (
     SECRET_NAMES,
+    SecretStore,
     SecretStoreError,
     build_secret_store,
     create_key_file,
@@ -50,9 +59,24 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
+def _abspath(path: str) -> str:
+    return os.path.abspath(os.path.expanduser(path))
+
+
+def _print_paths(settings: Settings, secrets: SecretStore) -> dict:
+    """Print where this command reads and writes (paths only); the backend status."""
+    b = secrets.backend_status()
+    print(f"database: {_abspath(settings.db_path)}")
+    print(f"backend: {b['name'] or 'none'} (choice {b['choice']})")
+    print(f"secrets file: {secrets.file_backend.path}")
+    print(f"key file: {_abspath(secrets.file_backend.key_path)}")
+    return b
+
+
 def _run(args: argparse.Namespace, settings: Settings) -> int:
     if args.cmd == "init-key":
         path = args.path or settings.secrets_key_file or default_key_path()
+        print(f"key file: {_abspath(path)}")
         create_key_file(path)
         print(f"created {path} (mode 0600)")
         return 0
@@ -64,13 +88,12 @@ def _run(args: argparse.Namespace, settings: Settings) -> int:
             settings,
             lambda: store.get_meta(conn, SECRETS_MARKER_KEY),
             lambda v: store.set_meta(conn, SECRETS_MARKER_KEY, v),
+            create_key=False,
         )
+        b = _print_paths(settings, secrets)
         if args.cmd == "status":
-            b = secrets.backend_status()
-            line = f"backend: {b['name'] or 'none'} (choice {b['choice']})"
             if not b["available"]:
-                line += f" — unavailable: {b['error']}"
-            print(line)
+                print(f"unavailable: {b['error']}")
             for name, st in secrets.statuses().items():
                 state = "set" if st["set"] else "unset"
                 extra = f" {st['hint']} from {st['source']}" if st["set"] else ""

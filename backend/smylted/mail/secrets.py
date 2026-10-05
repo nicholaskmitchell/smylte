@@ -239,10 +239,25 @@ def _resolve_key_path(key_path: str) -> str:
     return path
 
 
-def _no_key_message(path: str, strerror: str | None = None) -> str:
+def _in_credentials_dir(path: str) -> bool:
+    """Is `path` inside systemd's `$CREDENTIALS_DIRECTORY` (both resolved)?"""
+    cred_dir = os.environ.get("CREDENTIALS_DIRECTORY")
+    if not cred_dir:
+        return False
+    return Path(path).resolve().is_relative_to(Path(cred_dir).resolve())
+
+
+def _no_key_message(path: str, strerror: str | None = None, *, cli: bool = False) -> str:
     created = f" and it could not be created ({strerror})" if strerror is not None else ""
-    return (f"no secrets key at {path}{created}. "
-            f"Create one with: python -m smylted secrets init-key --path {path}")
+    message = (f"no secrets key at {path}{created}. "
+               f"Create one with: python -m smylted secrets init-key --path {path}")
+    if cli:
+        # The CLI never creates a key on its own, so a missing one most often
+        # means it was started without the service's environment and is
+        # looking in the wrong place.
+        message += (", or, if the service already has a key, run this command with the "
+                    "service's environment (SMYLTE_SECRETS_KEY_FILE, CREDENTIALS_DIRECTORY)")
+    return message
 
 
 def _write_new_key(path: str) -> None:
@@ -313,15 +328,19 @@ class EncryptedFileBackend:
         try:
             st = os.stat(path)
         except FileNotFoundError:
-            raise SecretStoreError(_no_key_message(path)) from None
+            raise SecretStoreError(_no_key_message(path, cli=not self.create_key)) from None
         except OSError as exc:
             raise SecretStoreError(f"could not read the secrets key {path} ({exc.strerror})") from None
         if not stat.S_ISREG(st.st_mode):
             raise SecretStoreError(f"{path} is not a regular file")
         if os.name != "nt":
-            # Group access is refused too, not just "world": the key should be
-            # the service user's alone, which is what 0600 says.
-            if st.st_mode & 0o077:
+            # Access for other users is always refused. Group access is refused
+            # too — the key should be the service user's alone, which is what
+            # 0600 says — except inside $CREDENTIALS_DIRECTORY: systemd grants
+            # the service user a LoadCredential= file through an ACL, and the
+            # ACL's mask shows up as group bits (0440) on a file nobody else
+            # can read.
+            if st.st_mode & 0o007 or (st.st_mode & 0o070 and not _in_credentials_dir(path)):
                 raise SecretStoreError(
                     f"refusing to load the secrets key: {path} is readable or writable by other "
                     f"users (mode {oct(st.st_mode & 0o777)}). Fix it with: chmod 600 {path}")
@@ -339,7 +358,7 @@ class EncryptedFileBackend:
         path = _resolve_key_path(self.key_path)
         if not os.path.exists(path):
             if not self.create_key:
-                raise SecretStoreError(_no_key_message(path))
+                raise SecretStoreError(_no_key_message(path, cli=True))
             try:
                 _write_new_key(path)
             except FileExistsError:
@@ -359,7 +378,7 @@ class EncryptedFileBackend:
             return False, str(e)
         if self.create_key and _dir_creatable(os.path.dirname(path)):
             return True, None
-        return False, _no_key_message(path)
+        return False, _no_key_message(path, cli=not self.create_key)
 
     # -- file --------------------------------------------------------------
 
@@ -618,11 +637,17 @@ class SecretStore:
         return moved
 
 
-def build_secret_store(settings, marker_get, marker_set) -> SecretStore:
-    """The app's store, from `smylted.config.Settings`."""
+def build_secret_store(settings, marker_get, marker_set, *,
+                       create_key: bool = True) -> SecretStore:
+    """The app's store, from `smylted.config.Settings`.
+
+    `create_key=False` is for the CLI: a key it created on its own, because it
+    was run without the service's environment, would encrypt secrets the
+    service can never read.
+    """
     file_backend = EncryptedFileBackend(
         settings.secrets_file or default_secrets_path(settings.db_path),
-        settings.secrets_key_file or default_key_path())
+        settings.secrets_key_file or default_key_path(), create_key=create_key)
     keyring_backend = KeyringBackend(settings.secrets_namespace)
     env: dict[str, str] = {}
     for name, value in (("anthropic_api_key", settings.anthropic_api_key),
