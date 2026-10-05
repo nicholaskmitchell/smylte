@@ -373,13 +373,18 @@ cannot forge. A reply in a thread that already has a task becomes an update to i
 not a second task; anything else is compared against your open tasks before it is
 proposed.
 
-Whether a message is a task or an event is the extraction model's call by
-default. Two alternatives sit behind one setting: **TypeSafe's Jev**, a decision
-model asked exactly one closed question — task or event? — whose answer comes
-with a calibrated confidence, and which is overruled by the extraction model
-whenever it is unsure or unreachable; or **your own rules**, a few lines in
-Settings (`subject:"parent evening" -> event`) checked when you save them rather
-than run as code.
+Two narrow decisions go to **TypeSafe's Jev** when you give it a key: whether
+a message is a task or an event, and whether a new item is the same piece of
+work as one you already have. Jev is a decision model — it answers a closed
+question with a calibrated confidence and never writes text — and Claude
+decides whenever it is unsure, unreachable or has no key. That split is
+measured rather than assumed (`backend/dev/mail_eval/`): on the same labelled
+mail, Claude alone merged a genuinely new request into an existing task four
+times in 98, which is a task you never see, and Jev with Claude as the fallback
+did not once. Leave the TypeSafe key empty and everything stays with Claude. Or
+decide task-or-event yourself: a few lines of rules in Settings
+(`subject:"parent evening" -> event`), checked when you save them rather than
+run as code.
 
 The Anthropic key, the TypeSafe key and the Bridge password are write-only. Settings shows that one
 is stored and its last four characters, and no endpoint, export or log line will

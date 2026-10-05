@@ -547,18 +547,21 @@ as ordinary mail (the safe failure), and that is worth reporting.
     IPAddressAllow=2607:6bc0::/48
 
 Bridge on the same host (or tunnelled to it) is covered by `localhost`; a Bridge
-on another machine needs its address allowed too. If Settings → Email has
-**TypeSafe Jev** deciding task-or-event, `api.typesafe.ai` needs allowing as well,
+on another machine needs its address allowed too. If a **TypeSafe** key is set
+(Jev then decides task-or-event and the duplicate check), `api.typesafe.ai` needs
+allowing as well,
 and that is a wider hole than the other two: it is served from Cloudflare's shared
 anycast addresses (`getent hosts api.typesafe.ai` answered `2606:4700::6812:182e`
 and `2606:4700::6812:192e` on 2026-10-05), so allowing it allows a slice of
 everything Cloudflare fronts. If that is not a trade worth making on the
 internet-facing box, leave Jev to a deployment that can afford the egress — a
 blocked Jev call costs nothing but the decision: the extraction model's choice
-stands and the ledger detail says "Jev unavailable".
+stands and the ledger detail says "Jev unavailable". Why Jev has those two jobs
+and not a third (a pre-filter in front of every Claude call was measured and
+dropped) is written up with the numbers in `backend/dev/mail_eval/README.md`.
 
 ### The secrets
-The Anthropic key, the Bridge password and (if Jev is used) the TypeSafe key are
+The Anthropic key, the Bridge password and the (optional) TypeSafe key are
 **write-only**: Settings shows
 `{set, hint: "…last4"}` and nothing more, the value is never returned by any
 endpoint, and every log record is scrubbed of them (`smylted/mail/redact.py`).
