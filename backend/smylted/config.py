@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .limits import DEFAULT_MAX_BODY_BYTES
 
@@ -17,6 +17,7 @@ log = logging.getLogger("smylted.config")
 
 _TRUE = frozenset({"1", "true", "yes", "y", "on"})
 _FALSE = frozenset({"0", "false", "no", "n", "off"})
+_SECRETS_BACKENDS = ("auto", "keyring", "file")
 
 # Every setting below moved from TASKS_* to SMYLTE_* with the rename. The old
 # spelling is still honoured, because the two halves of a deployment do not move
@@ -103,6 +104,22 @@ def _bool(name: str, default: bool) -> bool:
         f"{name}={raw!r} is not a boolean; use one of "
         f"{sorted(_TRUE)} or {sorted(_FALSE)}"
     )
+
+
+def _secrets_backend(raw: str) -> str:
+    """SMYLTE_SECRETS_BACKEND, refusing anything it does not recognise.
+
+    Same posture as `_bool`: a typo must not quietly pick a store the operator
+    did not ask for — "keyrnig" falling back to "auto" could put the
+    credentials in a file the operator believed was never written.
+    """
+    v = (raw or "").strip().lower() or "auto"
+    if v not in _SECRETS_BACKENDS:
+        raise ValueError(
+            f"SMYLTE_SECRETS_BACKEND={raw!r} is not a secrets backend; use one of "
+            f"{', '.join(_SECRETS_BACKENDS)}"
+        )
+    return v
 
 
 def normalize_dav_url(raw: str) -> str:
@@ -212,6 +229,34 @@ class Settings:
     # refuses to fail open).
     csp_mode: str = "on"
 
+    # ── email ingestion ──────────────────────────────────────────────────────
+    # The operator KILL SWITCH, mirroring `notify_enabled`: on by default, and
+    # nothing is read until the account turns email ingestion on in Settings
+    # and an IMAP password and an Anthropic key exist. Set it false to
+    # guarantee a deployment never logs into a mailbox or sends a byte of mail
+    # to a model, whatever the settings blob says.
+    mail_enabled: bool = True
+    # Credentials supplied by the operator. They WIN over the ones stored from
+    # the settings page and are never written anywhere — not to smylte.db, not
+    # to the secrets store — so an operator who already keeps secrets in the
+    # unit's environment file can leave them there. `repr=False` keeps them out
+    # of any `repr(settings)` that ends up in a log or a traceback.
+    anthropic_api_key: str = field(default="", repr=False)
+    mail_imap_password: str = field(default="", repr=False)
+    typesafe_api_key: str = field(default="", repr=False)
+    # Where secrets typed into Settings are kept: "keyring" (the OS secret
+    # service), "file" (AES-GCM next to the database, under a key kept
+    # elsewhere) or "auto" (the keyring when one is reachable, else the file).
+    # See smylted/mail/secrets.py.
+    secrets_backend: str = "auto"
+    # The encrypted file ("" → secrets.enc next to the database) and its key
+    # ("" → ~/.config/smylte/secrets.key, or a systemd LoadCredential=).
+    secrets_file: str = ""
+    secrets_key_file: str = ""
+    # Keyring service suffix (`smylte/<namespace>`), so two deployments under
+    # one desktop login do not read each other's credentials.
+    secrets_namespace: str = "default"
+
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
@@ -251,4 +296,12 @@ class Settings:
             telegram_bot_token=_env("SMYLTE_TELEGRAM_BOT_TOKEN", "").strip(),
             telegram_chat_id=_env("SMYLTE_TELEGRAM_CHAT_ID", "").strip(),
             notify_interval_s=float(_env("SMYLTE_NOTIFY_INTERVAL", "60")),
+            mail_enabled=_bool("SMYLTE_MAIL_ENABLED", True),
+            anthropic_api_key=_env("SMYLTE_ANTHROPIC_API_KEY", "").strip(),
+            mail_imap_password=_env("SMYLTE_MAIL_IMAP_PASSWORD", "").strip(),
+            typesafe_api_key=_env("SMYLTE_TYPESAFE_API_KEY", "").strip(),
+            secrets_backend=_secrets_backend(_env("SMYLTE_SECRETS_BACKEND", "auto")),
+            secrets_file=_env("SMYLTE_SECRETS_FILE", "").strip(),
+            secrets_key_file=_env("SMYLTE_SECRETS_KEY_FILE", "").strip(),
+            secrets_namespace=_env("SMYLTE_SECRETS_NAMESPACE", "default").strip() or "default",
         )
