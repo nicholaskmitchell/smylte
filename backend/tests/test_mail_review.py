@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from smylted.db import store
+from smylted.ical.edit import UNSET
 from smylted.mail import redact, review
 from smylted.mail.imap import FolderInfo
 from smylted.mail.llm import Match
@@ -322,6 +323,42 @@ def test_an_update_names_merged_senders_by_name(svc, tmp_path):
         "Coach asked.\n\n"
         "— Update from Coach Miller, 2026-10-05: Snacks.\n"
         "— Update from Coach Miller, 2026-10-05: Also please bring cups.")
+
+
+class NotesHost(UpdateHost):
+    """An `UpdateHost` whose task keeps the notes each edit writes."""
+
+    def __init__(self, svc):
+        super().__init__(svc)
+        self.task = dict(self.TASK)
+
+    def get_task(self, href, uid):
+        return dict(self.task) if (href, uid) == ("/dav/me/family/", "t1") else None
+
+    def edit_task(self, href, uid, edit):
+        super().edit_task(href, uid, edit)
+        if edit.description is not UNSET:
+            self.task["notes"] = edit.description
+        return dict(self.task)
+
+
+def test_an_update_approved_again_after_a_stuck_reset_is_appended_once(svc, tmp_path):
+    llm = FakeLlm(extract=extraction("Bring the team snack list", notes="Snacks."),
+                  match=Match("update", "T1"))
+    host = NotesHost(svc)
+    ing = Ingestor(host, make_store(tmp_path), llm=llm, jev=FakeJev(),
+                   clock=lambda: at(2026, 10, 6))
+    first = ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    review.approve(host, first.suggestion_id, config=MailConfig())
+    # The edit landed but the process died before recording it: the row sits in
+    # 'approving' until the stuck reset puts it back, and the owner approves again.
+    assert svc.mail(store.mail_transition_suggestion, first.suggestion_id, "approved", "approving")
+    assert svc.mail(store.mail_reset_stuck_approving, before="2999-01-01T00:00:00.000Z") == 1
+    review.approve(host, first.suggestion_id, config=MailConfig())
+    block = "— Update from Coach Miller, 2026-10-05: Snacks."
+    assert host.task["notes"] == "Coach asked.\n\n" + block
+    assert len(host.edits) == 2
+    assert svc.mail(store.mail_get_suggestion, first.suggestion_id)["status"] == "approved"
 
 
 # ── against the scratch Radicale ──

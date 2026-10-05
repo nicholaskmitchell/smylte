@@ -248,8 +248,17 @@ def approve(host, suggestion_id: str, *, config: MailConfig, title: str | None =
             if task is None:
                 raise ReviewError("the task this updates no longer exists", status=409)
             d = _as_date(chosen_due)
-            description = (task["notes"] or "").rstrip() + "\n\n" + _update_block(row, body)
-            edit = TaskEdit(description=description.lstrip(),
+            # A stuck 'approving' is put back to pending after 10 minutes, and
+            # the edit may have landed before the process died. Creating a task
+            # or an event is idempotent by client_id; appending notes is not,
+            # so a block already in the notes is not appended a second time.
+            block = _update_block(row, body)
+            current = task["notes"] or ""
+            if block.strip() in current:
+                description = UNSET
+            else:
+                description = (current.rstrip() + "\n\n" + block).lstrip()
+            edit = TaskEdit(description=description,
                             due=d if d is not None else UNSET)
             created = host.edit_task(row["target_list"], row["target_uid"], edit)
             result = None

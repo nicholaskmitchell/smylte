@@ -332,8 +332,8 @@ def test_the_server_is_fixed_while_an_env_password_is_set(tmp_path, field):
             assert r.status_code == 409
             assert r.json()["detail"] == (
                 "the server settings (host, port, encryption, certificate, username) are fixed "
-                "while SMYLTE_MAIL_IMAP_PASSWORD is set; unset it, change them here, then set it "
-                "again and restart")
+                "while SMYLTE_MAIL_IMAP_PASSWORD is set; unset it and restart, change them here, "
+                "then set it again and restart")
             assert _stored(c) == before
             r = c.post("/api/mail/test/imap")
             assert r.status_code == 200, r.text

@@ -5,7 +5,8 @@ pointing the database, the encrypted file and its key at tmp_path. The
 keyring is a fake module backed by a dict. What these pin down: the key file
 is created 0600 and never overwritten — and only by `init-key` — a value goes
 in through getpass and never comes back out, every command says which paths it
-uses, and migration moves the secrets rather than copying them.
+uses, migration moves the secrets rather than copying them, and a Bridge
+password set here is bound to the server saved in the database.
 """
 from __future__ import annotations
 
@@ -17,8 +18,11 @@ import pytest
 
 from smylted import __main__ as entry
 from smylted import config as cfg_module
+from smylted.db import store
 from smylted.mail import cli, redact
 from smylted.mail import secrets as sec
+from smylted.mail import settings as mail_settings
+from smylted.mail.settings import MAIL_SETTINGS_KEY
 
 KEY = "sk-ant-api03-" + "B" * 30 + "WXYZ"
 PASSWORD = "bridge-pass-CLI-4242"
@@ -126,6 +130,56 @@ def test_set_reads_the_value_from_getpass_and_status_shows_only_a_hint(env, tmp_
     capsys.readouterr()
     assert cli.secrets_main(["status"]) == 0
     assert "anthropic_api_key: unset" in capsys.readouterr().out
+
+
+def _mail_settings(tmp_path) -> dict:
+    conn = store.connect(str(tmp_path / "cli.db"))
+    try:
+        return store.get_meta_json(conn, MAIL_SETTINGS_KEY)
+    finally:
+        conn.close()
+
+
+def test_set_imap_password_binds_it_to_the_saved_server(env, tmp_path, capsys):
+    # The owner saved the server in Settings, then the operator stores the
+    # Bridge password from the shell, as DEPLOY.md describes.
+    conn = store.connect(str(tmp_path / "cli.db"))
+    try:
+        store.init_db(conn)
+        store.merge_meta_json(conn, MAIL_SETTINGS_KEY, {
+            "imap_host": "127.0.0.1", "imap_port": 1993, "imap_tls": "ssl",
+            "imap_username": "bridge-user", "poll_minutes": 7})
+    finally:
+        conn.close()
+    _init_key(capsys)
+
+    _prompt(env, KEY)
+    assert cli.secrets_main(["set", "anthropic_api_key"]) == 0
+    assert "imap_password_binding" not in _mail_settings(tmp_path)
+    capsys.readouterr()
+
+    _prompt(env, PASSWORD)
+    assert cli.secrets_main(["set", "imap_password"]) == 0
+    out = capsys.readouterr().out
+    assert "bound to 127.0.0.1:1993 (ssl) as bridge-user" in out
+    assert PASSWORD not in out
+    stored = _mail_settings(tmp_path)
+    assert stored["imap_password_binding"] == mail_settings.connection_binding(mail_settings.load(stored))
+    assert mail_settings.password_binding_ok(mail_settings.load(stored))
+    assert stored["poll_minutes"] == 7
+
+    assert cli.secrets_main(["clear", "imap_password"]) == 0
+    stored = _mail_settings(tmp_path)
+    assert stored["imap_password_binding"] == ""
+    assert not mail_settings.password_binding_ok(mail_settings.load(stored))
+
+
+def test_set_imap_password_without_saved_settings_binds_the_defaults(env, tmp_path, capsys):
+    _init_key(capsys)
+    _prompt(env, PASSWORD)
+    assert cli.secrets_main(["set", "imap_password"]) == 0
+    assert "bound to 127.0.0.1:1143 (starttls) as (no username)" in capsys.readouterr().out
+    assert mail_settings.password_binding_ok(mail_settings.load(_mail_settings(tmp_path)))
 
 
 def test_an_empty_value_stores_nothing(env, capsys):
