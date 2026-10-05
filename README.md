@@ -348,6 +348,42 @@ costs you one interruption at 07:30, not four.
 test any fifth rule has to pass. Setup — and the systemd egress rule it needs,
 which is the easy step to miss — is in `docs/DEPLOY.md`.
 
+**Email → suggested tasks.** Optional, off until you turn it on. Smylte reads
+the folders you name through Proton Mail Bridge, finds the messages that ask you
+to do something or invite you to something, and puts each one in a **Suggested**
+pane under Tasks — a task, an update to a task you already have, or a calendar
+event — with who sent it, the subject, the date and the Message-ID it came from.
+Nothing becomes a task until you press **Add task**; **Dismiss** is remembered,
+so a rescan or a later reply in the same thread does not bring it back unless the
+reply asks for something different.
+
+Most of the work is deciding what NOT to read, and that is code, not a model: a
+message already seen (by Message-ID, or a hash when there is none) in any folder,
+in any earlier scan, is skipped first; Sent, Drafts, All Mail, Spam and Trash are
+never opened, whatever the folder list says; your own mail is skipped unless it
+is a note to yourself; anything bulk-shaped — `List-Unsubscribe`, `Precedence:
+bulk`, an auto-reply, a no-reply address — is skipped unless the sender is on
+your **always read** list *and* Proton's DMARC verdict says the message really is
+from them, because an allow-list a stranger can satisfy by typing a school's
+address into From is not an allow-list. A calendar invitation (`.ics`) becomes an
+event without a model call. Only what is left reaches Claude, quoted reply text
+removed, in one call whose only tool records an answer: the model never has a
+tool that touches Smylte, and the email is handed over as data between markers it
+cannot forge. A reply in a thread that already has a task becomes an update to it,
+not a second task; anything else is compared against your open tasks before it is
+proposed.
+
+Whether a message is a task or an event is the model's call by default, or
+yours: a few lines of rules in Settings (`subject:"parent evening" -> event`)
+decide instead, checked when you save them rather than run as code.
+
+The Anthropic key and the Bridge password are write-only. Settings shows that one
+is stored and its last four characters, and no endpoint, export or log line will
+give either back; they live in the OS keyring, or encrypted under a key file
+outside the repository on a headless box, never in `smylte.db`. Setup — Bridge's
+certificate, the egress rule, and moving the secrets to another machine — is in
+`docs/DEPLOY.md`; the stages are in `backend/smylted/mail/pipeline.py`.
+
 **Displays.** A display is a screen with nothing to tap — the calendar in the
 hallway, today's habits in the kitchen, the thing you are on at your desk. It
 shows one of three things and accepts no input, which is the specification
@@ -632,6 +668,11 @@ backend/
     notify/     outbound notifications: the Telegram sender (borrowed from
                 Søren), the trigger rules, and the sweep that claims/sends/
                 settles against the delivery ledger
+    mail/       email → suggested tasks: IMAP over Bridge (imap.py), parsing and
+                quote stripping (message.py), sender authentication
+                (authres.py), the Anthropic call (llm.py), the staged pipeline
+                and its ledger (pipeline.py), approve/reject (review.py), and
+                the write-only secret store (secrets.py, redact.py)
     display/    passive screens: frame.py builds what one SAYS (pure, no I/O),
                 render.py rasterizes it for a panel with no browser (Pillow +
                 the app's own three typefaces under fonts/, built by
