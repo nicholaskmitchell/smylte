@@ -92,6 +92,12 @@ UMask=0077
 #   IPAddressAllow=160.79.104.0/23
 #   IPAddressAllow=2607:6bc0::/48
 #
+# With TypeSafe Jev deciding task-or-event, api.typesafe.ai too. It sits on
+# Cloudflare's shared anycast addresses (`getent hosts api.typesafe.ai`), so
+# allowing it opens a slice of everything Cloudflare fronts — see DEPLOY.md
+# before deciding that is worth it here. Without it Jev calls fail and the
+# extraction model's choice stands.
+#
 # Bridge on this host, or tunnelled onto its loopback, is already covered by
 # `localhost`. Its secrets key belongs here as a credential rather than under the
 # read-only /home (see docs/DEPLOY.md):

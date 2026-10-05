@@ -547,14 +547,23 @@ as ordinary mail (the safe failure), and that is worth reporting.
     IPAddressAllow=2607:6bc0::/48
 
 Bridge on the same host (or tunnelled to it) is covered by `localhost`; a Bridge
-on another machine needs its address allowed too.
+on another machine needs its address allowed too. If Settings → Email has
+**TypeSafe Jev** deciding task-or-event, `api.typesafe.ai` needs allowing as well,
+and that is a wider hole than the other two: it is served from Cloudflare's shared
+anycast addresses (`getent hosts api.typesafe.ai` answered `2606:4700::6812:182e`
+and `2606:4700::6812:192e` on 2026-10-05), so allowing it allows a slice of
+everything Cloudflare fronts. If that is not a trade worth making on the
+internet-facing box, leave Jev to a deployment that can afford the egress — a
+blocked Jev call costs nothing but the decision: the extraction model's choice
+stands and the ledger detail says "Jev unavailable".
 
-### The two secrets
-The Anthropic key and the Bridge password are **write-only**: Settings shows
+### The secrets
+The Anthropic key, the Bridge password and (if Jev is used) the TypeSafe key are
+**write-only**: Settings shows
 `{set, hint: "…last4"}` and nothing more, the value is never returned by any
-endpoint, and every log record is scrubbed of both (`smylted/mail/redact.py`).
+endpoint, and every log record is scrubbed of them (`smylted/mail/redact.py`).
 They are never written to `smylte.db`, the settings blob, or any config file in
-the repository. One store holds both:
+the repository. One store holds all of them:
 
 - **The OS keyring** when the process can reach one (Secret Service on a desktop
   session, Credential Manager on Windows).
@@ -568,9 +577,9 @@ the repository. One store holds both:
 Which one is used is decided once and recorded (`meta.secrets_backend`, a name,
 not a secret), so a desktop whose keyring is locked one morning reports "secrets
 unavailable" instead of silently writing the next key somewhere else.
-`SMYLTE_SECRETS_BACKEND=keyring|file` forces the choice. `SMYLTE_ANTHROPIC_API_KEY`
-and `SMYLTE_MAIL_IMAP_PASSWORD` override the stored values (Settings then says
-"set by the environment") and never touch either store.
+`SMYLTE_SECRETS_BACKEND=keyring|file` forces the choice. `SMYLTE_ANTHROPIC_API_KEY`,
+`SMYLTE_MAIL_IMAP_PASSWORD` and `SMYLTE_TYPESAFE_API_KEY` override the stored
+values (Settings then says "set by the environment") and never touch either store.
 
 Under the hardened unit the home directory is read-only, so give the key to the
 service as a credential:
@@ -586,7 +595,7 @@ without echo, `secrets clear NAME` removes it.
 **Moving to the homelab.** The values are write-only, so the plain path is to
 enter them again in Settings on the new box — the Bridge password changes with a
 new Bridge install anyway. To carry the Anthropic key over instead: on the
-desktop `python -m smylted secrets migrate --to file` (moves both from the
+desktop `python -m smylted secrets migrate --to file` (moves them all from the
 keyring into `secrets.enc` under the key file), copy `secrets.enc` and the key
 file across separately (`scp`, keep them `0600`), point `SMYLTE_SECRETS_FILE` and
 `SMYLTE_SECRETS_KEY_FILE` (or `LoadCredential=`) at them, and check with
