@@ -1,12 +1,13 @@
 """The mail feature's per-app objects, built once at startup.
 
 `build_runtime` is construction, plus one database write: it opens no socket,
-reads no stored secret and does not touch D-Bus (`KeyringBackend` imports `keyring` lazily, inside its
-methods). Everything that can fail — an unreachable keyring, a key file with
-the wrong mode, a mailbox that refuses the login — fails later, on the request
-or the scan that needs it, where the owner can see the reason. The rejected
-alternative, checking at startup, would refuse to boot a deployment whose only
-problem is that email ingestion has not been set up yet.
+reads no stored secret and does not touch D-Bus (`KeyringBackend` imports
+`keyring` lazily, inside its methods). Everything that can fail — an
+unreachable keyring, a key file with the wrong mode, a mailbox that refuses the
+login — fails later, on the request or the scan that needs it, where the owner
+can see the reason. The rejected alternative, checking at startup, would refuse
+to boot a deployment whose only problem is that email ingestion has not been
+set up yet.
 
 The secrets store's backend marker lives in the database's `meta` table and is
 reached through `svc.mail`, the same lock borrow the pipeline uses.

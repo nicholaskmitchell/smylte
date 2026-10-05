@@ -578,3 +578,21 @@ class _ThreadSafeEvent:
 
     async def wait(self):
         await self._event.wait()
+
+
+def test_shutdown_stops_the_scan_and_waits_for_it_before_closing(tmp_path):
+    """The lifespan asks a running scan to stop and waits for it, BEFORE the
+    service closes: a scan cut off mid-message would otherwise settle into a
+    closed database and leave its message for nobody."""
+    seen = []
+    with _client(tmp_path) as c:
+        ing = c.app.state.mail.ingestor
+        svc = c.app.state.service
+
+        def wait_idle(timeout):
+            seen.append((ing._stop.is_set(), svc._closed, timeout))
+            return True
+
+        ing.wait_idle = wait_idle
+    assert seen == [(True, False, 20.0)]
+    assert ing.run_once().skipped_reason == "stopping"
