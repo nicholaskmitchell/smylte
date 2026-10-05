@@ -190,6 +190,10 @@ export function App() {
   // exists to keep preferences out of. FocusView re-reads the session on this
   // and the day on `rev`.
   const [focusRev, setFocusRev] = useState(0)
+  // A FOURTH counter, for the email reader: its status and its pending
+  // suggestions. Same reasoning as `focusRev` — the Suggested pane and the
+  // mail settings re-read on this and nothing else.
+  const [mailRev, setMailRev] = useState(0)
   // Whether the focus surface is up. Read off the URL, so /focus is a real
   // address — a second window (the desktop client's floating one, a follow-up)
   // can open it cold — and entered from Today by pushing that address, so the
@@ -1145,6 +1149,13 @@ export function App() {
         setFocusRev((r) => r + 1)
         return
       }
+      if (type === 'mail_updated') {
+        // A scan finished or a suggestion was decided. Neither is task data,
+        // and routing it through `rev` would refetch every list, task and
+        // calendar window for a change that touched none of them.
+        setMailRev((r) => r + 1)
+        return
+      }
       clearTimeout(timer)
       timer = setTimeout(() => setRev((r) => r + 1), 250)
     }, onExpire)
@@ -1251,6 +1262,7 @@ export function App() {
       onNotifyEveningTimeChange={changeNotifyEveningTime}
       notifyTaskLead={notifyTaskLead}
       onNotifyTaskLeadChange={changeNotifyTaskLead}
+      mailRev={mailRev}
       user={user} sessionTtl={sessionTtl} onCycleSessionTtl={cycleSessionTtl}
       onLogout={onLogout} onExpire={onExpire}
       onClose={() => setSettingsOpen(false)} />
@@ -1269,7 +1281,7 @@ export function App() {
         groups={taskGroups} onGroupsChange={changeTaskGroups}
         collapsedGroups={collapsedGroups} onCollapsedGroupsChange={changeCollapsedGroups}
         collapsedTasks={collapsedTasks} onCollapsedTasksChange={changeCollapsedTasks}
-        showCompleted={showCompleted} />
+        showCompleted={showCompleted} mailRev={mailRev} />
     )}
     {!booting && tab === 'calendar' && (
       <CalendarView onExpire={onExpire} cursor={cursor} onCursorChange={setCursor}
