@@ -3,6 +3,7 @@ scratch Radicale (marked `radicale`); the refusals need no server."""
 from __future__ import annotations
 
 import dataclasses
+import json
 import uuid
 from datetime import date, datetime
 from pathlib import Path
@@ -359,6 +360,28 @@ def test_an_update_approved_again_after_a_stuck_reset_is_appended_once(svc, tmp_
     assert host.task["notes"] == "Coach asked.\n\n" + block
     assert len(host.edits) == 2
     assert svc.mail(store.mail_get_suggestion, first.suggestion_id)["status"] == "approved"
+
+
+def test_an_update_approved_again_after_a_merge_appends_only_the_new_line(svc, tmp_path):
+    llm = FakeLlm(extract=extraction("Bring the team snack list", notes="Snacks."),
+                  match=Match("update", "T1"))
+    host = NotesHost(svc)
+    ing = Ingestor(host, make_store(tmp_path), llm=llm, jev=FakeJev(),
+                   clock=lambda: at(2026, 10, 6))
+    first = ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    review.approve(host, first.suggestion_id, config=MailConfig())
+    assert svc.mail(store.mail_transition_suggestion, first.suggestion_id, "approved", "approving")
+    assert svc.mail(store.mail_reset_stuck_approving, before="2999-01-01T00:00:00.000Z") == 1
+    # A reply in the thread merged into it between the reset and the second approve.
+    row = svc.mail(store.mail_get_suggestion, first.suggestion_id)
+    updates = json.loads(row["updates"] or "[]") + [{
+        "sender": "coach@club.example", "sender_name": "Coach Miller",
+        "sent_at": "2026-10-06T09:00:00+02:00", "notes": "Also please bring cups."}]
+    svc.mail(store.mail_update_suggestion, first.suggestion_id, updates=updates)
+    review.approve(host, first.suggestion_id, config=MailConfig())
+    block = "— Update from Coach Miller, 2026-10-05: Snacks."
+    merged = "— Update from Coach Miller, 2026-10-06: Also please bring cups."
+    assert host.task["notes"] == "Coach asked.\n\n" + block + "\n\n" + merged
 
 
 # ── against the scratch Radicale ──

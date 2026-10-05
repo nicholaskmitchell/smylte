@@ -251,13 +251,18 @@ def approve(host, suggestion_id: str, *, config: MailConfig, title: str | None =
             # A stuck 'approving' is put back to pending after 10 minutes, and
             # the edit may have landed before the process died. Creating a task
             # or an event is idempotent by client_id; appending notes is not,
-            # so a block already in the notes is not appended a second time.
+            # so a line already in the notes is not appended a second time.
+            # Checked per line, not per block: a reply merged in between the
+            # reset and this approve adds a line, and the block as a whole
+            # would then miss and append the first line again.
             block = _update_block(row, body)
             current = task["notes"] or ""
-            if block.strip() in current:
+            existing = {ln.strip() for ln in current.splitlines() if ln.strip()}
+            new = [ln for ln in block.splitlines() if ln.strip() and ln.strip() not in existing]
+            if not new:
                 description = UNSET
             else:
-                description = (current.rstrip() + "\n\n" + block).lstrip()
+                description = (current.rstrip() + "\n\n" + "\n".join(new)).lstrip()
             edit = TaskEdit(description=description,
                             due=d if d is not None else UNSET)
             created = host.edit_task(row["target_list"], row["target_uid"], edit)

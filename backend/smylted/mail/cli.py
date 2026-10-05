@@ -30,6 +30,11 @@ password here and pointing at Settings was the alternative; it would leave
 the documented command storing a password that can never be used. The server
 has to be set in Settings first: changing it afterwards forgets the password.
 `clear imap_password` clears the binding with it.
+
+Neither is allowed while SMYLTE_MAIL_IMAP_PASSWORD provides the password, as
+DEPLOY.md's way of running this command (with the service's environment file)
+makes likely: a stored password would never be used, and clearing the binding
+would make the service refuse the variable's password until it restarts.
 """
 from __future__ import annotations
 
@@ -110,6 +115,12 @@ def _run(args: argparse.Namespace, settings: Settings) -> int:
                 extra = f" {st['hint']} from {st['source']}" if st["set"] else ""
                 print(f"{name}: {state}{extra}")
             return 0
+        if (args.cmd in ("set", "clear") and args.name == "imap_password"
+                and secrets.status("imap_password").source == "env"):
+            print("error: the Bridge password is set by SMYLTE_MAIL_IMAP_PASSWORD, which "
+                  "overrides one stored here; unset it to manage the password with this "
+                  "command", file=sys.stderr)
+            return 1
         if args.cmd == "set":
             value = getpass.getpass(f"{args.name}: ")
             if not value.strip():

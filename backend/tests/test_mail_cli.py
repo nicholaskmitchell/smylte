@@ -182,6 +182,39 @@ def test_set_imap_password_without_saved_settings_binds_the_defaults(env, tmp_pa
     assert mail_settings.password_binding_ok(mail_settings.load(_mail_settings(tmp_path)))
 
 
+def test_an_env_bridge_password_is_not_managed_here(env, tmp_path, capsys):
+    # The CLI runs with the service's environment (DEPLOY.md), where the
+    # variable provides the password and the service bound it at startup.
+    conn = store.connect(str(tmp_path / "cli.db"))
+    try:
+        store.init_db(conn)
+        store.merge_meta_json(conn, MAIL_SETTINGS_KEY, {
+            "imap_host": "127.0.0.1", "imap_port": 1143, "imap_username": "bridge-user"})
+        cfg = mail_settings.load(store.get_meta_json(conn, MAIL_SETTINGS_KEY))
+        store.merge_meta_json(conn, MAIL_SETTINGS_KEY,
+                              {"imap_password_binding": mail_settings.connection_binding(cfg)})
+    finally:
+        conn.close()
+    _init_key(capsys)
+    env.setenv("SMYLTE_MAIL_IMAP_PASSWORD", "env-bridge-pass-777")
+    before = _mail_settings(tmp_path)
+    prompts = _prompt(env, PASSWORD)
+    for argv in (["set", "imap_password"], ["clear", "imap_password"]):
+        assert cli.secrets_main(argv) == 1, argv
+        err = capsys.readouterr().err
+        assert "set by SMYLTE_MAIL_IMAP_PASSWORD" in err and "unset it" in err
+        assert _mail_settings(tmp_path) == before
+    assert prompts == []
+    assert mail_settings.password_binding_ok(mail_settings.load(_mail_settings(tmp_path)))
+    assert not (tmp_path / "secrets.enc").exists()          # the store was never written
+
+    # The other secrets are still managed here.
+    _prompt(env, KEY)
+    assert cli.secrets_main(["set", "anthropic_api_key"]) == 0
+    assert cli.secrets_main(["clear", "anthropic_api_key"]) == 0
+    assert _mail_settings(tmp_path) == before
+
+
 def test_an_empty_value_stores_nothing(env, capsys):
     _prompt(env, "   ")
     assert cli.secrets_main(["set", "imap_password"]) == 1
