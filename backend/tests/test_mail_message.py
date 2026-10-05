@@ -1,6 +1,7 @@
 """Message parsing: the facts the pipeline reads, from real-shaped .eml files."""
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -142,6 +143,114 @@ def test_strip_quotes_leaves_unquoted_text_alone():
     assert strip_quotes("On the agenda: nothing.\nFrom: me") == "On the agenda: nothing.\nFrom: me"
 
 
+@pytest.mark.parametrize("text", [
+    "On 10/5/26 9:00 AM, Ms Smith wrote:\n> Can you bring the nets on Thursday?\n>\n> Thanks\n\n"
+    "Yes, I will bring the nets.\n",
+    "On Mon, 5 Oct 2026 at 09:00, Ms Smith <office@school.example>\nwrote:\n> Can you bring the nets?\n\n"
+    "Yes, I will bring the nets.\n",
+    "Am 05.10.2026 um 09:00 schrieb Frau Müller <office@school.example>:\n> Kannst du die Netze mitbringen?\n\n"
+    "Yes, I will bring the nets.\n",
+], ids=["thunderbird", "two-line", "german"])
+def test_strip_quotes_keeps_a_bottom_posted_reply(text):
+    assert strip_quotes(text) == "Yes, I will bring the nets."
+
+
+def test_strip_quotes_keeps_every_inline_answer():
+    text = (
+        "On Mon, Oct 5, 2026 at 9:00 AM Owner <me@proton.me> wrote:\n"
+        "> Can I pick up the books on Thursday?\n\n"
+        "Thursday does not work. Please come on Friday at 3pm and bring the signed form.\n\n"
+        "> And do you need the form?\n\n"
+        "Yes, signed by both parents.\n"
+    )
+    assert strip_quotes(text) == (
+        "Thursday does not work. Please come on Friday at 3pm and bring the signed form.\n\n"
+        "Yes, signed by both parents."
+    )
+
+
+OUTLOOK_FW_PLAIN = (
+    "Can you handle this one?\n\n"
+    "________________________________\n"
+    "From: Grundschule Office <office@school.example>\n"
+    "Sent: Monday, October 5, 2026 9:00 AM\n"
+    "To: Partner <partner@example.com>\n"
+    "Subject: Field trip\n\n"
+    "Please sign the field trip permission slip and return it by Friday.\n"
+)
+OUTLOOK_FW_PLAIN_DE = (
+    "Kannst du das übernehmen?\n\n"
+    "________________________________\n"
+    "Von: Grundschule Office <office@school.example>\n"
+    "Gesendet: Montag, 5. Oktober 2026 09:00\n"
+    "An: Partner <partner@example.com>\n"
+    "Betreff: Ausflug\n\n"
+    "Bitte die Einverständniserklärung bis Freitag unterschreiben.\n"
+)
+
+
+@pytest.mark.parametrize("text,subject", [
+    (OUTLOOK_FW_PLAIN, "FW: Field trip"),
+    (OUTLOOK_FW_PLAIN, "Fwd: Field trip"),
+    (OUTLOOK_FW_PLAIN, "  fw : Field trip"),
+    (OUTLOOK_FW_PLAIN, "TR: Field trip"),
+    (OUTLOOK_FW_PLAIN, "RV: Field trip"),
+    (OUTLOOK_FW_PLAIN_DE, "WG: Ausflug"),
+], ids=["fw", "fwd", "fw-spaced", "tr", "rv", "wg-german"])
+def test_strip_quotes_keeps_an_outlook_forward(text, subject):
+    assert strip_quotes(text, subject=subject) == text.strip()
+
+
+def test_strip_quotes_still_cuts_an_outlook_reply():
+    assert strip_quotes(OUTLOOK_FW_PLAIN, subject="RE: Field trip") == "Can you handle this one?"
+    # Only a forward prefix at the very start makes it a forward.
+    assert strip_quotes(OUTLOOK_FW_PLAIN, subject="Re: Fwd: Field trip") == "Can you handle this one?"
+    assert strip_quotes(OUTLOOK_FW_PLAIN_DE) == "Kannst du das übernehmen?"
+
+
+def test_strip_quotes_does_not_cut_away_everything():
+    # A note-to-self forward with nothing written above the forwarded block.
+    note = OUTLOOK_FW_PLAIN.split("\n\n", 1)[1]
+    assert strip_quotes(note) == note.strip()
+    original = "-----Original Message-----\nFrom: A\nSent: x\n\nSign the slip.\n"
+    assert strip_quotes(original) == original.strip()
+    memo = (
+        "From: Head teacher\n"
+        "Date: 5 October 2026\n"
+        "To: Parents of class 3b\n"
+        "Subject: Parent evening\n\n"
+        "Please book a slot for the parent evening by Friday.\n"
+    )
+    assert strip_quotes(memo) == memo.strip()
+
+
+def test_strip_quotes_is_linear_in_underscore_lines():
+    text = "Hello\n" + "\n".join(["_" * 30] * 50_000)
+    started = time.perf_counter()
+    strip_quotes(text)
+    assert time.perf_counter() - started < 1.0
+
+
+def test_outlook_html_forward_keeps_the_forwarded_request():
+    m = parsed("fix_outlook_forward.eml")
+    assert m.html_used is True
+    assert m.text.startswith("Can you handle this one?")
+    assert "Please sign the field trip permission slip" in m.text
+    assert "Please sign the field trip permission slip" in strip_quotes(m.text, subject=m.subject)
+    html = load("fix_outlook_forward.eml").decode().split("\n\n", 1)[1]
+    assert "permission slip" in html_to_text(html, keep_forwarded=True)
+    assert html_to_text(html) == "Can you handle this one?"
+
+
+def test_outlook_html_note_to_self_forward_keeps_its_content():
+    # No "FW:" prefix: the forwarded block is all there is, so removing it
+    # would leave nothing.
+    m = parsed("fix_outlook_note_to_self.eml")
+    assert m.html_used is True
+    assert "Please sign the field trip permission slip" in m.text
+    assert "Please sign the field trip permission slip" in strip_quotes(m.text, subject=m.subject)
+
+
 def test_no_message_id_uses_a_stable_hash_key():
     raw = load("msg_no_message_id.eml")
     a, b = parse_message(raw), parse_message(raw)
@@ -217,6 +326,30 @@ def test_garbage_never_raises():
     odd = parse_message(b"Subject: caf\xe9 \xff\nFrom: a@school.example\n\nbody\n")
     odd.subject.encode("utf-8")
     ledger_key(odd)
+
+
+@pytest.mark.parametrize("header", ["From", "To", "Cc"])
+def test_deeply_nested_address_comments_do_not_raise(header):
+    raw = (f"{header}: me@proton.me " + "(" * 600 + ")" * 600 + "\nSubject: x\n\nbody\n").encode()
+    m = parse_message(raw)
+    assert m.subject == "x" and m.text.strip() == "body"
+    assert m.from_addr is None and m.from_count == 0 and m.to == () and m.cc == ()
+
+
+def test_raw_utf8_headers_decode():
+    raw = (
+        "Message-ID: <utf8-001@school.example>\r\n"
+        "From: Jürgen Müller <office@school.example>\r\n"
+        "To: \"Müller, Ich\" <me@proton.me>\r\n"
+        "Subject: Rückmeldung\r\n\r\n"
+        "Bitte bis Freitag.\r\n"
+    ).encode("utf-8")
+    m = parse_message(raw)
+    assert m.subject == "Rückmeldung"
+    assert header_value(m, "Subject") == "Rückmeldung"
+    assert m.from_name == "Jürgen Müller"
+    assert m.from_addr == "office@school.example" and m.from_count == 1
+    assert m.to == ("me@proton.me",)
 
 
 def test_two_from_addresses_are_counted():

@@ -232,6 +232,13 @@ def init_db(conn: sqlite3.Connection) -> None:
         # minted unestimated — which is what "nobody has said how long this
         # takes" means. One answer on the rule fixes every future day of it.
         conn.execute("ALTER TABLE habits ADD COLUMN estimate_minutes INTEGER")
+    cursor_cols = {r["name"] for r in conn.execute("PRAGMA table_info(mail_cursors)")}
+    if "window_since" not in cursor_cols:
+        # NULL on every cursor saved before date windows existed, which reads as
+        # "no window in progress" — the folder carries on from its last UID, as
+        # it did. Nothing to backfill: a window cut short under the old code
+        # cannot be told apart from a finished one any more.
+        conn.execute("ALTER TABLE mail_cursors ADD COLUMN window_since TEXT")
 
 
 # ── collections ──────────────────────────────────────────────────────────────
@@ -2380,6 +2387,35 @@ def mail_release_stale(conn: sqlite3.Connection, *, before: str) -> int:
     return cur.rowcount or 0
 
 
+def mail_release_unsettled(conn: sqlite3.Connection) -> int:
+    """Drop every unsettled claim, whatever its age.
+
+    Called at the start of a run, under the run lock: this process is then the
+    only claimer, so a claim nobody settled belongs to a run that never
+    finished (a crash, a kill, a restart). Waiting an hour for it to go stale,
+    as `mail_release_stale` does, let the restarted scan move the cursor past
+    the message and lose it.
+    """
+    cur = conn.execute("DELETE FROM mail_ledger WHERE settled_at IS NULL")
+    return cur.rowcount or 0
+
+
+def mail_reset_stuck_approving(conn: sqlite3.Connection, *, before: str) -> int:
+    """Put suggestions stuck in 'approving' since before `before` back to pending.
+
+    An approval interrupted after its compare-and-swap leaves the row in
+    'approving' for good, out of the owner's list. Retrying is safe: the
+    approved item's client_id is the suggestion id, so a second create is the
+    same write, not a second task.
+    """
+    cur = conn.execute(
+        f"UPDATE mail_suggestions SET status='pending', updated_at={_MAIL_NOW} "  # nosec B608
+        "WHERE status='approving' AND updated_at < ?",
+        (before,),
+    )
+    return cur.rowcount or 0
+
+
 def mail_ledger_get(conn: sqlite3.Connection, key: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM mail_ledger WHERE key=?", (key,)).fetchone()
 
@@ -2417,13 +2453,17 @@ def mail_set_cursor(
     uidvalidity: int,
     last_uid: int,
     last_scan_at: str,
+    window_since: str | None = None,
 ) -> None:
+    """Save a folder's cursor. `window_since` (an ISO date) says a date-window
+    pass is not finished: the next run searches from that date again, above
+    `last_uid`, instead of taking every UID after it. None ends the window."""
     conn.execute(
-        "INSERT INTO mail_cursors (folder, uidvalidity, last_uid, last_scan_at) "
-        "VALUES (?, ?, ?, ?) ON CONFLICT(folder) DO UPDATE SET "
+        "INSERT INTO mail_cursors (folder, uidvalidity, last_uid, last_scan_at, window_since) "
+        "VALUES (?, ?, ?, ?, ?) ON CONFLICT(folder) DO UPDATE SET "
         "uidvalidity=excluded.uidvalidity, last_uid=excluded.last_uid, "
-        "last_scan_at=excluded.last_scan_at",
-        (folder, uidvalidity, last_uid, last_scan_at),
+        "last_scan_at=excluded.last_scan_at, window_since=excluded.window_since",
+        (folder, uidvalidity, last_uid, last_scan_at, window_since),
     )
 
 
@@ -2528,12 +2568,14 @@ def mail_suggestions_for_thread(conn: sqlite3.Connection, thread_id: str) -> lis
 
 
 def mail_find_suggestion_by_ics_uid(conn: sqlite3.Connection, ics_uid: str) -> sqlite3.Row | None:
-    """The live suggestion for a calendar invite's UID, if any — a re-sent invite
-    must update it, not stage a second copy. Rejected ones do not count: that is
-    the owner's "no", handled through the rejections table."""
+    """The most recent suggestion for a calendar invite's UID, if any — a re-sent
+    invite must update it, not stage a second copy. Rejected ones count too: a
+    re-sent invitation the owner already dismissed must stay dismissed, and the
+    rejections table cannot say so, because it is keyed by message, not by UID."""
     return conn.execute(
         "SELECT * FROM mail_suggestions WHERE ics_uid=? "
-        "AND status IN ('pending','approving','approved') ORDER BY created_at DESC, id LIMIT 1",
+        "AND status IN ('pending','approving','approved','rejected') "
+        "ORDER BY created_at DESC, id LIMIT 1",
         (ics_uid,),
     ).fetchone()
 

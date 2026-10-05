@@ -121,6 +121,34 @@ def test_key_file_readable_by_others_is_refused(tmp_path):
     assert fb.get("anthropic_api_key") == API_KEY
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX modes")
+def test_group_readable_key_is_accepted_only_as_a_systemd_credential(tmp_path, monkeypatch):
+    # systemd's LoadCredential= file reaches the service user through an ACL,
+    # whose mask reads as group bits: 0440 there is not "shared with a group".
+    creds = tmp_path / "creds"
+    creds.mkdir()
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(creds))
+    key = creds / sec.KEY_FILE_ENV_CREDENTIAL
+    sec.create_key_file(str(key))
+    os.chmod(key, 0o440)
+    inside = sec.EncryptedFileBackend(str(tmp_path / "in.enc"), str(key), create_key=False)
+    inside.set("imap_password", PASSWORD)
+    assert inside.get("imap_password") == PASSWORD
+
+    elsewhere = tmp_path / "conf" / "secrets.key"
+    sec.create_key_file(str(elsewhere))
+    os.chmod(elsewhere, 0o440)
+    outside = sec.EncryptedFileBackend(str(tmp_path / "out.enc"), str(elsewhere))
+    with pytest.raises(sec.SecretStoreError, match="chmod 600"):
+        outside.set("imap_password", PASSWORD)
+
+    # Bits for other users are refused even inside the credentials directory.
+    for path, fb in ((key, inside), (elsewhere, outside)):
+        os.chmod(path, 0o404)
+        with pytest.raises(sec.SecretStoreError, match="readable or writable by other users"):
+            fb.set("imap_password", PASSWORD)
+
+
 def test_key_file_inside_the_source_tree_is_refused(tmp_path):
     root = Path(sec.__file__).resolve().parents[3]
     if not (root / ".git").exists():
@@ -405,3 +433,20 @@ def test_build_secret_store_reads_settings(tmp_path):
     assert redact.redact("x ts-env-key-98765") == "x <redacted>"
     assert store.get("typesafe_api_key") == "ts-env-key-98765"
     assert store.status("typesafe_api_key").source == "env"
+
+
+def test_build_secret_store_without_key_creation(tmp_path):
+    settings = SimpleNamespace(
+        db_path=str(tmp_path / "a.db"), secrets_file="", secrets_key_file=str(tmp_path / "k.key"),
+        secrets_namespace="default", secrets_backend="file",
+        anthropic_api_key="", mail_imap_password="", typesafe_api_key="")
+    store = sec.build_secret_store(settings, lambda: None, lambda v: None, create_key=False)
+    with pytest.raises(sec.SecretStoreError) as info:
+        store.set("imap_password", PASSWORD)
+    assert not (tmp_path / "k.key").exists()
+    assert "init-key" in str(info.value) and "service's environment" in str(info.value)
+    assert store.backend_status()["available"] is False
+    # The service's store still creates its key on the first write.
+    store = sec.build_secret_store(settings, lambda: None, lambda v: None)
+    store.set("imap_password", PASSWORD)
+    assert (tmp_path / "k.key").exists()

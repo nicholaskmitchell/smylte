@@ -152,22 +152,38 @@ def test_unknown_model_is_config():
     assert "'jev-nope'" in str(info.value)
 
 
-def test_validation_error_is_permanent_with_detail():
-    client, _, sleeps = _client([httpx.Response(422, json={"detail": [
-        {"loc": ["body", "questions"], "msg": "field required"}]})])
+def test_validation_error_is_permanent_with_its_error_type_only():
+    client, _, sleeps = _client([httpx.Response(422, json={"detail": {
+        "error_type": "validation_error", "message": "field required"}})])
     with pytest.raises(JevError) as info:
         _decide(client)
     assert info.value.kind == "permanent"
-    assert str(info.value).startswith("TypeSafe refused the request: ")
-    assert "field required" in str(info.value)
+    assert str(info.value) == "TypeSafe refused the request (422: validation_error)"
     assert sleeps == []
 
 
-def test_long_detail_is_cut():
-    client, _, _ = _client([httpx.Response(422, json={"detail": "x" * 1000})])
-    with pytest.raises(JevError) as info:
-        _decide(client)
-    assert len(str(info.value)) == len("TypeSafe refused the request: ") + jev.DETAIL_MAX
+def test_an_echoed_request_never_reaches_the_error():
+    # A 422 echoes what was sent — the email — in its message and body; the
+    # error goes to the ledger, the logs and the status page.
+    secret_text = "Dear parents, the code for the gate is 4711"
+    answers = [
+        httpx.Response(422, json={"detail": {"error_type": "validation_error",
+                                             "message": f"invalid state: {secret_text}",
+                                             "input": {"body": secret_text}}}),
+        httpx.Response(422, json={"detail": [{"msg": "bad", "input": secret_text}]}),
+        httpx.Response(422, json={"detail": {"error_type": secret_text}}),
+        httpx.Response(400, text=secret_text),
+    ]
+    client, _, _ = _client(answers)
+    errors = []
+    for _ in answers:
+        with pytest.raises(JevError) as info:
+            _decide(client)
+        errors.append(str(info.value))
+    assert errors == ["TypeSafe refused the request (422: validation_error)",
+                      "TypeSafe refused the request (422)",
+                      "TypeSafe refused the request (422)",
+                      "TypeSafe refused the request (400)"]
 
 
 def test_rate_limit_is_retried_once_and_succeeds():
@@ -273,7 +289,6 @@ def test_the_key_never_appears_in_errors_or_logs(caplog):
         with pytest.raises(JevError) as info:
             _decide(client)
         errors.append(str(info.value))
-    assert "bad header Bearer <redacted>" in errors[0]
     for text in errors:
         assert KEY not in text and "TESTKEY" not in text
     for record in caplog.records:

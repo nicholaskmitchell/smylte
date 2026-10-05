@@ -26,9 +26,10 @@ from smylted import config as cfg_module
 from smylted.app import _mail_loop, create_app
 from smylted.db import store
 from smylted.mail import redact
+from smylted.mail import settings as mail_settings
 from smylted.mail.imap import FolderInfo
 from tests.conftest import api_settings
-from tests.imap_server import make_self_signed_cert, run_server
+from tests.imap_server import free_port, make_self_signed_cert, run_server
 from tests.mail_fakes import FakeSdk, extraction_response
 
 LOGIN = {"username": "admin", "password": "testpass123"}
@@ -186,6 +187,119 @@ def test_failed_imap_login_logs_contain_no_password(tmp_path, caplog):
     assert not any(wrong in fmt.format(rec) for rec in caplog.records)
 
 
+# ── the Bridge password is bound to the server it was entered for ────────────
+
+_EMPTY_INBOX = {"INBOX": {"flags": [], "uidvalidity": 1, "messages": {}}}
+
+
+def _logins(server) -> list[str]:
+    return [cmd for cmd in server.commands if "LOGIN" in cmd.upper()]
+
+
+def _stored_binding(c) -> str:
+    stored = c.app.state.service.mail(store.get_meta_json, mail_settings.MAIL_SETTINGS_KEY)
+    return stored.get("imap_password_binding", "")
+
+
+@pytest.mark.parametrize("field", mail_settings.BOUND_FIELDS)
+def test_changing_the_server_forgets_the_stored_password(tmp_path, field):
+    # The reviewer's exploit: a session that can edit the settings repoints
+    # one of them at its own server and presses "Test" to receive the password.
+    cert_pem, key_pem = make_self_signed_cert()
+    other_pem, _ = make_self_signed_cert()
+    with run_server(mailboxes=_EMPTY_INBOX, user="x", password="y",
+                    tls_mode="ssl", cert_pem=cert_pem, key_pem=key_pem) as server:
+        reaches = {"imap_host": "127.0.0.1", "imap_port": server.port, "imap_tls": "ssl",
+                   "imap_cert_mode": "insecure_localhost", "imap_username": "x"}
+        # What the owner saved, differing from `reaches` in `field` alone,
+        # and the one-field change that points it at the server.
+        saved, change = {
+            "imap_host": ({"imap_host": "localhost"}, {"imap_host": "127.0.0.1"}),
+            "imap_port": ({"imap_port": free_port()}, {"imap_port": server.port}),
+            "imap_tls": ({"imap_tls": "starttls"}, {"imap_tls": "ssl"}),
+            "imap_cert_mode": ({"imap_cert_mode": "system"},
+                               {"imap_cert_mode": "insecure_localhost"}),
+            "imap_pinned_cert": ({"imap_cert_mode": "pinned", "imap_pinned_cert": other_pem},
+                                 {"imap_pinned_cert": cert_pem}),
+            "imap_username": ({"imap_username": "owner@proton.me"}, {"imap_username": "x"}),
+        }[field]
+        with _client(tmp_path) as c:
+            r = _put(c, **{**reaches, **saved}, imap_password="Bridge-Generated-XYZ123")
+            assert r.status_code == 200, r.text
+            assert r.json()["secrets"]["imap_password"]["set"] is True
+            assert _stored_binding(c)
+
+            r = _put(c, **change)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["secrets"]["imap_password"] == {"set": False, "hint": None, "source": None}
+            assert "imap_password_binding" not in body["settings"]
+            assert _stored_binding(c) == ""
+
+            r = c.post("/api/mail/test/imap")
+            assert r.status_code == 409
+        assert _logins(server) == []
+
+
+def test_a_password_saved_with_the_server_is_bound_to_that_server(tmp_path):
+    cert_pem, key_pem = make_self_signed_cert()
+    with run_server(mailboxes=_EMPTY_INBOX, user="x", password="y",
+                    tls_mode="ssl", cert_pem=cert_pem, key_pem=key_pem) as server:
+        with _client(tmp_path) as c:
+            r = _put(c, imap_host="localhost", imap_port=free_port(), imap_tls="ssl",
+                     imap_cert_mode="insecure_localhost", imap_username="x", imap_password="y")
+            assert r.status_code == 200, r.text
+            r = _put(c, imap_host="127.0.0.1", imap_port=server.port, imap_password="y")
+            assert r.status_code == 200, r.text
+            cfg = c.app.state.mail.ingestor.config()
+            assert _stored_binding(c) == mail_settings.connection_binding(cfg)
+            assert mail_settings.password_binding_ok(cfg)
+            # Settings outside the binding leave the password where it is.
+            r = _put(c, folders=["INBOX"], poll_minutes=10)
+            assert r.json()["secrets"]["imap_password"]["set"] is True
+            r = c.post("/api/mail/test/imap")
+            assert r.status_code == 200, r.text
+            # Clearing the password clears its binding.
+            assert _put(c, imap_password="").status_code == 200
+            assert _stored_binding(c) == ""
+    assert len(_logins(server)) == 1
+
+
+def test_an_env_password_waits_for_a_restart_after_a_server_change(tmp_path):
+    cert_pem, key_pem = make_self_signed_cert()
+    with run_server(mailboxes=_EMPTY_INBOX, user="x", password="y",
+                    tls_mode="ssl", cert_pem=cert_pem, key_pem=key_pem) as server:
+        with _client(tmp_path, mail_imap_password="y") as c:
+            r = _put(c, imap_host="127.0.0.1", imap_port=server.port, imap_tls="ssl",
+                     imap_cert_mode="insecure_localhost", imap_username="x")
+            assert r.status_code == 200, r.text
+            # The env password cannot be deleted, so it stays set but unbound.
+            assert r.json()["secrets"]["imap_password"]["source"] == "env"
+            r = c.post("/api/mail/test/imap")
+            assert r.status_code == 409
+            assert r.json()["detail"] == mail_settings.PASSWORD_BINDING_MESSAGE
+        assert _logins(server) == []
+
+        # The restart is the operator's confirmation of the new server.
+        with _client(tmp_path, mail_imap_password="y") as c:
+            r = c.post("/api/mail/test/imap")
+            assert r.status_code == 200, r.text
+            assert len(_logins(server)) == 1
+            assert _put(c, imap_username="someone-else").status_code == 200
+            r = c.post("/api/mail/test/imap")
+            assert r.status_code == 409
+            assert r.json()["detail"] == mail_settings.PASSWORD_BINDING_MESSAGE
+        assert len(_logins(server)) == 1
+
+
+def test_the_binding_is_not_a_setting(tmp_path):
+    with _client(tmp_path) as c:
+        r = _put(c, imap_password_binding="a" * 64)
+        assert r.status_code == 422
+        assert "imap_password_binding" not in c.get("/api/mail/settings").json()["settings"]
+        assert _stored_binding(c) == ""
+
+
 # ── the model is read from Settings on every call ─────────────────────────────
 
 def test_model_change_applies_without_restart(tmp_path):
@@ -241,6 +355,14 @@ def test_kill_switch_refuses_tests_and_scans(tmp_path):
         assert _put(c, enabled=True).status_code == 200
         assert c.get("/api/mail/suggestions").json()["enabled"] is False
         assert c.get("/api/mail/status").json()["deployment_enabled"] is False
+
+
+def test_kill_switch_refuses_the_model_list(tmp_path):
+    with _client(tmp_path, mail_enabled=False) as c:
+        assert _put(c, anthropic_api_key=KEY).status_code == 200
+        r = c.get("/api/mail/models")
+        assert r.status_code == 409
+        assert "SMYLTE_MAIL_ENABLED" in r.json()["detail"]
 
 
 # ── validation ───────────────────────────────────────────────────────────────

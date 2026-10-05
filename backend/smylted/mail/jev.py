@@ -95,7 +95,7 @@ KINDS = ("task", "event")
 MAX_RETRY_AFTER_S = 10.0
 
 _RETRYABLE = frozenset({429, 529})
-_ERROR_TYPE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+_ERROR_TYPE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 _NOT_UNDERSTOOD = "TypeSafe returned an answer this code does not understand"
 _BAD_KEY_CHARS = "the TypeSafe key contains a character that cannot go in a header; paste it again"
 
@@ -228,13 +228,13 @@ def _error_type(response: httpx.Response) -> str | None:
         return None
     detail = body.get("detail") if isinstance(body, Mapping) else None
     error_type = detail.get("error_type") if isinstance(detail, Mapping) else None
-    if isinstance(error_type, str) and _ERROR_TYPE.match(error_type):
+    if isinstance(error_type, str) and _ERROR_TYPE.fullmatch(error_type):
         return error_type
     return None
 
 
 def _refused(response: httpx.Response) -> str:
-    """"TypeSafe refused the request (422: error_type)", from the status and error type only."""
+    """The refusal as text, from the status and the error type only: `... (422: error_type)`."""
     error_type = _error_type(response)
     suffix = f": {error_type}" if error_type else ""
     return f"TypeSafe refused the request ({response.status_code}{suffix})"

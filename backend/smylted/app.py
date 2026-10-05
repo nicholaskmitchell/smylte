@@ -1488,17 +1488,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # Every loop goes down BEFORE svc.close(), or the survivor's next
             # iteration writes to a closed SQLite connection and asyncio logs an
             # unretrieved exception on every restart.
+            rt = getattr(app.state, "mail", None)
+            if rt is not None:
+                # Cancelling the task does not stop a scan already running in its
+                # worker thread; this asks it to stop after the current message.
+                rt.ingestor.request_stop()
             for task in (loop_task, notify_task, mail_task):
                 task.cancel()
             for task in (loop_task, notify_task, mail_task):
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+            if rt is not None:
+                # Let that message settle and its cursor save before the
+                # connection it writes to is closed under it.
+                await asyncio.to_thread(rt.ingestor.wait_idle, 20.0)
             notifier = getattr(app.state, "notifier", None)
             if notifier is not None:
                 notifier.close()
-            mail_rt = getattr(app.state, "mail", None)
-            if mail_rt is not None:
-                mail_rt.ingestor.jev.close()
+            if rt is not None:
+                rt.ingestor.jev.close()
             svc.close()
 
     app = FastAPI(title="smylted", version="0.1.0-phase1", lifespan=lifespan)

@@ -11,11 +11,16 @@ before anything is written and approving → approved after; two clicks (two
 tabs, a double tap) race on the status column and only one creates the task.
 A failed write moves it back to pending so the owner can try again. The
 approved item's `client_id` is the suggestion id, so the UID it gets is
-derived from the suggestion rather than minted fresh.
+derived from the suggestion rather than minted fresh. What is written is read
+from the row AFTER the swap: a message merged in between the owner opening
+the card and pressing Approve (a moved deadline, a note) is part of it, and
+one merged later finds the row no longer pending and becomes its own
+suggestion.
 
 **Provenance.** Every task or event written from mail ends its notes with a
 line naming the sender, the subject and the date, so a task met weeks later
-in another client still says where it came from.
+in another client still says where it came from. The notes of messages merged
+into the suggestion come before it, one line each.
 
 **Times.** An event the model read from prose has a naive start ("18:00 in
 the email's own words"); it is placed in the owner's home time zone when one
@@ -23,9 +28,12 @@ is set, and left floating otherwise — the same rule the rest of Smylte uses
 for times typed without a zone. An invite's times carry their own offset.
 
 **Rejection is remembered per message.** Rejecting writes a row for the
-suggestion's own message and for every message merged into it, so neither a
-rescan of the folder nor a later reply restating the same request brings it
-back. Rejecting never touches a task.
+suggestion's own message and for every message merged into it — each under
+its own thread, since a merged message may come from another conversation —
+so neither a rescan of the folder nor a later reply restating the same
+request brings it back. The swap and those rows are one transaction, so a
+message merged at the same moment is either rejected with the rest or staged
+on its own. Rejecting never touches a task.
 """
 from __future__ import annotations
 
@@ -171,6 +179,20 @@ def _update_block(row, notes: str) -> str:
     return "\n".join(lines)
 
 
+def _merged_notes(row) -> str:
+    """One line per merged message that added notes, for a new task or event."""
+    lines = []
+    for u in _updates(row):
+        text = (u.get("notes") or "").strip()
+        if not text:
+            continue
+        head = f"— {u.get('sender_name') or u.get('sender') or 'unknown sender'}"
+        if u.get("sent_at"):
+            head += f", {u['sent_at'][:10]}"
+        lines.append(f"{head}: {text}")
+    return "\n".join(lines)
+
+
 def _moment(value: str | None, all_day: bool, tz) -> date | datetime | None:
     if not value:
         return None
@@ -198,6 +220,9 @@ def approve(host, suggestion_id: str, *, config: MailConfig, title: str | None =
         raise ReviewError(f"this suggestion is already {row['status']}", status=409)
     if not host.mail(store.mail_transition_suggestion, suggestion_id, "pending", "approving"):
         raise ReviewError("this suggestion was just handled elsewhere", status=409)
+    # Re-read: a message merged since the first read (a moved due, a note)
+    # belongs in what is written. Nothing can merge into it from here on.
+    row = host.mail(store.mail_get_suggestion, suggestion_id)
 
     kind = row["kind"]
     new_title = (title or "").strip()
@@ -212,7 +237,7 @@ def approve(host, suggestion_id: str, *, config: MailConfig, title: str | None =
             if href is None:
                 raise ReviewError("choose a list for this task", status=422)
             d = _as_date(chosen_due)
-            edit = TaskEdit(description=_join(body, _provenance(row)),
+            edit = TaskEdit(description=_join(body, _merged_notes(row), _provenance(row)),
                             due=d if d is not None else UNSET)
             created = host.create_task(href, new_title, edit=edit, client_id=row["id"])
             result = (href, created["uid"])
@@ -240,7 +265,7 @@ def approve(host, suggestion_id: str, *, config: MailConfig, title: str | None =
             dtend = _moment(row["event_end"], all_day, tz)
             edit = EventEdit(
                 location=row["location"] or UNSET,
-                description=_join(body, _provenance(row)),
+                description=_join(body, _merged_notes(row), _provenance(row)),
                 rrule=icalendar.vRecur.from_ical(row["event_rrule"]) if row["event_rrule"] else UNSET,
             )
             created = host.create_event(href, new_title, dtstart=dtstart, dtend=dtend, edit=edit,
@@ -287,19 +312,22 @@ def reject(host, suggestion_id: str) -> dict:
     row = host.mail(store.mail_get_suggestion, suggestion_id)
     if row is None:
         raise ReviewError("no such suggestion", status=404)
-    tid = row["thread_id"]
 
     def write(conn):
         with store.tx(conn):
             if not store.mail_transition_suggestion(conn, suggestion_id, "pending", "rejected"):
                 return None
-            keys = [(row["message_key"], row["message_id"])]
-            keys += [(u.get("message_key"), u.get("message_id")) for u in _updates(row)
-                     if u.get("message_key")]
-            for key, mid in keys:
+            # Read in this transaction: every message merged before the swap
+            # is rejected with it, and none can merge after.
+            cur = store.mail_get_suggestion(conn, suggestion_id)
+            tid = cur["thread_id"]
+            keys = [(cur["message_key"], cur["message_id"], tid)]
+            keys += [(u.get("message_key"), u.get("message_id"), u.get("thread_id") or tid)
+                     for u in _updates(cur) if u.get("message_key")]
+            for key, mid, thread in keys:
                 store.mail_add_rejection(conn, suggestion_id=suggestion_id, message_key=key,
-                                         message_id=mid, thread_id=tid, title=row["title"],
-                                         due=row["due"])
+                                         message_id=mid, thread_id=thread, title=cur["title"],
+                                         due=cur["due"])
             th = store.mail_get_thread(conn, tid)
             if th is not None and th["suggestion_id"] == suggestion_id:
                 store.mail_upsert_thread(conn, tid, suggestion_id=None)

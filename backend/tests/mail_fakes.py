@@ -20,6 +20,7 @@ from smylted.db import store
 from smylted.mail.imap import FetchedMessage, FolderInfo, FolderState
 from smylted.mail.jev import JevError, JevMatch, KindVerdict
 from smylted.mail.llm import EXTRACT_TOOL_NAME, MATCH_TOOL_NAME, Extraction, LlmClient, Match
+from smylted.mail import settings
 from smylted.mail.secrets import EncryptedFileBackend, KeyringBackend, SecretStore
 from smylted.mail.settings import MAIL_SETTINGS_KEY
 from tests.conftest import api_settings
@@ -285,7 +286,11 @@ def make_store(tmp_path, *, api_key: str | None = TEST_API_KEY,
 
 
 def set_config(svc, **fields) -> dict:
-    return svc.mail(store.merge_meta_json, MAIL_SETTINGS_KEY, fields)
+    """Merge `fields` into the stored mail settings, and bind the IMAP password to
+    the resulting server settings, as saving the password in Settings would."""
+    merged = svc.mail(store.merge_meta_json, MAIL_SETTINGS_KEY, fields)
+    binding = settings.connection_binding(settings.load(merged))
+    return svc.mail(store.merge_meta_json, MAIL_SETTINGS_KEY, {"imap_password_binding": binding})
 
 
 class SpyHost:

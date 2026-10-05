@@ -17,6 +17,13 @@ Where the headers come from, and why only some of them count:
   `Authentication-Results` that says `dmarc=pass`. Only headers whose
   authserv-id is on the trusted list count; the default list is Proton's own
   domain and nothing broader.
+- A trusted id is not proof of authorship: the sender can write
+  `mailin001.protonmail.ch` as easily as `dmarc=pass`. What it cannot do is
+  put a header ABOVE the ones Proton adds on arrival, because Proton
+  prepends. So a forged pass cannot outvote Proton's own verdict for any
+  method: DMARC passes only when every trusted dmarc result passes, and DKIM
+  and SPF are read from the topmost trusted header that carries that method
+  and from nowhere else.
 - `ARC-Authentication-Results` is never read. ARC records what an earlier hop
   claims to have seen; believing it means believing that hop, and nothing here
   can tell a mailing list we trust from one we do not.
@@ -255,6 +262,16 @@ def _same_domain(a: str | None, b: str | None) -> bool:
     return da is not None and da == addresses.normalize_domain(b or "")
 
 
+def _topmost(hs: list[AuthResultsHeader],
+             method: str) -> tuple[AuthResultsHeader | None, list[MethodResult]]:
+    """The first header in `hs` with a `method` result, and those results."""
+    for h in hs:
+        results = [r for r in h.results if r.method == method]
+        if results:
+            return h, results
+    return None, []
+
+
 def verify_sender(headers, from_addr: str | None, from_count: int,
                   trusted_ids: Iterable[str]) -> Verdict:
     """Did a trusted server authenticate `from_addr`'s domain for this message?
@@ -276,10 +293,17 @@ def verify_sender(headers, from_addr: str | None, from_count: int,
        else an aligned SPF pass (every spf result passing, at least one with
        an aligned `smtp.mailfrom`). This is DMARC's own logic, run here
        because a domain without a DMARC record still signs and publishes SPF.
+       Each is read from the topmost trusted header carrying that method
+       only, which is Proton's: a sender-written `dkim=pass` further down
+       must not stand in for Proton's `dkim=none`, nor a forged `spf=pass`
+       for the school beside Proton's `spf=pass` for the sender's own
+       envelope domain. "Any pass" (or "all pass") across every trusted
+       header would let either through.
 
-    Residual risk: if Proton ever omitted its own dmarc result, a forged header
-    with a trusted id would be believed. That is why the default trust list is
-    Proton's domain and nothing broader, and why ARC results are never read.
+    Residual risk: if Proton ever omitted its own result for a method, a
+    forged header with a trusted id would be the topmost for that method and
+    would be believed. That is why the default trust list is Proton's domain
+    and nothing broader, and why ARC results are never read.
     """
     if from_count != 1 or not from_addr:
         return Verdict(False, None, "the From header must name exactly one address")
@@ -302,18 +326,18 @@ def verify_sender(headers, from_addr: str | None, from_count: int,
         if any(r.result == "pass" and not from_ok(r) for r in dmarc):
             return Verdict(False, "dmarc", "dmarc pass is for a different domain than From")
 
-    for h in hs:
-        for r in h.results:
-            if r.method != "dkim" or r.result != "pass":
-                continue
-            d = r.props.get("header.d") or r.props.get("header.i", "").rpartition("@")[2]
-            if d and addresses.aligned(d, dom):
-                return Verdict(True, "dkim",
-                               f"dkim=pass header.d={d} aligned with {dom} ({h.authserv_id})")
+    h, dkim = _topmost(hs, "dkim")
+    for r in dkim:
+        if r.result != "pass":
+            continue
+        d = r.props.get("header.d") or r.props.get("header.i", "").rpartition("@")[2]
+        if d and addresses.aligned(d, dom):
+            return Verdict(True, "dkim",
+                           f"dkim=pass header.d={d} aligned with {dom} ({h.authserv_id})")
 
-    spf = [(h, r) for h in hs for r in h.results if r.method == "spf"]
-    if spf and all(r.result == "pass" for _, r in spf):
-        for h, r in spf:
+    h, spf = _topmost(hs, "spf")
+    if spf and all(r.result == "pass" for r in spf):
+        for r in spf:
             mf = r.props.get("smtp.mailfrom", "").rpartition("@")[2]
             if mf and addresses.aligned(mf, dom):
                 return Verdict(True, "spf",

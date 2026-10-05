@@ -7,8 +7,13 @@ time zones, and cannot be talked into anything. `parse_ics` turns it into
 
 What is deliberately NOT proposed:
 
-- `METHOD:CANCEL` — a cancellation is about an event the owner may already have
-  in a calendar; there is nothing to add, and adding it would be wrong.
+- any `METHOD` other than `PUBLISH`, `REQUEST` or `ADD` (or none at all).
+  `CANCEL` is about an event the owner may already have in a calendar; there
+  is nothing to add, and adding it would be wrong. `REPLY`, `COUNTER`,
+  `DECLINECOUNTER` and `REFRESH` are an attendee answering an invitation the
+  owner sent: they carry the owner's own event back, not a new one. An
+  allowlist rather than a list of refusals, so a method nobody has seen yet
+  is not proposed either.
 - an event with `RECURRENCE-ID` — that is one changed occurrence of a series
   the invitation set up earlier, not a new event.
 - `STATUS:CANCELLED` — same reason as the method.
@@ -24,7 +29,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 import icalendar
 
@@ -34,6 +40,8 @@ MAX_EVENTS = 5
 MAX_SUMMARY = 300
 MAX_LOCATION = 300
 MAX_DESCRIPTION = 2000
+
+_PROPOSING_METHODS = frozenset({"PUBLISH", "REQUEST", "ADD"})
 
 
 @dataclass(frozen=True)
@@ -55,6 +63,34 @@ def _text(comp, name: str, limit: int) -> str:
     return str(value).strip()[:limit] if value is not None else ""
 
 
+def _own_tz(value, prop) -> date | datetime:
+    """`value` with a tzinfo this process owns, never the sender's.
+
+    For a TZID it does not know, icalendar builds a tzinfo from the VTIMEZONE
+    the sender put in the calendar, and that tzinfo computes offsets by
+    expanding the sender's RRULEs. A VTIMEZONE with `FREQ=SECONDLY` from 1601
+    makes one `utcoffset()` call — which `isoformat()`, comparison and
+    `astimezone` all make — run for centuries. So the foreign tzinfo is never
+    asked anything: the TZID is looked up in the system zone database, and
+    `replace()` swaps it in without consulting the old one. A TZID the database
+    does not have (an Outlook Windows zone name icalendar has no mapping for,
+    an invented one) becomes floating time, which approval reads in the
+    owner's home zone — right for the usual case of an invitation from someone
+    in the same place.
+    """
+    if not isinstance(value, datetime) or value.tzinfo is None:
+        return value
+    if value.tzinfo is timezone.utc or isinstance(value.tzinfo, ZoneInfo):
+        return value
+    tzid = prop.params.get("TZID") if prop is not None and hasattr(prop, "params") else None
+    if tzid:
+        try:
+            return value.replace(tzinfo=ZoneInfo(str(tzid)))
+        except Exception:                # not found, or not a valid key at all
+            pass
+    return value.replace(tzinfo=None)
+
+
 def _proposal(comp, method: str | None) -> EventProposal | None:
     if "RECURRENCE-ID" in comp:
         return None
@@ -65,10 +101,11 @@ def _proposal(comp, method: str | None) -> EventProposal | None:
     start = comp.decoded("DTSTART")
     if not isinstance(start, date):         # a value icalendar could not read as a date
         return None
+    start = _own_tz(start, comp.get("DTSTART"))
     all_day = isinstance(start, date) and not isinstance(start, datetime)
     end = None
     if comp.get("DTEND") is not None:
-        end = comp.decoded("DTEND")
+        end = _own_tz(comp.decoded("DTEND"), comp.get("DTEND"))
     elif comp.get("DURATION") is not None:
         end = start + comp.decoded("DURATION")
     if end is not None and not isinstance(end, date):
@@ -99,7 +136,7 @@ def parse_ics(data: bytes, *, max_events: int = MAX_EVENTS) -> list[EventProposa
         cal = icalendar.Calendar.from_ical(data)
         raw_method = cal.get("METHOD")
         method = str(raw_method).strip().upper() if raw_method is not None else None
-        if method == "CANCEL":
+        if method is not None and method not in _PROPOSING_METHODS:
             return []
         events = list(cal.walk("VEVENT"))
     except Exception as exc:

@@ -762,7 +762,8 @@ CREATE TABLE IF NOT EXISTS mail_cursors (
     folder        TEXT PRIMARY KEY,
     uidvalidity   INTEGER NOT NULL,
     last_uid      INTEGER NOT NULL DEFAULT 0,
-    last_scan_at  TEXT
+    last_scan_at  TEXT,
+    window_since  TEXT                              -- ISO date of an unfinished date-window pass
 );
 
 CREATE TABLE IF NOT EXISTS mail_suggestions (
