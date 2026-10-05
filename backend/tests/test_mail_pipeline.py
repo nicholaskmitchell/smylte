@@ -541,9 +541,12 @@ def test_jev_choosing_event_overrides_the_model(svc, jev_secrets):
         INBOX, eml("pipe_request"), uid=1)
     assert [s["kind"] for s in pending(svc)] == ["event"]
     assert "Jev chose event (0.90, jev-1.13.0)" in out.detail
+    # The email alone, as dev/mail_eval.py measured it: nothing the model extracted.
     [call] = jev.calls
-    assert call["start"] == "2026-10-10T10:00:00" and call["due"] == "2026-10-09"
-    assert call["title"] == "Match on Saturday" and call["sender"] == "coach@club.example"
+    assert call.keys() == {"sender", "subject", "sent", "body"}
+    assert call["sender"] == "Coach Miller <coach@club.example>"
+    assert (call["subject"], call["sent"]) == ("Snacks for Saturday", "2026-10-05")
+    assert call["body"] == llm.extract_calls[0].body
 
 
 def test_jev_disagreeing_with_itself_keeps_the_models_kind(svc, jev_secrets):

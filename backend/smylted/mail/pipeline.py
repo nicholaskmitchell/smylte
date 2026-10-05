@@ -760,11 +760,11 @@ class Ingestor:
     def _decide_kind(self, c: _Msg, ex: Extraction, body: str) -> tuple[str, str]:
         cfg, msg = c.cfg, c.msg
         if self._jev_ready(cfg.kind_decider):
+            sender = (f"{msg.from_name} <{msg.from_addr}>" if msg.from_name
+                      else (msg.from_addr or ""))
+            sent = c.sent.date().isoformat() if c.sent else ""
             try:
-                v = self.jev.decide_kind(
-                    subject=msg.subject, sender=msg.from_addr or "", body=body, title=ex.title,
-                    start=ex.event_start.isoformat() if ex.event_start else None,
-                    due=ex.due.isoformat() if ex.due else None)
+                v = self.jev.decide_kind(sender=sender, subject=msg.subject, sent=sent, body=body)
                 if v.agreed and v.confidence >= JEV_MIN_CONFIDENCE:
                     kind, why = v.kind, f"Jev chose {v.kind} ({v.confidence:.2f}, {v.model})"
                 else:
@@ -804,6 +804,18 @@ class Ingestor:
         rejected = list(host.mail(store.mail_rejections_for_thread, c.tid))
         if rejected and any(_same_item(ex, r) for r in rejected):
             return self._settle(c, "dedup", "suppressed", "same as a dismissed suggestion")
+
+        # b2. the thread's event is already on the calendar: a reply restating
+        #     it is not a second event. Compared by day, since an event read
+        #     from prose has a naive start; another day is a new suggestion the
+        #     owner decides on — changes to an added event are not applied.
+        if kind == "event":
+            start = ex.event_start
+            day = (start.date() if isinstance(start, datetime) else start).isoformat()
+            if any(s["kind"] == "event" and s["status"] in ("approved", "approving")
+                   and (s["event_start"] or "")[:10] == day
+                   for s in host.mail(store.mail_suggestions_for_thread, c.tid)):
+                return self._settle(c, "dedup", "duplicate", "already added as an event")
 
         # c. the thread became a task: propose an update to it (tasks only —
         #    an event in a task's thread is its own suggestion)
