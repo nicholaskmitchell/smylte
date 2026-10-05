@@ -194,10 +194,34 @@ def run_claude(emails: list[dict], dedup: list[dict]) -> dict | None:
     if not key:
         return None
     sys.path.insert(0, str(HERE.parent))
+    import anthropic  # noqa: E402
     from smylted.mail.llm import Candidate, EmailForExtraction, Extraction, LlmClient  # noqa: E402
-    model = os.environ.get("SMYLTE_MAIL_MODEL", "claude-haiku-4-5")
+    # Haiku only, deliberately not configurable here: this is a cost-bounded
+    # comparison against the production default, not a model sweep.
+    model = "claude-haiku-4-5"
+    workspace = os.environ.get("ANTHROPIC_WORKSPACE_ID", "").strip()
+    headers = {"anthropic-workspace-id": workspace} if workspace else None
+    spent = {"in": 0, "out": 0}
+
+    def factory(*_a):
+        client = anthropic.Anthropic(api_key=key, base_url="https://api.anthropic.com",
+                                     default_headers=headers, max_retries=2, timeout=60.0)
+        create = client.messages.create
+
+        def counted(**kw):
+            # Hard stop well under $2 at Haiku 4.5's $1 / $5 per Mtok.
+            if spent["in"] / 1e6 * 1.0 + spent["out"] / 1e6 * 5.0 > 2.0:
+                raise RuntimeError("eval spending cap reached")
+            r = create(**kw)
+            spent["in"] += r.usage.input_tokens
+            spent["out"] += r.usage.output_tokens
+            return r
+        client.messages.create = counted
+        return client
+
     llm = LlmClient(api_key_provider=lambda: key, model_provider=lambda: model)
-    out = {"model": model, "extract": {}, "match": {}}
+    llm.client_factory = factory
+    out = {"model": model, "extract": {}, "match": {}, "usage": spent}
     for c in emails:
         sent = datetime.fromisoformat(c["sent"]) if c.get("sent") else None
         try:
