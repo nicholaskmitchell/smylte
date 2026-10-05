@@ -109,7 +109,8 @@ def suggestion_dto(row, *, target_title: str | None = None) -> dict:
             "thread_id": row["thread_id"],
             "folder": row["folder"],
         },
-        "updates": [{k: u.get(k) for k in ("sender", "subject", "sent_at", "notes", "due")}
+        "updates": [{k: u.get(k) for k in ("sender", "sender_name", "subject", "sent_at",
+                                              "notes", "due")}
                     for u in _updates(row)],
         "created_at": row["created_at"],
         "decided_at": row["decided_at"],
