@@ -239,6 +239,15 @@ def init_db(conn: sqlite3.Connection) -> None:
         # it did. Nothing to backfill: a window cut short under the old code
         # cannot be told apart from a finished one any more.
         conn.execute("ALTER TABLE mail_cursors ADD COLUMN window_since TEXT")
+    mail_ledger_cols = {r["name"] for r in conn.execute("PRAGMA table_info(mail_ledger)")}
+    if "interrupted" not in mail_ledger_cols:
+        # 0 on every row written before strikes were counted: a claim left
+        # unsettled by the old code gets its full three tries, as it would have.
+        conn.execute("ALTER TABLE mail_ledger ADD COLUMN interrupted INTEGER NOT NULL DEFAULT 0")
+    if "released" not in mail_ledger_cols:
+        # 0 reads as "held": the next run start releases an unsettled claim and
+        # counts it, which is what the old code's release did, less the forgetting.
+        conn.execute("ALTER TABLE mail_ledger ADD COLUMN released INTEGER NOT NULL DEFAULT 0")
 
 
 # ── collections ──────────────────────────────────────────────────────────────
@@ -2332,16 +2341,21 @@ def mail_claim(
 ) -> bool:
     """Reserve one message for processing. True when this caller won it.
 
-    False means the ledger already has the key — settled by an earlier scan, or
-    claimed by a concurrent one — and the caller must skip the message. One
-    statement, so atomic on its own.
+    A new key is inserted; a claim `mail_recover_unsettled` released at the
+    start of this run is re-taken, keeping its count of interrupted scans.
+    False means the ledger already has the key settled by an earlier scan, or
+    held by a run still working on it, and the caller must skip the message.
+    One statement, so atomic on its own: SQLite reports a rowcount of 0 when
+    the upsert's WHERE is false.
     """
     cur = conn.execute(
         "INSERT INTO mail_ledger (key, message_id, thread_id, folder, uid) "
-        "VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+        "VALUES (?, ?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET "
+        f"claimed_at={_MAIL_NOW}, released=0, folder=excluded.folder, uid=excluded.uid "  # nosec B608
+        "WHERE mail_ledger.settled_at IS NULL AND mail_ledger.released = 1",
         (key, message_id, thread_id, folder, uid),
     )
-    return bool(cur.rowcount)
+    return cur.rowcount == 1
 
 
 def mail_settle(
@@ -2374,17 +2388,46 @@ def mail_release(conn: sqlite3.Connection, key: str) -> None:
     conn.execute("DELETE FROM mail_ledger WHERE key=? AND settled_at IS NULL", (key,))
 
 
-def mail_release_unsettled(conn: sqlite3.Connection) -> int:
-    """Drop every unsettled claim, whatever its age.
+def mail_recover_unsettled(
+    conn: sqlite3.Connection, *, max_interrupted: int
+) -> tuple[int, int]:
+    """Release the claims of a run that never finished, and give up on a
+    message that has interrupted `max_interrupted` scans.
 
     Called at the start of a run, under the run lock: this process is then the
-    only claimer, so a claim nobody settled belongs to a run that never
-    finished (a crash, a kill, a restart). Waiting an hour for it to go stale,
-    as an earlier version did, let the restarted scan move the cursor past the
-    message and lose it.
+    only claimer, so a held claim nobody settled belongs to a run that died (a
+    crash, a kill, a restart). Waiting an hour for it to go stale, as an
+    earlier version did, let the restarted scan move the cursor past the
+    message and lose it. The next version deleted the claim instead, and that
+    forgot how often it had happened: a poison message was re-read first on
+    every start, so a crash looped the service, a hang held the run lock, and
+    nothing after it in the folder was ever read. So each such claim earns a
+    strike and is marked released for `mail_claim` to re-take, and at the
+    limit it is settled as an error so the cursor can pass it.
+
+    Only a HELD claim earns a strike. A claim released earlier and not yet
+    re-taken was not read by the run that died, and counting it would give up
+    on mail nobody tried: after a reboot with Bridge still down, every run
+    fails to connect before reaching it.
+
+    Returns (released, gave_up): the claims left for the next read, and the
+    ones settled as errors. One transaction.
     """
-    cur = conn.execute("DELETE FROM mail_ledger WHERE settled_at IS NULL")
-    return cur.rowcount or 0
+    with tx(conn):
+        cur = conn.execute(
+            "UPDATE mail_ledger SET interrupted = interrupted + 1, released = 1 "
+            "WHERE settled_at IS NULL AND released = 0"
+        )
+        struck = cur.rowcount or 0
+        cur = conn.execute(
+            "UPDATE mail_ledger SET stage='error', outcome='error', detail=?, released=0, "
+            f"settled_at={_MAIL_NOW} "  # nosec B608
+            "WHERE settled_at IS NULL AND interrupted >= ?",
+            (f"a scan was interrupted on this message {max_interrupted} times (a crash, "
+             "a hang or a restart); skipped so the folder can go on", max_interrupted),
+        )
+        gave_up = cur.rowcount or 0
+    return struck - gave_up, gave_up
 
 
 def mail_reset_stuck_approving(conn: sqlite3.Connection, *, before: str) -> int:

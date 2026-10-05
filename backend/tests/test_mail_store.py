@@ -65,16 +65,65 @@ def test_release_only_removes_unsettled_claims(db):
     assert _claim(db, "mid:open@x") is True  # released, so claimable again
 
 
-def test_release_unsettled_drops_every_unsettled_claim_whatever_its_age(db):
+def test_recover_unsettled_counts_the_interruption_and_releases_every_unsettled_claim(db):
     for key in ("mid:old@x", "mid:new@x", "mid:settled@x"):
         _claim(db, key)
     store.mail_settle(db, "mid:settled@x", stage="s", outcome="skipped")
     db.execute("UPDATE mail_ledger SET claimed_at='2026-01-01T00:00:00.000Z' "
                "WHERE key='mid:old@x'")
-    assert store.mail_release_unsettled(db) == 2
-    assert store.mail_ledger_get(db, "mid:old@x") is None
-    assert store.mail_ledger_get(db, "mid:new@x") is None
-    assert store.mail_ledger_get(db, "mid:settled@x") is not None
+    assert store.mail_recover_unsettled(db, max_interrupted=3) == (2, 0)
+    for key in ("mid:old@x", "mid:new@x"):
+        row = store.mail_ledger_get(db, key)
+        assert (row["interrupted"], row["released"], row["settled_at"]) == (1, 1, None)
+    settled = store.mail_ledger_get(db, "mid:settled@x")
+    assert (settled["interrupted"], settled["released"], settled["outcome"]) == (0, 0, "skipped")
+
+
+def test_recover_unsettled_gives_up_at_the_limit(db):
+    _claim(db)
+    for strike in (1, 2):
+        assert store.mail_recover_unsettled(db, max_interrupted=3) == (1, 0)
+        assert _claim(db) is True                      # the next run reads it again, and dies
+        assert store.mail_ledger_get(db, "mid:a@x")["interrupted"] == strike
+    assert store.mail_recover_unsettled(db, max_interrupted=3) == (0, 1)
+    row = store.mail_ledger_get(db, "mid:a@x")
+    assert (row["stage"], row["outcome"], row["interrupted"], row["released"]) == (
+        "error", "error", 3, 0)
+    assert row["detail"] == ("a scan was interrupted on this message 3 times (a crash, a hang "
+                             "or a restart); skipped so the folder can go on")
+    assert row["settled_at"] is not None
+    assert _claim(db) is False                         # settled: a duplicate from now on
+    assert store.mail_recover_unsettled(db, max_interrupted=3) == (0, 0)
+
+
+def test_recover_unsettled_does_not_strike_a_released_claim_nobody_retook(db):
+    # A run that never reaches the message — Bridge still down after a reboot —
+    # did not read it, so it must not count against it.
+    _claim(db)
+    assert store.mail_recover_unsettled(db, max_interrupted=3) == (1, 0)
+    for _ in range(2):
+        assert store.mail_recover_unsettled(db, max_interrupted=3) == (0, 0)
+    row = store.mail_ledger_get(db, "mid:a@x")
+    assert (row["interrupted"], row["released"], row["settled_at"]) == (1, 1, None)
+
+
+def test_claim_retakes_a_released_claim_and_nothing_else(db):
+    _claim(db, "mid:held@x")
+    _claim(db, "mid:done@x")
+    store.mail_settle(db, "mid:done@x", stage="s", outcome="skipped")
+    _claim(db, "mid:released@x", folder="INBOX", uid=7)
+    db.execute("UPDATE mail_ledger SET released=1, claimed_at='2026-01-01T00:00:00.000Z' "
+               "WHERE key='mid:released@x'")
+    assert _claim(db, "mid:released@x", folder="Labels/School", uid=9) is True
+    row = store.mail_ledger_get(db, "mid:released@x")
+    assert (row["released"], row["folder"], row["uid"]) == (0, "Labels/School", 9)
+    assert row["claimed_at"] > "2026-01-01T00:00:00.000Z"
+    # The upsert's WHERE is false for these: SQLite reports rowcount 0, so False.
+    assert _claim(db, "mid:released@x") is False       # re-taken: held again
+    assert _claim(db, "mid:held@x") is False           # held by this run
+    assert _claim(db, "mid:done@x") is False           # settled
+    done = store.mail_ledger_get(db, "mid:done@x")
+    assert (done["outcome"], done["released"]) == ("skipped", 0)
 
 
 def test_reset_stuck_approving_goes_by_age_and_status(db):
@@ -340,6 +389,21 @@ def test_init_db_adds_window_since_to_an_old_cursor_table(db):
     db.execute("INSERT INTO mail_cursors VALUES ('INBOX', 1, 5, 't')")
     init_db(db)
     assert store.mail_get_cursor(db, "INBOX")["window_since"] is None
+
+
+def test_init_db_adds_interrupted_and_released_to_an_old_ledger_table(db):
+    db.execute("DROP TABLE mail_ledger")
+    db.execute("CREATE TABLE mail_ledger (key TEXT PRIMARY KEY, message_id TEXT, "
+               "thread_id TEXT NOT NULL, folder TEXT NOT NULL, uid INTEGER, stage TEXT, "
+               "outcome TEXT NOT NULL DEFAULT 'processing', detail TEXT, suggestion_id TEXT, "
+               "claimed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), "
+               "settled_at TEXT)")
+    db.execute("INSERT INTO mail_ledger (key, thread_id, folder) VALUES ('mid:a@x', 'mid:a@x', "
+               "'INBOX')")
+    init_db(db)
+    row = store.mail_ledger_get(db, "mid:a@x")
+    assert (row["interrupted"], row["released"]) == (0, 0)
+    assert store.mail_recover_unsettled(db, max_interrupted=3) == (1, 0)
 
 
 def test_init_db_twice_is_idempotent(db):

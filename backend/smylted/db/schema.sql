@@ -753,7 +753,9 @@ CREATE TABLE IF NOT EXISTS mail_ledger (
     detail        TEXT,                             -- short reason, ALREADY REDACTED; never body text
     suggestion_id TEXT,
     claimed_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    settled_at    TEXT
+    settled_at    TEXT,
+    interrupted   INTEGER NOT NULL DEFAULT 0,       -- runs that died holding this claim
+    released      INTEGER NOT NULL DEFAULT 0        -- 1: unsettled, free for the next run to re-take
 );
 CREATE INDEX IF NOT EXISTS idx_mail_ledger_thread ON mail_ledger(thread_id);
 CREATE INDEX IF NOT EXISTS idx_mail_ledger_claimed ON mail_ledger(claimed_at);
