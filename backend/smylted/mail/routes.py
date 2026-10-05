@@ -29,10 +29,17 @@ The stored Bridge password is bound to the server settings it was entered for
 (`settings.connection_binding`). A save that changes the host, port,
 encryption, certificate or username without a new password deletes a stored
 one and clears the binding, so a session that can edit the settings cannot
-point them at its own server and press "Test" to receive the password. Only
-deleting would not be enough for a password from the environment, which no
-route can delete: there the cleared binding makes the pipeline refuse to log
-in until a restart binds it again (`runtime.build_runtime`).
+point them at its own server and press "Test" to receive the password.
+
+A password from the environment cannot be deleted, overrides any saved here,
+and is bound again at every start (`runtime.build_runtime`) — and a deploy
+restarts the service. Clearing its binding would therefore only last until the
+next deploy, which would then bind it to whatever server the UI last named. So
+while `SMYLTE_MAIL_IMAP_PASSWORD` is set the route refuses both a password
+(which would never be used) and any save that changes the server settings;
+bound fields resent unchanged, and every other setting, still save. The
+operator changes the server by unsetting the variable, saving, setting it again
+and restarting.
 """
 from __future__ import annotations
 
@@ -63,6 +70,11 @@ _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 _KILL_SWITCH = ("email ingestion is disabled for this deployment "
                 "(SMYLTE_MAIL_ENABLED=false)")
+_ENV_PASSWORD = ("the Bridge password is set by SMYLTE_MAIL_IMAP_PASSWORD, which overrides "
+                 "one saved here; unset it to manage the password in Settings")
+_ENV_SERVER = ("the server settings (host, port, encryption, certificate, username) are fixed "
+               "while SMYLTE_MAIL_IMAP_PASSWORD is set; unset it, change them here, then set it "
+               "again and restart")
 _INSECURE_REMOTE = ("certificate checks can only be switched off for a loopback host "
                     "(127.0.0.1, ::1 or localhost)")
 
@@ -265,16 +277,20 @@ def register(api: APIRouter) -> None:
             raise HTTPException(422, _INSECURE_REMOTE)
         old, new = await asyncio.to_thread(_bindings, svc, data)
         password = secrets.get("imap_password")
+        held = None
+        if password is not None or new != old:
+            held = await asyncio.to_thread(rt.secrets.status, "imap_password")
+            # Refused before anything is written; see the module docstring.
+            if held.source == "env":
+                raise HTTPException(status.HTTP_409_CONFLICT,
+                                    _ENV_PASSWORD if password is not None else _ENV_SERVER)
         try:
             if password is not None:
                 # A password saved now is for the server settings saved with it.
                 data["imap_password_binding"] = new if password.strip() else ""
             elif new != old:
                 # The server changed under a stored password: forget it rather
-                # than send it somewhere it was never entered for. An env
-                # password cannot be deleted; the cleared binding holds it back
-                # until a restart.
-                held = await asyncio.to_thread(rt.secrets.status, "imap_password")
+                # than send it somewhere it was never entered for.
                 if held.source == "store":
                     await asyncio.to_thread(rt.secrets.delete, "imap_password")
                 data["imap_password_binding"] = ""

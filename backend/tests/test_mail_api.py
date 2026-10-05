@@ -265,31 +265,93 @@ def test_a_password_saved_with_the_server_is_bound_to_that_server(tmp_path):
     assert len(_logins(server)) == 1
 
 
-def test_an_env_password_waits_for_a_restart_after_a_server_change(tmp_path):
+def _reaches(server) -> dict:
+    return {"imap_host": "127.0.0.1", "imap_port": server.port, "imap_tls": "ssl",
+            "imap_cert_mode": "insecure_localhost", "imap_username": "x"}
+
+
+def _stored(c) -> dict:
+    return c.app.state.service.mail(store.get_meta_json, mail_settings.MAIL_SETTINGS_KEY)
+
+
+def test_an_env_password_cannot_be_rebound_through_the_settings(tmp_path):
+    # An env password overrides a saved one, so saving "a password" with a new
+    # server would bind the env password to that server.
     cert_pem, key_pem = make_self_signed_cert()
     with run_server(mailboxes=_EMPTY_INBOX, user="x", password="y",
                     tls_mode="ssl", cert_pem=cert_pem, key_pem=key_pem) as server:
-        with _client(tmp_path, mail_imap_password="y") as c:
-            r = _put(c, imap_host="127.0.0.1", imap_port=server.port, imap_tls="ssl",
-                     imap_cert_mode="insecure_localhost", imap_username="x")
-            assert r.status_code == 200, r.text
-            # The env password cannot be deleted, so it stays set but unbound.
-            assert r.json()["secrets"]["imap_password"]["source"] == "env"
-            r = c.post("/api/mail/test/imap")
+        with _client(tmp_path, mail_imap_password="ENV-Bridge-Password-777") as c:
+            before = _stored(c)
+            r = _put(c, imap_port=server.port, imap_tls="ssl",
+                     imap_cert_mode="insecure_localhost", imap_username="x",
+                     imap_password="anything")
             assert r.status_code == 409
-            assert r.json()["detail"] == mail_settings.PASSWORD_BINDING_MESSAGE
+            assert "SMYLTE_MAIL_IMAP_PASSWORD" in r.json()["detail"]
+            assert _stored(c) == before
+            assert c.post("/api/mail/test/imap").status_code == 409
         assert _logins(server) == []
 
-        # The restart is the operator's confirmation of the new server.
-        with _client(tmp_path, mail_imap_password="y") as c:
+
+@pytest.mark.parametrize("value", ["a-saved-password", ""])
+def test_a_password_cannot_be_saved_while_an_env_password_is_set(tmp_path, value):
+    with _client(tmp_path, mail_imap_password="y") as c:
+        before = _stored(c)
+        r = _put(c, imap_password=value, folders=["Labels/School"])
+        assert r.status_code == 409
+        assert r.json()["detail"] == (
+            "the Bridge password is set by SMYLTE_MAIL_IMAP_PASSWORD, which overrides one "
+            "saved here; unset it to manage the password in Settings")
+        assert _stored(c) == before
+        assert c.app.state.mail.secrets.backend().get("imap_password") is None
+
+
+@contextlib.contextmanager
+def _env_client_for(tmp_path, server):
+    """The server saved while the variable was unset, then a start with it set."""
+    with _client(tmp_path) as c:
+        assert _put(c, **_reaches(server)).status_code == 200
+    with _client(tmp_path, mail_imap_password="y") as c:
+        yield c
+
+
+@pytest.mark.parametrize("field", mail_settings.BOUND_FIELDS)
+def test_the_server_is_fixed_while_an_env_password_is_set(tmp_path, field):
+    cert_pem, key_pem = make_self_signed_cert()
+    other_pem, _ = make_self_signed_cert()
+    change = {"imap_host": "localhost", "imap_port": free_port(), "imap_tls": "starttls",
+              "imap_cert_mode": "system", "imap_pinned_cert": other_pem,
+              "imap_username": "someone-else"}[field]
+    with run_server(mailboxes=_EMPTY_INBOX, user="x", password="y",
+                    tls_mode="ssl", cert_pem=cert_pem, key_pem=key_pem) as server:
+        with _env_client_for(tmp_path, server) as c:
+            # The start bound the env password to the server saved before it.
+            assert _stored_binding(c) == mail_settings.connection_binding(
+                c.app.state.mail.ingestor.config())
+            before = _stored(c)
+            r = _put(c, **{field: change})
+            assert r.status_code == 409
+            assert r.json()["detail"] == (
+                "the server settings (host, port, encryption, certificate, username) are fixed "
+                "while SMYLTE_MAIL_IMAP_PASSWORD is set; unset it, change them here, then set it "
+                "again and restart")
+            assert _stored(c) == before
             r = c.post("/api/mail/test/imap")
             assert r.status_code == 200, r.text
-            assert len(_logins(server)) == 1
-            assert _put(c, imap_username="someone-else").status_code == 200
-            r = c.post("/api/mail/test/imap")
-            assert r.status_code == 409
-            assert r.json()["detail"] == mail_settings.PASSWORD_BINDING_MESSAGE
         assert len(_logins(server)) == 1
+
+
+def test_unchanged_server_fields_still_save_while_an_env_password_is_set(tmp_path):
+    cert_pem, key_pem = make_self_signed_cert()
+    with run_server(mailboxes=_EMPTY_INBOX, user="x", password="y",
+                    tls_mode="ssl", cert_pem=cert_pem, key_pem=key_pem) as server:
+        with _env_client_for(tmp_path, server) as c:
+            binding = _stored_binding(c)
+            # The form resends every field, the bound ones unchanged.
+            r = _put(c, **_reaches(server), folders=["INBOX", "Labels/School"])
+            assert r.status_code == 200, r.text
+            assert r.json()["settings"]["folders"] == ["INBOX", "Labels/School"]
+            assert _stored_binding(c) == binding
+            assert c.post("/api/mail/test/imap").status_code == 200
 
 
 def test_the_binding_is_not_a_setting(tmp_path):
