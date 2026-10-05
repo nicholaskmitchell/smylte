@@ -6,7 +6,8 @@
 --     you get byte-identical application state back (invariant #1).
 --   * SIDECAR tables (sidecar, list_settings, completions, attachments,
 --     day_plan, day_plan_opened, day_ritual, habits, focus_session,
---     notification_deliveries)
+--     notification_deliveries, mail_ledger, mail_cursors, mail_suggestions,
+--     mail_threads, mail_rejections)
 --     hold app-only state that
 --     exists NOWHERE on the wire (kanban column, manual sort, pins, per-list
 --     settings, the day's plan, which days were opened at all, what the owner
@@ -719,3 +720,101 @@ CREATE TABLE IF NOT EXISTS displays (
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
+
+-- ── email ingestion (SIDECAR: what the mail pipeline has seen and proposed) ──
+--
+-- App-only, like everything above: nothing here is on the wire, and nothing
+-- here is rebuilt by a resync. The mailbox itself stays the source of truth
+-- for the mail; these tables are only the pipeline's memory of what it did
+-- with it.
+--
+-- The ledger is what makes a rescan, a UIDVALIDITY change or the same message
+-- sitting in three folders produce ONE suggestion: it is keyed on the message
+-- (Message-ID, or a content hash when there is none), never on folder + UID,
+-- because a folder/UID pair is only meaningful until the server renumbers.
+-- Losing it re-proposes old mail, so it is backed up with the rest.
+--
+-- No foreign key to `items`, for the reason day_plan gives: an approved
+-- suggestion points at a task by (collection, uid) and that task may briefly
+-- vanish and come back during a delete-and-recreate.
+--
+-- `mail_suggestions` is the "Suggested" list the owner reviews. Rejections are
+-- remembered in `mail_rejections` so that a rescan, or a later reply in the
+-- same thread, does not bring a dismissed suggestion back.
+
+CREATE TABLE IF NOT EXISTS mail_ledger (
+    key           TEXT PRIMARY KEY,                 -- 'mid:<message-id>' or 'hash:<sha256>'
+    message_id    TEXT,
+    thread_id     TEXT NOT NULL,
+    folder        TEXT NOT NULL,                    -- where it was first seen
+    uid           INTEGER,
+    stage         TEXT,                             -- the stage that decided
+    outcome       TEXT NOT NULL DEFAULT 'processing',
+    detail        TEXT,                             -- short reason, ALREADY REDACTED; never body text
+    suggestion_id TEXT,
+    claimed_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    settled_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mail_ledger_thread ON mail_ledger(thread_id);
+CREATE INDEX IF NOT EXISTS idx_mail_ledger_claimed ON mail_ledger(claimed_at);
+
+CREATE TABLE IF NOT EXISTS mail_cursors (
+    folder        TEXT PRIMARY KEY,
+    uidvalidity   INTEGER NOT NULL,
+    last_uid      INTEGER NOT NULL DEFAULT 0,
+    last_scan_at  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mail_suggestions (
+    id            TEXT PRIMARY KEY,                 -- uuid4().hex; also the approved item's client_id
+    kind          TEXT NOT NULL,                    -- task | update | event
+    status        TEXT NOT NULL DEFAULT 'pending',  -- pending | approving | approved | rejected
+    title         TEXT NOT NULL,
+    notes         TEXT NOT NULL DEFAULT '',
+    due           TEXT,                             -- YYYY-MM-DD
+    confidence    REAL,
+    event_start   TEXT,                             -- ISO date or datetime
+    event_end     TEXT,
+    event_all_day INTEGER NOT NULL DEFAULT 0,
+    location      TEXT,
+    ics_uid       TEXT,
+    event_rrule   TEXT,
+    target_list   TEXT,                             -- collection href (update target, or the approved result)
+    target_uid    TEXT,
+    sender        TEXT NOT NULL,
+    sender_name   TEXT,
+    subject       TEXT,
+    sent_at       TEXT,
+    message_key   TEXT NOT NULL,                    -- the ledger key of the message that created it
+    message_id    TEXT,
+    thread_id     TEXT NOT NULL,
+    folder        TEXT,
+    updates       TEXT NOT NULL DEFAULT '[]',       -- JSON list of later messages merged in
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    decided_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mail_suggestions_status ON mail_suggestions(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_mail_suggestions_thread ON mail_suggestions(thread_id);
+CREATE INDEX IF NOT EXISTS idx_mail_suggestions_ics ON mail_suggestions(ics_uid);
+
+CREATE TABLE IF NOT EXISTS mail_threads (
+    thread_id     TEXT PRIMARY KEY,
+    suggestion_id TEXT,                             -- the pending suggestion this thread feeds
+    task_list     TEXT,                             -- collection href of the task it became
+    task_uid      TEXT,
+    updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS mail_rejections (
+    suggestion_id TEXT NOT NULL,
+    message_key   TEXT NOT NULL,
+    message_id    TEXT,
+    thread_id     TEXT NOT NULL,
+    title         TEXT NOT NULL,
+    due           TEXT,
+    rejected_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (suggestion_id, message_key)
+);
+CREATE INDEX IF NOT EXISTS idx_mail_rejections_thread ON mail_rejections(thread_id);
+CREATE INDEX IF NOT EXISTS idx_mail_rejections_key ON mail_rejections(message_key);
