@@ -107,11 +107,14 @@ export function MailSection({ onExpire, mailRev }: {
   }, [mailRev])
 
   const keySet = payload?.secrets.anthropic_api_key.set ?? false
+  const deploymentOn = payload?.deployment_enabled ?? false
   // The model list needs a key to ask with, and is asked again after one is
   // saved (`modelsTick`) because replacing a key leaves `set` true throughout
-  // and the new key may be the one that can see a different list.
+  // and the new key may be the one that can see a different list. Not asked at
+  // all while the deployment has email switched off: the server refuses it
+  // then, and the refusal would show as a failure of the list.
   useEffect(() => {
-    if (!keySet) { setModels(null); setModelsError(null); return }
+    if (!keySet || !deploymentOn) { setModels(null); setModelsError(null); return }
     let alive = true
     ;(async () => {
       try {
@@ -128,7 +131,7 @@ export function MailSection({ onExpire, mailRev }: {
     })()
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keySet, modelsTick])
+  }, [keySet, deploymentOn, modelsTick])
 
   /** Write some settings and take the answer as the new truth. Resolves false
    *  when the server refused, so a field can put its draft back. */
@@ -299,8 +302,6 @@ export function MailSection({ onExpire, mailRev }: {
         </div>
       )}
 
-      {toggle('mail-enabled', s.enabled, (enabled) => ({ enabled }), 'mail.enabled')}
-
       <div className="menu-head">{tr('mail.head.anthropic')}</div>
       <SecretField id="mail-api-key" label={tr('mail.apiKey')}
         status={payload.secrets.anthropic_api_key} envVar="SMYLTE_ANTHROPIC_API_KEY"
@@ -361,6 +362,7 @@ export function MailSection({ onExpire, mailRev }: {
       {checkLine(keyCheck)}
 
       <div className="menu-head">{tr('mail.head.imap')}</div>
+      <div className="hintline">{tr('mail.imap.rebind')}</div>
       <div className="menu-row">
         <label htmlFor="mail-imap-host">{tr('mail.imap.host')}</label>
         <Draft id="mail-imap-host" className="input" value={s.imap_host}
@@ -522,6 +524,9 @@ export function MailSection({ onExpire, mailRev }: {
 
       <div className="menu-head">{tr('mail.head.advanced')}</div>
       {listField('mail-trusted', 'mail.trusted', 'trusted_authserv_ids', 'mail.trusted.hint')}
+
+      {toggle('mail-enabled', s.enabled, (enabled) => ({ enabled }), 'mail.enabled')}
+      <div className="hintline">{tr('mail.enabled.hint', { days: s.backfill_days })}</div>
 
       <div className="menu-head">{tr('mail.head.status')}</div>
       <div className="menu-row">

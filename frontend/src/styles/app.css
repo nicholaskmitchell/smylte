@@ -3639,6 +3639,9 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .mail-sug-notes { font-size: calc(13px * var(--fs-scale)); color: var(--fg-muted); }
 .mail-sug-notes summary { cursor: pointer; color: var(--fg-faint); }
 .mail-sug-notes p { margin: 4px 0 0; white-space: pre-wrap; }
+.mail-sug-later { font-size: calc(13px * var(--fs-scale)); color: var(--fg-muted); }
+.mail-sug-updates { margin: 2px 0 0; padding-left: 1.2em; }
+.mail-sug-updates li { margin: 2px 0; }
 .mail-sug-src { font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); line-height: 1.4; }
 .mail-sug-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .mail-sug .mail-sug-pick { width: auto; max-width: 12rem; margin-right: auto; }

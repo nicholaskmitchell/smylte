@@ -1177,11 +1177,14 @@ export interface MailSuggestion {
   }
   /** Later messages in the same thread folded into this suggestion. */
   updates: {
+    message_key: string
     sender: string
+    sender_name?: string | null
     subject: string | null
     sent_at: string | null
     notes: string
     due: string | null
+    thread_id?: string
   }[]
   created_at: string
   decided_at: string | null

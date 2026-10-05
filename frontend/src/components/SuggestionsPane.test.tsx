@@ -32,6 +32,11 @@ const task = (over: Partial<MailSuggestion> = {}): MailSuggestion => ({
   ...over,
 })
 
+const update = (over: Partial<MailSuggestion['updates'][number]> = {}) => ({
+  message_key: 'k1', sender: 'a@b.example', sender_name: null, subject: null,
+  sent_at: null, notes: 'n', due: null, thread_id: 'mid:m1@school.example', ...over,
+})
+
 function show(over: Partial<Parameters<typeof SuggestionsPane>[0]> = {}) {
   const onApprove = vi.fn().mockResolvedValue(true)
   const onReject = vi.fn().mockResolvedValue(true)
@@ -64,8 +69,7 @@ describe('a task suggestion', () => {
   })
 
   it('mentions the later messages folded into it', () => {
-    const updates = [{ sender: 'a@b.example', subject: null, sent_at: null, notes: 'n', due: null }]
-    show({ items: [task({ updates })] })
+    show({ items: [task({ updates: [update()] })] })
     expect(document.querySelector('.mail-sug-src')).toHaveTextContent('+1 later message')
   })
 
@@ -73,6 +77,75 @@ describe('a task suggestion', () => {
     show()
     expect(screen.getByText('Details').closest('details')).not.toHaveAttribute('open')
     expect(screen.getByText('Ms Smith asked for it signed.')).toBeInTheDocument()
+  })
+
+  it('lists the merged updates under the card, with a new due date', () => {
+    show({
+      items: [task({
+        updates: [
+          update({ sender_name: 'Mr Jones', sent_at: '2026-10-06T09:00:00Z',
+            notes: 'Also please bring cups', due: '2026-10-12' }),
+          update({ message_key: 'k2', sender: 'c@d.example', notes: '' }),
+        ],
+      })],
+    })
+    const ul = document.querySelector('ul.mail-sug-updates')!
+    expect(screen.getByText('Later in the thread')).toBeInTheDocument()
+    const lis = ul.querySelectorAll('li')
+    expect(lis).toHaveLength(2)
+    expect(lis[0]).toHaveTextContent(/^Mr Jones · .+ — Also please bring cups · new due Oct 12$/)
+    expect(lis[1]).toHaveTextContent('c@d.example')
+    expect(lis[1]).not.toHaveTextContent('new due')
+  })
+
+  it('shows no updates list when nothing was merged', () => {
+    show()
+    expect(document.querySelector('ul.mail-sug-updates')).toBeNull()
+    expect(screen.queryByText('Later in the thread')).toBeNull()
+  })
+
+  it('sends neither title nor date when the owner edited neither', async () => {
+    const user = userEvent.setup()
+    const { onApprove } = show()
+    await user.click(screen.getByRole('button', { name: 'Add task' }))
+    expect(onApprove).toHaveBeenCalledWith('abc', {})
+  })
+
+  it('sends only the field that was edited', async () => {
+    const user = userEvent.setup()
+    const { onApprove } = show()
+    fireEvent.change(screen.getByLabelText('Due date'), { target: { value: '2026-10-12' } })
+    await user.click(screen.getByRole('button', { name: 'Add task' }))
+    expect(onApprove).toHaveBeenLastCalledWith('abc', { due: '2026-10-12' })
+    await user.type(screen.getByLabelText('Title'), '!')
+    await user.click(screen.getByRole('button', { name: 'Add task' }))
+    expect(onApprove).toHaveBeenLastCalledWith('abc',
+      { title: 'Return the permission slip!', due: '2026-10-12' })
+  })
+
+  it('follows a changed title and date while they are not edited', () => {
+    const { rerender } = render(<SuggestionsPane onExpire={vi.fn()} lists={[]}
+      items={[task()]} loaded error={null} onApprove={vi.fn()} onReject={vi.fn()} />)
+    rerender(<SuggestionsPane onExpire={vi.fn()} lists={[]}
+      items={[task({ title: 'Return the slip and the form', due: '2026-10-14' })]}
+      loaded error={null} onApprove={vi.fn()} onReject={vi.fn()} />)
+    expect(screen.getByLabelText('Title')).toHaveValue('Return the slip and the form')
+    expect(screen.getByLabelText('Due date')).toHaveValue('2026-10-14')
+  })
+
+  it('keeps what the owner typed when the props change under it', async () => {
+    const user = userEvent.setup()
+    const props = { onExpire: vi.fn(), lists: [], loaded: true, error: null,
+      onApprove: vi.fn(), onReject: vi.fn() }
+    const { rerender } = render(<SuggestionsPane {...props} items={[task()]} />)
+    const title = screen.getByLabelText('Title')
+    await user.clear(title)
+    await user.type(title, 'Mine')
+    rerender(<SuggestionsPane {...props}
+      items={[task({ title: 'Theirs', due: '2026-10-14' })]} />)
+    expect(screen.getByLabelText('Title')).toHaveValue('Mine')
+    // The date was not touched, so it follows.
+    expect(screen.getByLabelText('Due date')).toHaveValue('2026-10-14')
   })
 
   it('sends the edited title and date on approve', async () => {
@@ -91,7 +164,7 @@ describe('a task suggestion', () => {
     const { onApprove } = show()
     fireEvent.change(screen.getByLabelText('Due date'), { target: { value: '' } })
     await user.click(screen.getByRole('button', { name: 'Add task' }))
-    expect(onApprove).toHaveBeenCalledWith('abc', { title: 'Return the permission slip', due: null })
+    expect(onApprove).toHaveBeenCalledWith('abc', { due: null })
   })
 
   it('sends the chosen list', async () => {
@@ -99,8 +172,7 @@ describe('a task suggestion', () => {
     const { onApprove } = show()
     await user.selectOptions(screen.getByLabelText('Add to list'), 'l2')
     await user.click(screen.getByRole('button', { name: 'Add task' }))
-    expect(onApprove).toHaveBeenCalledWith('abc',
-      { title: 'Return the permission slip', due: '2026-10-09', list: 'l2' })
+    expect(onApprove).toHaveBeenCalledWith('abc', { list: 'l2' })
   })
 
   it('will not approve a row with no title', async () => {
@@ -138,6 +210,19 @@ describe('an update suggestion', () => {
     // It still has a date to move, like a task.
     expect(screen.getByLabelText('Due date')).toBeInTheDocument()
   })
+
+  it('shows the title as plain text, not an input, and never sends one', async () => {
+    const user = userEvent.setup()
+    const { onApprove } = show({
+      items: [task({ kind: 'update', title: 'Buy paint',
+        target: { list: 'l1', uid: 'u1', title: 'Buy paint' } })],
+    })
+    expect(screen.queryByLabelText('Title')).toBeNull()
+    expect(document.querySelector('.mail-sug-title')!.tagName).toBe('SPAN')
+    expect(document.querySelector('.mail-sug-title')).toHaveTextContent('Buy paint')
+    await user.click(screen.getByRole('button', { name: 'Apply update' }))
+    expect(onApprove).toHaveBeenCalledWith('abc', {})
+  })
 })
 
 describe('an event suggestion', () => {
@@ -171,15 +256,15 @@ describe('an event suggestion', () => {
     expect(m.calendars).toHaveBeenCalledTimes(1)
   })
 
-  it('sends only the title, and the calendar when one was chosen', async () => {
+  it('sends neither title nor date unless edited, and the calendar when one was chosen', async () => {
     const user = userEvent.setup()
     m.calendars.mockResolvedValue([list('c1', 'Family')])
     const { onApprove } = show({ items: [event] })
     await user.click(screen.getByRole('button', { name: 'Add event' }))
-    expect(onApprove).toHaveBeenLastCalledWith('abc', { title: 'Parent evening' })
+    expect(onApprove).toHaveBeenLastCalledWith('abc', {})
     await user.selectOptions(screen.getByLabelText('Add to calendar'), await screen.findByRole('option', { name: 'Family' }))
     await user.click(screen.getByRole('button', { name: 'Add event' }))
-    expect(onApprove).toHaveBeenLastCalledWith('abc', { title: 'Parent evening', calendar: 'c1' })
+    expect(onApprove).toHaveBeenLastCalledWith('abc', { calendar: 'c1' })
   })
 })
 
