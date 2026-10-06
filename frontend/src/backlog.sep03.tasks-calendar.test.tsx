@@ -159,7 +159,9 @@ function tasksSetup(view: 'list' | 'day3' = 'list') {
  *  setter out so a test can play a concurrent server refresh. */
 function SidebarHost({ initial, api: sbApi, expose }: {
   initial: List[]
-  api: typeof noopApi
+  // The same methods as `noopApi`, each any mock: a test swaps one in that
+  // resolves to a List or `unknown`, and vitest 4 types a mock by what it returns.
+  api: Record<keyof typeof noopApi, unknown>
   expose?: (set: (next: List[]) => void) => void
 }) {
   const [items, setItems] = useState(initial)

@@ -6,7 +6,7 @@
 // after it. A second copy that got either wrong would measure fallback-font
 // metrics and be off by a few px, silently, and differently depending on how
 // fast the run is.
-import { page } from '@vitest/browser/context'
+import { page } from 'vitest/browser'
 
 /** Put the page at a viewport. 844 is an iPhone 14's CSS height. */
 export const viewport = (width: number, height = 844) => page.viewport(width, height)

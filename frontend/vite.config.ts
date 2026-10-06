@@ -1,6 +1,7 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import { configDefaults } from 'vitest/config'
+import { playwright } from '@vitest/browser-playwright'
 import react from '@vitejs/plugin-react'
 
 // Dev: `npm run dev` proxies API calls to the FastAPI app on :8080.
@@ -64,7 +65,10 @@ export default defineConfig({
           include: ['src/**/*.browser.test.tsx'],
           browser: {
             enabled: true,
-            provider: 'playwright',
+            // `env: { TZ }` above is a NODE process variable and never reaches
+            // the page, so the zone has to be set on the browser context or the
+            // DST pinning the comment above defends is silently lost here.
+            provider: playwright({ contextOptions: { timezoneId: 'America/New_York' } }),
             headless: true,
             // BOTH ENGINES, every file. Chromium was the only one for as long
             // as this project existed, and that left the engine every phone
@@ -80,13 +84,7 @@ export default defineConfig({
             // an assertion that pins an exact height belongs in a tolerance,
             // not a `toBe` — every one here already reads as `toBeGreaterThan`
             // or a rounded compare, which is why adding this needed no edits.
-            instances: [
-              // `env: { TZ }` above is a NODE process variable and never reaches
-              // the page, so the zone has to be set on the browser context or the
-              // DST pinning the comment above defends is silently lost here.
-              { browser: 'chromium', context: { timezoneId: 'America/New_York' } },
-              { browser: 'webkit', context: { timezoneId: 'America/New_York' } },
-            ],
+            instances: [{ browser: 'chromium' }, { browser: 'webkit' }],
           },
         },
       },
