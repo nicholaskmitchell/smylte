@@ -25,11 +25,11 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^5.2.0",
-    "@vitest/browser": "^3.2.7",
+    "@vitest/browser-playwright": "^4.1.11",
     "jsdom": "^29.1.1",
     "playwright": "~1.56.0",
     "typescript": "^5.6.3",
     "vite": "^7.3.6",
-    "vitest": "^3.2.7"
+    "vitest": "^4.1.11"
   }
 }
