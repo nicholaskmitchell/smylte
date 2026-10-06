@@ -55,12 +55,16 @@ jobs:
           # reviewing the MR, start its pipeline by hand.
           git push -o ci.skip "$REMOTE" "FETCH_HEAD:refs/heads/$BR" --force
 
+          # The project's owner merges every merge request, so assign it to them.
+          # A project with no single owner (a group's) gets no assignee.
+          OWNER=$(curl -s --max-time 20 -H "PRIVATE-TOKEN: $GITLAB_TOKEN" "$API" | jq -r '.owner.id // empty' || true)
           OUT="$RUNNER_TEMP/mr.json"
           CODE=$(curl -s -o "$OUT" -w '%{http_code}' -X POST \
             -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
             --data-urlencode "source_branch=$BR" \
             --data-urlencode "target_branch=$BASE" \
             --data-urlencode "title=$TITLE" \
+            ${OWNER:+--data-urlencode "assignee_id=$OWNER"} \
             --data-urlencode "description=From GitHub PR by \`$AUTHOR\`: $URL"$'\n\n'"$(printf '%s\n' "$BODY" | sed 's/@/@ /g; s/^/> /')" \
             "$API/merge_requests")
           # 201 = created, 409 = an open MR for this branch already exists (fine)
