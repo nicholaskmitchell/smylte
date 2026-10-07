@@ -3,7 +3,7 @@
 `python dev/mail_eval.py [--claude]` re-runs everything here. It needs
 `TYPESAFE_API_KEY`; `--claude` also needs `SMYLTE_ANTHROPIC_API_KEY` (and
 `ANTHROPIC_WORKSPACE_ID` for a key that is not scoped to a workspace). Claude
-is always `claude-haiku-4-5` — the production default — with a $2 cap.
+is always `claude-haiku-5-5` — the production default — with a $2 cap.
 `--report-only` re-prints the tables from a saved results file.
 
 ## The data
