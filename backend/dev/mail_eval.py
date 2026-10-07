@@ -203,7 +203,7 @@ def run_claude(emails: list[dict], dedup: list[dict]) -> dict | None:
     from smylted.mail.llm import Candidate, EmailForExtraction, Extraction, LlmClient  # noqa: E402
     # Haiku only, deliberately not configurable here: this is a cost-bounded
     # comparison against the production default, not a model sweep.
-    model = "claude-haiku-4-5"
+    model = "claude-haiku-5-5"
     workspace = os.environ.get("ANTHROPIC_WORKSPACE_ID", "").strip()
     headers = {"anthropic-workspace-id": workspace} if workspace else None
     spent = {"in": 0, "out": 0}
@@ -214,8 +214,9 @@ def run_claude(emails: list[dict], dedup: list[dict]) -> dict | None:
         create = client.messages.create
 
         def counted(**kw):
-            # Hard stop well under $2 at Haiku 4.5's $1 / $5 per Mtok.
-            if spent["in"] / 1e6 * 1.0 + spent["out"] / 1e6 * 5.0 > 2.0:
+            # Hard stop well under $2 at Haiku 5.5's $0.10 / $0.50 per Mtok (prompts
+            # under 100k tokens, which every eval prompt is).
+            if spent["in"] / 1e6 * 0.10 + spent["out"] / 1e6 * 0.50 > 2.0:
                 raise RuntimeError("eval spending cap reached")
             r = create(**kw)
             spent["in"] += r.usage.input_tokens

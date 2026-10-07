@@ -42,7 +42,7 @@ from .authres import DEFAULT_TRUSTED
 MAIL_SETTINGS_KEY = "mail_settings"
 MAIL_STATUS_KEY = "mail_status"
 SECRETS_MARKER_KEY = "secrets_backend"
-DEFAULT_MODEL = "claude-haiku-4-5"
+DEFAULT_MODEL = "claude-haiku-5-5"
 DEFAULT_JEV_MODEL = "jev-latest"
 
 HARD_EXCLUDED_FLAGS = frozenset({"\\sent", "\\drafts", "\\all", "\\junk", "\\trash"})

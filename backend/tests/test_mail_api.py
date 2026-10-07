@@ -114,7 +114,7 @@ def test_the_payload_has_three_secrets_and_the_defaults(tmp_path):
     assert body["secrets_backend"]["name"] == "file"
     assert body["secrets_backend"]["available"] is True
     assert body["deployment_enabled"] is True
-    assert body["defaults"] == {"model": "claude-haiku-4-5"}
+    assert body["defaults"] == {"model": "claude-haiku-5-5"}
     assert body["settings"]["enabled"] is False
     assert body["pinned_cert_fingerprint"] is None
 
