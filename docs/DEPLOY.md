@@ -1,618 +1,341 @@
-# Deployment — Smylte at radicale.nicholaskmitchell.com
+# Deployment
 
-Public (no tailnet), gated by the app's own username/password. Raw CalDAV for
-device clients moves to `radicale.nicholaskmitchell.com/dav`.
+Smylte runs as a systemd service next to Radicale, behind a reverse proxy that
+sends `/dav` to Radicale and everything else to the app. The app signs in to
+Radicale over localhost, so Radicale is only reachable through `/dav`.
 
 ```
-                              Cloudflare edge (TLS, your login is the app's own)
-                                        │
-                         cloudflared tunnel (dashboard-managed)
-                                        │  http://127.0.0.1:9080
-                              ┌─────────┴──────────┐  (public Caddy site)
-                    /dav/* ──►│  Caddy path split   │──► everything else
-              (X-Script-Name) │                     │
-                              ▼                     ▼
-                   Radicale 127.0.0.1:5232   smylted 127.0.0.1:8080 ──► Radicale (localhost)
-                     (device sync)              (web app)
+                 HTTPS (your proxy, or a Cloudflare tunnel)
+                                  │
+                       ┌──────────┴──────────┐
+             /dav/* ──►│  Caddy path split    │──► everything else
+                       └──────────┬──────────┘
+                     ▼                         ▼
+          Radicale 127.0.0.1:5232     smylted 127.0.0.1:8080 ──► Radicale
+            (device sync)               (web app)
 ```
 
-The app authenticates to Radicale as you over localhost; Radicale is never
-exposed except through the `/dav` path (Basic auth, HTTPS at the edge).
+This guide uses `smylte.example.com` as the hostname, `<user>` as the account
+that runs the service, and `~/smylte` as the checkout. The templates in
+`deploy/` are filled in for one particular deployment. Before installing, edit
+`User=`, `Group=`, `WorkingDirectory=` and `ExecStart=` in `deploy/smylte.service`,
+`USER_NAME` in `deploy/setup.sh`, and the hostnames in
+`deploy/Caddyfile.snippet` and `deploy/smylte.env.example`.
 
-Legend: **[SAFE]** on-Pi, reversible · **[DASH]** you, in the Cloudflare dashboard
-· **[PROD]** touches production Radicale/Caddy — do only with a go-ahead.
+## Requirements
 
----
+- A Linux host with systemd, and Radicale already running on `127.0.0.1:5232`.
+- **Python 3.12 or 3.13.** CI tests exactly these (`.github/workflows/ci.yml`),
+  and `setup.sh` refuses anything else.
+- Node.js, to build the frontend.
+- Caddy (or another reverse proxy), and optionally `cloudflared`.
 
-## 0. Build the frontend  **[SAFE]**
+## 1. Build the frontend
+
 ```bash
 cd ~/smylte/frontend && npm install && npm run build   # -> dist/
 ```
-⚠️ **Restart the service after a rebuild**: `sudo systemctl restart smylte`. The
-Content-Security-Policy (below) carries a hash of the SPA's inline pre-paint
-script, read from `dist/index.html` at startup — so a rebuild that changes that
-script while the old process is still running leaves a stale hash, and the
-browser blocks the script: a blank page. Everything else about a rebuild is
-picked up without a restart, so this is the one new rule.
 
-## A. Install the app  **[SAFE]**
+**Restart the service after every rebuild** (`sudo systemctl restart smylte`).
+The Content-Security-Policy includes a hash of the SPA's inline pre-paint script,
+read from `dist/index.html` at startup. A stale hash blocks the script, and the
+page loads blank.
 
-### The Python the service runs on
-**Supported: 3.12 and 3.13.** CI runs the full backend suite on exactly those
-two (`.github/workflows/ci.yml`, job `backend`), and `setup.sh` refuses to
-install onto anything else.
+## 2. Install the app
 
-`setup.sh` does **not** create the venv. Its interpreter is whatever `python3`
-was on the day someone ran `venv`, and it stays that version forever — including
-across an OS upgrade that moves `python3` underneath it, which is exactly how
-this drifted out of CI's coverage once already. A docstring defect that raises
-at import on 3.13 and on no earlier version took the service down while CI, then
-pinned to 3.12, was fully green.
+`setup.sh` doesn't create the venv. Create it with a supported Python, and
+rebuild it if an OS upgrade moves `python3` to an untested version:
 
-Check what is there, and rebuild it if it is not on the list:
 ```bash
-~/smylte/backend/.venv/bin/python -V
-# if it is not 3.12.x or 3.13.x:
-sudo systemctl stop smylte
-cd ~/smylte/backend && rm -rf .venv
+cd ~/smylte/backend
 python3.13 -m venv .venv && .venv/bin/pip install -r requirements.txt
-sudo systemctl start smylte && curl -s localhost:8080/healthz
+.venv/bin/python -V    # must be 3.12.x or 3.13.x
 ```
-Worth re-checking after any `apt full-upgrade` that moves the system Python.
 
-### Run it
+Then:
+
 ```bash
 sudo ~/smylte/deploy/setup.sh
-```
-Prompts for the Radicale password and a new app login password (scrypt-hashed),
-generates the session + hook secrets, writes `/etc/smylte/smylte.env` and
-`/etc/smylte/hook-secret` (both 0600), installs `/usr/local/bin/smylte-notify` and
-`smylte.service`, and starts it on `127.0.0.1:8080`. Check: `curl -s localhost:8080/healthz`.
-
-The SQLite cache lives at `/var/lib/smylte/smylte.db`, which `StateDirectory=smylte`
-in the unit creates and owns. It is deliberately outside the source tree: the
-unit used to grant `ReadWritePaths=~/smylte/backend`, which is where `.venv` and
-`smylted` live, so a write primitive in the internet-reachable parse path could
-drop a `.pth` into site-packages and survive every restart.
-
-### Moving an existing install to /var/lib/smylte  **[PROD — one time]**
-`setup.sh` leaves an existing `/etc/smylte/smylte.env` untouched, so an install
-made before this change still points `SMYLTE_DB` at the old path — which the
-narrowed sandbox no longer grants, and the service will fail to open its cache.
-Move it by hand, once:
-```bash
-sudo systemctl stop smylte
-sudo install -d -o nicholaskmitchell -g nicholaskmitchell -m 0700 /var/lib/smylte
-sudo mv ~/smylte/backend/smylte.db     /var/lib/smylte/smylte.db
-sudo mv ~/smylte/backend/smylte.db-wal /var/lib/smylte/ 2>/dev/null || true
-sudo mv ~/smylte/backend/smylte.db-shm /var/lib/smylte/ 2>/dev/null || true
-sudo chown nicholaskmitchell:nicholaskmitchell /var/lib/smylte/smylte.db*
-sudo sed -i 's#^SMYLTE_DB=.*#SMYLTE_DB=/var/lib/smylte/smylte.db#' /etc/smylte/smylte.env
-sudo systemctl start smylte && curl -s localhost:8080/healthz
-```
-Move the file rather than letting a fresh one be created: `smylte.db` holds the
-sidecar-class tables under **Backups** below, and those are the one part of it a
-resync cannot rebuild. Take the backup first.
-
-### Migrating a box named `tasks`  **[PROD — one time, with sudo]**
-
-Everything above assumes the `smylte` names. A deployment installed before the
-rename is called `tasks` throughout — `tasks.service`, `/etc/tasks`,
-`/var/lib/tasks`, `~/tasks`, `TASKS_*` in the env file, `/usr/local/bin/tasks-notify`
-— and `deploy/migrate.sh` is what moves it. Do not do this by hand; the script
-is guarded at every step and a half-finished hand migration is the one state
-nothing here describes.
-
-```bash
-cd ~/tasks
-./deploy/migrate.sh --status     # what is pending, and what needs root
-./deploy/migrate.sh --dry-run    # print the actions, change nothing
-sudo ./deploy/migrate.sh         # apply
+curl -s localhost:8080/healthz
 ```
 
-**Back up first** — see **Backups** below. The sidecar tables in the database
-exist nowhere on the wire and a resync cannot rebuild them.
+`setup.sh` asks for the Radicale password and a new app password (stored as an
+scrypt hash), generates the session and hook secrets, writes
+`/etc/smylte/smylte.env` and `/etc/smylte/hook-secret` (both 0600), installs
+`/usr/local/bin/smylte-notify` and `smylte.service`, and starts the app on
+`127.0.0.1:8080`. It leaves an existing env file untouched.
 
-What it does, in this order and each step skipped if already done: stops the old
-unit; moves `/etc/tasks` → `/etc/smylte` and rewrites the `TASKS_*` names inside
-the env file **in place**, keeping a timestamped copy (the session secret and
-the password hash exist nowhere else, so the file is never regenerated); moves
-`/var/lib/tasks` → `/var/lib/smylte` with the `-wal`/`-shm` sidecars; moves the
-checkout `~/tasks` → `~/smylte` and repairs the venv's console-script shebangs;
-installs `smylte-notify` and repoints Radicale's `hook =` line; installs and
-enables `smylte.service` and removes the old unit; replaces the sudoers rule
-(validated with `visudo -c` before it lands — a malformed file under
-`/etc/sudoers.d` breaks *sudo*, not just one rule); starts the service;
-then reinstalls `~/smylte-autopull.sh` and rewrites the crontab line.
+The database is at `/var/lib/smylte/smylte.db`, created by
+`StateDirectory=smylte` in the unit. It is kept outside the source tree so the
+service has no write access to its own code or venv.
 
-`migrate.sh` re-execs itself from a temporary copy, so moving the checkout out
-from under a running script is safe. Progress is a single integer in
-`~/.smylte-migration-level`; re-running is a no-op and a run interrupted part way
-resumes rather than half-applying.
+## 3. Reverse proxy
 
-**Autopull calls `migrate.sh --auto` on every deploy** — but read the next
-paragraph before relying on that for *this* migration. It applies migrations
-needing no root, and for anything that does need root it logs the command and
-**declines to restart the service**, leaving the old one running rather than
-bringing it up against a half-renamed box. So a deploy that lands before you run
-the migration is safe; it keeps saying so in `~/smylte-autopull.log` on every
-tick, and — if Telegram is configured — sends **one** message saying deploys are
-stalled. Once, not once a minute: the marker is `~/.smylte-migration-notified`,
-cleared automatically when nothing is pending so the next migration can notify
-again. It cannot do the root half itself, because
-the sudoers rule grants exactly `systemctl restart smylte.service` — widening it
-so cron could rewrite `/etc` would undo the reason it is that narrow.
-
-**For migration 0001 itself, that safety net is not yet installed.** The autopull
-loop running on a pre-rename box is the copy at `~/tasks-autopull.sh`, which
-predates `migrate.sh` and knows nothing about it — migration 0002 is what
-installs the version that calls it. So on the deploy that first carries this
-change, the old loop simply pulls and restarts `tasks.service` as it always has.
-
-That is safe, but by a different mechanism: the `tasksd` Python package survives
-as a small shim, so the old unit's `python -m tasksd` keeps booting the renamed
-code, and `config.py` still reads the `TASKS_*` names out of the old env file.
-The box keeps working, unmigrated, until you run the migration — it just will
-not nag you about it. Both the shim and the env fallback are deleted in a later
-release, once the deployment has migrated.
-
-Later migrations go in `deploy/migrations/` as `NNNN-slug.sh`, defining
-`NEEDS_ROOT`, `describe()`, `applies()` and `apply()`.
-
-### Auto-deploy from `main`  **[PROD — cron + one sudoers rule]**
-
-`deploy/smylte-autopull.sh` is what keeps the Pi current: fetch, fast-forward
-only, reinstall backend deps if `requirements.txt` moved, rebuild the frontend
-if anything under `frontend/` did, apply any pending unprivileged migration
-(`migrate.sh --auto`), restart the service. It refuses to do
-anything clever — a non-fast-forward pull is left alone for a human, and an
-`flock` means a slow rebuild cannot be overlapped by the next minute's run.
-
-It lives in the repo so the Corresponding Source the licence asks for includes
-the script that produces the running deployment, and it is *installed* rather
-than run from the tree:
+Append `deploy/Caddyfile.snippet` to `/etc/caddy/Caddyfile`, then:
 
 ```bash
-cp ~/smylte/deploy/smylte-autopull.sh ~/smylte-autopull.sh   # re-copy after it changes
-chmod +x ~/smylte-autopull.sh
-# the restart needs one passwordless rule:
+sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+```
+
+This adds a loopback site on `:9080`: `/dav*` goes to Radicale (prefix stripped,
+`X-Script-Name: /dav`) and everything else to the app. Don't set a second
+Content-Security-Policy in the proxy; the app sends its own.
+
+The snippet also answers **RFC 6764 discovery**: `/.well-known/caldav`,
+`/.well-known/carddav` and DAV methods on `/` redirect to `/dav/`. Apple's
+clients need this because they take a hostname, not a URL. Browsers loading the
+app aren't affected. `smylted` answers the same probes itself, so discovery
+works behind other proxies too. If `/dav` moves, change both the snippet and
+`SMYLTE_DAV_URL`.
+
+## 4. Cloudflare tunnel (optional)
+
+1. In Cloudflare Zero Trust, go to **Networks → Tunnels → Create tunnel** and
+   copy the token.
+2. Copy `deploy/smylte-cloudflared.env.example` to
+   `deploy/smylte-cloudflared.env`, paste the token, and start the connector:
+   ```bash
+   cd ~/smylte/deploy && docker compose -f smylte-cloudflared.compose.yml up -d
+   ```
+3. On the tunnel's **Public Hostname** tab, add `smylte.example.com` with service
+   type `HTTP` and URL `localhost:9080`. The port goes in the service field, not
+   in DNS. Cloudflare creates the DNS record.
+
+## 5. Radicale storage hook
+
+Add this under `[storage]` in Radicale's config, then restart Radicale:
+
+```
+hook = /usr/local/bin/smylte-notify %(path)s
+```
+
+The hook tells the app about changes from other clients within about a second.
+Without it, they appear on the 30-second poll. The hook's request is synchronous
+on purpose (`curl --max-time 2`): Radicale kills the hook's process group as soon
+as it returns, so a backgrounded request never connects. Optionally add
+`use_mtime_and_size_for_item_cache = True`, which helps on slow storage.
+
+## 6. Device clients
+
+**Clients that take a URL** (DAVx⁵, Thunderbird, jtx Board, Evolution):
+
+    https://smylte.example.com/dav
+
+with your Radicale username and password.
+
+**Apple clients take a hostname only.** Enter `smylte.example.com` with no
+`https://` and no `/dav`. Discovery finds the rest.
+
+- **macOS:** Calendar → Settings → Accounts → **+** → *Other CalDAV Account* →
+  Account Type **Manual**.
+- **iOS/iPadOS:** Settings → Apps → Calendar → Calendar Accounts → Add Account →
+  Other → *Add CalDAV Account*.
+
+To make the bare domain work too, add SRV and TXT records:
+
+    _caldavs._tcp.example.com.  SRV  0 1 443 smylte.example.com.
+    _caldavs._tcp.example.com.  TXT  "path=/dav/"
+
+Apple's Reminders dropped CalDAV task support in iOS 13, so Apple devices show
+calendars only. Use the web app, Tasks.org or jtx Board for tasks.
+
+## 7. Auto-deploy from `main` (optional)
+
+`deploy/smylte-autopull.sh` fast-forwards the checkout, reinstalls backend
+dependencies if `requirements.txt` changed, rebuilds the frontend if
+`frontend/` changed, applies pending unprivileged migrations, and restarts the
+service. It never handles a non-fast-forward pull and uses `flock` so runs don't
+overlap. Install a copy (not a symlink, since it pulls the tree it lives in) and
+re-copy it when it changes:
+
+```bash
+cp ~/smylte/deploy/smylte-autopull.sh ~/smylte-autopull.sh && chmod +x ~/smylte-autopull.sh
 echo "$(id -un) ALL=(root) NOPASSWD: /usr/bin/systemctl restart smylte.service" \
   | sudo tee /etc/sudoers.d/smylte-autopull && sudo chmod 440 /etc/sudoers.d/smylte-autopull
 crontab -e     # * * * * * $HOME/smylte-autopull.sh
 ```
 
-A copy rather than a symlink into the tree, deliberately: the script's own job
-is to `git pull` the directory it would be symlinked into, and a script that
-rewrites itself mid-run is a failure mode nobody wants to debug at one-minute
-intervals. The cost is that a change to it needs the copy repeating — which is
-why the line above says so.
+The log is `~/smylte-autopull.log`.
 
-Progress and failures go to `~/smylte-autopull.log`.
+## 8. Upgrades and migrations
 
-## B. Public Caddy site (path split)  **[PROD — reload Caddy]**
-Append `~/smylte/deploy/Caddyfile.snippet` to `/etc/caddy/Caddyfile`, then:
+Changes outside the source tree (the unit, `/etc/smylte`, Radicale's hook line)
+are applied by `deploy/migrate.sh`. Preview before running anything as root:
+
 ```bash
-sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+cd ~/smylte
+./deploy/migrate.sh --status     # what is pending, and what needs root
+./deploy/migrate.sh --dry-run    # print the actions, change nothing
+sudo ./deploy/migrate.sh         # apply
 ```
-This adds an `http://127.0.0.1:9080` site: `/dav*` → Radicale (prefix stripped,
-`X-Script-Name: /dav`), everything else → the app. The existing tailnet
-`radicale.nkm.com { bind 100.99.99.49 }` vhost is untouched and can stay.
 
-It also answers **RFC 6764 discovery** at the site root — `/.well-known/caldav`
-and `/.well-known/carddav`, plus DAV verbs (`PROPFIND`/`REPORT`/…) on `/`, all
-301 to `/dav/`. That is what makes clients which cannot be handed a path work:
-Apple's CalDAV setup takes a *host*, not a URL, so it can only find `/dav` by
-probing the root (step E). Only DAV methods are matched on `/`, so browsers
-loading the app are unaffected. `smylted` answers the same probes itself, so
-discovery still works behind a different reverse proxy; if `/dav` ever moves,
-change both this snippet and `SMYLTE_DAV_URL`.
+Back up first (see [Backups](#backups)). Re-running is a no-op, and an
+interrupted run resumes. Progress is kept in `~/.smylte-migration-level`.
+Autopull runs `migrate.sh --auto`, which applies migrations that don't need
+root. For one that does, it logs the command, leaves the old service running
+instead of restarting, and sends one Telegram message if notifications are set
+up. New migrations go in `deploy/migrations/` as `NNNN-slug.sh`, defining
+`NEEDS_ROOT`, `describe()`, `applies()` and `apply()`.
 
-## C. Tunnel + DNS  **[DASH]**
-1. Zero Trust → **Networks → Tunnels → Create tunnel** (name `tasks`). Copy the token.
-2. `cp ~/smylte/deploy/smylte-cloudflared.env.example ~/smylte/deploy/smylte-cloudflared.env`,
-   paste the token, then:
-   ```bash
-   cd ~/smylte/deploy && docker compose -f smylte-cloudflared.compose.yml up -d
-   ```
-   (host-network connector so it can reach `127.0.0.1:9080`).
-3. On the tunnel → **Public Hostname** tab → **Add a public hostname** (this is the
-   same shape as notes' `notes.nkm.com → http://silverbullet:3000`):
-   - **Subdomain** `radicale`, **Domain** `nicholaskmitchell.com`, Path empty
-     — this is the DNS part; it has **no port**. Cloudflare auto-creates the CNAME.
-   - **Service**: Type `HTTP`, URL `localhost:9080`
-     — **the port goes HERE, in the Service field, never in a DNS record.**
-   Do NOT hand-create a DNS record (that's why "you can't put a port in DNS" — you're
-   not supposed to; the port lives in the tunnel's Service config).
-   ⚠️ Adding this repoints `radicale.nkm.com` off the tailnet, through the tunnel.
-   Device clients then use `.../dav` (step E).
+**Installs from before the rename** (`tasks.service`, `/etc/tasks`,
+`/var/lib/tasks`, `~/tasks`, `TASKS_*` variables) are moved by migrations 0001
+and 0002. Run the commands above from `~/tasks`, and don't migrate by hand. The
+old autopull script doesn't call `migrate.sh`, so it won't prompt you. Until you
+migrate, a `tasksd` shim and the `TASKS_*` fallback in `config.py` keep the old
+unit working.
 
-## D. Radicale storage hook (live phone → web)  **[PROD — edit Radicale config + restart]**
-This is the one sharp edge (spec §4/§10). Add to `~/radicale/config` under `[storage]`:
+## 9. Verify
+
+```bash
+S=https://smylte.example.com
+curl -sI -X PROPFIND $S/.well-known/caldav | head -1   # 301
+curl -sI -X PROPFIND $S/                   | head -1   # 301
+curl -s -X PROPFIND $S/dav/ -u <user>:PASSWORD -H 'Depth: 0' \
+  -H 'Content-Type: application/xml' \
+  --data '<propfind xmlns="DAV:"><prop><current-user-principal/></prop></propfind>'
+# -> <current-user-principal><href>/dav/<user>/</href>
+curl -sI -X OPTIONS $S/dav/<user>/ -u <user>:PASSWORD | grep -i '^dav:'
+# -> DAV: 1, 2, 3, calendar-access   (Apple refuses the account without it)
 ```
-hook = /usr/local/bin/smylte-notify %(path)s
-```
-Optionally also `use_mtime_and_size_for_item_cache = True` (a Pi win, spec §9).
-Then `sudo systemctl restart radicale`.
 
-The hook POSTs **synchronously** (`curl --max-time 2`) and then exits — do NOT
-"optimize" it into a backgrounded curl: Radicale SIGKILLs the hook's whole
-process group the moment the script returns, so a backgrounded request dies
-before it connects (see the header comment in `deploy/smylte-notify`). The
-bounded max-time keeps the locked write from stalling more than ~2s even if
-the app is down. **Søren note:** the restart briefly interrupts
-Søren's calendar tools (transient); and Søren should be reloaded once so it picks
-up its hardened `tools/radicale.py` (see the tasks-app-stack memory). Neither is
-urgent.
+- `$S` shows the login page, and tasks and calendars load after signing in.
+- A `200` with HTML instead of a `301` means the Caddy snippet is out of date.
+- A change made on a phone appears within about a second (hook) or 30 seconds
+  (poll).
 
-Without this hook the app still works — phone changes just appear on the ~30s
-poll instead of in ~1s.
+## Optional features
 
-## E. Point device clients at /dav  **[you, on each device]**
-
-Which of the two forms a client wants depends on whether it accepts a **URL**
-or only a **host**. Both work; they just take different fields.
-
-**Clients that accept a full URL** — DAVx⁵, Thunderbird, jtx Board, Evolution:
-
-    https://radicale.nicholaskmitchell.com/dav
-
-user `nicholaskmitchell`, your Radicale password.
-
-**Apple (macOS Calendar, iOS) — give it the host, not the URL.** Apple's CalDAV
-setup has a *Server Address* field that takes a hostname and nothing else;
-there is nowhere to put `/dav`, and pasting the full URL fails. This is not a
-misconfiguration on our side — it is how the client works, and it is why the
-server answers RFC 6764 discovery (section B): Apple probes
-`/.well-known/caldav` and the bare root, gets a 301 to `/dav/`, and finds the
-principal from there.
-
-- **macOS** — Calendar → Settings → Accounts → **+** → *Other CalDAV Account* →
-  Account Type **Manual** (Automatic wants an email address and will fail):
-  - Username `nicholaskmitchell`
-  - Password your Radicale password
-  - Server Address `radicale.nicholaskmitchell.com` — **no `/dav`, no `https://`**
-- **iOS/iPadOS** — Settings → Apps → Calendar → Calendar Accounts → Add Account
-  → Other → *Add CalDAV Account*, same three fields.
-
-Optional, so that bare `nicholaskmitchell.com` also resolves — RFC 6764 SRV
-records in DNS (the TXT record carries the path, which is exactly the piece
-Apple's field has no room for):
-
-    _caldavs._tcp.nicholaskmitchell.com.  SRV  0 1 443 radicale.nicholaskmitchell.com.
-    _caldavs._tcp.nicholaskmitchell.com.  TXT  "path=/dav/"
-
-⚠️ **Apple shows calendars, not task lists.** iOS/macOS Reminders dropped
-third-party CalDAV VTODO support in iOS 13, so an Apple account surfaces the
-VEVENT calendars only. Tasks need the web app, Tasks.org/DAVx⁵, or jtx Board —
-they are the same collections either way.
-
-## F. Connect Claude (OPTIONAL)  **[PROD — edit env + restart]**
-
-Off by default. Turning it on publishes an OAuth-protected MCP endpoint that
-Claude can be added to as a custom connector.
+### Claude connector (MCP)
 
 1. In `/etc/smylte/smylte.env`:
    ```
    SMYLTE_MCP_ENABLED=true
-   SMYLTE_PUBLIC_URL=https://radicale.nicholaskmitchell.com
+   SMYLTE_PUBLIC_URL=https://smylte.example.com
    ```
-   `SMYLTE_PUBLIC_URL` is required — the OAuth metadata has to state absolute
-   URLs, and the value a token is bound to must match what the client was
-   pointed at, so it is configured rather than read off the `Host` header. The
-   app refuses to start if it is missing, or if app auth is off, or if
-   `SMYLTE_SESSION_SECRET` is unset.
-2. `sudo systemctl restart smylte`.
-3. No Caddy change is needed. `/.well-known/oauth-*` and `/mcp` fall through the
-   existing catch-all to the app; only `/dav*`, the two CalDAV well-knowns and
-   `/internal*` are handled before it.
-4. In Claude → Settings → Connectors → **Add custom connector**, give it
-   `https://radicale.nicholaskmitchell.com/mcp`. Leave the OAuth Client ID and
-   Secret blank: the server supports dynamic client registration, so Claude
-   registers itself. A consent screen asks for your app username and password —
-   that is the gate; knowing the URL is not enough — and lets you grant
-   read-only instead of full access.
-5. Manage or revoke connections at any time in the app: **Settings → Connected
-   apps**. Disconnecting kills the access token and every refresh token from
-   that approval immediately.
+   `SMYLTE_PUBLIC_URL` is required because OAuth metadata needs absolute URLs
+   and tokens are bound to it. The app won't start without it, without app auth,
+   or without `SMYLTE_SESSION_SECRET`.
+2. `sudo systemctl restart smylte`. No proxy change is needed.
+3. In Claude → Settings → Connectors → **Add custom connector**, enter
+   `https://smylte.example.com/mcp` and leave the client ID and secret blank
+   (dynamic client registration). The consent screen asks for the app password
+   and offers read-only or full access.
+4. Manage connections in **Settings → Account → Connected apps**.
 
-Anthropic's requests come from `160.79.104.0/21`; if you ever put a WAF or
-Cloudflare Access in front of the app, that range needs to reach both `/mcp`
-*and* the `/.well-known/oauth-*` documents, or discovery fails with the server
-looking reachable.
+Anthropic's requests come from `160.79.104.0/21`. A WAF or Cloudflare Access in
+front of the app must let that range reach `/mcp` and `/.well-known/oauth-*`.
 
-## Verify
-- `https://radicale.nicholaskmitchell.com` → login → tasks + calendar.
-- `PROPFIND https://radicale.nicholaskmitchell.com/dav/nicholaskmitchell/` returns 207.
-- Discovery, i.e. what Apple actually does (both must be `301` → `/dav/`):
-  ```bash
-  S=https://radicale.nicholaskmitchell.com
-  curl -sI -X PROPFIND $S/.well-known/caldav | head -1   # HTTP/2 301
-  curl -sI -X PROPFIND $S/                   | head -1   # HTTP/2 301
-  curl -s -X PROPFIND $S/dav/ -u nicholaskmitchell:PASSWORD -H 'Depth: 0' \
-    -H 'Content-Type: application/xml' \
-    --data '<propfind xmlns="DAV:"><prop><current-user-principal/></prop></propfind>'
-  # -> <current-user-principal><href>/dav/nicholaskmitchell/</href>
-  ```
-  A `200` with HTML instead of a `301` means the Caddy snippet is stale — the
-  well-known blocks are missing and the request fell through to the web app.
-- `curl -I -X OPTIONS $S/dav/nicholaskmitchell/ -u ...` advertises
-  `DAV: 1, 2, 3, calendar-access` (Apple refuses the account without it).
-- Change a task on the phone → appears in the web UI within ~1s (hook) or ~30s (poll).
-- With the connector on, discovery answers and the endpoint challenges:
-  ```bash
-  S=https://radicale.nicholaskmitchell.com
-  curl -s $S/.well-known/oauth-protected-resource | jq .resource   # "$S/mcp"
-  curl -s $S/.well-known/oauth-authorization-server | jq .issuer    # "$S"
-  curl -sI -X POST $S/mcp -H 'Content-Type: application/json' -d '{}' | grep -i www-authenticate
-  # -> WWW-Authenticate: Bearer realm="smylte", resource_metadata="$S/.well-known/..."
-  ```
-  A `resource` that does not exactly match the URL you gave Claude — including
-  the path — is the usual reason a reachable server still fails to connect.
+Check:
 
-## Content-Security-Policy
-
-The app sets one on every response (`backend/smylted/csp.py`). It is what bounds
-where a page can fetch from at all — the field-level guards on collection colors
-and appearance tokens only cover the fields they name, and this covers the rest.
-Nothing to configure in Caddy; the snippet has a comment saying why it must not
-set a second one.
-
-What it allows, and why:
-
-| Directive | Why it is not tighter |
-|---|---|
-| `script-src 'self' 'sha256-…'` | The hash is the SPA's inline pre-paint script (it applies your theme before first paint, so it cannot be a module). Derived from the served `dist/index.html` at startup — see the warning in §0. |
-| `style-src … 'unsafe-inline' fonts.googleapis.com` | Every calendar and list color is an inline style, and the MCP consent screen is a `<style>` block, so `'unsafe-inline'` is unavoidable. The Google host is there because 13 of the Appearance font choices load a stylesheet from it. |
-| `font-src 'self' fonts.gstatic.com` | Where that Google stylesheet then fetches its woff2. The shipped faces (Newsreader/Hanken Grotesk/JetBrains Mono, and the Classic preset's Fraunces/Inter) are local and need neither host. |
-
-Everything else is `'self'` or `'none'`. Note the privacy consequence of the two
-Google entries: picking one of those font families means every page load — the
-public booking page included, for visitors who are not you — tells Google the
-reader's IP. Self-hosting those families would let both entries go.
-
-**If it breaks something**, in `/etc/smylte/smylte.env`:
-
+```bash
+curl -s $S/.well-known/oauth-protected-resource | jq .resource   # "$S/mcp"
+curl -s $S/.well-known/oauth-authorization-server | jq .issuer    # "$S"
+curl -sI -X POST $S/mcp -H 'Content-Type: application/json' -d '{}' | grep -i www-authenticate
 ```
-SMYLTE_CSP=report-only    # log violations in the browser console, block nothing
-SMYLTE_CSP=off            # no header at all
-```
-then `sudo systemctl restart smylte`. Unset (or anything unrecognised) enforces —
-a typo must not silently disable a security control. The policy in force is
-logged at startup: `journalctl -u smylte | grep csp:`.
 
-## If the password leaks — signing out everywhere
+If `resource` doesn't exactly match the URL given to Claude, the connection
+fails even though the server is reachable.
 
-Sessions are JWTs, so they are valid until they expire whether or not the
-browser still holds the cookie. How long that is comes from the **Stay signed
-in** setting under Settings → Account (1 day / 7 days / 30 days / Never), NOT
-from the env file: `SMYLTE_SESSION_TTL` is only the fallback used until the
-account has chosen, so editing it does nothing once a choice has been stored. Logging out
-withdraws one session *by name*; it cannot reach a session minted on someone
-else's machine, whose id you have never seen.
+### Telegram notifications
 
-Two levers, in the order to reach for them:
-
-1. **Change the password.** Regenerate with `cd ~/smylte/backend && .venv/bin/python
-   -m smylted hash-password` — `smylted` is not installed anywhere, so it resolves
-   only from the backend directory and run from elsewhere this aborts on "No
-   module named smylted" — set `SMYLTE_AUTH_PASSWORD_HASH` in `/etc/smylte/smylte.env`, `sudo systemctl
-   restart smylte`. Every existing session is refused from that moment: a token
-   carries a fingerprint of the credentials it was minted under, so changing
-   the password (or `SMYLTE_AUTH_USER`) invalidates all of them. This is the
-   normal response, and it keeps the session secret stable.
-2. **Rotate `SMYLTE_SESSION_SECRET`** if you have reason to think the secret
-   itself leaked — it is the signing key, and anyone holding it can mint a
-   valid session without the password. Set a fresh one (`python -c 'import
-   secrets;print(secrets.token_hex(32))'`) and restart. Every session dies,
-   including yours.
-
-An ordinary restart signs nobody out; only a change to one of these does.
-
-**MCP grants go with them.** Either lever also ends every OAuth grant on the
-remote MCP endpoint: an access token stops answering at once and its refresh
-token can no longer be exchanged, so a client cannot quietly re-arm another 30
-days. Reconnect each MCP client afterwards — it will send you back through the
-consent screen, which is the point. (This has not always been true: before the
-`cv` column on `oauth_tokens`, both levers left every MCP grant working, and
-"signing out everywhere" reached only the browser sessions.)
-
-## Telegram notifications (optional, off by default)
-Thirteen rules, described in full in `backend/smylted/notify/rules.py`. Five ship
-on: a **daily digest** at an hour you set, a nudge **before a meeting starts**,
-the **reminders you set** on individual tasks and events, a note when **someone
-books you**, and a warning when **sync has stopped working**. The other eight —
-the deadline and end-of-day nudges — ship off, with the case against each written
-beside its switch in Settings.
-
-Whatever is on, a rule may buzz only when its timing is the owner's (an hour they
-set, or a moment in their own calendar), and everything else is silent. That is
-what keeps a quiet-hours setting unnecessary, and it is the property any new rule
-has to preserve — `tests/test_notify_rules.py` asserts it rather than trusting
-it.
-
-1. Create a bot with [@BotFather](https://t.me/BotFather) and **message it once**
-   — a bot cannot open a conversation, so a chat it has never heard from answers
-   `chat not found`.
-2. Paste the token and your chat id into **Settings → Notifications**, turn the
-   switch on, and press **Send a test message**. Nothing is sent until all three
-   are true. (A deployment that never opens the UI can use
-   `SMYLTE_TELEGRAM_BOT_TOKEN` and `SMYLTE_TELEGRAM_CHAT_ID` in
-   `/etc/smylte/smylte.env` instead; the account's own values win when both are
-   set. `SMYLTE_NOTIFY_ENABLED=false` is an operator kill switch that stops the
-   scheduler being built at all, whatever the settings say.)
-3. **Open egress.** This is the step that is easy to miss and impossible to
-   diagnose from the outside. `deploy/smylte.service` is loopback-only
-   (`IPAddressDeny=any`), so until it is widened every send fails at connect,
-   gets retried, gets recorded in `notification_deliveries` with an error, and
-   nothing reaches a phone. Add Telegram's ranges as `IPAddressAllow=` lines
-   above the deny rather than deleting it — see the long note in the unit. The
-   process parses attacker-influenced iCalendar, so unrestricted egress turns a
-   parser bug into an exfiltration channel.
+1. Create a bot with [@BotFather](https://t.me/BotFather) and send it a message
+   (a bot can't start a conversation).
+2. In **Settings → Notifications**, enter the token and your chat id, turn it on
+   and press **Send a test message**. Alternatively set
+   `SMYLTE_TELEGRAM_BOT_TOKEN` and `SMYLTE_TELEGRAM_CHAT_ID` in the env file;
+   values set in the app take precedence. `SMYLTE_NOTIFY_ENABLED=false` disables
+   notifications entirely.
+3. **Allow egress.** The unit is loopback-only (`IPAddressDeny=any`). Add
+   Telegram's ranges as `IPAddressAllow=` lines above the deny, as shown in the
+   comments in `deploy/smylte.service`. Don't remove the deny: the service parses
+   untrusted iCalendar, and open egress would turn a parser bug into an
+   exfiltration channel.
 4. `sudo systemctl daemon-reload && sudo systemctl restart smylte`. The scheduler
-   sweeps once at startup, so a correctly configured deploy proves itself within
-   a minute.
+   runs once at startup.
 
-Which rules are on, the digest hour and the meeting lead time are **per-account
-preferences**, not env vars: they live in the settings blob and are edited in
-the app. `GET /api/notifications/recent` shows what the bot has actually sent,
-including anything the daily ceiling downgraded to silent.
+Rules, the digest time and lead times are account settings, edited in the app.
+`GET /api/notifications/recent` lists what was sent. The bot token is stored in
+the database in plain text (it has to be reused to send), so it is in every
+backup. It is never returned over HTTP. Put it in the env file to keep it out of
+the database. Telegram isn't end-to-end encrypted, so messages carry no error
+details.
 
-**The bot token is a credential.** Entered in Settings it is stored in
-`meta.app_settings` in the clear, like `booking_links.token` beside it — the app
-has to reproduce it to send, so unlike an OAuth secret it cannot be hashed, and
-it is therefore in every backup of `smylte.db`. It is never returned over HTTP:
-`GET /api/settings` substitutes a boolean and the public bot-id half, so the
-settings document the browser fetches on every page load carries no working
-credential. Put it in `/etc/smylte/smylte.env` instead if you would rather it
-never touch the database. Rotating it either way is `/revoke` in BotFather plus
-re-entering it. Note that Telegram's Bot API is not end-to-end encrypted and this
-server captures nothing of the reply side: treat every notification as a
-postcard, which is why the sync-failure alert names the collection and points at
-the log rather than carrying the error text.
+### Email suggestions
 
-## Email → suggested tasks (optional, off by default)
-The pipeline is described in `backend/smylted/mail/pipeline.py`; this section is
-how to run it. Everything that configures it — on/off, the model, Bridge's host,
-the folders, the sender lists — is in **Settings → Email** and applies on the
-next scan without a restart. (The one exception: while `SMYLTE_MAIL_IMAP_PASSWORD`
-is set, Bridge's host, port, encryption, certificate and username are fixed; see
-*The secrets*.) Nothing reaches Anthropic until the switch is on and
-both secrets are set. `SMYLTE_MAIL_ENABLED=false` is an operator kill switch: the
-loop never scans and the test buttons refuse, whatever the settings say.
+Configured in **Settings → Email**. Changes apply on the next scan. Nothing is
+sent to Anthropic until it is switched on and both secrets are set.
+`SMYLTE_MAIL_ENABLED=false` disables it. The pipeline is described in
+`backend/smylted/mail/pipeline.py`.
 
-### Where it runs
-The pipeline is part of `smylted`, so it runs wherever `smylted` runs, and it has
-to be able to open an IMAP connection to Bridge. Two shapes work:
+**Where it runs.** The pipeline runs inside `smylted` and needs an IMAP
+connection to Proton Mail Bridge. Either:
 
-1. **On the desktop that runs Bridge (today).** Run `smylted` there as an
-   ordinary user process with its own `SMYLTE_DB`, pointed at the same Radicale
-   (`RADICALE_URL` must be Radicale's own origin — the DAV client builds
-   server-absolute paths, so a `/dav` path prefix does not work; an SSH tunnel
-   `ssh -N -L 5232:127.0.0.1:5232 <server>` and `RADICALE_URL=http://127.0.0.1:5232`
-   is the simplest). Approve suggestions in that instance's UI; approved tasks
-   are ordinary VTODOs on Radicale and show up everywhere within a sync. Bridge
-   is at `127.0.0.1:1143`.
-2. **On the server, with Bridge tunnelled to it (the homelab shape).** Keep the
-   one `smylted` and give it a path to Bridge — `ssh -N -R 1143:127.0.0.1:1143
-   <server>` from the desktop makes Bridge appear on the server's loopback, which
-   the unit's `IPAddressAllow=localhost` already admits; a headless Bridge on the
-   homelab itself is the same thing without the tunnel. Host and port are
-   settings, and a pinned certificate is checked by fingerprint, not by
-   hostname, so a tunnel or a LAN address needs nothing special.
+- run `smylted` on the machine with Bridge (`127.0.0.1:1143`), with its own
+  `SMYLTE_DB` and `RADICALE_URL` pointing at Radicale's own origin, for example
+  through `ssh -N -L 5232:127.0.0.1:5232 <server>`. A `/dav` path prefix doesn't
+  work there; or
+- tunnel Bridge to the server with `ssh -N -R 1143:127.0.0.1:1143 <server>`, or
+  run Bridge headless on the server. The unit's `IPAddressAllow=localhost`
+  already admits it.
 
-### Bridge
-1. In Bridge, open the account's **mailbox configuration** and note the IMAP
-   username and password. They are Bridge's own, not your Proton login.
-2. **Settings → Advanced settings → Export TLS certificates** and keep `cert.pem`.
-   Bridge's certificate is self-signed; paste `cert.pem` into Settings → Email →
-   Certificate → **Pinned certificate**. The app compares the SHA-256 of what
-   the server presents against it before sending the password, and refuses on a
-   mismatch (re-export if Bridge ever regenerates it). "Don't check" exists for a
-   loopback host only and the page says why in red; it is refused for any other
-   host.
-3. Port `1143`, **STARTTLS** (Bridge's defaults), then **Test connection**. The
-   result lists the folders — Bridge shows Proton labels as `Labels/…` and
-   folders as `Folders/…`, and the same message can sit in several of them and in
-   All Mail at once, which is what the ledger is for. It also says whether the
-   newest INBOX messages (up to 10) carry `Authentication-Results` from a
-   trusted server (see below).
+**Bridge setup.**
 
-It coexists with Thunderbird: Bridge serves several IMAP clients at once, folders
-are opened with `EXAMINE` (read-only) and bodies fetched with `BODY.PEEK[]`, so
-nothing is marked read, moved, flagged or deleted, and Thunderbird's own account
-setup is untouched.
+1. In Bridge's mailbox configuration, note the IMAP username and password
+   (Bridge's own, not your Proton login).
+2. Export the certificate (**Settings → Advanced settings → Export TLS
+   certificates**) and paste `cert.pem` under **Certificate → Pinned
+   certificate**. The app checks its SHA-256 before sending the password.
+   "Don't check" is allowed for localhost only.
+3. Use port `1143` with **STARTTLS**, then **Test connection**. It lists the
+   folders and says whether recent INBOX mail carries `Authentication-Results`
+   from a trusted server. If none do, always-read senders are treated as
+   ordinary mail.
 
-### What Bridge passes through (and what the code assumes)
-Checked against Bridge's source and published Proton headers, not against a
-running Bridge (none was reachable from where this was built):
-- Bridge rebuilds each message's header from the headers Proton stored for it
-  (`pkg/message/build.go`, `toMessageHeader(msg.ParsedHeaders)`), in their
-  original order, so the `Authentication-Results` Proton's inbound servers wrote
-  arrive over IMAP. Proton writes one per method — `arc`, `dkim`, `spf`, `dmarc` —
-  with authserv-id `mailinNNN.protonmail.ch` (ARC sets use `mail.protonmail.ch`).
-  The trusted list defaults to `protonmail.ch` and `*.protonmail.ch`; only those
-  headers are believed, and `ARC-Authentication-Results` never is. A sender can
-  write a header that claims Proton's authserv-id, but Proton prepends its own
-  above anything that arrived with the message. So DKIM and SPF are read only
-  from the topmost trusted header that has them, and every trusted DMARC result
-  must say `pass`. A forged "pass" lower down cannot outvote Proton's verdict.
-- When a message has no `Message-ID`, Bridge invents `<id@protonmail.internalid>`,
-  and it appends `<id@protonmail.internalid>` to `References`. Thread identity
-  ignores those, or every new thread would be its own root and a reply would
-  never find its request.
-**Test connection** prints which authserv-ids it saw on your newest INBOX
-messages (up to 10). If that line says none came through, allow-listed senders are treated
-as ordinary mail (the safe failure), and that is worth reporting.
+Smylte opens folders read-only (`EXAMINE`, `BODY.PEEK[]`), so it doesn't mark,
+move or delete anything, and it can share Bridge with Thunderbird.
+`Authentication-Results` are trusted only from `protonmail.ch` and
+`*.protonmail.ch`. DKIM and SPF are read from the topmost trusted header, and
+every trusted DMARC result must pass, so a forged header lower down can't
+override Proton's verdict.
 
-### Egress
-`deploy/smylte.service` is loopback-only. Anthropic publishes fixed ranges for
-`api.anthropic.com`; add them above the deny, as for Telegram:
+**Egress.** Allow Anthropic's ranges above the deny in the unit:
 
     IPAddressAllow=160.79.104.0/23
     IPAddressAllow=2607:6bc0::/48
 
-Bridge on the same host (or tunnelled to it) is covered by `localhost`; a Bridge
-on another machine needs its address allowed too. If a **TypeSafe** key is set
-(Jev then decides task-or-event and the duplicate check), `api.typesafe.ai` needs
-allowing as well,
-and that is a wider hole than the other two: it is served from Cloudflare's shared
-anycast addresses (`getent hosts api.typesafe.ai` answered `2606:4700::6812:182e`
-and `2606:4700::6812:192e` on 2026-10-05), so allowing it allows a slice of
-everything Cloudflare fronts. If that is not a trade worth making on the
-internet-facing box, leave Jev to a deployment that can afford the egress — a
-blocked Jev call costs nothing but the decision: the extraction model's choice
-stands and the ledger detail says "Jev unavailable". Why Jev has those two jobs
-and not a third (a pre-filter in front of every Claude call was measured and
-dropped) is written up with the numbers in `backend/dev/mail_eval/README.md`.
+A Bridge on another machine needs its address allowed too. A TypeSafe key also
+needs `api.typesafe.ai`, which is served from Cloudflare's shared anycast
+addresses, so allowing it opens a slice of everything Cloudflare serves. If
+that's not acceptable, leave the TypeSafe key empty. A blocked Jev call just
+leaves the decision to Claude. Measurements are in
+`backend/dev/mail_eval/README.md`.
 
-### The secrets
-The Anthropic key, the Bridge password and the (optional) TypeSafe key are
-**write-only**: Settings shows
-`{set, hint: "…last4"}` and nothing more, the value is never returned by any
-endpoint, and every log record is scrubbed of them (`smylted/mail/redact.py`).
-They are never written to `smylte.db`, the settings blob, or any config file in
-the repository. One store holds all of them:
+**Secrets.** The Anthropic key, Bridge password and TypeSafe key are write-only.
+They're never returned, never logged (`smylted/mail/redact.py`), and never written
+to `smylte.db` or any config file in the repository. They're stored in one of:
 
-- **The OS keyring** when the process can reach one (Secret Service on a desktop
-  session, Credential Manager on Windows).
-- Otherwise **an encrypted file**: `secrets.enc` next to the database
-  (`/var/lib/smylte/secrets.enc`), AES-256-GCM under a key read from
-  `SMYLTE_SECRETS_KEY_FILE` (default `~/.config/smylte/secrets.key`, or the
-  systemd credential `smylte-secrets-key` when the unit loads one). The key file
-  is refused if other users can read it, if anyone but its user or root owns it,
-  or if it sits inside the source tree. Group read is refused too, except under
-  the systemd credentials directory, where it is how systemd's ACL for the
-  service user shows up (`0440`).
+- **the OS keyring**, when one is available (Secret Service, Windows Credential
+  Manager);
+- **an encrypted file**, `secrets.enc` next to the database, using AES-256-GCM
+  under the key in `SMYLTE_SECRETS_KEY_FILE` (default
+  `~/.config/smylte/secrets.key`) or the systemd credential
+  `smylte-secrets-key`. The key file is refused if other users can read it, if
+  someone other than its user or root owns it, or if it's inside the source tree.
 
-Which one is used is decided once and recorded (`meta.secrets_backend`, a name,
-not a secret), so a desktop whose keyring is locked one morning reports "secrets
-unavailable" instead of silently writing the next key somewhere else.
-`SMYLTE_SECRETS_BACKEND=keyring|file` forces the choice. `SMYLTE_ANTHROPIC_API_KEY`,
-`SMYLTE_MAIL_IMAP_PASSWORD` and `SMYLTE_TYPESAFE_API_KEY` override the stored
-values (Settings then says "set by the environment") and never touch either store.
+The choice is made once and recorded (`meta.secrets_backend`).
+`SMYLTE_SECRETS_BACKEND=keyring|file` forces it. `SMYLTE_ANTHROPIC_API_KEY`,
+`SMYLTE_MAIL_IMAP_PASSWORD` and `SMYLTE_TYPESAFE_API_KEY` override stored values.
 
-Under the hardened unit the home directory is read-only, so give the key to the
-service as a credential. The key stays root's (`0600` under `/etc/smylte`), and
-systemd hands the service a read-only copy:
+Under the hardened unit the home directory is read-only, so pass the key as a
+credential and leave `SMYLTE_SECRETS_KEY_FILE` unset:
 
-    sudo /home/<user>/smylte/backend/.venv/bin/python -m smylted secrets init-key --path /etc/smylte/secrets.key
+    sudo ~/smylte/backend/.venv/bin/python -m smylted secrets init-key --path /etc/smylte/secrets.key
     # in deploy/smylte.service, [Service]:
     LoadCredential=smylte-secrets-key:/etc/smylte/secrets.key
 
-Leave `SMYLTE_SECRETS_KEY_FILE` unset in that case. Pointed at
-`/etc/smylte/secrets.key`, it would make the service read root's file directly
-and fail.
-
-`python -m smylted secrets status` shows which store is in use and which secrets
-are set (never their values). `secrets set NAME` reads one from the terminal
-without echo, and `secrets clear NAME` removes it. `secrets set imap_password`
-ties the password to the server settings already saved in the database, and
-says which. So save Bridge's host, port, encryption, certificate and username in
-Settings first. While `SMYLTE_MAIL_IMAP_PASSWORD` is set, `set` and `clear`
-refuse `imap_password`: the variable is what counts. Every command first prints
-the database, the store and the key file it is using. Those must be the service's,
-so run the CLI with the service's user, environment and credential, not from a
-plain shell (which would read `~/.config` and the default database):
+The `secrets` CLI has `status`, `set NAME`, `clear NAME`, `init-key` and
+`migrate --to file`. Run it with the service's user, environment and credential,
+or it will read a different database and key:
 
     sudo systemd-run --pipe --wait --quiet -p User=<user> \
         -p EnvironmentFile=/etc/smylte/smylte.env \
@@ -620,238 +343,128 @@ plain shell (which would read `~/.config` and the default database):
         -p WorkingDirectory=/home/<user>/smylte/backend \
         /home/<user>/smylte/backend/.venv/bin/python -m smylted secrets status
 
-The CLI never creates a key implicitly; `init-key` is the only command that does.
+Save Bridge's server settings before setting `imap_password`. The password is
+bound to the host, port, encryption, certificate and username it was saved for,
+and changing any of them clears it. While `SMYLTE_MAIL_IMAP_PASSWORD` is set,
+the server settings can't be changed in the app. Unset it and restart, change
+them, then set it again.
 
-**The Bridge password is tied to its server.** Saving the password records
-which host, port, encryption, pinned certificate and username it was entered
-for. Changing any of those in Settings forgets a stored password, and the next
-scan or test asks for it again, so a changed setting can never send it to a
-different server. A password from `SMYLTE_MAIL_IMAP_PASSWORD` is tied to the
-server settings at startup. While that variable is set, Settings refuses to
-change the server or to take a password. To move to another server: unset the
-variable and restart, change the server in Settings, then set the variable again
-and restart. On a new install, save the server settings before setting the
-variable.
+**Moving to another machine.** Either re-enter the secrets in Settings, or run
+`secrets migrate --to file`, copy `secrets.enc` and the key file separately
+(keep them 0600), and point `SMYLTE_SECRETS_FILE` and `SMYLTE_SECRETS_KEY_FILE`
+(or `LoadCredential=`) at them. Copy the mail tables too (see
+[Backups](#backups)), or the first scan re-proposes the last week of mail.
 
-**Moving to the homelab.** The values are write-only, so the plain path is to
-enter them again in Settings on the new box — the Bridge password changes with a
-new Bridge install anyway. To carry the Anthropic key over instead: on the
-desktop `python -m smylted secrets migrate --to file` (moves them all from the
-keyring into `secrets.enc` under the key file), copy `secrets.enc` and the key
-file across separately (`scp`, keep them `0600`), point `SMYLTE_SECRETS_FILE` and
-`SMYLTE_SECRETS_KEY_FILE` (or `LoadCredential=`) at them, and check with
-`secrets status`. Bring the mail tables (Backups, below) along too, or the first
-scan on the new box proposes the last week of mail again, including what you
-had already dismissed.
+### Displays
 
-## Displays (the passive screens)
+Pair a display in **Settings → Displays**. Each one has a token and these URLs:
 
-> **Previewing one without owning the panel.** Settings → Developer renders
-> every mode at the sizes real panels come in, through
-> `GET /api/displays/preview.png?mode=&palette=&w=&h=&rotate=` — authed, writes
-> nothing, creates no display and no token. Use it rather than minting a real
-> display to look at a layout: a display token is a bearer credential for the
-> calendar and every one you make is one to remember to revoke.
+| URL | For |
+| --- | --- |
+| `/display/<token>` | A browser: a Raspberry Pi kiosk, an old tablet, a Boox |
+| `/api/public/display/<token>.bin` | A microcontroller: the packed 1-bit framebuffer (see `firmware/README.md`) |
+| `/api/public/display/<token>.png`, `.bmp` | A board with an image decoder. `?w=&h=`, `?rotate=` and `?palette=` override per request |
+| `/api/public/display/<token>` | The frame as JSON (about 30 KB for a typical month, up to about 130 KB) |
 
-**Set `home_timezone` if the server is not in your zone.** A display draws the
-OWNER's day and the OWNER's clock, which is what the app's own calendar tab has
-always drawn: an event another CalDAV client cached as
-`2026-09-01T02:00:00+00:00` is September 1st at 02:00 in UTC and August 31st at
-22:00 on a screen in New York, and the panel now says the same thing the phone
-does. The zone comes from `home_timezone` in Settings, and **an account that has
-not set one falls back to the server process's zone** — the same fallback
-`_due_day` and the day plan already take, so the grid, its chips and the day
-behind them are all in one zone rather than three. On a UTC container with no
-`home_timezone`, a panel therefore draws UTC clocks.
-A display is a screen with nothing to tap — a calendar in a hallway, today's
-habits in a kitchen. It is paired in **Settings → Displays**, which mints a
-token and gives you two URLs for it:
+- **Set a home timezone** in Settings → General if the server isn't in your
+  zone. Without one, displays use the server's zone.
+- Renders are limited to 4,000,000 pixels. Larger requests get a 422.
+- `.bin` is always 1-bit and always drawn in the e-ink palette, and its
+  `X-Display-Refresh-Seconds` is never below 180. `.png` and `.bmp` are 1-bit
+  only while the display is set to e-ink. In colour mode the same URL serves
+  24-bit BGR (1,152,054 bytes at 800×480).
+- The PNG uses adaptive row filtering (needs zlib and all five unfilters), and
+  the BMP is bottom-up with padded rows. On a Pico-class board, use `.bin`.
+- E-ink refresh is limited to every 180 seconds. Existing e-ink displays set
+  lower are raised on first start. Colour displays can refresh every 60 seconds.
+- Every format answers 304 to a matching `If-None-Match`. The ETag excludes the
+  timestamp, so it changes only when the picture does.
+- The month needs at least about 360×260 (`render.py::month_grid_fits`). Smaller
+  panels get a notice instead.
+- Greyscale and colour e-paper panels aren't supported as their own palettes
+  yet; use `eink`.
+- The token gives read access to your events and habits. Use **New URL** if it
+  leaks. MicroPython doesn't verify TLS certificates by default (see
+  `firmware/README.md`).
+- **Settings → Developer** previews every mode at real panel sizes through
+  `GET /api/displays/preview.png`, without creating a display or token.
 
-- `https://<host>/display/<token>` — the page. Point any browser at it: a
-  Raspberry Pi in kiosk mode, an old tablet, a Boox or a jailbroken Kindle. It
-  polls at the interval the display is set to and takes no input at all.
-- `https://<host>/api/public/display/<token>.bin` — **the packed 1-bit
-  framebuffer, and nothing else.** This is the one to point a microcontroller
-  at. Eight pixels per byte, MSB leftmost, rows of `ceil(width/8)`, bit 1 =
-  white paper — which is `framebuf.MONO_HLSB`, so at 800×480 it is exactly
-  48,000 bytes and the client is `sock.readinto(epd.buffer)`. `?invert=1` for a
-  driver whose convention is 0 = white. `firmware/` has a worked MicroPython
-  example for a Pico 2 W and a Waveshare 7.5".
-- `https://<host>/api/public/display/<token>.png` (or `.bmp`) — the same frame
-  as an image, for a board that has a decoder. Set the panel's pixels in
-  Settings or pass `?w=&h=`; `?rotate=` and `?palette=` override per fetch.
-  A render is bounded by AREA as well as by side: `w × h` may not exceed
-  **4,000,000 pixels** (422 past that), which covers every browserless panel
-  made — 4096 × 4096 was a 50 MB body from one unauthenticated request.
-  Be aware what each costs to decode: the **PNG is saved with adaptive row
-  filtering**, so it needs zlib *and* all five PNG unfilters (a single 400×300
-  render uses filter types 1, 2 and 3), and the **BMP is a 62-byte container
-  stored bottom-up with rows padded to four bytes**. On a Pico-class board
-  either is a decoder you have to write before you can see a calendar.
-- There is also `/api/public/display/<token>` on its own, which returns the
-  frame as JSON for firmware that would rather draw it itself. Size it before
-  you parse it on a microcontroller: a typical month is ~30 KB and the frame's
-  own per-day cap puts the worst case near 130 KB.
+The renderer needs Pillow and the fonts in `backend/smylted/display/fonts/`.
+Rebuild them with `python -m dev.build_display_fonts` (needs `fonttools` and
+`brotli`) if the frontend's fonts change. Displays need no outbound network.
 
-**`.bin` is 1-bit whatever the display is set to; `.png` and `.bmp` are not.**
-On those two the one-bit guarantee holds only while the display's palette is
-*eink* — switch it to colour and the same URL serves 24-bit BGR, which at
-800×480 is **1,152,054 bytes** against the 48,000 a board just allocated. That
-is why `.bin` refuses a `?palette=` at all: a format whose byte width depends on
-a setting somewhere else is a format that overruns a buffer.
+## Content-Security-Policy
 
-`.bin` is also *drawn* in the e-ink palette whatever the display is set to, and
-that is a separate fact from its byte width. Thresholding a colour render at
-the end kept the length right and lost the picture: the colour rule is
-`(206,204,200)`, which converts to paper, so every column separator and week
-rule vanished and a month came back as floating text with nothing dividing one
-day from the next. A one-bit target is an e-ink target. For the same reason
-`.bin` never advises a refresh interval below the e-ink floor, even on a
-display configured as colour — `X-Display-Refresh-Seconds` is clamped to 180 on
-that route.
+The app sends one on every response (`backend/smylted/csp.py`).
 
-**Headers a firmware should check before it paints.** `.bin` carries
-`X-Display-Width`, `X-Display-Height`, `X-Display-Stride` and
-`X-Display-Format` (`mono-hlsb`, or `mono-hlsb-inverted` with `?invert=1`), and
-`Content-Length` equals `stride × height`. Check all five **before you read the
-body**, not after: on a board that reads straight into its framebuffer, a
-refusal that comes afterwards has already overwritten the picture on the wall.
-Send `Accept-Encoding: identity` and refuse a chunked or re-encoded body too —
-RFC 9110 §12.5.3 makes an absent `Accept-Encoding` an invitation for any hop to
-gzip 48,000 bytes of framebuffer. The failure mode all of this avoids is
-diagonal garbage on a wall in another room with nothing on screen to say why.
-The stride matters most at a width that is not a multiple of eight: 250 pixels
-is 32 bytes a row, not 31.25.
+| Directive | Why it isn't tighter |
+|---|---|
+| `script-src 'self' 'sha256-…'` | The hash is the SPA's inline pre-paint script, read from `dist/index.html` at startup (see step 1). |
+| `style-src … 'unsafe-inline' fonts.googleapis.com` | Calendar and list colours are inline styles, and the MCP consent screen uses a `<style>` block. Some Appearance font choices load a Google stylesheet. |
+| `font-src 'self' fonts.gstatic.com` | Where that stylesheet loads fonts from. The built-in fonts are local. |
 
-**A display token is a bearer credential, and TLS alone may not be protecting
-it.** MicroPython's `ssl.wrap_socket` defaults to `cert_reqs=CERT_NONE` and
-`server_hostname` only sets SNI, so an unconfigured client completes its
-handshake against any certificate at all — which stops a passive listener and
-nothing else. `firmware/README.md` has the CA setup; if a panel of yours is on
-a network you do not control, do that rather than assume `https://` covered it.
-  Size it before you parse it on a microcontroller: a typical month is ~30 KB,
-  and the frame's own per-day cap puts the worst case near 130 KB, which is
-  more than an ESP32 will comfortably hold alongside a JSON document tree. The
-  image endpoints exist precisely so that board does not have to.
+Choosing a Google-hosted font means every page load, including the public booking
+page, sends the reader's IP to Google.
 
-**Panel sizes.** The month grid needs seven readable columns, so it has a
-minimum — about **360×260** — and `render.py::month_grid_fits` is the one place
-that decides. Below it the image endpoint draws a sentence saying so and naming
-the mode that does fit, rather than seven columns of overlapping ink, and
-Settings says the same thing beside the size field the moment you type it.
-Tested against the panels people actually mount: a 4.2" (400×300) clears it and
-reads; a 2.9" (296×128) does not. Habits + today has no such floor — it fits
-whatever it can and counts the rest.
+If the policy breaks something, set this in the env file and restart:
 
-A **portrait** panel is worth a word. The grid's type is sized by the column,
-not by the panel's height, because seven columns is what binds it; and where a
-column is too narrow to hold a clock and an event, the clock is dropped so the
-row can say *what* rather than *when*. Both are automatic.
+```
+SMYLTE_CSP=report-only    # log violations, block nothing
+SMYLTE_CSP=off            # no header
+```
 
-**Refresh interval: e-ink is floored at 180 seconds.** The panel makers rate
-these screens at no more than one refresh every 180s and require them to be put
-to sleep in between — Waveshare say plainly that the alternative *"will damage
-the e-Paper and cannot be repaired"*. So an e-ink display cannot be set below
-that, and Settings says why beside the control. A colour display (an old tablet,
-an LCD) keeps the 60s floor, because none of that is true of a backlight. **On
-upgrade, any e-ink display stored below 180s is raised to it on first start** —
-a setting changed without asking, because the thing being protected is hardware.
-Note also that `X-Display-Refresh-Seconds` is advisory: nothing enforces it on a
-device, so firmware should carry its own floor (the example does).
+Any other value enforces. The active policy is logged at startup
+(`journalctl -u smylte | grep csp:`).
 
-**Every format, including `.bin`, answers 304 to a matching `If-None-Match`.**
-Honour it in your firmware: a full eink refresh flashes the panel and takes the
-better part of a second, and a display polling every five minutes would
-otherwise do that 288 times a day to redraw a month that changed twice. The
-frame's ETag is taken over the body WITHOUT its timestamp, so it only moves when
-something on the screen actually does.
+## If the password leaks — signing out everywhere
 
-**The token is a bearer credential for private data.** Unlike a booking link —
-which is meant to be published and shows a stranger a redacted busy grid — this
-one shows your actual events and actual habits, and it will be sitting in a Pi's
-autostart file or an ESP32's flash. It is 32 bytes rather than 16, it reaches
-exactly one read-only call, and nothing behind it can write: the single write in
-the whole path is the display's own `last_seen_at`, which is what Settings uses
-to tell you a screen has gone dark. If a URL gets out, **New URL** re-keys the
-display in place and keeps everything else about it; deleting removes the
-display itself. Switching one off makes its URL answer as though it never
-existed.
+Sessions are JWTs and stay valid until they expire. Their lifetime is the **Stay
+signed in** setting (Settings → Account). `SMYLTE_SESSION_TTL` is only the
+default until that's set. Logging out ends only the current session.
 
-A display never opens a day. On a day you have not opened yourself it shows a
-clearly labelled PREVIEW of what opening it would derive and writes nothing —
-the same rule the MCP connector is held to, for the same reason: the day plan is
-worth keeping only while it records what was actually intended, and a panel in a
-hallway intends nothing.
+1. **Change the password.** Generate a hash with
+   `cd ~/smylte/backend && .venv/bin/python -m smylted hash-password` (it must be
+   run from the backend directory), set `SMYLTE_AUTH_PASSWORD_HASH` in the env
+   file, and restart. Every existing session is refused from then on. Changing
+   `SMYLTE_AUTH_USER` has the same effect.
+2. **Rotate `SMYLTE_SESSION_SECRET`** if the secret itself may have leaked, since
+   it can mint sessions without the password. Generate one with
+   `python -c 'import secrets;print(secrets.token_hex(32))'` and restart. Every
+   session ends, including yours.
 
-**Greyscale panels are not a separate palette yet.** A 4- or 16-level grey
-panel (a Kindle, a reMarkable, an Inkplate in greyscale mode) gets either the
-1-bit render, which throws away levels it has, or the colour one, which it has
-to dither itself. Both work; neither uses the hardware well. Same for the
-7-colour ACeP and Spectra panels, which receive full sRGB and map it to their
-own fixed palette. Pick `eink` for these today. `.bin` is 1-bit only this round — no greyscale
-plane, and no second plane for the tri-colour (black/white/red) panels.
-
-The server-side renderer needs **Pillow** (`requirements.txt`), which is what
-rasterizes the three typefaces vendored under `backend/smylted/display/fonts/` —
-Newsreader, Hanken Grotesk and JetBrains Mono, the app's own, converted from the
-woff2 the frontend already ships so a bitmap panel is set in the same type as the
-browser page. Rebuild them with `python -m dev.build_display_fonts` (it needs
-`fonttools` and `brotli`, which the app itself does not) if the frontend's fonts
-are ever replaced; nothing does it automatically, and a stale instance here
-shows up as a panel drifting from the app rather than as an error. The build
-does refuse one kind of drift outright: the eink page's serif is pinned to an
-optical size in `display.css`, and it will not build the bitmap's at a different
-one. No
-outbound network is involved either way, so `IPAddressDeny=any` in
-`deploy/smylte.service` does not have to be relaxed for any of this.
-
-## Backups (spec §9 — important)
-Back up **both**:
-- `~/radicale/collections` — the source of truth (all `.ics`).
-- the app's **sidecar-class tables** from `/var/lib/smylte/smylte.db`:
-  **`sidecar`** (per-task app-only state: the manual order, pins, remembered
-  estimates, per-item reminder leads, WHICH TASKS ARE PARKED — set aside
-  without being finished; losing it un-parks everything, and since parking is
-  deliberately not on the wire there is nothing to restore it from — and the
-  DEADLINES TASKS HAVE ALREADY MISSED, the date each was rescheduled off once
-  it had passed, which nothing else records: DUE holds only the date the task
-  is working to now, so losing this loses the fact that it was ever late),
-  `list_settings`, `completions`, `attachments`, **`booking_links`**
-  and **`bookings`** (every scheduling-link config plus client names/emails/
-  notes — this exists nowhere on the wire), **`day_plan`** plus
-  **`day_plan_opened`** (the Today tab's whole record: what the owner added to a
-  day by hand, what they ticked, how long they expected each thing to take and
-  how long a focus session actually spent on it, what
-  they moved to another day, what they dropped rather than did, and which days
-  were opened at all), **`day_ritual`** (what the owner SAID about each day —
-  how long they were willing to work, when they started it, how far over that
-  the plan ran at the moment they committed it, when they shut it down, and the
-  line they wrote about how it went; the reflections are the only prose in this
-  database that exists nowhere else), and **`habits`** (the rules
-  that put entries on a day — they are never PUT to Radicale and carry no RRULE,
-  so the wire has no copy; losing them stops every habit recurring, though the
-  occurrences already in `day_plan` keep their titles and stay readable),
-  **`focus_session`** (the day being worked against a clock — which row, which
-  phase, and the anchor the clock runs from; losing it loses a running clock
-  and never the time already credited, which lives on `day_plan`), and
-  **`notification_deliveries`** (what has already been said out loud — the
-  record that stops a notification arriving twice; a restore without it re-sends
-  whatever still falls inside the scheduler's catch-up window), and
-  **`displays`** (the passive screens: each one's token, what it shows, and the
-  panel it is drawn for — losing it does not lose data, it UN-PAIRS every screen
-  in the house, which is recoverable only by walking round and pointing each one
-  at a new URL), and the email pipeline's **`mail_ledger`**, **`mail_cursors`**,
-  **`mail_suggestions`**, **`mail_threads`** and **`mail_rejections`** (what has
-  been read, how far each folder was scanned, what is waiting for approval, which
-  thread became which task, and what you dismissed — without them the next scan
-  proposes the last week of mail again, dismissed suggestions included; the
-  secrets are NOT here and must be carried separately, see above). All of
-  these are app-only
-  state that a resync CANNOT rebuild (see docs/phase0-findings.md). Only the
-  *cache* tables (items/collections/sync_state/FTS) are disposable — "the DB is a disposable
-  cache" stopped being the whole truth when scheduling landed.
+Either one also ends every MCP grant. Reconnect MCP clients afterwards. An
+ordinary restart signs nobody out.
 
 ## Rollback
-`sudo systemctl disable --now smylte.service`; remove the Caddy snippet + reload;
-delete the tunnel's public hostname (DNS reverts); remove the Radicale `hook`
-line + restart. Nothing in production Radicale's data is modified by any of this.
+
+`sudo systemctl disable --now smylte.service`, remove the Caddy snippet and
+reload Caddy, delete the tunnel's public hostname, and remove the Radicale
+`hook` line and restart Radicale. None of this changes Radicale's data.
+
+## Backups
+
+Back up both:
+
+- **Radicale's collections** (the `.ics` files), which are the source of truth.
+- **The sidecar tables** in `/var/lib/smylte/smylte.db`. They exist nowhere
+  else, and a resync can't rebuild them (`docs/phase0-findings.md`). Only the
+  cache tables (items, collections, sync_state, FTS) are disposable.
+
+| Table | Holds |
+|---|---|
+| `sidecar` | Per-task app state: manual order, pins, estimates, reminder leads, parking, and original due dates |
+| `list_settings` | Per-list settings |
+| `completions` | Completion records |
+| `attachments` | Attachments |
+| `booking_links`, `bookings` | Booking link settings, and bookings with client names, emails and notes |
+| `day_plan` | Each day's rows: what was added, ticked, estimated, worked, moved or dropped |
+| `day_plan_opened` | Which days were opened |
+| `day_ritual` | What you said about each day: capacity, start, shutdown, how far over at commit, and your note |
+| `habits` | Habit rules. Losing them stops habits recurring; past rows stay in `day_plan` |
+| `focus_session` | The running focus session. Worked time already credited is in `day_plan` |
+| `notification_deliveries` | What has been sent. Without it, a restore re-sends anything inside the catch-up window |
+| `displays` | Paired displays and their tokens. Losing it unpairs every screen |
+| `mail_ledger`, `mail_cursors`, `mail_suggestions`, `mail_threads`, `mail_rejections` | What mail was read, scan positions, pending suggestions, thread links and dismissals. Without them the next scan re-proposes the last week of mail |
+
+Email secrets aren't in the database; carry them separately (see
+[Email suggestions](#email-suggestions)).

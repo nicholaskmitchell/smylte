@@ -75,7 +75,7 @@ public sealed class SetupForm : Form
         Controls.Add(new Label
         {
             Text = "The server address is where Smylte is deployed, e.g. "
-                 + "https://radicale.nicholaskmitchell.com.\n"
+                 + "https://smylte.example.com.\n"
                  + "The password is stored encrypted for your Windows account, never in the clear.\n"
                  + "A GitHub token is optional — only useful if update checks hit a rate limit.",
             Location = new Point(24, 272),
