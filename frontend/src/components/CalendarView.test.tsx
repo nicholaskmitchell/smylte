@@ -189,7 +189,7 @@ describe('busy / free', () => {
     await openEvent(user)
     expect(screen.getByLabelText('Show as')).toHaveValue('free')
     // …and says what that costs, which is the half a person cannot see.
-    expect(screen.getByText(/will not block a slot/i)).toBeInTheDocument()
+    expect(screen.getByText(/block slots on your booking links/i)).toBeInTheDocument()
   })
 
   it('says nothing about availability while the event blocks', async () => {
@@ -198,7 +198,7 @@ describe('busy / free', () => {
     // busiest dialog.
     const user = setup([ev()])
     await openEvent(user)
-    expect(screen.queryByText(/will not block a slot/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/block slots on your booking links/i)).not.toBeInTheDocument()
   })
 
   it('leaves busy off a save that did not touch it', async () => {

@@ -173,7 +173,7 @@ describe('saving', () => {
     await show()
     const ws = el('mail-workspace') as HTMLInputElement
     expect(ws.value).toBe('')
-    expect(screen.getByText(/Leave empty unless Anthropic says/)).toBeInTheDocument()
+    expect(screen.getByText(/Only needed if Anthropic asks/)).toBeInTheDocument()
     await user.type(ws, ' wrkspc_01ABC ')
     expect(m.putMailSettings).not.toHaveBeenCalled()
     await user.tab()
@@ -254,7 +254,7 @@ describe('saving', () => {
     // Nothing but its own hint sits between the switch and the Status head.
     const hint = toggle.closest('.menu-row')!.nextElementSibling!
     expect(hint).toHaveTextContent(
-      'The first check reads the last 7 days. Turn this on once the connection test passes and your sender lists are set.')
+      'The first check reads the last 7 days.')
     expect(hint.nextElementSibling).toBe(status)
     // And it is no longer the first thing in the section.
     expect(document.querySelector('.menu-row')!.contains(toggle)).toBe(false)
@@ -264,7 +264,7 @@ describe('saving', () => {
     await show()
     const head = screen.getByText('Proton Mail Bridge (IMAP)')
     expect(head.nextElementSibling).toHaveTextContent(
-      'Changing the server, port, encryption, certificate or username forgets the saved password')
+      'Changing the host, port, encryption, certificate or username clears the saved password')
   })
 
   it('warns when the deployment has it switched off', async () => {
@@ -336,7 +336,7 @@ describe('the connection check', () => {
     m.testMailImap.mockResolvedValue(found)
     await show()
     await user.click(screen.getByRole('button', { name: 'Test connection' }))
-    expect(await screen.findByText(/come through \(mailin008\.protonmail\.ch\)/)).not.toHaveClass('warn')
+    expect(await screen.findByText(/headers found \(mailin008\.protonmail\.ch\)/)).not.toHaveClass('warn')
     cleanup()
     m.testMailImap.mockResolvedValue({
       ...found, auth_results: { ...found.auth_results, trusted: false },

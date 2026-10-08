@@ -209,11 +209,6 @@ export function NotificationsSection({
       <div className="notif-rules">{DEFAULT_ON.map(rule)}</div>
 
       <div className="menu-head">{tr('notif.more')}</div>
-      {/* The honest framing, and the reason this tier is a separate block
-          rather than eight more rows: the app has a position on these, the
-          position is "probably not", and saying so is more useful than a flat
-          list that implies it has no view at all. */}
-      <div className="hintline">{tr('notif.more.hint')}</div>
       <div className="notif-rules">{DEFAULT_OFF.map(rule)}</div>
 
       <div className="menu-head">{tr('notif.timing')}</div>

@@ -44,19 +44,17 @@ describe('the rule rows', () => {
     // "These are what the app thinks you need" and "these are available if you
     // disagree" are different statements, and a flat list makes neither.
     show()
-    expect(screen.getByText('Off by default')).toBeInTheDocument()
-    expect(screen.getByText(/know your own days better/)).toBeInTheDocument()
+    const head = screen.getByText('Off by default')
+    expect(head.compareDocumentPosition(screen.getByText("Today isn't planned"))
+      & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('gives every opt-in rule the reason it is off', () => {
-    // A rule you switch on should come with the reason the app did not switch
-    // it on for you.
+  it('says when every opt-in rule fires', () => {
     show()
     for (const t of DEFAULT_OFF) {
       const label = document.querySelector(`label[for="notif-${t}"]`)
       const hint = label?.closest('.notif-rule')?.querySelector('.hintline')
       expect(hint?.textContent, t).toBeTruthy()
-      expect(hint!.textContent!.length, t).toBeGreaterThan(40)
     }
   })
 

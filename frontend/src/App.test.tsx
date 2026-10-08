@@ -192,7 +192,7 @@ describe('<App> auth gate', () => {
     await openSettings('Account')
     await userEvent.click(screen.getByRole('button', { name: /log out/i }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/still signed in/i)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Couldn’t sign out/)
     expect(screen.queryByRole('button', { name: /sign in/i })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Tasks' })).toBeInTheDocument()
   })
@@ -634,13 +634,13 @@ describe('<App> day capacity', () => {
     m.getSettings.mockRejectedValue(new HttpError(500, 'nope'))
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await screen.findByText(/Couldn't load your preferences/i)
+    await screen.findByText(/Couldn’t load preferences/i)
     await openSettings('General')
 
     await userEvent.type(screen.getByLabelText('Working time for Sun'), '2h')
     await userEvent.tab()
     expect(m.putSettings).not.toHaveBeenCalled()
-    expect(await screen.findByText(/this change wasn't saved/i)).toBeInTheDocument()
+    expect(await screen.findByText(/^Not saved\./)).toBeInTheDocument()
 
     // The default still goes, because there is nothing of the account's to lose.
     await userEvent.type(capacityField(), '5h')
@@ -902,7 +902,7 @@ describe('the floating window', () => {
 })
 
 describe('planning the work you answer with today', () => {
-  const NAME = 'Put it on your day when you move it onto today'
+  const NAME = 'Plan tasks moved to today'
 
   const openTasks = async () => {
     render(<App />)

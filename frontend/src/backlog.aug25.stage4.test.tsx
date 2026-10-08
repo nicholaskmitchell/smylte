@@ -751,7 +751,7 @@ describe('2026-08-25 — the shutdown ritual, step two', () => {
     return dialog
   }
 
-  const DONE_SENTENCE = 'Everything on today is done. Nothing to carry.'
+  const DONE_SENTENCE = 'All done. Nothing to carry over.'
 
   // ── AUDIT (open): ShutdownRitual.tsx:232 — step 2 reports "Everything on
   //    today is done" after the owner MOVED everything to tomorrow ──────────
@@ -767,7 +767,7 @@ describe('2026-08-25 — the shutdown ritual, step two', () => {
     //
     // Reproduced: a day holding two undone rows; Shut down -> Next -> "Move all
     // 2 to tomorrow"; `rollDayEntry` called twice, then `.plan-body` reads
-    // "Everything on today is done. Nothing to carry."
+    // "All done. Nothing to carry over."
     //
     // ASSERTED AS THE EXACT FALSE SENTENCE, which is the one thing every correct
     // repair removes from this path. The suggested fix words it "Everything on

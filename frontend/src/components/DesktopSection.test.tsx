@@ -59,14 +59,14 @@ describe('inside the Windows client', () => {
 
     expect(await screen.findByLabelText('Start menu shortcut')).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Follow the Windows theme' })).toBeInTheDocument()
-    expect(screen.getByText(/taskbar button shows a grouped icon/)).toBeInTheDocument()
-    expect(screen.getByText(/Windows is currently light/)).toBeInTheDocument()
+    expect(screen.getByText(/taskbar icon comes from the Start menu shortcut/)).toBeInTheDocument()
+    expect(screen.getByText(/Windows is light/)).toBeInTheDocument()
   })
 
   it('says so when the build can only be told light or dark', async () => {
     vi.mocked(readState).mockResolvedValue(host({ captionColour: false }))
     render(<DesktopSection />)
-    expect(await screen.findByText(/only supports a light or dark title bar/)).toBeInTheDocument()
+    expect(await screen.findByText(/supports only a light or dark title bar/)).toBeInTheDocument()
   })
 
   it('drops that sentence once the caption has been handed back', async () => {
@@ -77,15 +77,15 @@ describe('inside the Windows client', () => {
       host({ captionColour: false, systemTitleBar: true }))
     render(<DesktopSection />)
     await screen.findByLabelText('System title bar')
-    expect(screen.queryByText(/only supports a light or dark title bar/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/supports only a light or dark title bar/)).not.toBeInTheDocument()
   })
 
   it('does not promise a restart Windows does not need', async () => {
     vi.mocked(readState).mockResolvedValue(host())
     render(<DesktopSection />)
     await screen.findByLabelText('System title bar')
-    expect(screen.getByText(/the colour Windows draws it/)).toBeInTheDocument()
-    expect(screen.queryByText(/next time Smylte starts/)).not.toBeInTheDocument()
+    expect(screen.getByText(/Windows title bar colour/)).toBeInTheDocument()
+    expect(screen.queryByText(/after a restart/)).not.toBeInTheDocument()
   })
 })
 
@@ -96,14 +96,14 @@ describe('inside the Linux client', () => {
 
     expect(await screen.findByLabelText('Applications menu entry')).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Follow the system theme' })).toBeInTheDocument()
-    expect(screen.getByText(/applications grid and to search/)).toBeInTheDocument()
-    expect(screen.getByText(/The system is currently light/)).toBeInTheDocument()
+    expect(screen.getByText(/app grid and search/)).toBeInTheDocument()
+    expect(screen.getByText(/The system is light/)).toBeInTheDocument()
 
     // And none of the Windows wording survives, which is the half a
     // half-finished platform switch would leave behind.
     expect(screen.queryByText(/taskbar/)).not.toBeInTheDocument()
     expect(screen.queryByText(/Start menu/)).not.toBeInTheDocument()
-    expect(screen.queryByText(/only supports a light or dark title bar/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/supports only a light or dark title bar/)).not.toBeInTheDocument()
   })
 
   it('states the trade and the restart, which Windows has neither of', async () => {
@@ -116,8 +116,8 @@ describe('inside the Linux client', () => {
 
     await screen.findByLabelText('System title bar')
     expect(screen.getByText(/window manager draw the title bar/)).toBeInTheDocument()
-    expect(screen.getByText(/next time Smylte starts/)).toBeInTheDocument()
-    expect(screen.queryByText(/the colour Windows draws it/)).not.toBeInTheDocument()
+    expect(screen.getByText(/after a restart/)).toBeInTheDocument()
+    expect(screen.queryByText(/Windows title bar colour/)).not.toBeInTheDocument()
   })
 
   it('keeps the plate names, which are colours and not operating systems', async () => {
@@ -132,7 +132,7 @@ describe('inside the Linux client', () => {
     // contract is 420x280 down to 320x200 — so the explanation lives here.
     vi.mocked(readState).mockResolvedValue(host({ platform: 'linux', canPin: false }))
     render(<DesktopSection />)
-    expect(await screen.findByText(/Wayland session/)).toBeInTheDocument()
+    expect(await screen.findByText(/On Wayland/)).toBeInTheDocument()
     expect(screen.getByText(/"Backend": "x11"/)).toBeInTheDocument()
   })
 
@@ -140,7 +140,7 @@ describe('inside the Linux client', () => {
     vi.mocked(readState).mockResolvedValue(host({ platform: 'linux', canPin: true }))
     render(<DesktopSection />)
     await screen.findByLabelText('Applications menu entry')
-    expect(screen.queryByText(/Wayland session/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/On Wayland/)).not.toBeInTheDocument()
   })
 })
 
@@ -156,7 +156,7 @@ describe('the title bar', () => {
 
     await screen.findByLabelText('App icon')
     expect(screen.queryByLabelText('System title bar')).not.toBeInTheDocument()
-    expect(screen.queryByText(/the colour Windows draws it/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Windows title bar colour/)).not.toBeInTheDocument()
   })
 
   it('applies at once and then takes the host answer over its own guess', async () => {
@@ -176,7 +176,7 @@ describe('the title bar', () => {
     expect(setTitleBar).toHaveBeenCalledWith(true)
     expect((toggle as HTMLInputElement).checked).toBe(true)
     await waitFor(() =>
-      expect(screen.getByText(/The system is currently dark/)).toBeInTheDocument())
+      expect(screen.getByText(/The system is dark/)).toBeInTheDocument())
   })
 
   it('sends false when it is being turned back off', async () => {
@@ -219,7 +219,7 @@ describe('choosing', () => {
     const shortcut = await screen.findByLabelText('Applications menu entry')
 
     // Before the click the hint says light, which is what the first read said.
-    expect(screen.getByText(/The system is currently light/)).toBeInTheDocument()
+    expect(screen.getByText(/The system is light/)).toBeInTheDocument()
     await user.click(shortcut)
     expect(setIcon).toHaveBeenCalledWith('Auto', true)
 
@@ -227,7 +227,7 @@ describe('choosing', () => {
     // is derived from a value only the host has. That it changes is the
     // reconcile, and it is the only observable proof the answer was taken.
     await waitFor(() =>
-      expect(screen.getByText(/The system is currently dark/)).toBeInTheDocument())
+      expect(screen.getByText(/The system is dark/)).toBeInTheDocument())
     expect((shortcut as HTMLInputElement).checked).toBe(true)
   })
 

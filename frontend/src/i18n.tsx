@@ -7,10 +7,8 @@
 // signature between App and a button's label.
 //
 // The default is English, so a component rendered OUTSIDE the provider — which
-// is every existing test — reads exactly the strings it read before. That is
-// what makes 500-odd assertions matching on English text keep passing without
-// being touched, and it is deliberate rather than lucky: the English catalogue
-// holds today's strings verbatim.
+// is every existing test — reads the English catalogue. That is what lets
+// 500-odd assertions match on English text without wrapping every render.
 
 import { createContext, Fragment, useContext, useMemo, type ReactNode } from 'react'
 import { DEFAULT_LANGUAGE, localeFor, type Language } from './lang'

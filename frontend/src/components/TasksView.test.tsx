@@ -228,7 +228,7 @@ describe('<TasksView> creating', () => {
     await openBulk(user, ['alpha', 'bravo'])
     await user.click(bulkAdd(2))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/1 task couldn't be created/)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Couldn’t create 1 task/)
     expect(screen.getByRole('dialog', { name: /add multiple tasks/i })).toBeInTheDocument()
     expect(screen.getByLabelText('Title, row 1')).toHaveValue('bravo')
     // The one that landed is painted behind the modal; the one that didn't left
@@ -1890,7 +1890,7 @@ describe('<TasksView> parked work', () => {
     const { user } = setup()
     await user.click(await screen.findByText('Learn the harmonica'))
 
-    expect(screen.getByText(/Sets it aside without finishing it/)).toBeInTheDocument()
+    expect(screen.getByText(/until you bring it back/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Park it' }))
     expect(m.park).toHaveBeenCalledWith('l1', 'harmonica', true)
   })
@@ -1914,7 +1914,7 @@ describe('<TasksView> parked work', () => {
     await user.click(await screen.findByText('Renew the passport'))
 
     expect(screen.getByText(/Originally due/)).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Forget that' }))
+    await user.click(screen.getByRole('button', { name: 'Clear' }))
     expect(m.forgetOriginalDue).toHaveBeenCalledWith('l1', 'passport')
     expect(screen.getByRole('dialog', { name: 'Task' })).toBeInTheDocument()
     await waitFor(() =>

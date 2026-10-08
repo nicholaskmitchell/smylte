@@ -119,7 +119,7 @@ describe('the sidebar layout', () => {
   it('says where the tab order shows', async () => {
     render(<App />)
     await userEvent.click(await screen.findByRole('button', { name: 'Settings' }))
-    expect(await screen.findByText(/order down the sidebar/)).toBeInTheDocument()
+    expect(await screen.findByText(/order in the sidebar/)).toBeInTheDocument()
   })
 
   it('on a phone, puts the views in a bar along the bottom with the gear', async () => {

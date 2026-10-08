@@ -44,7 +44,7 @@ describe('<ConnectionsSection>', () => {
   it('says the account has nothing connected only when it really has nothing', async () => {
     m.mcpConnections.mockResolvedValue([] as never)
     mount()
-    expect(await screen.findByText(/nothing is connected/i)).toBeInTheDocument()
+    expect(await screen.findByText(/No connected apps/i)).toBeInTheDocument()
   })
 
   it('does NOT claim an empty account when the fetch fails', async () => {
@@ -55,7 +55,7 @@ describe('<ConnectionsSection>', () => {
     m.mcpConnections.mockRejectedValue(new HttpError(502, 'bad gateway'))
     mount()
     expect(await screen.findByRole('alert')).toHaveTextContent(/couldn.t load/i)
-    expect(screen.queryByText(/nothing is connected/i)).toBeNull()
+    expect(screen.queryByText(/No connected apps/i)).toBeNull()
   })
 
   it('does not sit on "Loading…" forever when the fetch fails', async () => {

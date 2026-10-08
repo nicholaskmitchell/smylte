@@ -247,7 +247,7 @@ describe('AddMultipleModal', () => {
     await user.click(add())
 
     expect(onClose).not.toHaveBeenCalled()
-    expect(await screen.findByRole('alert')).toHaveTextContent(/1 task couldn't be created/)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Couldn’t create 1 task/)
     expect(title(1)).toHaveValue('failed')
     expect(screen.queryByDisplayValue('landed')).not.toBeInTheDocument()
     expect(add()).toHaveTextContent('Add 1 task')
