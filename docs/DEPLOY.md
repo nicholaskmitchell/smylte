@@ -5,7 +5,7 @@ sends `/dav` to Radicale and everything else to the app. The app signs in to
 Radicale over localhost, so Radicale is only reachable through `/dav`.
 
 ```
-                 HTTPS (your proxy, or a Cloudflare tunnel)
+                 HTTPS (a Cloudflare tunnel, or your own TLS proxy)
                                   │
                        ┌──────────┴──────────┐
              /dav/* ──►│  Caddy path split    │──► everything else
@@ -18,9 +18,10 @@ Radicale over localhost, so Radicale is only reachable through `/dav`.
 This guide uses `smylte.example.com` as the hostname, `<user>` as the account
 that runs the service, and `~/smylte` as the checkout. The templates in
 `deploy/` are filled in for one particular deployment. Before installing, edit
-`User=`, `Group=`, `WorkingDirectory=` and `ExecStart=` in `deploy/smylte.service`,
-`USER_NAME` in `deploy/setup.sh`, and the hostnames in
-`deploy/Caddyfile.snippet` and `deploy/smylte.env.example`.
+`User=`, `Group=`, `WorkingDirectory=` and `ExecStart=` in `deploy/smylte.service`
+and `USER_NAME` in `deploy/setup.sh`. `setup.sh` expects the checkout at
+`/home/<user>/smylte` and sets `RADICALE_USER` to the same user. If your Radicale
+user is different, change it in `/etc/smylte/smylte.env` afterwards.
 
 ## Requirements
 
@@ -28,7 +29,7 @@ that runs the service, and `~/smylte` as the checkout. The templates in
 - **Python 3.12 or 3.13.** CI tests exactly these (`.github/workflows/ci.yml`),
   and `setup.sh` refuses anything else.
 - Node.js, to build the frontend.
-- Caddy (or another reverse proxy), and optionally `cloudflared`.
+- Caddy (or another reverse proxy, see step 3), and `cloudflared` for a tunnel.
 
 ## 1. Build the frontend
 
@@ -43,13 +44,22 @@ page loads blank.
 
 ## 2. Install the app
 
-`setup.sh` doesn't create the venv. Create it with a supported Python, and
-rebuild it if an OS upgrade moves `python3` to an untested version:
+`setup.sh` doesn't create the venv. Create it with a supported Python:
 
 ```bash
 cd ~/smylte/backend
 python3.13 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python -V    # must be 3.12.x or 3.13.x
+```
+
+A venv keeps the Python it was created with, even after an OS upgrade changes
+`python3`. Check it after upgrades, and rebuild it if it isn't 3.12 or 3.13:
+
+```bash
+sudo systemctl stop smylte
+cd ~/smylte/backend && rm -rf .venv
+python3.13 -m venv .venv && .venv/bin/pip install -r requirements.txt
+sudo systemctl start smylte && curl -s localhost:8080/healthz
 ```
 
 Then:
@@ -81,6 +91,17 @@ This adds a loopback site on `:9080`: `/dav*` goes to Radicale (prefix stripped,
 `X-Script-Name: /dav`) and everything else to the app. Don't set a second
 Content-Security-Policy in the proxy; the app sends its own.
 
+**The snippet assumes a Cloudflare tunnel in front.** It sets `X-Real-IP` from
+Cloudflare's `CF-Connecting-IP`, and the app trusts `X-Real-IP` from loopback to
+rate-limit sign-in and booking per client. Without Cloudflare, anyone can send
+their own `CF-Connecting-IP` and get past the limits. If Caddy terminates TLS
+itself, use `header_up X-Real-IP {remote_host}` instead. Any other proxy must
+do the same three things the snippet does:
+
+- overwrite `X-Real-IP` with the real client address;
+- return 403 for `/internal*`, which only the Radicale hook on localhost may use;
+- reject request bodies over 1 MB.
+
 The snippet also answers **RFC 6764 discovery**: `/.well-known/caldav`,
 `/.well-known/carddav` and DAV methods on `/` redirect to `/dav/`. Apple's
 clients need this because they take a hostname, not a URL. Browsers loading the
@@ -88,7 +109,9 @@ app aren't affected. `smylted` answers the same probes itself, so discovery
 works behind other proxies too. If `/dav` moves, change both the snippet and
 `SMYLTE_DAV_URL`.
 
-## 4. Cloudflare tunnel (optional)
+## 4. Cloudflare tunnel
+
+Skip this if you run your own TLS proxy instead (see step 3).
 
 1. In Cloudflare Zero Trust, go to **Networks → Tunnels → Create tunnel** and
    copy the token.
@@ -257,8 +280,8 @@ Rules, the digest time and lead times are account settings, edited in the app.
 `GET /api/notifications/recent` lists what was sent. The bot token is stored in
 the database in plain text (it has to be reused to send), so it is in every
 backup. It is never returned over HTTP. Put it in the env file to keep it out of
-the database. Telegram isn't end-to-end encrypted, so messages carry no error
-details.
+the database. To rotate it, use `/revoke` in BotFather and enter the new token.
+Telegram isn't end-to-end encrypted, so messages carry no error details.
 
 ### Email suggestions
 

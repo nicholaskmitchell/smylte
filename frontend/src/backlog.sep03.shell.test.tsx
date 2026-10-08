@@ -491,7 +491,7 @@ describe('2026-09-03 — "you were away", said to someone who was here', () => {
     tick(120)
     expect(screen.getByText('Interval over')).toBeInTheDocument()
     expect(screen.queryByText('Interval over · you were away')).not.toBeInTheDocument()
-    expect(screen.queryByText(/Nothing rolled on without you/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/The clock stopped when the interval ended/)).not.toBeInTheDocument()
   })
 
   it('CONTROL: still says away when the bell rang in a hidden tab', async () => {

@@ -214,7 +214,7 @@ export const en = {
 
   'settings.clock': 'Clock',
   'settings.clock.aria': '12- or 24-hour clock',
-  'settings.clock.hint': 'Date and time pickers follow it in Chrome, Edge and the desktop app. Firefox uses your system setting.',
+  'settings.clock.hint': 'Date and time pickers follow it in Chrome, Edge and the Windows app. Firefox and the Linux app use your system setting.',
   'clock.12h': '12-hour',
   'clock.24h': '24-hour',
 
@@ -322,7 +322,7 @@ export const en = {
   'capacity.defaultDay': 'the default working day',
   'capacity.sameAsMostDays': 'same as most days',
   'capacity.workingTimeFor': 'Working time for {name}',
-  'capacity.hint': 'Enter {short} or {long} minutes. Days left blank aren’t tracked.',
+  'capacity.hint': 'Enter {short} or {long} minutes. Blank weekdays use Most days.',
   // ── sign in ─────────────────────────────────────────────────────────────────
   'login.invalid': 'Invalid credentials',
   'login.username': 'Username',
@@ -733,7 +733,7 @@ export const en = {
   'today.over': '{amount} over your working day.',
   'today.readFailed': 'Couldn’t read today.',
   'today.tryAgain': 'Try again',
-  'today.emptyBefore': 'Nothing on today yet. Add something above, or ',
+  'today.emptyBefore': 'Nothing on today yet. Add something, or ',
   'today.setUpHabit': 'set up a habit',
   'today.habitsHint': 'Habits add a line to your day on the days you choose. ',
   'today.setOneUp': 'Set one up',
@@ -1055,7 +1055,7 @@ export const en = {
   'settings.planOnDueToday': 'Plan tasks moved to today',
   'settings.planOnDueToday.on': 'On',
   'settings.planOnDueToday.off': 'Off',
-  'settings.planOnDueToday.hint': 'Moving a task’s due date to today also adds it to today’s plan.',
+  'settings.planOnDueToday.hint': 'An overdue task given today as its new date is also added to today’s plan.',
   // Shown in place of the hint when the threshold above is 0. The switch stays
   // on screen — a control that vanishes is one nobody can find again to work
   // out why it stopped mattering — so the line says why it is doing nothing.
@@ -1082,7 +1082,7 @@ export const en = {
   'settings.section.about': 'About',
   'about.licence': 'Licence',
   'about.source': 'Source code',
-  'about.hint': 'Source for the version running here. If you run a modified copy, the AGPL requires you to link your own source.',
+  'about.hint': 'Source for the version running here. If you run a modified copy that others use over a network, the AGPL requires you to offer them its source.',
   // ── email ingestion ────────────────────────────────────────────────────────
   //    Reads the owner's mail through Proton Mail Bridge and PROPOSES tasks. The
   //    wording keeps one promise in view throughout: nothing becomes a task, or
@@ -1095,7 +1095,7 @@ export const en = {
   'mail.deploymentOff': 'Turned off for this deployment (SMYLTE_MAIL_ENABLED=false).',
   'mail.secretsUnavailable': 'Secrets can’t be stored right now: {error}',
   'mail.enabled': 'Read my email',
-  'mail.enabled.hint': 'The first check reads the last {days} days.',
+  'mail.enabled.hint': 'The first check reads the last {days} days. Set up the sender lists first, because skipped mail isn’t read again.',
   'mail.on': 'On',
   'mail.off': 'Off',
   'mail.head.anthropic': 'Anthropic',

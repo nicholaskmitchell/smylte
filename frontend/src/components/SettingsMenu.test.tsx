@@ -373,7 +373,7 @@ describe('<SettingsMenu> planning the work you answer with today', () => {
     // The hint has to carry the exclusion, because it is the half that is not
     // obvious from the label: a task moved to Thursday is scheduled, not
     // planned, and there is no day plan to put it on.
-    expect(panel()).toHaveTextContent(/adds it to today’s plan/)
+    expect(panel()).toHaveTextContent(/overdue task given today as its new date/)
 
     await user.click(toggle)
     expect(onToggle).toHaveBeenCalled()
