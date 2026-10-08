@@ -296,7 +296,7 @@ describe('2026-09-03 — the Settings hints in German', () => {
 
     await userEvent.click(screen.getByRole('tab', { name: 'Aufgaben' }))
     expect(within(panel()).queryByText(/Subtasks marked won’t-do/)).toBeNull()
-    expect(within(panel()).getByText(/Unterpunkte auf „wird nichts“/)).toBeInTheDocument()
+    expect(within(panel()).getByText(/Unteraufgaben auf „wird nichts“/)).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('tab', { name: 'Konto' }))
     expect(within(panel()).queryByText(/A shorter time applies/)).toBeNull()

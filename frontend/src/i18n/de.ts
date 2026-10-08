@@ -143,7 +143,7 @@ export const de: Catalogue = {
   'disp.needOneSource': 'Wähle mindestens eines.',
   'disp.panelTooSmall': 'Zu klein für einen Monat. Der Bildschirm zeigt stattdessen einen Hinweis. Jetzt + als Nächstes und Gewohnheiten + heute funktionieren in jeder Größe.',
   'disp.rotation': 'Drehung',
-  'disp.imageHint': 'Für einen Mikrocontroller die .bin verwenden: ein gepackter 1-Bit-Framebuffer, der direkt aufs Panel geht (800×480 sind 48.000 Bytes). .png oder .bmp, wenn dein Board Bilder dekodieren kann.',
+  'disp.imageHint': 'Für einen Mikrocontroller die .bin verwenden: ein gepackter 1-Bit-Framebuffer, der direkt aufs Panel geht (800×480 sind 48.000 Bytes). Nimm .png oder .bmp, wenn dein Board Bilder dekodieren kann.',
   'disp.enabled': 'Verbunden',
   'disp.enabledHint': 'Solange sie aus ist, funktioniert die URL nicht.',
   'disp.rotateToken': 'Neue URL',
@@ -224,7 +224,7 @@ export const de: Catalogue = {
 
   'settings.clock': 'Uhrzeit',
   'settings.clock.aria': '12- oder 24-Stunden-Anzeige',
-  'settings.clock.hint': 'Datums- und Zeitfelder folgen ihr in Chrome, Edge und der Desktop-App. Firefox nutzt die Einstellung deines Systems.',
+  'settings.clock.hint': 'Datums- und Zeitfelder folgen ihr in Chrome, Edge und der Windows-App. Firefox und die Linux-App nutzen die Einstellung deines Systems.',
   'clock.12h': '12 Stunden',
   'clock.24h': '24 Stunden',
 
@@ -340,7 +340,7 @@ export const de: Catalogue = {
   // {short} and {long} are the two examples in the mono face. They are slots
   // rather than three fragments spliced around <span>s, so this sentence can
   // be reordered — see `useTx` in i18n.tsx.
-  'capacity.hint': 'Als {short} oder {long} Minuten eingeben. Leere Tage werden nicht erfasst.',
+  'capacity.hint': 'Als {short} oder {long} Minuten eingeben. Leere Wochentage übernehmen „Meistens“.',
   // ── sign in ─────────────────────────────────────────────────────────────────
   'login.invalid': 'Ungültige Zugangsdaten',
   'login.username': 'Benutzername',
@@ -793,7 +793,7 @@ export const de: Catalogue = {
   // Split around the “set up a habit” button that finishes the sentence.
   // The trailing space and the closing period are part of the two halves,
   // so a translator controls where the break falls.
-  'today.emptyBefore': 'Heute steht noch nichts an. Füg oben etwas hinzu, oder ',
+  'today.emptyBefore': 'Heute steht noch nichts an. Füg etwas hinzu, oder ',
   'today.setUpHabit': 'richte eine Gewohnheit ein',
   // Both habit blurbs run the second clause on with an em dash rather than
   // starting a new sentence with the pronoun. „Sie wird nie zur Aufgabe“ is
@@ -1064,10 +1064,10 @@ export const de: Catalogue = {
   'side.viewParkedShort': 'Zurückgestellte anzeigen',
 
   // ── Eine Aufgabe schließen, in der nichts mehr offen ist ──
-  'settings.autoCloseParents': 'Aufgabe mit dem letzten Unterpunkt abschließen',
+  'settings.autoCloseParents': 'Aufgabe mit der letzten Unteraufgabe abschließen',
   'settings.autoCloseParents.on': 'An',
   'settings.autoCloseParents.off': 'Aus',
-  'settings.autoCloseParents.hint': 'Unterpunkte auf „wird nichts“ zählen als erledigt, zurückgestellte nicht. Die Erledigung wird mit deinen anderen Apps synchronisiert.',
+  'settings.autoCloseParents.hint': 'Unteraufgaben auf „wird nichts“ zählen als erledigt, zurückgestellte nicht. Die Erledigung wird mit deinen anderen Apps synchronisiert.',
 
   // ── Ein zu voller Tag, benannt im Moment der Zusage ────────────────────────
   'plan.trim': 'Etwas streichen',
@@ -1092,13 +1092,13 @@ export const de: Catalogue = {
   'today.wasDueDays': 'war fällig am {date} · {days} T',
   'settings.staleOverdue': 'Tage Verzug bis zur Nachfrage',
   'settings.staleOverdue.hint': 'Danach fragt eine überfällige Aufgabe nach einem neuen Datum oder dem Zurückstellen, statt für heute angeboten zu werden. 0 schaltet das ab.',
-  'settings.staleOverdue.off': 'Aus. Überfällige Aufgaben werden für heute angeboten, egal wie spät sie sind.',
+  'settings.staleOverdue.off': 'Aus. Überfällige Aufgaben werden für heute angeboten, egal wie lange sie schon überfällig sind.',
   // Als REGEL formuliert, nicht als Schaltfläche: das Datumsfeld daneben tut
   // dasselbe, wenn du denselben Tag wählst.
   'settings.planOnDueToday': 'Auf heute verschobene Aufgaben einplanen',
   'settings.planOnDueToday.on': 'An',
   'settings.planOnDueToday.off': 'Aus',
-  'settings.planOnDueToday.hint': 'Setzt du das Fälligkeitsdatum einer Aufgabe auf heute, kommt sie auch in den heutigen Plan.',
+  'settings.planOnDueToday.hint': 'Bekommt eine überfällige Aufgabe heute als neues Datum, kommt sie auch in den heutigen Plan.',
   // Statt des Hinweises, wenn die Schwelle oben 0 ist. Der Schalter bleibt
   // sichtbar, damit man ihn wiederfindet – die Zeile sagt, warum er gerade
   // nichts tut.
@@ -1121,7 +1121,7 @@ export const de: Catalogue = {
   'settings.section.about': 'Über',
   'about.licence': 'Lizenz',
   'about.source': 'Quellcode',
-  'about.hint': 'Der Quellcode der Version, die hier läuft. Wer eine geänderte Kopie betreibt, muss laut AGPL auf den eigenen Quellcode verlinken.',
+  'about.hint': 'Der Quellcode der Version, die hier läuft. Wer eine geänderte Kopie betreibt, die andere über ein Netzwerk nutzen, muss ihnen laut AGPL deren Quellcode anbieten.',
   // ── E-Mail-Import ──────────────────────────────────────────────────────────
   'settings.section.mail': 'E-Mail',
   'mail.intro': 'Schlägt über Proton Mail Bridge Aufgaben und Termine aus deinen E-Mails vor. Nichts wird hinzugefügt, bevor du es bestätigst.',
@@ -1129,7 +1129,7 @@ export const de: Catalogue = {
   'mail.deploymentOff': 'Für diese Installation abgeschaltet (SMYLTE_MAIL_ENABLED=false).',
   'mail.secretsUnavailable': 'Zugangsdaten können gerade nicht gespeichert werden: {error}',
   'mail.enabled': 'Meine E-Mails lesen',
-  'mail.enabled.hint': 'Die erste Prüfung liest die letzten {days} Tage.',
+  'mail.enabled.hint': 'Die erste Prüfung liest die letzten {days} Tage. Richte vorher die Absenderlisten ein, denn übersprungene E-Mails werden nicht erneut gelesen.',
   'mail.on': 'An',
   'mail.off': 'Aus',
   'mail.head.anthropic': 'Anthropic',
@@ -1197,7 +1197,7 @@ export const de: Catalogue = {
   'mail.typesafeKey': 'TypeSafe-API-Schlüssel',
   'mail.jevModel': 'Jev-Modell',
   'mail.test.typesafe': 'TypeSafe-Schlüssel testen',
-  'mail.jev.hint': 'Jev entscheidet, ob es eine Aufgabe oder ein Termin ist und ob es etwas doppelt, das du schon hast. Claude entscheidet, wenn Jev unsicher oder nicht erreichbar ist. Lass den Schlüssel leer, um nur Claude zu nutzen.',
+  'mail.jev.hint': 'Jev entscheidet zwischen Aufgabe und Termin und erkennt Dubletten zu dem, was du schon hast. Claude entscheidet, wenn Jev unsicher oder nicht erreichbar ist. Lass den Schlüssel leer, um nur Claude zu nutzen.',
   'mail.dedupDecider': 'Duplikatprüfung',
   'mail.dedupDecider.jev': 'TypeSafe Jev, Claude bei Unsicherheit',
   'mail.dedupDecider.model': 'Claude',

@@ -3216,7 +3216,7 @@ describe('<TodayView> reviewing today', () => {
 
     expect(await screen.findByText(/Nothing planned or finished yet/))
       .toBeInTheDocument()
-    expect(screen.queryByText(/Nothing was planned on this day/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Nothing planned or finished.')).not.toBeInTheDocument()
   })
 
   it('treats a row dropped today as the record it is', async () => {

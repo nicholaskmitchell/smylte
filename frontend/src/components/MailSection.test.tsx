@@ -254,7 +254,7 @@ describe('saving', () => {
     // Nothing but its own hint sits between the switch and the Status head.
     const hint = toggle.closest('.menu-row')!.nextElementSibling!
     expect(hint).toHaveTextContent(
-      'The first check reads the last 7 days.')
+      'The first check reads the last 7 days. Set up the sender lists first, because skipped mail isn’t read again.')
     expect(hint.nextElementSibling).toBe(status)
     // And it is no longer the first thing in the section.
     expect(document.querySelector('.menu-row')!.contains(toggle)).toBe(false)

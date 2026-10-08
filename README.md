@@ -128,9 +128,10 @@ cd frontend && npm run test:browser              # Playwright: Chromium and WebK
 
 Run Radicale and the app behind a reverse proxy that sends `/dav` to Radicale
 and everything else to the app on `127.0.0.1:8080`. The app signs in to Radicale
-over localhost. The public gate is the app's own username and password. A
-Cloudflare tunnel or Cloudflare Access can sit in front. The full guide,
-including backups, is in [`docs/DEPLOY.md`](docs/DEPLOY.md).
+over localhost. The public gate is the app's own username and password. The
+provided Caddy snippet expects a Cloudflare tunnel in front, and the guide says
+what to change for other setups. The full guide, including backups, is in
+[`docs/DEPLOY.md`](docs/DEPLOY.md).
 
 ## Disclosure
 
