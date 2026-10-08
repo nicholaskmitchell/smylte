@@ -72,7 +72,7 @@ describe('<DisplaysSection>', () => {
       .toBeInTheDocument()
     // The honest caveat, on screen rather than in a comment: this URL is a
     // password in a browser's address bar.
-    expect(screen.getByText(/is a password in a browser’s address bar/i))
+    expect(screen.getByText(/Anyone with this URL can see/i))
       .toBeInTheDocument()
   })
 
@@ -177,7 +177,7 @@ describe('<DisplaysSection>', () => {
       Promise.resolve({ ...DISPLAY, palette: 'eink', ...body })) as never)
     const { unmount } = mount()
     await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
-    expect(screen.getByText(/three minutes is the floor on e-ink/i)).toBeInTheDocument()
+    expect(screen.getByText(/more often than every 3 minutes/i)).toBeInTheDocument()
 
     // Cycling from 5 minutes lands on 15, never on 1.
     await userEvent.click(screen.getByRole('button', { name: 'Every 5 minutes' }))
@@ -188,7 +188,7 @@ describe('<DisplaysSection>', () => {
     m.displays.mockResolvedValue([DISPLAY] as never)
     mount()
     await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
-    expect(screen.queryByText(/three minutes is the floor/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/more often than every 3 minutes/i)).not.toBeInTheDocument()
   })
 
   it('points an e-ink screen at the raw framebuffer, not the PNG', async () => {
@@ -252,13 +252,13 @@ describe('<DisplaysSection>', () => {
     await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
     // The honest caveat, on the screen where the choice is made rather than in
     // a README: this face moves on the panel's next refresh, not on the tick.
-    expect(screen.getByText(/on this screen’s next refresh/i)).toBeInTheDocument()
+    expect(screen.getByText(/on the screen’s next refresh/i)).toBeInTheDocument()
     unmount()
 
     m.displays.mockResolvedValue([DISPLAY] as never)
     mount()
     await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
-    expect(screen.queryByText(/on this screen’s next refresh/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/on the screen’s next refresh/i)).not.toBeInTheDocument()
   })
 
   it('offers the habits-only toggles only on a habits display', async () => {
@@ -274,7 +274,7 @@ describe('<DisplaysSection>', () => {
     expect(screen.getByText(/hide habits once done/i)).toBeInTheDocument()
     // The setting the whole habit-tracker idea rests on, and the reason it is
     // stated next to the switch.
-    expect(screen.getByText(/getting shorter as the day goes/i)).toBeInTheDocument()
+    expect(screen.getByText(/The count still includes them/i)).toBeInTheDocument()
     cleanup()
 
     // And not on a `now` display: that face has no done rows to hide — they are

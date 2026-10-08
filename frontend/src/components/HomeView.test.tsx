@@ -323,7 +323,7 @@ describe("the day-plan module", () => {
     // A day nobody has opened answers `planned: false` with no rows, and this
     // reads the same to a user as one they opened and emptied. The card points
     // at the tab that can change it rather than offering to plan the day here.
-    expect(await screen.findByText('Nothing on today yet. Plan it from the Today tab.'))
+    expect(await screen.findByText('Nothing planned yet.'))
       .toBeInTheDocument()
   })
 

@@ -362,7 +362,6 @@ export function SettingsMenu({
                 {tr('settings.appearance.customize')}
               </button>
             </div>
-            <div className="hintline">{tr('settings.appearance.hint')}</div>
             <DesktopSection />
           </>
         )}
@@ -407,7 +406,6 @@ export function SettingsMenu({
                   ? 'settings.completedTasks.shown' : 'settings.completedTasks.hidden')}
               </button>
             </div>
-            <div className="hintline">{tr('settings.completedTasks.hint')}</div>
             <div className="menu-row">
               <label htmlFor="set-autoclose">{tr('settings.autoCloseParents')}</label>
               <button className="menu-toggle" id="set-autoclose"
@@ -475,7 +473,6 @@ export function SettingsMenu({
 
         {section === 'notifications' && (
           <>
-            <div className="hintline">{tr('notif.intro')}</div>
             <NotificationsSection
               enabled={notifyEnabled} onEnabledChange={onNotifyEnabledChange}
               chatId={notifyChatId} onChatIdChange={onNotifyChatIdChange}

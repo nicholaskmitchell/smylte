@@ -403,8 +403,8 @@ describe('2026-09-03 — minutes of calendar on THIS day', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('2026-09-03 — the shutdown ritual after the owner came back', () => {
-  const DONE_SENTENCE = 'Everything on today is done. Nothing to carry.'
-  const NOTHING_AT_ALL = 'Nothing on today, and nothing finished off-plan.'
+  const DONE_SENTENCE = 'All done. Nothing to carry over.'
+  const NOTHING_AT_ALL = 'Nothing planned or finished today.'
 
   const open = async (user: ReturnType<typeof setup>) => {
     await user.click(await screen.findByRole('button', { name: 'More actions' }))
@@ -421,7 +421,7 @@ describe('2026-09-03 — the shutdown ritual after the owner came back', () => {
     // the count dies. The stamps that tell "moved" from "done" apart —
     // `rolled_to` / `dropped_at` — are on `allEntries` and are never handed in.
     // Measured: move all 2, Close, Shut down again -> step 1 "0 of 0 done
-    // Nothing on today, and nothing finished off-plan.", step 2 the exact
+    // Nothing planned or finished today.", step 2 the exact
     // sentence #68's pin forbids. `DoneStep`'s own comment says coming back is
     // "allowed and expected".
     m.openDay.mockResolvedValue(plan([

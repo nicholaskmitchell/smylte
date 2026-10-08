@@ -724,7 +724,7 @@ describe('<TodayView> what a reviewed day shows', () => {
     await back(user)
     // A day nobody opened has no plan and no rows, and that is a real answer
     // rather than a missing one — `api.day` returns planned=false for it.
-    expect(await screen.findByText(/nothing was planned on this day/i)).toBeInTheDocument()
+    expect(await screen.findByText('Nothing planned or finished.')).toBeInTheDocument()
   })
 
   it('says nothing at all until the read for that day lands', async () => {
@@ -735,9 +735,9 @@ describe('<TodayView> what a reviewed day shows', () => {
     // On a look-back the empty state IS the whole content of the screen, so
     // flashing it over a fetch in flight is a claim about a day the surface has
     // not seen yet.
-    expect(screen.queryByText(/nothing was planned on this day/i)).not.toBeInTheDocument()
+    expect(screen.queryByText('Nothing planned or finished.')).not.toBeInTheDocument()
     await act(async () => { settle(plan([], inDays(-1))) })
-    expect(await screen.findByText(/nothing was planned on this day/i)).toBeInTheDocument()
+    expect(await screen.findByText('Nothing planned or finished.')).toBeInTheDocument()
   })
 })
 
@@ -1220,7 +1220,7 @@ describe('<TodayView> a day committed over its capacity', () => {
     await user.click(await screen.findByRole('button', { name: 'Previous day' }))
 
     expect(await screen.findByText(
-      'Started 1h 20m over what you said you would work.')).toBeInTheDocument()
+      'Started 1h 20m over your working day.')).toBeInTheDocument()
   })
 
   it('says nothing for a day committed inside its capacity', async () => {
@@ -1232,7 +1232,7 @@ describe('<TodayView> a day committed over its capacity', () => {
     await user.click(await screen.findByRole('button', { name: 'Previous day' }))
 
     await screen.findByText('A thing')
-    expect(screen.queryByText(/over what you said you would work/))
+    expect(screen.queryByText(/Started .* over your working day/))
       .not.toBeInTheDocument()
   })
 })
@@ -1713,7 +1713,7 @@ describe('<TodayView> the add box', () => {
     // at all about what Enter would do — the silence this whole change removes.
     const chip = fateChip()!
     expect(chip.textContent).toMatch(/Note/)
-    expect(chip.textContent).toMatch(/never leaves Smylte/)
+    expect(chip.textContent).toMatch(/not synced/)
 
     await user.type(screen.getByLabelText('Add to today'), '{Enter}')
 
@@ -1790,7 +1790,7 @@ describe('<TodayView> the planning ritual', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Next' }))
     expect(within(dialog).getByText('What are you doing?')).toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: 'Next' }))
-    expect(within(dialog).getByText('Shape it')).toBeInTheDocument()
+    expect(within(dialog).getByText('Order and estimate')).toBeInTheDocument()
 
     // Every step is optional and the way out is always there.
     await user.click(within(dialog).getByRole('button', { name: 'Close' }))
@@ -1851,7 +1851,7 @@ describe('<TodayView> the planning ritual', () => {
     const dialog = await pick(user)
 
     const headings = [...dialog.querySelectorAll('.section-label')].map((n) => n.textContent)
-    expect(headings[0]).toBe('You did not finish these last time')
+    expect(headings[0]).toBe('Unfinished from last time')
     // Reworded HERE only — the day behind the dialog keeps its own wording.
     expect(headings).not.toContain('Still open from a recent plan')
     // The rest keep the labels and the order the day gives them: this screen is
@@ -2002,7 +2002,7 @@ describe('<TodayView> the planning ritual', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Next' }))
     await user.click(within(dialog).getByRole('button', { name: 'Next' }))
 
-    expect(within(dialog).getByText(/3h more than you said you would work/))
+    expect(within(dialog).getByText(/3h over your working day/))
       .toBeInTheDocument()
     // Not offered as "Start the day" at all: the unqualified name is gone while
     // the day is over, which is what stops the two readings coexisting.
@@ -2117,7 +2117,7 @@ describe('<TodayView> the shutdown ritual', () => {
 
     expect(within(dialog).getByText('How today went')).toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: 'Next' }))
-    expect(within(dialog).getByText('What follows you')).toBeInTheDocument()
+    expect(within(dialog).getByText('What carries over')).toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: 'Next' }))
     expect(within(dialog).getByText('Anything to note?')).toBeInTheDocument()
 
@@ -2172,7 +2172,7 @@ describe('<TodayView> the shutdown ritual', () => {
     expect(within(dialog).getByText(/1 of 1 done/)).toBeInTheDocument()
     expect(within(dialog).getByText(/30m of 30m planned/)).toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: 'Next' }))
-    expect(within(dialog).getByText(/Everything on today is done/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/All done/)).toBeInTheDocument()
   })
 
   it('lists what got finished without ever being planned', async () => {
@@ -2503,7 +2503,7 @@ describe('<TodayView> the shutdown ritual', () => {
     // And it is RE-ENTERABLE — an evening thought belongs in the same
     // reflection — so it reports the stamp rather than refusing.
     const again = await open(user)
-    expect(within(again).getByText(/You shut today down at/)).toBeInTheDocument()
+    expect(within(again).getByText(/Shut down at/)).toBeInTheDocument()
     await user.click(within(again).getByRole('button', { name: 'Next' }))
     await user.click(within(again).getByRole('button', { name: 'Next' }))
     // And the last button says so too, rather than offering to do it twice.
@@ -2649,7 +2649,7 @@ describe('<TodayView> how full the day is', () => {
 
     expect(document.querySelector('.today-load.over')).not.toBeNull()
     expect(await screen.findByRole('status')).toHaveTextContent(
-      /3h more than you said you would work/)
+      /3h over your working day/)
   })
 
   it('counts the calendar beside the plan, never inside it', async () => {
@@ -3214,7 +3214,7 @@ describe('<TodayView> reviewing today', () => {
     await screen.findByRole('button', { name: 'Review' })
     await user.click(screen.getByRole('button', { name: 'Review' }))
 
-    expect(await screen.findByText(/Nothing on today yet, and nothing finished so far/))
+    expect(await screen.findByText(/Nothing planned or finished yet/))
       .toBeInTheDocument()
     expect(screen.queryByText(/Nothing was planned on this day/)).not.toBeInTheDocument()
   })
@@ -3373,7 +3373,7 @@ describe('<TodayView> what the add box promises', () => {
     await waitFor(() => expect(fateChip()).not.toBeNull())
     expect(fateChip()!.textContent).toMatch(/Note/)
     expect(fateChip()!.textContent).toMatch(/this day only/)
-    expect(fateChip()!.textContent).toMatch(/never leaves Smylte/)
+    expect(fateChip()!.textContent).toMatch(/not synced/)
   })
 
   it('says a dated line will become a task, and names the list it lands on', async () => {
@@ -4178,7 +4178,7 @@ describe('<TodayView> the habits sheet', () => {
     // Two presses, and the second is offered beside the warning rather than
     // instead of it: deleting a habit removes the RULE, and every day it has
     // already run on keeps the line it put there.
-    expect(screen.getByText(/keeps the line it put there/i)).toBeInTheDocument()
+    expect(screen.getByText(/Past days keep their entries/i)).toBeInTheDocument()
     expect(m.deleteHabit).not.toHaveBeenCalled()
 
     await user.click(screen.getByRole('button', { name: 'Confirm delete Read' }))
@@ -4719,7 +4719,7 @@ describe('<TodayView> the habits sheet, before the server answers', () => {
     await user.click(within(sheet).getByRole('button', { name: 'How long Read takes' }))
     expect(within(sheet).getByLabelText('Minutes each time for Read')).toHaveValue(null)
     await act(async () => { fetched.land([habit({ estimate_minutes: 30 })]) })
-    await user.click(within(sheet).getByText(/A habit is a rule/))
+    await user.click(within(sheet).getByText(/Habits add a line to your day/))
 
     expect(m.patchHabit).not.toHaveBeenCalled()
     expect(within(sheet).getByRole('button', { name: 'Read takes 30m each time — change it' }))

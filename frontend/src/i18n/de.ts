@@ -47,13 +47,8 @@ export const de: Catalogue = {
   // languages, which is where a fix belongs.
   'tabs.moveLeft': '{tab} nach links',
   'tabs.moveRight': '{tab} nach rechts',
-  'tabs.hint': 'Die Reihenfolge hier ist die Reihenfolge oben. '
-    + '\u201EZuletzt genutzter Reiter\u201C \u00F6ffnet dort, wo du aufgeh\u00F6rt hast \u2014 auf '
-    + 'jedem Ger\u00E4t, das an diesem Konto angemeldet ist.',
-  'tabs.hint.sidebar': 'Die Reihenfolge hier ist die Reihenfolge in der '
-    + 'Seitenleiste und, auf dem Telefon, in der unteren Leiste. „Zuletzt genutzter '
-    + 'Reiter“ öffnet dort, wo du aufgehört hast — auf jedem Gerät, das an diesem '
-    + 'Konto angemeldet ist.',
+  'tabs.hint': 'Legt die Reihenfolge der Reiter fest. „Zuletzt genutzter Reiter“ öffnet dort, wo du aufgehört hast, auf jedem Gerät.',
+  'tabs.hint.sidebar': 'Legt die Reihenfolge in der Seitenleiste und in der unteren Leiste am Telefon fest. „Zuletzt genutzter Reiter“ öffnet dort, wo du aufgehört hast, auf jedem Gerät.',
 
   // ── settings ─────────────────────────────────────────────────────────────
   'settings.sections': 'Einstellungsbereiche',
@@ -66,19 +61,19 @@ export const de: Catalogue = {
   'settings.icon.accent': 'Akzentfarbene Platte',
   'settings.icon.mark': 'Nur das Signet',
   'settings.icon.shortcut': 'Startmenü-Verknüpfung',
-  'settings.icon.hint': 'Ändert Titelleiste, Alt-Tab und Task-Manager sofort. Die Taskleiste zeigt ein Gruppensymbol, das Windows aus einer Startmenü-Verknüpfung nimmt, nicht aus dem Fenster — dafür diese Option einschalten.',
-  'settings.icon.autoLight': 'Windows ist derzeit hell, daher wird die tiefschwarze Platte verwendet.',
-  'settings.icon.autoDark': 'Windows ist derzeit dunkel, daher wird die cremefarbene Platte verwendet.',
-  'settings.icon.win10': 'Diese Windows-Version unterstützt nur eine helle oder dunkle Titelleiste, keine exakte Farbe.',
+  'settings.icon.hint': 'Das Symbol in der Taskleiste kommt aus der Startmenü-Verknüpfung. Schalte sie ein, um es auch dort zu ändern.',
+  'settings.icon.autoLight': 'Windows ist hell, daher wird die tiefschwarze Platte verwendet.',
+  'settings.icon.autoDark': 'Windows ist dunkel, daher wird die cremefarbene Platte verwendet.',
+  'settings.icon.win10': 'Diese Windows-Version unterstützt nur eine helle oder dunkle Titelleiste.',
   'settings.icon.auto.linux': 'Systemdesign folgen',
   'settings.icon.shortcut.linux': 'Eintrag im Anwendungsmenü',
-  'settings.icon.hint.linux': 'Ändert Fenstersymbol, Alt-Tab und die Fensterübersicht sofort. Ein Eintrag nimmt Smylte in das Anwendungsraster und in die Suche auf, gibt dem Dock das richtige Symbol für ein laufendes Fenster und lässt Benachrichtigungen den App-Namen tragen.',
-  'settings.icon.autoLight.linux': 'Das System ist derzeit hell, daher wird die tiefschwarze Platte verwendet.',
-  'settings.icon.autoDark.linux': 'Das System ist derzeit dunkel, daher wird die cremefarbene Platte verwendet.',
+  'settings.icon.hint.linux': 'Der Menüeintrag nimmt Smylte in das Anwendungsraster und die Suche auf und gibt Dock und Benachrichtigungen das richtige Symbol und den richtigen Namen.',
+  'settings.icon.autoLight.linux': 'Das System ist hell, daher wird die tiefschwarze Platte verwendet.',
+  'settings.icon.autoDark.linux': 'Das System ist dunkel, daher wird die cremefarbene Platte verwendet.',
   'settings.titlebar': 'Systemtitelleiste',
-  'settings.titlebar.hint': 'Eingeschaltet bleibt die Titelleiste in der Farbe, die Windows zeichnet, statt den App-Hintergrund aufzunehmen.',
-  'settings.titlebar.hint.linux': 'Eingeschaltet zeichnet der Fenstermanager die Titelleiste — mit seinem Dekorationsdesign, seinen eigenen Schaltflächen und dem Fenstersymbol. Smylte kann eine Titelleiste, die es nicht selbst zeichnet, nicht einfärben; der App-Hintergrund erreicht sie dann nicht mehr. Beides zugleich geht nicht. Wirkt beim nächsten Start von Smylte.',
-  'settings.float.noPin': 'Dies ist eine Wayland-Sitzung, in der ein Fenster nicht darum bitten kann, über anderen zu bleiben — daher bietet das schwebende Fenster keine Anheftung und öffnet sich nicht an der zuletzt genutzten Stelle. Wayland hat Vorrang, weil X11 zwei Monitore nicht unabhängig skalieren kann und Text bei fraktionaler Skalierung unscharf wird. Mit "Backend": "x11" in der settings.json tauschst du das gegen die Anheftung zurück.',
+  'settings.titlebar.hint': 'Verwendet die Titelleistenfarbe von Windows statt des App-Hintergrunds.',
+  'settings.titlebar.hint.linux': 'Der Fenstermanager zeichnet die Titelleiste, die dann nicht mehr zum App-Hintergrund passt. Wirkt nach einem Neustart.',
+  'settings.float.noPin': 'Unter Wayland kann das schwebende Fenster nicht im Vordergrund bleiben und öffnet sich nicht an der zuletzt genutzten Stelle. Mit "Backend": "x11" in der settings.json geht beides wieder, aber X11 zeichnet Text auf skalierten oder gemischten Bildschirmen unscharf.',
   'settings.section.calendar': 'Kalender',
   'settings.section.tasks': 'Aufgaben',
   'settings.section.focus': 'Fokus',
@@ -95,19 +90,19 @@ export const de: Catalogue = {
   'settings.section.developer': 'Entwicklung',
 
   // Anzeigen — die passiven Bildschirme.
-  'disp.intro': 'Eine Anzeige ist ein Bildschirm ohne Bedienung: ein Kalender im Flur, die Gewohnheiten von heute in der Küche — sie liest dieses Konto und schreibt nie hinein.',
+  'disp.intro': 'Bildschirme, die deinen Kalender oder Tag nur anzeigen, etwa ein Wandkalender oder ein E-Ink-Panel.',
   'disp.loading': 'Anzeigen werden geladen…',
-  'disp.loadFailed': 'Die Anzeigen konnten nicht geladen werden. Das heißt nicht, dass es keine gibt — bitte gleich noch einmal versuchen.',
+  'disp.loadFailed': 'Die Anzeigen konnten nicht geladen werden.',
   'disp.none': 'Noch keine Anzeigen.',
   'disp.mode': 'Zeigt',
   'disp.mode.calendar': 'Den Monat',
   'disp.mode.habits': 'Gewohnheiten + heute',
   'disp.mode.now': 'Jetzt + als Nächstes',
-  'disp.modeNowHint': 'Eins nach dem anderen: woran du gerade bist, was danach kommt und wie viel noch dahinter wartet. Der Bildschirm folgt deinem Tagesplan — wer ihn unter Heute umsortiert, sortiert auch den Bildschirm um. Und er rückt weiter, sobald irgendwo etwas abgehakt wird: beim nächsten Aktualisieren, nicht sofort, und auf E-Ink nie schneller als alle drei Minuten.',
+  'disp.modeNowHint': 'Der aktuelle Eintrag aus dem heutigen Plan, der nächste und wie viele noch folgen. Aktualisiert sich beim nächsten Abruf des Bildschirms.',
   'disp.palette': 'Bildschirm',
   'disp.palette.color': 'Farbe',
   'disp.palette.eink': 'E-Ink (1 Bit)',
-  'disp.paletteHint': 'E-Ink lässt jede Farbe und jeden Grauton weg: Kalender werden stattdessen an der Form ihrer Markierung unterschieden, ab dem fünften kommt ein Buchstabe dazu.',
+  'disp.paletteHint': 'Nur Schwarz und Weiß. Kalender werden an der Form ihrer Markierung unterschieden, ab dem fünften mit einem Buchstaben.',
   'disp.on': 'An',
   'disp.off': 'Aus',
   'disp.lastSeen': 'Zuletzt gesehen {when}',
@@ -123,65 +118,56 @@ export const de: Catalogue = {
   'disp.refresh.900': 'Alle 15 Minuten',
   'disp.refresh.3600': 'Jede Stunde',
   'disp.refresh.seconds': 'Alle {n} Sekunden',
-  'disp.refreshEinkHint': 'Drei Minuten sind bei E-Ink das Minimum: die Hersteller sagen, nicht öfter zu aktualisieren und den Bildschirm dazwischen schlafen zu lassen, sonst nimmt er dauerhaft Schaden. Eine Minute gibt es nur bei einem Farbbildschirm, der diese Probleme nicht hat.',
+  'disp.refreshEinkHint': 'E-Ink-Panels können Schaden nehmen, wenn sie öfter als alle 3 Minuten aktualisiert werden.',
   'disp.hideDoneHabits': 'Erledigte Gewohnheiten ausblenden',
-  'disp.hideDoneHabitsHint': 'Ein Tracker an der Wand lohnt sich, wenn er im Lauf des Tages kürzer wird. Der Zähler in der Ecke weiß weiterhin, was darauf stand.',
+  'disp.hideDoneHabitsHint': 'Der Zähler zählt sie weiterhin mit.',
   'disp.hideDoneTasks': 'Erledigte Zeilen ausblenden',
   'disp.whichCalendars': 'Welche Kalender',
   'disp.whichLists': 'Welche Listen',
   'disp.url': 'Bildschirm richten auf',
-  'disp.urlHint': 'Wer diese URL hat, kann lesen, was der Bildschirm zeigt — sie ist ein Passwort in der Adresszeile. Bei Verdacht eine neue erzeugen.',
+  'disp.urlHint': 'Wer diese URL hat, sieht, was der Bildschirm zeigt. Erzeuge eine neue, falls sie in falsche Hände gerät.',
   'disp.copy': 'Kopieren',
   'disp.copied': 'Kopiert',
   'disp.panel': 'Für ein Panel ohne Browser',
-  'disp.panelHint': 'Ein E-Ink-Panel an einem Mikrocontroller kann ein fertiges Bild holen, statt die Seite auszuführen. Dazu die Pixel des Panels und seine Montage angeben.',
+  'disp.panelHint': 'Ein Mikrocontroller kann statt der Seite ein fertiges Bild abrufen. Gib Größe und Drehung des Panels an.',
   'disp.panelSize': 'Panelgröße',
 
-  'dev.intro': 'Alle Anzeigemodi, gezeichnet in den Größen echter Panels. Nichts davon wird gespeichert, und es entsteht weder eine Anzeige noch ein Token.',
+  'dev.intro': 'Alle Anzeigemodi in gängigen Panelgrößen. Nichts wird gespeichert.',
   'dev.panels': 'Panels',
   'dev.refresh': 'Neu zeichnen',
   'dev.hideDone': 'Erledigtes ausblenden',
   'dev.alt': '{panel}, {w} mal {h} Pixel',
-  'dev.hint': 'Jede Vorschau ist der echte Renderer in den Pixeln dieses Panels, verkleinert dargestellt. Die Größe neben einem E-Ink-Panel ist der gepackte Framebuffer, den es bekäme — das, was ein Mikrocontroller reservieren muss, bevor er ein Bild anfordern kann.',
+  'dev.hint': 'Die Vorschauen nutzen den echten Renderer, verkleinert. Die Größe bei einem E-Ink-Panel ist der Framebuffer, den ein Mikrocontroller reservieren muss.',
   'disp.panelWidth': 'Panelbreite in Pixeln',
   'disp.panelHeight': 'Panelhöhe in Pixeln',
-  'disp.needOneSource': 'Ein Display muss mindestens eines zeigen.',
-  'disp.panelTooSmall': 'Zu klein für einen Monat — sieben Spalten passen nicht. Der Bildschirm sagt das dann, statt einen zu zeichnen; Jetzt + als Nächstes und Gewohnheiten + heute lesen sich in jeder Größe.',
+  'disp.needOneSource': 'Wähle mindestens eines.',
+  'disp.panelTooSmall': 'Zu klein für einen Monat. Der Bildschirm zeigt stattdessen einen Hinweis. Jetzt + als Nächstes und Gewohnheiten + heute funktionieren in jeder Größe.',
   'disp.rotation': 'Drehung',
-  'disp.imageHint': 'Ein Mikrocontroller will die .bin — den gepackten 1-Bit-Puffer, der ohne jedes Dekodieren direkt aufs Panel geht (800×480 sind genau 48.000 Bytes). Für Boards mit Bildbibliothek stattdessen .png oder .bmp. Alle drei antworten mit 304, wenn sich nichts geändert hat — das Panel zeichnet also nur bei Neuem.',
+  'disp.imageHint': 'Für einen Mikrocontroller die .bin verwenden: ein gepackter 1-Bit-Framebuffer, der direkt aufs Panel geht (800×480 sind 48.000 Bytes). .png oder .bmp, wenn dein Board Bilder dekodieren kann.',
   'disp.enabled': 'Verbunden',
-  'disp.enabledHint': 'Eine ausgeschaltete Anzeige antwortet auf ihrer URL, als hätte es sie nie gegeben.',
+  'disp.enabledHint': 'Solange sie aus ist, funktioniert die URL nicht.',
   'disp.rotateToken': 'Neue URL',
-  'disp.rotateHint': 'Eine neue URL behält die Anzeige und alle Einstellungen; der Bildschirm muss neu darauf gerichtet werden. Löschen entfernt die Anzeige selbst.',
+  'disp.rotateHint': 'Eine neue URL behält die Einstellungen dieser Anzeige. Richte den Bildschirm danach neu darauf.',
   'disp.delete': 'Löschen',
   'disp.deleteConfirm': 'Anzeige löschen',
   'disp.keep': 'Behalten',
   'disp.add': 'Anzeige hinzufügen',
   'disp.addButton': 'Hinzufügen',
-  'disp.hint': 'Am besten nach dem Ort benennen, an dem sie hängt — der Name steht auf dem Bildschirm, damit man bei zweien weiß, welche welche ist.',
+  'disp.hint': 'Der Name steht auf dem Bildschirm.',
 
   // ── Benachrichtigungen ─────────────────────────────────────────────────────
-  'notif.intro': 'In Smylte steht ohnehin alles, wonach du später suchen wirst. '
-    + 'Eine Benachrichtigung muss also etwas sein, das du nicht nachträglich in '
-    + 'der App findest. Darum ist diese Liste kurz.',
   'notif.enabled': 'Telegram-Benachrichtigungen',
-  'notif.enabled.hint': 'Aus, bis du sie einschaltest — und nichts wird '
-    + 'verschickt, solange Bot-Token und Chat-ID unten nicht beide gesetzt sind.',
+  'notif.enabled.hint': 'Braucht ein Bot-Token und eine Chat-ID.',
   'notif.telegram': 'Verbindung',
   'notif.rules': 'Was verschickt wird',
   'notif.token': 'Bot-Token',
   'notif.token.placeholder': 'Token von @BotFather einfügen',
   'notif.token.stored': 'Gespeichert — Bot {bot}',
   'notif.token.remove': 'Entfernen',
-  'notif.token.hint': 'Lege in Telegram mit @BotFather einen Bot an und füge '
-    + 'sein Token ein. Es wird danach nie wieder angezeigt — die Einstellungen, '
-    + 'die diese Seite lädt, enthalten es bewusst nicht.',
+  'notif.token.hint': 'Lege mit @BotFather einen Bot an und füge sein Token ein. Es wird nach dem Speichern nicht mehr angezeigt.',
   'notif.token.removed': 'Bot-Token entfernt.',
   'notif.chatId': 'Chat-ID',
-  'notif.chatId.hint': 'Deine eigene ID für eine Direktnachricht, oder eine '
-    + 'negative Zahl für eine Gruppe. Schreibe dem Bot vorher einmal — ein Bot '
-    + 'kann kein Gespräch beginnen, ein unangeschriebener Chat antwortet mit '
-    + '„chat not found“.',
+  'notif.chatId.hint': 'Deine eigene ID oder eine negative Zahl für eine Gruppe. Schreib dem Bot vorher einmal, sonst antwortet Telegram mit „chat not found“.',
   'notif.test': 'Testnachricht senden',
   'notif.test.sending': 'Wird gesendet…',
   'notif.on': 'An',
@@ -190,113 +176,61 @@ export const de: Catalogue = {
   'notif.volume.silent': 'stumm',
   'notif.trigger.aria': 'Benachrichtigung „{rule}“ an- oder ausschalten',
   'notif.trigger.dailyDigest': 'Tagesüberblick',
-  'notif.trigger.dailyDigest.hint': 'Die Termine des Tages, was fällig ist und '
-    + 'wie viel überfällig — einmal am Morgen. Er ersetzt den Blick in die App, '
-    + 'er wirbt nicht für sie.',
+  'notif.trigger.dailyDigest.hint': 'Die Termine des Tages, was fällig ist und die Zahl der überfälligen Aufgaben, jeden Morgen.',
   'notif.trigger.eventStarting': 'Vor einem Termin',
-  'notif.trigger.eventStarting.hint': 'Das Einzige, was ein Morgenüberblick '
-    + 'nicht abdecken kann. Wenn dein Telefonkalender ohnehin erinnert, lass '
-    + 'das aus — Smylte sieht diese Alarme nicht und meldet sich sonst doppelt.',
+  'notif.trigger.eventStarting.hint': 'Vor jedem Termin. Unabhängig von den Erinnerungen deines Telefonkalenders.',
   'notif.trigger.bookingCreated': 'Jemand bucht dich',
-  'notif.trigger.bookingCreated.hint': 'Das Einzige in der App, das von außen '
-    + 'kommt, während du nicht hinsiehst. Immer stumm: gegen eine Buchung um 3 '
-    + 'Uhr lässt sich um 3 Uhr nichts machen.',
+  'notif.trigger.bookingCreated.hint': 'Wenn jemand über einen deiner Links bucht.',
   'notif.trigger.syncStalled': 'Sync steht still',
-  'notif.trigger.syncStalled.hint': 'Der eine Zustand, in dem die App dich '
-    + 'täuscht — alles sieht normal aus und die Daten sind eingefroren. Höchstens '
-    + 'eine stumme Nachricht am Tag, mit dem Namen der Liste statt der '
-    + 'Fehlermeldung.',
+  'notif.trigger.syncStalled.hint': 'Wenn der Abgleich seit über einer Stunde fehlschlägt. Höchstens einmal am Tag.',
   'notif.more': 'Standardmäßig aus',
-  'notif.more.hint': 'Smylte hält diese für die meisten Leute nicht für '
-    + 'sinnvoll — jede wiederholt entweder einen Dauerzustand oder etwas, das '
-    + 'ohnehin auf dem Bildschirm steht, den du öffnest. Der Grund steht jeweils '
-    + 'darunter. Wenn du das anders siehst: du kennst deine Tage besser als die App.',
   'notif.firesEvening': 'Kommt zur Abendzeit weiter unten.',
   'notif.trigger.itemReminder': 'Erinnerungen, die du setzt',
-  'notif.trigger.itemReminder.hint': 'Das „Erinnere mich“, das du an einer '
-    + 'einzelnen Aufgabe oder einem Termin gesetzt hast. Ohne dein Zutun passiert '
-    + 'hier nichts.',
+  'notif.trigger.itemReminder.hint': 'Für jede Aufgabe und jeden Termin mit „Erinnere mich“.',
   'notif.trigger.taskDueSoon': 'Vor jeder fälligen Aufgabe',
-  'notif.trigger.taskDueSoon.hint': 'Eine Frist ist entweder etwas, das du '
-    + 'ohnehin wusstest — dann ist das Lärm — oder etwas, das du in einer halben '
-    + 'Stunde nicht mehr schaffst, dann ist es Druck. Genau deshalb gibt es '
-    + '„Erinnere mich“ pro Aufgabe. Wiederkehrende und ganztägige Aufgaben bleiben '
-    + 'außen vor: beide haben keine Uhrzeit, auf die sich ehrlich zählen ließe.',
+  'notif.trigger.taskDueSoon.hint': 'Vor jeder Aufgabe mit Uhrzeit. Wiederkehrende und ganztägige Aufgaben werden übersprungen. Für eine einzelne Aufgabe „Erinnere mich“ verwenden.',
   'notif.trigger.taskOverdue': 'Was überfällig ist',
-  'notif.trigger.taskOverdue.hint': 'Überfällig bleibt jede Minute wahr, bis du '
-    + 'etwas tust — das hier ist also eine Zahl am Morgen, keine Neuigkeit. Der '
-    + 'Tagesüberblick nennt dieselbe Zahl bereits in einer Zeile.',
+  'notif.trigger.taskOverdue.hint': 'Die Zahl der überfälligen Aufgaben, jeden Morgen. Der Tagesüberblick enthält sie bereits.',
   'notif.trigger.dayUnplanned': 'Heute ist nicht geplant',
-  'notif.trigger.dayUnplanned.hint': 'Du weißt, dass du heute nicht geplant hast. '
-    + 'Hier bittet die App um Aufmerksamkeit für sich selbst — und das ist die '
-    + 'Nachricht, wegen der man am ehesten alles stummschaltet.',
+  'notif.trigger.dayUnplanned.hint': 'Jeden Morgen, wenn heute noch nicht geplant ist.',
   'notif.trigger.overcommitted': 'Der Plan wird zu lang',
-  'notif.trigger.overcommitted.hint': 'Die Zahl steht schon auf dem Bildschirm, '
-    + 'auf dem du planst, bevor der Tag beginnt. Kommt nie, wenn du nicht gesagt '
-    + 'hast, wie lang dein Tag ist — die App erfindet dir keinen.',
+  'notif.trigger.overcommitted.hint': 'Jeden Morgen, wenn der heutige Plan länger ist als dein Arbeitstag. Setzt einen eingestellten Arbeitstag voraus.',
   'notif.trigger.notShutDown': 'Heute wurde nicht abgeschlossen',
-  'notif.trigger.notShutDown.hint': 'Das erzieht eher zur Gewohnheit, als dass es '
-    + 'informiert: es sagt dir nichts, was du nicht weißt. Nur an einem Tag, den '
-    + 'du tatsächlich geplant hast.',
+  'notif.trigger.notShutDown.hint': 'Am Abend, wenn ein geplanter Tag nicht abgeschlossen wurde.',
   'notif.trigger.habitsLeft': 'Offene Gewohnheiten',
-  'notif.trigger.habitsLeft.hint': 'Die Haltung der App ist, dass eine Gewohnheit '
-    + 'nie als Fehlschlag eingefärbt wird und hier nichts deinen Tag bewertet — '
-    + 'und das hier passt zu beidem schlecht. Es nennt, was offen ist, und sonst '
-    + 'nichts: keine Serie, kein Prozentwert, keine Zählung von Auslassungen.',
+  'notif.trigger.habitsLeft.hint': 'Am Abend die Gewohnheiten, die heute noch offen sind.',
   'notif.trigger.linkBroken': 'Ein Buchungslink ist kaputt',
-  'notif.trigger.linkBroken.hint': 'Ein geteilter Link zeigt auf einen Kalender, '
-    + 'den es nicht mehr gibt — wer ihn öffnet, sieht einen Fehler. Selten: '
-    + 'löschst du einen Kalender in Smylte, werden seine Links automatisch '
-    + 'deaktiviert.',
+  'notif.trigger.linkBroken.hint': 'Wenn ein aktiver Buchungslink auf einen gelöschten Kalender zeigt.',
   'notif.trigger.syncRecovered': 'Sync läuft wieder',
-  'notif.trigger.syncRecovered.hint': 'Eine zweite Nachricht, die die erste '
-    + 'zurücknimmt, bringt Leute dazu, Meldungen nicht mehr zu lesen. Andererseits: '
-    + 'wenn du es repariert hast, willst du vielleicht wissen, dass es geklappt hat.',
+  'notif.trigger.syncRecovered.hint': 'Wenn der Abgleich nach einer Fehlermeldung wieder funktioniert.',
   'notif.eveningTime': 'Abendregeln um',
-  'notif.eveningTime.hint': 'Wann die beiden Tagesabschluss-Regeln oben kommen, '
-    + 'falls du sie einschaltest.',
+  'notif.eveningTime.hint': 'Für die beiden Abendregeln oben.',
   'notif.taskLead': 'Vorlauf bei Aufgaben',
-  'notif.taskLead.hint': 'Minuten Vorwarnung, bevor eine Aufgabe fällig ist — für '
-    + '„Vor jeder fälligen Aufgabe“. Eine an einer Aufgabe gesetzte Erinnerung '
-    + 'nutzt stattdessen ihren eigenen Wert.',
+  'notif.taskLead.hint': 'Für „Vor jeder fälligen Aufgabe“. Eine eigene Erinnerung an der Aufgabe hat Vorrang.',
   'notif.timing': 'Zeitpunkt',
   'notif.digestTime': 'Überblick kommt um',
-  'notif.digestTime.hint': 'In deiner Heimatzeitzone ({tz}). Ein Überblick, der '
-    + 'mehr als vier Stunden zu spät wäre, entfällt — er würde einen Morgen '
-    + 'beschreiben, der schon vorbei ist.',
-  'notif.digestTime.noTz': 'Stelle zuerst unter Allgemein eine Heimatzeitzone '
-    + 'ein. Ohne sie kommt der Überblick gar nicht: eine Uhrzeit, die gegen die '
-    + 'Serveruhr aufgelöst wird, ist nicht die Uhrzeit, die du gewählt hast.',
+  'notif.digestTime.hint': 'In {tz}. Entfällt, wenn er mehr als vier Stunden zu spät käme.',
+  'notif.digestTime.noTz': 'Stelle zuerst unter Allgemein eine eigene Zeitzone ein. Ohne sie wird der Überblick nicht verschickt.',
   'notif.eventLead': 'Vorlauf vor Terminen',
-  'notif.eventLead.hint': 'Minuten Vorwarnung, bevor ein Termin beginnt. Drei '
-    + 'ist das Minimum: Abgleich und Prüfung kosten zusammen fast zwei Minuten, '
-    + 'und eine Meldung nach Terminbeginn wird nie verschickt.',
-  'notif.ceiling.hint': 'Ab acht hörbaren Nachrichten am Tag kommen die '
-    + 'übrigen stumm an. Verworfen wird nie etwas — ein Kanal, der bei allem '
-    + 'summt, wird stummgeschaltet, und dann sagt er dir auch nicht mehr, dass '
-    + 'der Termin in zehn Minuten beginnt.',
+  'notif.eventLead.hint': 'Minuten vor Terminbeginn. Mindestens 3.',
+  'notif.ceiling.hint': 'Nach acht hörbaren Nachrichten am Tag kommen die übrigen stumm an.',
   'settings.section.account': 'Konto',
 
   'settings.tabs': 'Reiter',
 
   'settings.language': 'Sprache',
   'settings.language.aria': 'Sprache, in der die App angezeigt wird',
-  'settings.language.hint': 'Die Sprache, in der die App schreibt, und der '
-    + 'Kalender, nach dem sie Tage zählt. Deine Listen, Aufgaben und Termine '
-    + 'behalten die Namen, die du ihnen gegeben hast.',
+  'settings.language.hint': 'Legt auch fest, wie Daten geschrieben werden.',
 
   'settings.clock': 'Uhrzeit',
   'settings.clock.aria': '12- oder 24-Stunden-Anzeige',
-  'settings.clock.hint': 'Die Uhrzeitanzeige gilt überall dort, wo die App '
-    + 'selbst zeichnet. Datums- und Zeitfelder zeichnet der Browser — Chrome, '
-    + 'Edge und die Desktop-App folgen dieser Einstellung, Firefox folgt '
-    + 'deinem System.',
+  'settings.clock.hint': 'Datums- und Zeitfelder folgen ihr in Chrome, Edge und der Desktop-App. Firefox nutzt die Einstellung deines Systems.',
   'clock.12h': '12 Stunden',
   'clock.24h': '24 Stunden',
 
   'settings.workingDay': 'Arbeitstag',
   // ── Einstellungen → Fokus ──
-  'settings.focus.intro': 'Die Uhr der Fokus-Oberfläche. Gestartet wird sie von Heute aus.',
+  'settings.focus.intro': 'Eine Fokus-Sitzung startest du unter Heute.',
   'settings.focus.clock': 'Die Uhr',
   'settings.focus.interval': 'Intervall',
   'settings.focus.break': 'Pause',
@@ -305,15 +239,15 @@ export const de: Catalogue = {
   'settings.focus.longEvery.never': 'nie',
   'settings.focus.minutes': 'Minuten',
   'settings.focus.intervals': 'Intervallen',
-  'settings.focus.clock.hint': 'Eine Sitzung behält die Längen, mit denen sie begonnen hat — eine Änderung hier gilt für die nächste Phase, nie für die laufende.',
+  'settings.focus.clock.hint': 'Änderungen gelten ab der nächsten Phase.',
   'settings.focus.end': 'Wenn ein Intervall endet',
   'settings.focus.end.wait': 'Auf mich warten',
   'settings.focus.end.roll': 'Direkt weiter',
-  'settings.focus.end.hint': 'So oder so: Eine Uhr, die abläuft, während du weg bist, bleibt dort stehen. Weiterlaufen ist etwas, das ein Bildschirm tut, während du hinsiehst.',
+  'settings.focus.end.hint': 'So oder so bleibt die Uhr stehen, wenn sie abläuft, während du weg bist.',
   'settings.focus.cap': 'Schätzungen',
   'settings.focus.cap.open': 'Arbeiten, bis es fertig ist',
   'settings.focus.cap.capped': 'Bei der Schätzung aufhören',
-  'settings.focus.cap.hint': 'Die Vorgabe für eine Zeile, die nichts gesagt hat. Jede Zeile kann es auf der Fokus-Oberfläche anders sagen.',
+  'settings.focus.cap.hint': 'Die Vorgabe für jede Zeile. Beim Fokussieren lässt sie sich pro Zeile ändern.',
   'settings.focus.alerts': 'Wenn es endet',
   'settings.focus.chime': 'Klang',
   'settings.focus.notify': 'Browser-Benachrichtigung',
@@ -323,13 +257,12 @@ export const de: Catalogue = {
   'settings.focus.notifyGranted': 'Vom Browser erlaubt.',
   'settings.focus.notifyDenied': 'Im Browser blockiert',
   'settings.focus.notifyUnsupported': 'In diesem Browser nicht verfügbar.',
-  'settings.focus.notify.hint': 'Die eine Meldung, die dich erreicht, während das Fenster hinter etwas anderem liegt. Stumm — der Klang ist der Ton.',
+  'settings.focus.notify.hint': 'Erscheint auch, wenn das Fenster im Hintergrund liegt. Stumm.',
 
   'settings.timezone': 'Zeitzone',
   'settings.homeTimezone': 'Eigene Zeitzone',
   'settings.homeTimezone.aria': 'Zeitzone, in der deine Termine geschrieben werden',
-  'settings.homeTimezone.title': 'Nach welcher Uhr deine Termine geschrieben '
-    + 'werden. Buchungslinks erkennen daran, wann du wirklich belegt bist.',
+  'settings.homeTimezone.title': 'Die Zeitzone, in der deine Termine geschrieben werden. Buchungslinks ermitteln damit, wann du belegt bist.',
   'settings.notSet': 'Nicht gesetzt',
 
   'settings.theme': 'Design',
@@ -338,47 +271,30 @@ export const de: Catalogue = {
   'settings.appearance': 'Darstellung',
   'settings.appearance.customize': 'Anpassen…',
   'settings.appearance.aria': 'Darstellung anpassen',
-  'settings.appearance.hint': 'Anpassen öffnet den vollständigen Editor für das '
-    + 'Design-System — jeden Farbwert, die Eckenrundung, die Textgröße und die '
-    + 'Schriftfamilien — und speichert das Ergebnis als benanntes Design.',
   'settings.layout': 'Layout',
   'settings.layout.aria': 'Seitenleiste oder klassisches Layout',
-  'settings.layout.hint': 'Die Seitenleiste hält die Ansichten, deine Listen und '
-    + 'deine Kalender in einer Spalte am linken Rand. Klassisch ist die Reiterleiste '
-    + 'oben, mit der Smylte ausgeliefert wurde — dort haben Aufgaben und Kalender '
-    + 'je eine eigene Seitenleiste.',
+  'settings.layout.hint': 'Seitenleiste zeigt Ansichten, Listen und Kalender in einer Spalte links. Klassisch nutzt Reiter am oberen Rand.',
   'layout.sidebar': 'Seitenleiste',
   'layout.classic': 'Klassisch',
 
   'settings.calendarWindow': 'Kalenderansicht',
   'settings.calendarFit.aria': 'Festes oder dynamisches Kalenderraster',
-  'settings.calendarFit.title': 'Fest hält jede Woche gleich hoch; ein Tag mit '
-    + 'mehr Einträgen als hineinpassen wird zu „+N weitere“, statt seine Woche '
-    + 'zu dehnen.',
-  'settings.calendarFit.hint': 'Eine feste Kalenderansicht bringt den ganzen '
-    + 'Monat in den Bereich: jede Woche ist gleich hoch, und ein Tag mit mehr '
-    + 'Einträgen als hineinpassen wird zu „+N weitere“. Dynamisch lässt eine '
-    + 'volle Woche wachsen und das Raster scrollen.',
+  'settings.calendarFit.title': 'Fest bringt den Monat ins Fenster. Volle Tage zeigen „+N weitere“.',
+  'settings.calendarFit.hint': 'Fest bringt den ganzen Monat ins Fenster, volle Tage zeigen „+N weitere“. Dynamisch lässt volle Wochen wachsen und das Raster scrollen.',
   'calendarFit.fixed': 'Fest',
   'calendarFit.dynamic': 'Dynamisch',
 
   'settings.archivedCalendars': 'Archivierte Kalender',
-  'settings.archived.hint': 'Archivieren blendet einen Kalender aus, ohne ihn '
-    + 'zu löschen. Listen und Kalender liegen auf dem Radicale-CalDAV-Server — '
-    + 'Änderungen dort erscheinen in jedem verbundenen Client, das Archiv aber '
-    + 'gehört Smylte allein, und die Sammlung bleibt auf dem Server.',
+  'settings.archived.hint': 'Archivierte Kalender sind nur in Smylte ausgeblendet. Auf dem Server und in deinen anderen Apps bleiben sie.',
 
   'settings.completedTasks': 'Erledigte Aufgaben',
   'settings.completedTasks.shown': 'Sichtbar',
   'settings.completedTasks.hidden': 'Ausgeblendet',
-  'settings.completedTasks.hint': 'Ob erledigte Aufgaben in der Hauptansicht '
-    + 'bleiben. „Erledigte anzeigen“ in der Seitenleiste funktioniert so oder so.',
 
   'settings.signedInAs': 'Angemeldet als',
   'settings.staySignedIn': 'Angemeldet bleiben',
   'settings.staySignedIn.aria': 'Wie lange angemeldet bleiben',
-  'settings.session.hint': 'Eine kürzere Anmeldung gilt sofort, auf diesem '
-    + 'Gerät und auf jedem anderen. Eine längere gilt ab der nächsten Anmeldung.',
+  'settings.session.hint': 'Eine kürzere Dauer gilt sofort, auf jedem Gerät. Eine längere gilt ab der nächsten Anmeldung.',
   'session.1d': '1 Tag',
   'session.7d': '7 Tage',
   'session.30d': '30 Tage',
@@ -387,7 +303,7 @@ export const de: Catalogue = {
   'settings.logout': 'Abmelden',
   // ── archived calendars ──────────────────────────────────────────────────────
   'arch.loading': 'Wird geladen…',
-  'arch.loadFailed': 'Deine archivierten Kalender konnten nicht geladen werden.',
+  'arch.loadFailed': 'Archivierte Kalender konnten nicht geladen werden.',
   'arch.none': 'Keine archivierten Kalender.',
   'arch.viewEvents': 'Termine ansehen',
   'arch.restore': 'Wiederherstellen',
@@ -408,13 +324,13 @@ export const de: Catalogue = {
   'conn.loading': 'Wird geladen…',
   // “not read, not emptied” is the whole point of the sentence: the failure
   // is in the reading, not in the data. German keeps the same contrast.
-  'conn.loadFailed': 'Deine verbundenen Anwendungen konnten nicht geladen werden. Erteilte Zugriffe gelten weiter — die Liste ließ sich nicht lesen, sie ist nicht leer.',
-  'conn.none': 'Nichts ist verbunden. Anwendungen, die du über den MCP-Endpunkt verbindest, erscheinen hier.',
+  'conn.loadFailed': 'Verbundene Apps konnten nicht geladen werden.',
+  'conn.none': 'Noch keine verbundenen Apps.',
   'conn.anApplication': 'Eine Anwendung',
   'conn.connectedAt': 'Verbunden {when}',
   'conn.keep': 'Behalten',
   'conn.disconnect': 'Trennen',
-  'conn.hint': 'Das Trennen wirkt sofort — die Anwendung muss neu verbunden und erneut freigegeben werden, bevor sie wieder etwas lesen kann.',
+  'conn.hint': 'Trennen entzieht den Zugriff sofort.',
   // ── capacity ────────────────────────────────────────────────────────────────
   'capacity.mostDays': 'Meistens',
   'capacity.notSet': 'nicht gesetzt',
@@ -424,7 +340,7 @@ export const de: Catalogue = {
   // {short} and {long} are the two examples in the mono face. They are slots
   // rather than three fragments spliced around <span>s, so this sentence can
   // be reordered — see `useTx` in i18n.tsx.
-  'capacity.hint': 'Schreib es als {short} oder {long} Minuten. Ein Tag, dem du keine Länge gegeben hast, wird dir nie angerechnet — der Heute-Tab sagt dann einfach nichts darüber, wie voll er ist.',
+  'capacity.hint': 'Als {short} oder {long} Minuten eingeben. Leere Tage werden nicht erfasst.',
   // ── sign in ─────────────────────────────────────────────────────────────────
   'login.invalid': 'Ungültige Zugangsdaten',
   'login.username': 'Benutzername',
@@ -441,14 +357,14 @@ export const de: Catalogue = {
   // gesetzt und danach nie überschrieben, nennt also auch nach vier
   // Verschiebungen noch das Datum, für das die Aufgabe wirklich zugesagt war.
   'taskModal.originalDue': 'Ursprünglich fällig am {date}',
-  'taskModal.forgetOriginalDue': 'Verwerfen',
+  'taskModal.forgetOriginalDue': 'Entfernen',
   'common.delete': 'Löschen',
   'common.add': 'Hinzufügen',
   'common.save': 'Speichern',
   // ── plan ritual ─────────────────────────────────────────────────────────────
   'plan.step.capacity': 'Wie lang ist heute?',
   'plan.step.pick': 'Was machst du heute?',
-  'plan.step.shape': 'In Form bringen',
+  'plan.step.shape': 'Ordnen und schätzen',
   'plan.aria': 'Plane deinen Tag',
   'plan.stepOf': '{n} von {total}',
   'plan.total': '{planned} von {capacity}',
@@ -461,21 +377,21 @@ export const de: Catalogue = {
   'plan.done': 'Fertig',
   'plan.start': 'Tag beginnen',
   'plan.next': 'Weiter',
-  'plan.warn': 'Das ist {amount} mehr, als du arbeiten wolltest. Du kannst trotzdem anfangen — aber jetzt etwas zu verschieben ist leichter als um vier.',
+  'plan.warn': '{amount} über deinem Arbeitstag.',
   'plan.stopping': 'Wann hörst du heute auf?',
   // The examples must be things the parser actually takes, so these change
   // when daytext.ts learns German and not before. See daytext.ts.
-  'plan.capacityPlaceholder': 'bis 18 Uhr, oder 5h',
+  'plan.capacityPlaceholder': 'bis 18 Uhr oder 5h',
   'plan.capacityAria': 'Wie lange du heute arbeitest',
   'plan.capacityRefused': 'Versuch {a} oder {b}.',
-  'plan.capacityHint': 'Beides geht — {a} oder {b}. Das gilt nur für heute; in den Einstellungen steht die Vorgabe.',
-  'plan.meetings': 'Du hast heute schon {amount} im Kalender.',
-  'plan.leftovers': 'Das ist letztes Mal liegen geblieben',
-  'plan.nothingWaiting': 'Nichts liegt an. Was heute sonst noch ansteht, tippst du in das Feld dahinter.',
+  'plan.capacityHint': 'Als {a} oder {b} eingeben. Gilt nur für heute.',
+  'plan.meetings': '{amount} heute im Kalender.',
+  'plan.leftovers': 'Vom letzten Mal offen',
+  'plan.nothingWaiting': 'Nichts liegt an.',
   'plan.addToToday': '{task} zu heute hinzufügen',
   'common.task': 'Aufgabe',
   'plan.nothingOnToday': 'Heute steht noch nichts an.',
-  'plan.shapeHint': 'Tippe auf eine Schätzung, um sie zu setzen. Zieh eine Zeile, um sie zu verschieben.',
+  'plan.shapeHint': 'Tippe auf eine Schätzung, um sie zu setzen. Zum Umsortieren ziehen.',
   // ── parser examples ─────────────────────────────────────────────────────────
   // An example is a PROMISE that the parser takes this exact text. Its German
   // is therefore not a translator's choice but a fact about `parseCapacity`,
@@ -484,21 +400,21 @@ export const de: Catalogue = {
   'capacity.example.length': '5h',
   // ── shutdown ritual ─────────────────────────────────────────────────────────
   'shut.step.done': 'Wie heute lief',
-  'shut.step.follows': 'Was dir folgt',
+  'shut.step.follows': 'Was weiterwandert',
   'shut.step.reflect': 'Etwas festzuhalten?',
   'shut.aria': 'Den Tag abschließen',
   'shut.done': 'Fertig',
   'shut.shutDown': 'Abschließen',
-  'shut.alreadyShutdown': 'Du hast heute um {time} abgeschlossen. Was du von hier aus änderst, landet trotzdem auf heute.',
+  'shut.alreadyShutdown': 'Um {time} abgeschlossen. Änderungen gelten weiter für heute.',
   'shut.doneCount': '{done} von {total} erledigt',
   'shut.plannedOf': ' · {done} von {planned} geplant',
   'shut.unestimated': ' · {count} ohne Schätzung',
   'shut.offPlan': 'Ungeplant erledigt',
   'shut.doneMark': 'Erledigt',
-  'shut.nothingAtAll': 'Nichts auf heute, und ungeplant auch nichts erledigt.',
-  'shut.allDecided': 'Über alles von heute ist entschieden. Es bleibt nichts übrig.',
-  'shut.allDone': 'Alles von heute ist erledigt. Es bleibt nichts übrig.',
-  'shut.followsHint': 'Was du in Ruhe lässt, wandert von selbst weiter — hier geht es um die Zeilen, über die du entscheiden willst. Eine Entscheidung nimmt die Zeile aus dieser Liste.',
+  'shut.nothingAtAll': 'Heute nichts geplant und nichts erledigt.',
+  'shut.allDecided': 'Nichts wandert weiter.',
+  'shut.allDone': 'Alles erledigt. Nichts wandert weiter.',
+  'shut.followsHint': 'Was du nicht anfasst, wandert von selbst weiter.',
   'shut.moveAll': 'Alle {count} auf morgen schieben',
   'shut.thisTask': '(diese Aufgabe)',
   'shut.moveToTomorrow': '{task} auf morgen schieben',
@@ -507,9 +423,9 @@ export const de: Catalogue = {
   'shut.takeOff': '{task} aus dem Plan nehmen',
   'shut.offThePlan': 'Nicht im Plan',
   'shut.howDidItGo': 'Wie war dein Tag?',
-  'shut.reflectPlaceholder': 'Ein Satz reicht völlig.',
+  'shut.reflectPlaceholder': 'Optional',
   'shut.reflectAria': 'Eine Notiz zu heute',
-  'shut.reflectHint': 'Bleibt beim Tag. Du siehst sie jedes Mal, wenn du auf heute zurückschaust.',
+  'shut.reflectHint': 'Erscheint, wenn du auf diesen Tag zurückschaust.',
   // ── task fields ─────────────────────────────────────────────────────────────
   'field.list': 'Liste',
   'field.due': 'Fällig',
@@ -550,8 +466,8 @@ export const de: Catalogue = {
   // does not use. The du/Sie guard cannot tell them apart and should not try:
   // the case it would have to allow through is exactly the one worth catching.
   'bulk.failed': {
-    one: '1 Aufgabe konnte nicht angelegt werden. Die Zeile ist geblieben — drück auf Hinzufügen, um es noch einmal zu versuchen.',
-    other: '{count} Aufgaben konnten nicht angelegt werden. Die Zeilen sind geblieben — drück auf Hinzufügen, um es noch einmal zu versuchen.',
+    one: '1 Aufgabe konnte nicht angelegt werden. Drück auf Hinzufügen, um es erneut zu versuchen.',
+    other: '{count} Aufgaben konnten nicht angelegt werden. Drück auf Hinzufügen, um es erneut zu versuchen.',
   },
   'bulk.progress': '{done} / {total}',
   'bulk.adding': 'Wird hinzugefügt…',
@@ -573,13 +489,13 @@ export const de: Catalogue = {
   'module.mini_calendar': 'Minikalender',
   'module.mini_calendar.blurb': 'Dieser Monat, gepunktet in der Farbe jedes Kalenders.',
   'module.completed': 'Zuletzt erledigt',
-  'module.completed.blurb': 'Was du zuletzt fertig bekommen hast.',
+  'module.completed.blurb': 'Zuletzt erledigte Aufgaben.',
   'module.booking_links': 'Buchungslinks',
   'module.booking_links.blurb': 'Deine Buchungslinks und ihr Zustand.',
   'module.bookings': 'Anstehende Buchungen',
   'module.bookings.blurb': 'Wer Zeit bei dir gebucht hat.',
   'module.quick_add': 'Schnell hinzufügen',
-  'module.quick_add.blurb': 'Eine Aufgabe direkt auf eine Liste werfen.',
+  'module.quick_add.blurb': 'Eine Aufgabe zu einer Liste hinzufügen.',
   'home.title': 'Start',
   'home.moduleCount': { one: '{count} Modul', other: '{count} Module' },
   'home.arrangeHint': 'Ziehen zum Verschieben · Ecke zum Skalieren',
@@ -594,7 +510,7 @@ export const de: Catalogue = {
   'home.emptyOverdue': 'Nichts überfällig.',
   'home.emptyUpcoming': 'Nichts in den nächsten sieben Tagen.',
   'home.emptyCompleted': 'Noch nichts erledigt.',
-  'home.calPartial': '{cals} konnte nicht geladen werden — es fehlen vielleicht Termine.',
+  'home.calPartial': '{cals} konnte nicht geladen werden. Es fehlen vielleicht Termine.',
   'home.dayWithEvents': {
     one: '{day}, {count} Termin',
     other: '{day}, {count} Termine',
@@ -615,14 +531,14 @@ export const de: Catalogue = {
   'side.lists.one': 'Liste',
   'side.lists.new': 'Neue Liste',
   'side.lists.manage': 'Listen verwalten',
-  'side.lists.groupEmpty': 'Leer — ordne eine Liste über ihr ⋯-Menü zu',
+  'side.lists.groupEmpty': 'Leer. Ordne eine Liste über ihr ⋯-Menü zu.',
   'side.lists.dropHere': 'Zieh eine Liste hierher',
   'side.lists.tapHint': 'Tipp auf eine Liste, um sie ein- oder auszublenden. Tipp auf ⋯ zum Umbenennen, Umfärben{archive} oder Löschen.',
   'side.calendars.heading': 'Kalender',
   'side.calendars.one': 'Kalender',
   'side.calendars.new': 'Neuer Kalender',
   'side.calendars.manage': 'Kalender verwalten',
-  'side.calendars.groupEmpty': 'Leer — ordne einen Kalender über sein ⋯-Menü zu',
+  'side.calendars.groupEmpty': 'Leer. Ordne einen Kalender über sein ⋯-Menü zu.',
   'side.calendars.dropHere': 'Zieh einen Kalender hierher',
   'side.calendars.tapHint': 'Tipp auf einen Kalender, um ihn ein- oder auszublenden. Tipp auf ⋯ zum Umbenennen, Umfärben{archive} oder Löschen.',
   'side.archiveClause': ', Archivieren',
@@ -661,7 +577,7 @@ export const de: Catalogue = {
   'side.group': 'Gruppe',
   'side.noGroup': 'Keine Gruppe',
   'side.reallyDelete': 'Wirklich löschen?',
-  'side.archiveTitle': 'Ausblenden statt löschen — später in den Einstellungen wiederherstellbar',
+  'side.archiveTitle': 'Ausblenden statt löschen. In den Einstellungen wiederherstellbar.',
   'side.archive': 'Archivieren',
   // ── tasks tab ───────────────────────────────────────────────────────────────
   'tasks.view.list': 'Liste',
@@ -679,8 +595,8 @@ export const de: Catalogue = {
   'tasks.noCompleted': 'Keine erledigten Aufgaben.',
   'common.loading': 'Wird geladen…',
   'tasks.createListFirst': 'Leg eine Liste an, um loszulegen.',
-  'tasks.allHidden': 'Alle Listen sind ausgeblendet — schalte in der Seitenleiste eine ein.',
-  'tasks.partial': '{lists} konnte nicht geladen werden — es fehlen vielleicht Aufgaben.',
+  'tasks.allHidden': 'Alle Listen sind ausgeblendet.',
+  'tasks.partial': '{lists} konnte nicht geladen werden. Es fehlen vielleicht Aufgaben.',
   'common.retry': 'Erneut versuchen',
   'tasks.nothingToDo': 'Hier gibt es nichts zu tun.',
   'tasks.completedSection': 'Erledigt · {count}',
@@ -688,15 +604,15 @@ export const de: Catalogue = {
   // follows it in the markup, and only the sentence can say where the break
   // goes.
   'tasks.undatedHidden': {
-    one: '{count} Aufgabe ohne Datum wird nicht gezeigt — ',
-    other: '{count} Aufgaben ohne Datum werden nicht gezeigt — ',
+    one: '{count} Aufgabe ohne Datum wird nicht gezeigt. ',
+    other: '{count} Aufgaben ohne Datum werden nicht gezeigt. ',
   },
-  'tasks.switchToList': 'zur Liste wechseln',
+  'tasks.switchToList': 'Zur Liste wechseln',
   'tasks.overdueHidden': {
-    one: '{count} überfällige Aufgabe wird nicht gezeigt — ',
-    other: '{count} überfällige Aufgaben werden nicht gezeigt — ',
+    one: '{count} überfällige Aufgabe wird nicht gezeigt. ',
+    other: '{count} überfällige Aufgaben werden nicht gezeigt. ',
   },
-  'tasks.jumpToToday': 'zu heute springen',
+  'tasks.jumpToToday': 'Zu heute springen',
   'tasks.overdue': 'Überfällig',
   'tasks.doneSection': 'Erledigt · {count}',
   'tasks.colAdd': '+ Neu',
@@ -721,8 +637,8 @@ export const de: Catalogue = {
   'cal.completedShown': 'Erledigte · sichtbar',
   'cal.completedHidden': 'Erledigte · verborgen',
   'cal.createCalendarFirst': 'Leg einen Kalender an, um loszulegen.',
-  'cal.allArchived': 'Alle Kalender sind archiviert — stell in den Einstellungen einen wieder her.',
-  'cal.partial': '{cals} konnte nicht geladen werden — in diesem Monat fehlen vielleicht Termine.',
+  'cal.allArchived': 'Alle Kalender sind archiviert. Stell in den Einstellungen einen wieder her.',
+  'cal.partial': '{cals} konnte nicht geladen werden. Es fehlen vielleicht Termine.',
   'cal.grid': 'Monat',
   'cal.newEvent': 'Neuer Termin',
   'cal.repeatingTitle': '{summary} (wiederkehrend)',
@@ -738,11 +654,11 @@ export const de: Catalogue = {
   'cal.scope.this': 'Diesen Termin',
   'cal.scope.following': 'Diesen und die folgenden',
   'cal.scope.all': 'Alle Termine',
-  'cal.cadenceBlocked': 'Die geänderte Wiederholung braucht „Diesen und die folgenden“ oder „Alle Termine“ — ein einzelner Termin hat keinen eigenen Rhythmus.',
+  'cal.cadenceBlocked': 'Um die Wiederholung zu ändern, wähle „Diesen und die folgenden“ oder „Alle Termine“.',
   // The quoted names here are BUTTON labels and a select option. If any of
   // them is reworded, this sentence stops pointing at anything: cal.scope.*
   // and cal.repeat.keep are the three it names.
-  'cal.cadenceRefused': 'Eine geänderte Wiederholung kann nicht für einen einzelnen Termin gelten. Nimm „Diesen und die folgenden“ oder „Alle Termine“, oder stell Wiederholung zurück auf „Rhythmus beibehalten“.',
+  'cal.cadenceRefused': 'Ein einzelner Termin kann die Wiederholung nicht ändern. Wähle „Diesen und die folgenden“ oder „Alle Termine“, oder stell Wiederholung zurück auf „Rhythmus beibehalten“.',
   'cal.title': 'Titel',
   'cal.startField': 'Beginn',
   'cal.endLastDay': 'Ende (letzter Tag)',
@@ -761,17 +677,17 @@ export const de: Catalogue = {
   // time.
   'cal.busy': 'Gebucht',
   'cal.free': 'Frei',
-  'cal.freeHint': 'Freie Zeit kann trotzdem gebucht werden — das blockiert keinen Termin auf deinen Buchungslinks.',
+  'cal.freeHint': 'Blockiert keine Zeiten auf deinen Buchungslinks.',
   'cal.repeatUntil': 'Wiederholen bis (optional)',
   'cal.calendarField': 'Kalender',
   'cal.location': 'Ort',
   'cal.notes': 'Notizen',
-  'cal.moveHint': '„Alle Termine“ verschiebt jeden Termin um denselben Abstand — nimm „Diesen Termin“, um nur einen zu verschieben.',
+  'cal.moveHint': '„Alle Termine“ verschiebt jeden Termin um denselben Abstand.',
   // ── scheduling tab ──────────────────────────────────────────────────────────
   'sched.title': 'Buchungen',
   'sched.newLink': 'Neuer Link',
-  'sched.loadFailed': 'Deine Buchungslinks konnten nicht geladen werden. Das ist ein Anzeigeproblem — die Links sind weiter aktiv und nehmen weiter Buchungen an.',
-  'sched.empty': 'Leg einen Buchungslink an, gib ihn an jemanden weiter, und was die Person wählt, landet in deinem Kalender.',
+  'sched.loadFailed': 'Buchungslinks konnten nicht geladen werden.',
+  'sched.empty': 'Noch keine Buchungslinks.',
   'sched.calendarGone': 'Der Kalender, in den dieser Link bucht, existiert nicht mehr',
   'sched.linkLive': 'Link ist aktiv',
   'sched.linkOff': 'Link ist aus',
@@ -779,7 +695,7 @@ export const de: Catalogue = {
   'sched.live': 'Aktiv',
   'sched.off': 'Aus',
   'sched.minutes': '{n} Min.',
-  'sched.calendarDeleted': 'Kalender gelöscht — wähl einen anderen, um ihn wieder zu aktivieren',
+  'sched.calendarDeleted': 'Kalender gelöscht, wähl einen anderen, um ihn wieder zu aktivieren',
   'sched.showsBusy': ' · zeigt gebuchte Zeiten',
   'sched.bookingCount': {
     one: '{count} Buchung',
@@ -791,9 +707,9 @@ export const de: Catalogue = {
   'sched.upcoming': 'Anstehende Buchungen',
   'sched.nothingBooked': 'Noch nichts gebucht.',
   'sched.err.title': 'Gib dem Link einen Titel.',
-  'sched.err.calendar': 'Wähl einen Kalender, in dem die Buchungen landen.',
-  'sched.err.tz': 'Leg fest, in welcher Zeitzone deine Verfügbarkeit gilt.',
-  'sched.err.noDays': 'Schalte mindestens einen Tag ein, sonst kann niemand etwas buchen.',
+  'sched.err.calendar': 'Wähl einen Kalender.',
+  'sched.err.tz': 'Leg eine Zeitzone fest.',
+  'sched.err.noDays': 'Schalte mindestens einen Tag ein.',
   'sched.err.ranges': 'Korrigier die hervorgehobenen Zeitspannen.',
   'sched.err.bothTimes': 'Füll beide Zeiten aus, oder entfern die Spanne.',
   'sched.err.startBeforeEnd': 'Jede Spanne muss vor ihrem Ende beginnen.',
@@ -805,7 +721,7 @@ export const de: Catalogue = {
   'sched.description': 'Beschreibung (für die Gäste sichtbar)',
   'sched.calendarField': 'Kalender',
   'sched.duration': 'Dauer (Min.)',
-  'sched.timezone': 'Zeitzone (deine Verfügbarkeit gilt in dieser Zone)',
+  'sched.timezone': 'Zeitzone der Verfügbarkeit',
   'sched.weekly': 'Wöchentliche Verfügbarkeit',
   'sched.removeRange': 'Spanne entfernen',
   'sched.addRange': 'Noch eine Spanne',
@@ -815,7 +731,7 @@ export const de: Catalogue = {
   // „Gebucht“ here is the same word as cal.busy, on purpose: this sentence
   // describes what a visitor sees on the booking page, and that block is
   // labelled from the same idea.
-  'sched.showBusyHint': 'Gäste sehen nur unbeschriftete Blöcke „Gebucht“ — nie Titel oder Details. Gebuchte und bestehende Termine mit Uhrzeit blockieren immer; ganztägige Termine (Geburtstage, Reisen) nicht.',
+  'sched.showBusyHint': 'Erscheint als unbeschriftete Blöcke „Gebucht“. Termine mit Uhrzeit blockieren immer, ganztägige nicht.',
   'sched.buffer': 'Puffer (Min.)',
   'sched.notice': 'Mindestvorlauf (Std.)',
   'sched.horizon': 'Tage im Voraus',
@@ -853,38 +769,38 @@ export const de: Catalogue = {
   // Both examples are lines the PARSER has to read. They change with
   // daytext.ts's German grammar and not before it — an example that does not
   // parse teaches the wrong thing on the one surface that teaches.
-  'today.addPlaceholder': 'Zu heute hinzufügen — „rechnung freitag“, „sport um 7“…',
+  'today.addPlaceholder': 'Zu heute hinzufügen, z. B. „rechnung freitag“ oder „sport um 7“',
   'today.addAsTask': 'Als Aufgabe hinzufügen',
   'today.addAsNote': 'Als Notiz hinzufügen',
   'today.willAdd': 'fügt hinzu',
   'today.guess': ' (geraten)',
-  'today.fate.note': 'nur an diesem Tag — es verlässt Smylte nie',
-  'today.fate.taskAnyList': 'es taucht auch in deinen anderen Apps auf',
-  'today.fate.taskNamedList': 'auf {list} — es taucht auch in deinen anderen Apps auf',
+  'today.fate.note': 'nur an diesem Tag, nicht synchronisiert',
+  'today.fate.taskAnyList': 'mit deinen anderen Apps synchronisiert',
+  'today.fate.taskNamedList': 'auf {list}, mit deinen anderen Apps synchronisiert',
   'today.yourLists': 'deinen Listen',
   'today.makeItNote': 'Als Notiz',
   'today.makeItTask': 'Als Aufgabe',
   'today.listForNewTask': 'Liste für die neue Aufgabe',
-  'today.bandNoCapacity': 'Plan deinen Tag — sag, wie lang er ist, dann was darauf soll.',
+  'today.bandNoCapacity': 'Heute ist noch nicht geplant.',
   'today.planMyDay': 'Tag planen',
   'today.notNow': 'Jetzt nicht',
   'today.loadFigure': '{planned} von {capacity}',
   'today.loadCalendar': ' · {amount} im Kalender',
   'today.loadUnestimated': ' · {count} ohne Schätzung',
-  'today.over': 'Das ist {amount} mehr, als du arbeiten wolltest.',
+  'today.over': '{amount} über deinem Arbeitstag.',
   'today.readFailed': 'Heute konnte nicht gelesen werden.',
   'today.tryAgain': 'Nochmal versuchen',
   // Split around the “set up a habit” button that finishes the sentence.
   // The trailing space and the closing period are part of the two halves,
   // so a translator controls where the break falls.
-  'today.emptyBefore': 'Heute steht noch nichts an. Tipp oben eine Zeile, nimm eine der Aufgaben von unten, oder ',
+  'today.emptyBefore': 'Heute steht noch nichts an. Füg oben etwas hinzu, oder ',
   'today.setUpHabit': 'richte eine Gewohnheit ein',
   // Both habit blurbs run the second clause on with an em dash rather than
   // starting a new sentence with the pronoun. „Sie wird nie zur Aufgabe“ is
   // correct German — sie, the Gewohnheit — but sentence-initial it capitalises
   // to Sie, which the du/Sie guard cannot tell from the formal address, and
   // should not have to. See bulk.failed for the same call.
-  'today.habitsHint': 'Eine Gewohnheit ist eine Regel, die an den Tagen, die du wählst, eine Zeile auf deinen Tag setzt — und dabei nie zur Aufgabe wird und diese App nie verlässt. ',
+  'today.habitsHint': 'Gewohnheiten setzen an den Tagen, die du wählst, eine Zeile auf deinen Tag. ',
   'today.setOneUp': 'Richte eine ein',
   'today.theDay': 'Der Tag',
   'today.onTheCalendar': 'Im Kalender',
@@ -893,8 +809,8 @@ export const de: Catalogue = {
   'today.howItWent': 'Wie es lief',
   'today.doneOffPlan': 'Ungeplant erledigt',
   'today.doneMark': 'Erledigt',
-  'today.reviewEmptyLive': 'Heute steht noch nichts an, und erledigt ist bisher auch nichts.',
-  'today.reviewEmptyPast': 'An diesem Tag war nichts geplant, und erledigt wurde auch nichts.',
+  'today.reviewEmptyLive': 'Noch nichts geplant oder erledigt.',
+  'today.reviewEmptyPast': 'Nichts geplant oder erledigt.',
   'today.noCalendar': 'Heute steht nichts im Kalender.',
   'today.estimateAria': '{entry} schätzen',
   'today.estimatedAt': '{entry} ist auf {amount} geschätzt — ändern',
@@ -914,7 +830,7 @@ export const de: Catalogue = {
   'focus.phase.breakOver': 'Pause vorbei',
   'focus.phase.paused': 'Angehalten',
   'focus.phase.away': 'Intervall vorbei · du warst weg',
-  'focus.awayHint': 'Die Uhr blieb am Ende des Intervalls stehen. Ohne dich ging nichts weiter.',
+  'focus.awayHint': 'Die Uhr blieb am Ende des Intervalls stehen.',
   'focus.now': 'Jetzt',
   'focus.upNext': 'Als Nächstes',
   'focus.next': 'Danach',
@@ -938,7 +854,7 @@ export const de: Catalogue = {
   'focus.readyHeadline': { one: '1 Sache auf dem Tag.', other: '{count} Sachen auf dem Tag.' },
   'focus.pickRow': 'Stattdessen daran arbeiten',
   'focus.notPlanned': 'Heute ist noch nicht geplant.',
-  'focus.notPlannedHint': 'Öffne zuerst Heute — eine Sitzung plant keinen Tag für dich.',
+  'focus.notPlannedHint': 'Öffne zuerst Heute.',
   'focus.queueEmpty': 'Nichts mehr in der Reihe.',
   'focus.setAside': { one: '1 zurückgestellt', other: '{count} zurückgestellt' },
   'focus.again': 'Noch eine Runde',
@@ -961,13 +877,10 @@ export const de: Catalogue = {
   'today.weekCountThat': '{done} von {total} in jener Woche bis dahin',
   'today.movedTo': '→ {day}',
   'today.removeFromToday': '{entry} von heute entfernen',
-  'habit.sheet.blurb': 'Eine Gewohnheit ist eine Regel, die eine Zeile auf deinen Tag '
-    + 'setzt — und dabei nie zur Aufgabe wird und diese App nie verlässt. Du schätzt '
-    + 'sie einmal, hier oder in der Zeile eines beliebigen Tages, und jeder Tag, an '
-    + 'dem sie vorkommt, beginnt mit dieser Schätzung.',
+  'habit.sheet.blurb': 'Gewohnheiten setzen an den Tagen, die du wählst, eine Zeile auf deinen Tag, bleiben in Smylte und werden nicht synchronisiert. Eine Schätzung hier gilt für jeden Tag.',
   'habit.none': 'Noch keine Gewohnheiten.',
   'habit.newAria': 'Neue Gewohnheit',
-  'habit.addPlaceholder': 'Gewohnheit hinzufügen — „lesen“, „dehnen“…',
+  'habit.addPlaceholder': 'Gewohnheit hinzufügen',
   'habit.rename': '{habit} umbenennen',
   'habit.resumeAria': '{habit} fortsetzen',
   'habit.pauseAria': '{habit} pausieren',
@@ -981,16 +894,16 @@ export const de: Catalogue = {
   'habit.estimateAria': 'Wie lange {habit} dauert',
   'habit.estimatedAt': '{habit} dauert jedes Mal {amount} — ändern',
   'habit.minutesFor': 'Minuten für {habit}, jedes Mal',
-  'habit.deleteWarn': 'Die Regel kommt nicht mehr wieder. Jeder Tag, an dem sie schon lief, behält die Zeile, die sie dort gesetzt hat — ein vergangener Tag ist ein abgeschlossener Bericht, keine Hochrechnung der heutigen Regeln.',
+  'habit.deleteWarn': 'Vergangene Tage behalten ihre Einträge.',
   // ── the shell's own messages ────────────────────────────────────────────────
-  'app.settingsLoadFailed': 'Deine Einstellungen konnten nicht geladen werden — Änderungen werden erst gespeichert, wenn das hier neu lädt',
-  'app.settingsNotLoaded': 'Deine Einstellungen wurden nicht geladen, also ist diese Änderung nicht gespeichert — lad neu, um es noch einmal zu versuchen',
+  'app.settingsLoadFailed': 'Einstellungen konnten nicht geladen werden. Änderungen werden erst nach dem Neuladen gespeichert.',
+  'app.settingsNotLoaded': 'Nicht gespeichert. Lad neu und versuch es noch einmal.',
   // {error} arrives from the server in English and stays that way — see the
   // header of i18n/index.ts on why server text is out of scope. The sentence
   // around it is still worth having in the reader's language.
   'app.settingsSaveFailed': 'Deine Einstellungen konnten nicht gespeichert werden: {error}',
-  'app.logoutFailed': 'Abmelden hat nicht geklappt — du bist auf diesem Gerät weiter angemeldet.',
-  'app.offline': 'Der Server ist nicht erreichbar — gezeigt wird, was zuletzt auf diesem Gerät gespeichert wurde. Du bist weiter angemeldet.',
+  'app.logoutFailed': 'Abmelden hat nicht geklappt.',
+  'app.offline': 'Der Server ist nicht erreichbar. Gezeigt werden gespeicherte Daten.',
   // ── appearance — design tokens ──────────────────────────────────────────────
   'token.bg': 'Hintergrund',
   'token.bgElev': 'Erhöht',
@@ -1024,9 +937,9 @@ export const de: Catalogue = {
   'token.labelCase.uppercase': 'Großbuchstaben',
   'token.labelCase.none': 'Normale Schreibweise',
   'token.tracking': 'Laufweite',
-  'token.tracking.hint': 'Buchstabenabstand bei genau diesen Beschriftungen. 0 schließt ihn.',
+  'token.tracking.hint': 'Buchstabenabstand bei diesen Beschriftungen.',
   'token.gutter': 'Seitenabstand',
-  'token.gutter.hint': 'Waagerechte Luft um den Inhalt.',
+  'token.gutter.hint': 'Waagerechter Abstand um den Inhalt.',
   'token.rowY': 'Zeilenhöhe',
   'token.rowY.hint': 'Senkrechter Innenabstand in einer Aufgabenzeile.',
   'tokenGroup.Surfaces': 'Flächen',
@@ -1037,7 +950,7 @@ export const de: Catalogue = {
   'tokenGroup.Shape': 'Form',
   'tokenGroup.Density': 'Dichte',
   'tokenGroup.Type': 'Schrift',
-  'appear.atCap': 'Du kannst {max} Themes behalten — lösch zuerst eines.',
+  'appear.atCap': 'Du kannst bis zu {max} Themes behalten. Lösch zuerst eines.',
   'appear.copySuffix': '{name} Kopie',
   'appear.custom': 'Eigenes',
   'appear.notATheme': 'Diese Datei ist kein Smylte-Theme.',
@@ -1054,10 +967,10 @@ export const de: Catalogue = {
   'appear.export': 'Exportieren',
   'appear.import': 'Importieren',
   'appear.themeName': 'Theme-Name',
-  'appear.presetHint': '{name} ist ein mitgeliefertes Theme. Änder unten irgendetwas, und es zweigt in ein eigenes Theme ab.',
-  'appear.classicHint': 'Classic ist das Design, das Smylte bis September 2026 hatte. Ein davon abgezweigtes Theme behält Schrift, rechtwinklige Ecken und Großbuchstaben; Bedienelemente, Schatten und Bewegung folgen dem aktuellen Design.',
-  'appear.editingHint': 'Du bearbeitest dieses Theme. Smyltes eigenes Design wird nie verändert — du kannst jederzeit zurückwechseln.',
-  'appear.shippedHint': 'Smyltes mitgeliefertes Design. Änder unten irgendetwas, und es zweigt in ein eigenes Theme ab.',
+  'appear.presetHint': '{name} ist mitgeliefert. Beim Bearbeiten entsteht eine eigene Kopie.',
+  'appear.classicHint': 'Eine Kopie von Classic behält Schrift, rechtwinklige Ecken und Großbuchstaben, nutzt aber die aktuellen Bedienelemente, Schatten und Bewegungen.',
+  'appear.editingHint': 'Du bearbeitest dein Theme.',
+  'appear.shippedHint': 'Das Standarddesign. Beim Bearbeiten entsteht eine eigene Kopie.',
   'appear.editingMode': 'Bearbeitungsmodus',
   'appear.light': 'Hell',
   'appear.dark': 'Dunkel',
@@ -1074,16 +987,16 @@ export const de: Catalogue = {
   'appear.resetMode': '{mode} zurücksetzen',
   'appear.deleteTheme': 'Theme löschen',
   'appear.done': 'Fertig',
-  'appear.resetToken': 'Zurück zum Smylte-Wert',
+  'appear.resetToken': 'Auf Standard zurücksetzen',
   'appear.resetNamed': '{token} zurücksetzen',
   'appear.pickColor': '{token} — eine Farbe wählen',
   'appear.customFont': 'Eigene ({family})',
   // ── the public booking page ─────────────────────────────────────────────────
-  'book.loading': 'Die freien Zeiten werden geladen…',
+  'book.loading': 'Zeiten werden geladen…',
   'book.notFound': 'Dieser Buchungslink ist nicht mehr verfügbar.',
-  'book.notFoundHint': 'Er wurde vielleicht abgeschaltet oder entfernt. Frag die Person, die ihn geschickt hat, nach einem neuen Link.',
+  'book.notFoundHint': 'Frag die Person, die ihn geschickt hat, nach einem neuen Link.',
   'book.unavailable': 'Diese Seite konnte gerade nicht geladen werden.',
-  'book.unavailableHint': 'Mit dem Link ist wahrscheinlich alles in Ordnung — unterwegs ist etwas schiefgegangen. Versuch es gleich noch einmal.',
+  'book.unavailableHint': 'Versuch es gleich noch einmal.',
   'book.tryAgain': 'Nochmal versuchen',
   'book.confirmed': 'Bestätigt',
   'book.range': '{from}–{to}',
@@ -1091,7 +1004,7 @@ export const de: Catalogue = {
   'book.bookATime': 'Zeit buchen',
   'book.minutes': '{n} Min.',
   'book.timesShownIn': 'Zeiten in {tz}',
-  'book.noTimes': 'Gerade sind keine Zeiten frei — schau später noch einmal.',
+  'book.noTimes': 'Gerade sind keine Zeiten frei.',
   'book.hostBusy': 'Zu dieser Zeit ist der Gastgeber belegt',
   'book.busyRange': 'Belegt {from}–{to}',
   'book.change': 'Ändern',
@@ -1101,19 +1014,19 @@ export const de: Catalogue = {
   'book.notesPlaceholder': 'Etwas, das der Gastgeber wissen sollte?',
   'book.booking': 'Wird gebucht…',
   'book.confirm': 'Buchung bestätigen',
-  'book.taken': 'Diese Zeit wurde gerade vergeben — bitte wähl eine andere.',
+  'book.taken': 'Diese Zeit wurde gerade vergeben. Wähl eine andere.',
   // ── today — the tomorrow suggestion ─────────────────────────────────────────
   'today.sug.tomorrow': 'Morgen fällig',
   // ── home — the day-plan module ──────────────────────────────────────────────
   'module.day_plan': 'Tagesplan',
-  'module.day_plan.blurb': 'Was du dir für heute vorgenommen hast, dazu deine Gewohnheiten und Notizen.',
-  'home.planEmpty': 'Heute steht noch nichts an. Plan ihn im Heute-Tab.',
+  'module.day_plan.blurb': 'Der heutige Plan, Gewohnheiten und Notizen.',
+  'home.planEmpty': 'Noch nichts geplant.',
   'home.planUncheck': '{entry} abhaken rückgängig',
   'home.planCheck': '{entry} abhaken',
   // ── 2026-09-03 sweep — fe-a (shell, Focus, Home) ─────────────────────────
   'today.taskUnavailable': 'Aufgabe aus einer Liste, die nicht geladen werden konnte',
-  'focus.readFailed': 'Die Fokus-Ansicht konnte nicht geladen werden.',
-  'home.linksFailed': 'Deine Buchungslinks konnten nicht geladen werden — sie sind weiter aktiv.',
+  'focus.readFailed': 'Die Fokus-Sitzung konnte nicht geladen werden.',
+  'home.linksFailed': 'Buchungslinks konnten nicht geladen werden.',
   'home.bookingsFailed': 'Deine Buchungen konnten nicht geladen werden.',
   // ── 2026-09-03 sweep — the priority picker's choices ────────────────────────
   'priority.none': 'Keine',
@@ -1122,7 +1035,7 @@ export const de: Catalogue = {
   'priority.high': 'Hoch',
   // ── 2026-09-03 sweep — fe-b1 (the Today tab) ─────────────────────────────
   'today.readFailedDay': 'Dieser Tag konnte nicht gelesen werden.',
-  'shut.nothingLeft': 'Auf heute ist nichts mehr übrig — was drauf war, wurde auf einen anderen Tag verschoben oder vom Plan genommen.',
+  'shut.nothingLeft': 'Nichts mehr übrig. Alles wurde verschoben oder vom Plan genommen.',
   // ── 2026-09-03 sweep — die drei eigenen Texte der Anzeigeseite und der
   //    Name eines importierten Designs ohne Namen (fe-c) ────────────────────
   'display.stale': 'Länger nicht aktualisiert',
@@ -1144,28 +1057,24 @@ export const de: Catalogue = {
   // Kein satzinitiales „Sie“ für die Aufgabe: `i18n.test.ts` prüft auf formelle
   // Anrede und kann das Pronomen nicht vom „Sie“ unterscheiden — der Test hat
   // recht, dass hier keins stehen soll, wenn auch aus dem falschen Grund.
-  'tasks.parkHint': 'Legt sie beiseite, ohne sie abzuschließen. Damit verschwindet sie aus deinen Listen und deinem Tag und kommt zurück, wann immer du willst.',
-  'tasks.parkedHint': 'Beiseitegelegt. Beim Wiederaufnehmen steht sie wieder in deinen Listen und in deinem Tag, genau wie zuvor.',
+  'tasks.parkHint': 'Blendet sie in deinen Listen und deinem Tag aus, bis du sie wieder aufnimmst. Andere Apps zeigen sie weiter.',
+  'tasks.parkedHint': 'Zurückgestellt. Wieder aufnehmen bringt sie zurück in deine Listen.',
   'tasks.wontDoAction': 'Wird nichts',
   'side.viewParked': '⏸ Zurückgestellte anzeigen',
   'side.viewParkedShort': 'Zurückgestellte anzeigen',
 
   // ── Eine Aufgabe schließen, in der nichts mehr offen ist ──
-  'settings.autoCloseParents': 'Checkliste mit dem letzten Schritt abschließen',
+  'settings.autoCloseParents': 'Aufgabe mit dem letzten Unterpunkt abschließen',
   'settings.autoCloseParents.on': 'An',
   'settings.autoCloseParents.off': 'Aus',
-  'settings.autoCloseParents.hint': 'Wenn du den letzten offenen Schritt einer '
-    + 'Aufgabe abhakst, wird auch die Aufgabe selbst erledigt. Ein Schritt, den du '
-    + 'auf „wird nichts“ gesetzt hast, zählt als nichts mehr zu tun; ein '
-    + 'zurückgestellter nicht, denn er kommt ja wieder. Das schreibt eine echte '
-    + 'Erledigung und ist damit auch in deinen anderen Kalender-Apps zu sehen.',
+  'settings.autoCloseParents.hint': 'Unterpunkte auf „wird nichts“ zählen als erledigt, zurückgestellte nicht. Die Erledigung wird mit deinen anderen Apps synchronisiert.',
 
   // ── Ein zu voller Tag, benannt im Moment der Zusage ────────────────────────
   'plan.trim': 'Etwas streichen',
   'plan.commitAnyway': 'Trotzdem starten',
   'today.addWhenOver': '· schon {amount} drüber',
   'today.sugWouldBeOver': '+{amount} drüber',
-  'today.committedOver': 'Mit {amount} mehr gestartet, als du arbeiten wolltest.',
+  'today.committedOver': 'Mit {amount} über deinem Arbeitstag gestartet.',
   // ── Arbeit, die alt genug ist für eine Entscheidung statt eines Angebots ───
   'today.sug.triage': 'Wartet auf eine Entscheidung',
   'today.triage.today': 'Heute fällig',
@@ -1181,36 +1090,26 @@ export const de: Catalogue = {
   // Frist, die noch am selben Tag verstrichen ist, wo keine Zahl ehrlicher
   // ist als eine Null.
   'today.wasDueDays': 'war fällig am {date} · {days} T',
-  'settings.staleOverdue': 'Ab mehr als wie vielen Tagen Verzug nachfragen',
-  'settings.staleOverdue.hint': 'Danach wird eine Aufgabe deinem Tag nicht mehr '
-    + 'als gewöhnliche Arbeit angeboten, sondern erfragt: neues Datum oder '
-    + 'zurückstellen. Versteckt wird nie etwas — im Aufgaben-Tab steht weiterhin '
-    + 'alles. Mit 0 schaltest du das ab.',
-  'settings.staleOverdue.off': 'Aus. Überfälliges wird deinem Tag angeboten wie '
-    + 'alles andere, egal wie lange es schon wartet.',
+  'settings.staleOverdue': 'Tage Verzug bis zur Nachfrage',
+  'settings.staleOverdue.hint': 'Danach fragt eine überfällige Aufgabe nach einem neuen Datum oder dem Zurückstellen, statt für heute angeboten zu werden. 0 schaltet das ab.',
+  'settings.staleOverdue.off': 'Aus. Überfällige Aufgaben werden für heute angeboten, egal wie spät sie sind.',
   // Als REGEL formuliert, nicht als Schaltfläche: das Datumsfeld daneben tut
   // dasselbe, wenn du denselben Tag wählst.
-  'settings.planOnDueToday': 'Beim Verschieben auf heute in den Tag aufnehmen',
+  'settings.planOnDueToday': 'Auf heute verschobene Aufgaben einplanen',
   'settings.planOnDueToday.on': 'An',
   'settings.planOnDueToday.off': 'Aus',
-  'settings.planOnDueToday.hint': 'Diese Antworten verschieben eine Frist – '
-    + '„heute“ macht eine Aufgabe also heute fällig, ohne sie für heute zu '
-    + 'planen; du musst sie danach noch einmal suchen und hinzufügen. Ist dies '
-    + 'an, landet eine Aufgabe, die du auf den geplanten Tag verschiebst, auch '
-    + 'in diesem Tag. Nur auf diesen Tag: was du auf Donnerstag verschiebst, '
-    + 'ist terminiert, nicht geplant.',
+  'settings.planOnDueToday.hint': 'Setzt du das Fälligkeitsdatum einer Aufgabe auf heute, kommt sie auch in den heutigen Plan.',
   // Statt des Hinweises, wenn die Schwelle oben 0 ist. Der Schalter bleibt
   // sichtbar, damit man ihn wiederfindet – die Zeile sagt, warum er gerade
   // nichts tut.
-  'settings.planOnDueToday.moot': 'Ohne Wirkung, solange die Einstellung oben 0 '
-    + 'ist: Wird nichts erfragt, gibt es auch keine Antworten zu ändern.',
+  'settings.planOnDueToday.moot': 'Ohne Wirkung, solange die Einstellung oben 0 ist.',
   'home.overdueWaiting': {
-    one: '{count} wartet lange genug, um eine Entscheidung zu brauchen.',
-    other: '{count} warten lange genug, um eine Entscheidung zu brauchen.',
+    one: '{count} wartet auf eine Entscheidung.',
+    other: '{count} warten auf eine Entscheidung.',
   },
   // ── Was du diese Woche geschafft hast ──────────────────────────────────────
   'module.week': 'Diese Woche erledigt',
-  'module.week.blurb': 'Wie viele Aufgaben du abgeschlossen hast, Woche für Woche.',
+  'module.week.blurb': 'Erledigte Aufgaben pro Woche.',
   'module.week.thisWeek': 'diese Woche',
   'module.week.lastWeek': 'letzte Woche',
   'module.week.weeksAgo': 'vor {n} Wochen',
@@ -1222,15 +1121,15 @@ export const de: Catalogue = {
   'settings.section.about': 'Über',
   'about.licence': 'Lizenz',
   'about.source': 'Quellcode',
-  'about.hint': 'Das ist der Quellcode der Version, die hier läuft. Die Lizenz verlangt, dass jeder, der eine geänderte Kopie betreibt, deren Quellcode den Nutzenden anbietet — dieser Link ist Smyltes Antwort darauf. Wenn du etwas änderst, lass ihn auf dein eigenes Repository zeigen.',
+  'about.hint': 'Der Quellcode der Version, die hier läuft. Wer eine geänderte Kopie betreibt, muss laut AGPL auf den eigenen Quellcode verlinken.',
   // ── E-Mail-Import ──────────────────────────────────────────────────────────
   'settings.section.mail': 'E-Mail',
-  'mail.intro': 'Liest deine E-Mails über Proton Mail Bridge und schlägt Aufgaben für die Bitten darin vor. Nichts wird zur Aufgabe, bevor du es bestätigst.',
+  'mail.intro': 'Schlägt über Proton Mail Bridge Aufgaben und Termine aus deinen E-Mails vor. Nichts wird hinzugefügt, bevor du es bestätigst.',
   'mail.loadFailed': 'Die E-Mail-Einstellungen konnten nicht geladen werden.',
   'mail.deploymentOff': 'Für diese Installation abgeschaltet (SMYLTE_MAIL_ENABLED=false).',
   'mail.secretsUnavailable': 'Zugangsdaten können gerade nicht gespeichert werden: {error}',
   'mail.enabled': 'Meine E-Mails lesen',
-  'mail.enabled.hint': 'Die erste Prüfung liest die letzten {days} Tage. Schalte das erst ein, wenn der Verbindungstest besteht und deine Absenderlisten stehen.',
+  'mail.enabled.hint': 'Die erste Prüfung liest die letzten {days} Tage.',
   'mail.on': 'An',
   'mail.off': 'Aus',
   'mail.head.anthropic': 'Anthropic',
@@ -1250,17 +1149,17 @@ export const de: Catalogue = {
   'mail.secret.save': 'Speichern',
   'mail.secret.cancel': 'Abbrechen',
   'mail.secret.placeholder': 'Hier einfügen',
-  'mail.secret.hint': 'Nur zum Schreiben: Einmal gespeichert, wird der Wert nie wieder angezeigt, weder auf dieser Seite noch auf einer anderen.',
-  'mail.workspace': 'Workspace-ID (nur für Schlüssel ohne Workspace)',
-  'mail.workspace.hint': 'Leer lassen, außer Anthropic meldet, dass der Schlüssel eine anthropic-workspace-id braucht.',
+  'mail.secret.hint': 'Wird nach dem Speichern nicht mehr angezeigt.',
+  'mail.workspace': 'Workspace-ID (optional)',
+  'mail.workspace.hint': 'Nur nötig, wenn Anthropic eine anthropic-workspace-id verlangt.',
   'mail.model': 'Modell',
   'mail.model.other': 'Andere…',
   'mail.model.needKey': 'Speichere einen API-Schlüssel, um aus Anthropics Liste zu wählen.',
-  'mail.model.hint': 'Wird vor jeder E-Mail gelesen, eine Änderung gilt also ab der nächsten.',
+  'mail.model.hint': 'Gilt ab der nächsten E-Mail.',
   'mail.test.key': 'API-Schlüssel testen',
   'mail.test.imap': 'Verbindung testen',
   'mail.test.running': 'Teste…',
-  'mail.imap.rebind': 'Wenn du Server, Port, Verschlüsselung, Zertifikat oder Benutzernamen änderst, wird das gespeicherte Passwort vergessen — gib es danach erneut ein.',
+  'mail.imap.rebind': 'Wenn du Host, Port, Verschlüsselung, Zertifikat oder Benutzernamen änderst, wird das gespeicherte Passwort gelöscht.',
   'mail.imap.host': 'Host',
   'mail.imap.port': 'Port',
   'mail.imap.user': 'Bridge-Benutzername',
@@ -1274,31 +1173,31 @@ export const de: Catalogue = {
   'mail.cert.pem': 'Zertifikat (PEM)',
   'mail.cert.pemHint': 'In Bridge: Einstellungen → Erweiterte Einstellungen → TLS-Zertifikate exportieren. Füge cert.pem hier ein.',
   'mail.cert.fingerprint': 'SHA-256 {fp}',
-  'mail.cert.insecureWarning': 'Die Zertifikatsprüfung ist aus. Alles, was diese Verbindung mitlesen kann, kann deine E-Mails und dein Bridge-Passwort lesen. Nur für 127.0.0.1, ::1 oder localhost erlaubt — fixiere nach Möglichkeit stattdessen das Zertifikat von Bridge.',
-  'mail.imap.hint': 'Der eigene Benutzername und das Passwort von Bridge aus den Postfach-Einstellungen — nicht dein Proton-Login.',
-  'mail.imap.authres.ok': 'Authentication-Results-Header kommen an ({ids}); Absender auf der Erlaubnisliste können den Massenfilter überspringen.',
+  'mail.cert.insecureWarning': 'Die Zertifikatsprüfung ist aus. Wer diese Verbindung mitliest, kann deine E-Mails und dein Bridge-Passwort lesen. Nur für localhost erlaubt. Fixiere nach Möglichkeit das Zertifikat.',
+  'mail.imap.hint': 'Benutzername und Passwort von Bridge aus den Postfach-Einstellungen, nicht dein Proton-Login.',
+  'mail.imap.authres.ok': 'Authentication-Results-Header gefunden ({ids}). Absender unter „Immer lesen“ können den Massenfilter umgehen.',
   'mail.imap.authres.untrusted': 'Authentication-Results-Header stammen von {ids}, das nicht in der Liste vertrauenswürdiger Server unten steht.',
-  'mail.imap.authres.missing': 'Kein Authentication-Results-Header an den neuesten INBOX-Nachrichten; Absender auf der Erlaubnisliste werden wie gewöhnliche E-Mails behandelt.',
+  'mail.imap.authres.missing': 'Kein Authentication-Results-Header an den neuesten INBOX-Nachrichten. Absender unter „Immer lesen“ werden wie gewöhnliche E-Mails behandelt.',
   'mail.folders': 'Ordner',
   'mail.folders.hint': 'Einer pro Zeile. Gesendet, Entwürfe, Alle E-Mails, Spam und Papierkorb werden nie gelesen.',
   'mail.folders.never': 'wird nie gelesen',
   'mail.self': 'Meine Adressen',
-  'mail.self.hint': 'Jede Adresse und jeder Alias, von dem du sendest. Deine eigenen E-Mails werden übersprungen, außer sie sind eine Notiz an dich selbst.',
+  'mail.self.hint': 'Jede Adresse und jeder Alias, von dem du sendest. Deine eigenen E-Mails werden übersprungen, außer Notizen an dich selbst.',
   'mail.always': 'Immer lesen',
   'mail.never': 'Nie lesen',
   'mail.patterns.hint': 'Eine pro Zeile: eine Adresse, eine Domain (schule.org) oder *.schule.org für ihre Subdomains.',
-  'mail.always.hint': 'Auch lesen, wenn es nach Massenmail aussieht — aber nur, wenn Proton den Absender bestätigt (DMARC).',
+  'mail.always.hint': 'Auch lesen, wenn es nach Massenmail aussieht, sofern DMARC den Absender bestätigt.',
   'mail.notesSelf': 'Notizen an mich selbst werden zu Vorschlägen',
   'mail.kindDecider': 'Aufgabe oder Termin?',
   'mail.kindDecider.model': 'Das Modell entscheidet',
   'mail.kindDecider.jev': 'TypeSafe Jev entscheidet',
   'mail.kindDecider.rules': 'Meine Regeln entscheiden',
   'mail.kindRules': 'Regeln',
-  'mail.kindRules.hint': 'Eine pro Zeile, die erste passende gilt: Bedingungen, dann -> task oder -> event. Bedingungen: from:schule.org, subject:"Elternabend", body:Rechnung, has:time, has:date, has:location, model:event; ein - davor kehrt sie um. Wenn Regeln entscheiden, wird alles, worauf keine Regel passt, zur Aufgabe — beende die Liste mit model:event -> event, damit das Modell den Rest entscheidet.',
+  'mail.kindRules.hint': 'Eine pro Zeile, die erste passende gilt: Bedingungen, dann -> task oder -> event. Bedingungen: from:schule.org, subject:"Elternabend", body:Rechnung, has:time, has:date, has:location, model:event. Ein - davor kehrt sie um. Worauf keine Regel passt, wird zur Aufgabe. Beende die Liste mit model:event -> event, damit das Modell den Rest entscheidet.',
   'mail.typesafeKey': 'TypeSafe-API-Schlüssel',
   'mail.jevModel': 'Jev-Modell',
   'mail.test.typesafe': 'TypeSafe-Schlüssel testen',
-  'mail.jev.hint': 'Jev beantwortet zwei enge Fragen — Aufgabe oder Termin, und ist das dieselbe Arbeit wie etwas, das du schon hast — mit einer kalibrierten Sicherheit; Claude entscheidet, wenn Jev unsicher oder nicht erreichbar ist oder kein Schlüssel gesetzt ist. Lass den Schlüssel leer, damit alles bei Claude bleibt.',
+  'mail.jev.hint': 'Jev entscheidet, ob es eine Aufgabe oder ein Termin ist und ob es etwas doppelt, das du schon hast. Claude entscheidet, wenn Jev unsicher oder nicht erreichbar ist. Lass den Schlüssel leer, um nur Claude zu nutzen.',
   'mail.dedupDecider': 'Duplikatprüfung',
   'mail.dedupDecider.jev': 'TypeSafe Jev, Claude bei Unsicherheit',
   'mail.dedupDecider.model': 'Claude',
@@ -1327,7 +1226,7 @@ export const de: Catalogue = {
     one: '{count} wartet',
     other: '{count} warten',
   },
-  'mail.sug.empty': 'Nichts wartet. Bitten, die in deinen E-Mails gefunden werden, erscheinen hier zur Bestätigung.',
+  'mail.sug.empty': 'Nichts wartet.',
   'mail.sug.kind.task': 'Aufgabe',
   'mail.sug.kind.update': 'Ergänzung',
   'mail.sug.kind.event': 'Termin',

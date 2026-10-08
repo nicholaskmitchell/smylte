@@ -391,7 +391,7 @@ describe('2026-08-19 — the calendar grid', () => {
     const banner = await screen.findByRole('status')
     expect(banner).toHaveTextContent(/Personal/)
     expect(banner, 'the banner does not say the month may be incomplete')
-      .toHaveTextContent(/missing events/i)
+      .toHaveTextContent(/events may be missing/i)
     expect(within(banner).getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })
 

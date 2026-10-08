@@ -196,7 +196,7 @@ describe('2026-09-03 — the shell while the server cannot be reached', () => {
     const wrote = m.putSettings.mock.calls
       .map((c) => c[0] as Record<string, unknown>).filter((b) => 'tab_order' in b)
     expect(wrote, 'the shipped tab order was PUT over the account while offline').toEqual([])
-    expect(screen.getByRole('alert')).toHaveTextContent(/didn.t load/)
+    expect(screen.getByRole('alert')).toHaveTextContent(/Not saved/)
   })
 
   it('CONTROL: writes again once Retry brings the server back', async () => {

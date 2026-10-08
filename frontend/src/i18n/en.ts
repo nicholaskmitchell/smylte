@@ -2,12 +2,10 @@
 // in — and the list of keys every other catalogue is checked against, because a
 // key English lacks is a key nobody wrote rather than one nobody translated.
 //
-// THE VALUES HERE ARE TODAY'S STRINGS, VERBATIM. That is not tidiness: some
-// 500 test assertions match on this text (`getByLabelText('Add to today')`,
-// `getByText('Nothing to do here.')`), the provider defaults to English, and a
-// component rendered outside it reads exactly what it read before — so
-// extracting a string costs no test change, and a "harmless" rewording while
-// extracting would cost several. Reword in a commit of its own.
+// Some 500 test assertions match on this text (`getByLabelText('Add to today')`,
+// `getByText('Nothing to do here.')`), and the provider defaults to English, so
+// rewording a string means updating the tests that read it. Keep the copy
+// short: say what a control does, not why.
 //
 // Flat dotted keys, sorted by surface, so a catalogue diffs against another
 // line by line. Placeholders are `{name}`; a message that changes with a count
@@ -32,11 +30,8 @@ export const en = {
   'tabs.lastUsed': 'Last used tab',
   'tabs.moveLeft': 'Move {tab} left',
   'tabs.moveRight': 'Move {tab} right',
-  'tabs.hint': 'The order here is the order across the top. “Last used tab” '
-    + 'reopens wherever you left off, on every device signed into this account.',
-  'tabs.hint.sidebar': 'The order here is the order down the sidebar, and along '
-    + 'the bottom bar on a phone. “Last used tab” reopens wherever you left off, '
-    + 'on every device signed into this account.',
+  'tabs.hint': 'Sets the order of the tabs. “Last used tab” opens where you left off, on any device.',
+  'tabs.hint.sidebar': 'Sets the order in the sidebar and on the phone’s bottom bar. “Last used tab” opens where you left off, on any device.',
 
   // ── settings ─────────────────────────────────────────────────────────────
   'settings.sections': 'Settings sections',
@@ -49,19 +44,19 @@ export const en = {
   'settings.icon.accent': 'Accent plate',
   'settings.icon.mark': 'Bare mark',
   'settings.icon.shortcut': 'Start menu shortcut',
-  'settings.icon.hint': 'Changes the title bar, Alt-Tab and Task Manager straight away. The taskbar button shows a grouped icon that Windows takes from a Start menu shortcut, not from the window — so turn that on to change it there too.',
-  'settings.icon.autoLight': 'Windows is currently light, so the ink plate is in use.',
-  'settings.icon.autoDark': 'Windows is currently dark, so the cream plate is in use.',
-  'settings.icon.win10': 'This build of Windows only supports a light or dark title bar, not an exact colour.',
+  'settings.icon.hint': 'The taskbar icon comes from the Start menu shortcut, so turn that on to change it there too.',
+  'settings.icon.autoLight': 'Windows is light, so the ink plate is in use.',
+  'settings.icon.autoDark': 'Windows is dark, so the cream plate is in use.',
+  'settings.icon.win10': 'This version of Windows supports only a light or dark title bar.',
   'settings.icon.auto.linux': 'Follow the system theme',
   'settings.icon.shortcut.linux': 'Applications menu entry',
-  'settings.icon.hint.linux': 'Changes the window icon, Alt-Tab and the window switcher straight away. An entry adds Smylte to the applications grid and to search, gives the dash the right icon for a running window, and lets its notifications carry the app name.',
-  'settings.icon.autoLight.linux': 'The system is currently light, so the ink plate is in use.',
-  'settings.icon.autoDark.linux': 'The system is currently dark, so the cream plate is in use.',
+  'settings.icon.hint.linux': 'The menu entry adds Smylte to the app grid and search, and gives the dock and notifications the right icon and name.',
+  'settings.icon.autoLight.linux': 'The system is light, so the ink plate is in use.',
+  'settings.icon.autoDark.linux': 'The system is dark, so the cream plate is in use.',
   'settings.titlebar': 'System title bar',
-  'settings.titlebar.hint': 'Turn this on to leave the title bar the colour Windows draws it, instead of matching the app background.',
-  'settings.titlebar.hint.linux': 'Turn this on to let your window manager draw the title bar, with its decoration theme, its own buttons and the window icon. Smylte cannot colour a title bar it does not draw, so the app background stops reaching it — the two are not available together. Takes effect the next time Smylte starts.',
-  'settings.float.noPin': 'This is a Wayland session, where a window cannot ask to stay above others, so the floating window offers no pin and will not reopen where you left it. Wayland is preferred because X11 cannot scale two monitors independently and blurs text under fractional scaling. Set "Backend": "x11" in settings.json to trade that back for the pin.',
+  'settings.titlebar.hint': 'Uses the Windows title bar colour instead of the app background.',
+  'settings.titlebar.hint.linux': 'Lets your window manager draw the title bar. It won’t match the app background. Takes effect after a restart.',
+  'settings.float.noPin': 'On Wayland the floating window can’t stay on top or reopen where you left it. Setting "Backend": "x11" in settings.json restores both, but X11 blurs text on scaled or mixed-DPI displays.',
   'settings.section.calendar': 'Calendar',
   'settings.section.tasks': 'Tasks',
   'settings.section.focus': 'Focus',
@@ -81,19 +76,19 @@ export const en = {
 
   // Displays — the passive screens. A display takes no input, so every word it
   // shows and every choice about it is made here.
-  'disp.intro': 'A display is a screen with nothing to tap: a calendar in the hallway, today’s habits in the kitchen. It reads this account and never writes to it.',
+  'disp.intro': 'Read-only screens for your calendar or day, such as a wall calendar or an e-ink panel.',
   'disp.loading': 'Loading displays…',
-  'disp.loadFailed': 'Couldn’t load your displays. This is not the same as having none — try again in a moment.',
+  'disp.loadFailed': 'Couldn’t load displays.',
   'disp.none': 'No displays yet.',
   'disp.mode': 'Shows',
   'disp.mode.calendar': 'The month',
   'disp.mode.habits': 'Habits + today',
   'disp.mode.now': 'Now + next',
-  'disp.modeNowHint': 'One thing at a time: what you’re on, what follows it, and how many are behind that. It follows your plan for today, so reordering it in Today reorders the screen. And it moves when you tick something off anywhere — on this screen’s next refresh, not instantly, which on e-ink is never sooner than three minutes.',
+  'disp.modeNowHint': 'The current item from today’s plan, the next one, and how many remain. Updates on the screen’s next refresh.',
   'disp.palette': 'Screen',
   'disp.palette.color': 'Color',
   'disp.palette.eink': 'E-ink (1-bit)',
-  'disp.paletteHint': 'E-ink drops every color and tint: each calendar is told apart by the shape of its mark instead, and a letter is added once there are more than four.',
+  'disp.paletteHint': 'Black and white only. Calendars are told apart by the shape of their mark, plus a letter when there are more than four.',
   'disp.on': 'On',
   'disp.off': 'Off',
   'disp.lastSeen': 'Last seen {when}',
@@ -109,68 +104,60 @@ export const en = {
   'disp.refresh.900': 'Every 15 minutes',
   'disp.refresh.3600': 'Every hour',
   'disp.refresh.seconds': 'Every {n} seconds',
-  'disp.refreshEinkHint': 'Three minutes is the floor on e-ink: the panel makers say to refresh no more often than that, and to let the screen sleep in between, or it is damaged for good. A minute is offered on a colour screen, which has none of those problems.',
+  'disp.refreshEinkHint': 'E-ink panels can be damaged by refreshing more often than every 3 minutes.',
   'disp.hideDoneHabits': 'Hide habits once done',
-  'disp.hideDoneHabitsHint': 'A wall tracker earns its place by getting shorter as the day goes. The count in the corner still remembers what was on it.',
+  'disp.hideDoneHabitsHint': 'The count still includes them.',
   'disp.hideDoneTasks': 'Hide finished rows',
   'disp.whichCalendars': 'Which calendars',
   'disp.whichLists': 'Which lists',
   'disp.url': 'Point the screen at',
-  'disp.urlHint': 'Anyone with this URL can read what the screen shows — it is a password in a browser’s address bar. Rotate it if it gets out.',
+  'disp.urlHint': 'Anyone with this URL can see what the screen shows. Get a new URL if it leaks.',
   'disp.copy': 'Copy',
   'disp.copied': 'Copied',
   'disp.panel': 'For a panel with no browser',
-  'disp.panelHint': 'An e-ink panel driven by a microcontroller can fetch a ready-made image instead of running the page. Give it the panel’s pixels and how it is mounted.',
+  'disp.panelHint': 'A microcontroller can fetch a ready-made image instead of the page. Enter the panel’s size and rotation.',
   'disp.panelSize': 'Panel size',
 
   // Settings → Developer. A display is drawn for hardware whoever is designing
   // it does not own, so this draws it at the sizes that hardware comes in.
-  'dev.intro': 'Every display mode, drawn at the sizes real panels come in. Nothing here is saved, and no display or token is created.',
+  'dev.intro': 'Every display mode at common panel sizes. Nothing is saved.',
   'dev.panels': 'Panels',
   'dev.refresh': 'Redraw',
   'dev.hideDone': 'Hide what is done',
   'dev.alt': '{panel}, {w} by {h} pixels',
-  'dev.hint': 'Each preview is the real renderer at that panel’s pixels, shown scaled down. The size beside an e-ink panel is the packed framebuffer it would receive — what a microcontroller has to allocate before it can ask for a frame.',
+  'dev.hint': 'Previews use the real renderer, scaled down. The size shown for an e-ink panel is the framebuffer a microcontroller has to allocate.',
   // Its own accessible name — the width field borrows the label above, the
   // height field had nothing at all.
   'disp.panelWidth': 'Panel width in pixels',
   'disp.panelHeight': 'Panel height in pixels',
-  'disp.needOneSource': 'A display has to show at least one.',
-  'disp.panelTooSmall': 'Too small for a month — seven columns don’t fit. This screen will say so instead of drawing one; now + next and habits + today both read fine at any size.',
+  'disp.needOneSource': 'Pick at least one.',
+  'disp.panelTooSmall': 'Too small for a month. The screen will show a notice instead. Now + next and habits + today work at any size.',
   'disp.rotation': 'Rotation',
-  'disp.imageHint': 'A microcontroller wants the .bin — the packed 1-bit framebuffer, written straight to the panel with no decoding at all (800×480 is exactly 48,000 bytes). Swap it for .png or .bmp if your board has an image library. All three answer 304 when nothing has changed, so the panel only repaints when there is something new.',
+  'disp.imageHint': 'Use .bin on a microcontroller. It is a packed 1-bit framebuffer you write straight to the panel (800×480 is 48,000 bytes). Use .png or .bmp if your board can decode images.',
   'disp.enabled': 'Connected',
-  'disp.enabledHint': 'Switching a display off makes its URL answer as though it never existed.',
+  'disp.enabledHint': 'While off, the URL stops working.',
   'disp.rotateToken': 'New URL',
-  'disp.rotateHint': 'A new URL keeps the display and everything set here; the screen has to be pointed at it again. Deleting removes the display itself.',
+  'disp.rotateHint': 'A new URL keeps this display’s settings. Point the screen at it afterwards.',
   'disp.delete': 'Delete',
   'disp.deleteConfirm': 'Delete display',
   'disp.keep': 'Keep',
   'disp.add': 'Add a display',
   'disp.addButton': 'Add',
-  'disp.hint': 'Name it after where it hangs — that name is drawn on the screen, so a household with two of them can tell which is which.',
+  'disp.hint': 'The name is shown on the screen.',
 
   // ── notifications ──────────────────────────────────────────────────────────
-  'notif.intro': 'Smylte already holds everything you will come looking for, so '
-    + 'a notification has to be something you cannot recover by opening the app '
-    + 'later. That is why this list is short.',
   'notif.enabled': 'Telegram notifications',
-  'notif.enabled.hint': 'Off until you turn it on, and nothing is sent until a '
-    + 'bot token and a chat id are both set below.',
+  'notif.enabled.hint': 'Needs a bot token and a chat id.',
   'notif.telegram': 'Connection',
   'notif.rules': 'What gets sent',
   'notif.token': 'Bot token',
   'notif.token.placeholder': 'Paste a token from @BotFather',
   'notif.token.stored': 'Stored — bot {bot}',
   'notif.token.remove': 'Remove it',
-  'notif.token.hint': 'Create a bot with @BotFather in Telegram and paste its '
-    + 'token. It is never shown again after you save it — the settings this page '
-    + 'loads deliberately do not carry it.',
+  'notif.token.hint': 'Create a bot with @BotFather and paste its token. It isn’t shown again after saving.',
   'notif.token.removed': 'Bot token removed.',
   'notif.chatId': 'Chat id',
-  'notif.chatId.hint': 'Your own id for a direct message, or a negative number '
-    + 'for a group. Message the bot once first — a bot cannot open a '
-    + 'conversation, so an unmessaged chat answers "chat not found".',
+  'notif.chatId.hint': 'Your user id, or a negative number for a group. Message the bot once first, or Telegram answers "chat not found".',
   'notif.test': 'Send a test message',
   'notif.test.sending': 'Sending…',
   'notif.on': 'On',
@@ -179,107 +166,61 @@ export const en = {
   'notif.volume.silent': 'silent',
   'notif.trigger.aria': 'Turn the {rule} notification on or off',
   'notif.trigger.dailyDigest': 'Daily digest',
-  'notif.trigger.dailyDigest.hint': "Today's events, what is due and how much is "
-    + 'overdue, once each morning. It exists to replace opening the app, not to '
-    + 'advertise it.',
+  'notif.trigger.dailyDigest.hint': 'Today’s events, what’s due and the overdue count, each morning.',
   'notif.trigger.eventStarting': 'Before a meeting',
-  'notif.trigger.eventStarting.hint': 'The one thing a morning digest cannot '
-    + 'cover. If your phone calendar already alerts you, leave this off — Smylte '
-    + 'cannot see those alarms and will happily tell you twice.',
+  'notif.trigger.eventStarting.hint': 'Before each event starts. Separate from your phone’s calendar alerts.',
   'notif.trigger.bookingCreated': 'Someone books you',
-  'notif.trigger.bookingCreated.hint': 'The only thing in the app that arrives '
-    + 'from outside while you are not looking. Always silent: nothing can be '
-    + 'done about a 3am booking at 3am.',
+  'notif.trigger.bookingCreated.hint': 'When someone books one of your links.',
   'notif.trigger.syncStalled': 'Sync has stopped',
-  'notif.trigger.syncStalled.hint': 'The one state where the app is lying to '
-    + 'you — everything looks normal and the data is frozen. At most one silent '
-    + 'message a day, and it names the list rather than carrying the error.',
+  'notif.trigger.syncStalled.hint': 'When sync has been failing for over an hour. At most once a day.',
   'notif.more': 'Off by default',
-  'notif.more.hint': 'Smylte does not think most people want these — each one '
-    + 'restates something standing, or something already on the screen you open '
-    + 'anyway. The reason is under each. If you disagree, you know your own days '
-    + 'better than the app does.',
-  'notif.firesEvening': 'Arrives at the evening hour below.',
+  'notif.firesEvening': 'Sent at the evening time below.',
   'notif.trigger.itemReminder': 'Reminders you set',
-  'notif.trigger.itemReminder.hint': 'The "Remind me" you put on one task or '
-    + 'event. Nothing fires unless you asked for it on that item.',
+  'notif.trigger.itemReminder.hint': 'For each task or event with “Remind me” set.',
   'notif.trigger.taskDueSoon': 'Before every task is due',
-  'notif.trigger.taskDueSoon.hint': 'A deadline is either something you already '
-    + 'knew about, in which case this is noise, or something you cannot do in '
-    + 'half an hour, in which case it is stress — which is why "Remind me" is '
-    + 'per task instead. Skips repeating and all-day tasks: neither has a clock '
-    + 'this can honestly count down to.',
+  'notif.trigger.taskDueSoon.hint': 'Before every timed task is due. Repeating and all-day tasks are skipped. Use “Remind me” for a single task.',
   'notif.trigger.taskOverdue': 'What is overdue',
-  'notif.trigger.taskOverdue.hint': 'Overdue is true every minute until you do '
-    + 'something about it, so this is a count once a morning rather than news. '
-    + 'The digest already carries the same number as one line.',
+  'notif.trigger.taskOverdue.hint': 'The number of overdue tasks, each morning. The digest already includes it.',
   'notif.trigger.dayUnplanned': "Today isn't planned",
-  'notif.trigger.dayUnplanned.hint': 'You know you have not planned today. This '
-    + 'is the app asking for your attention on its own behalf — and the message '
-    + 'most likely to make you mute the lot.',
+  'notif.trigger.dayUnplanned.hint': 'Each morning, when today has no plan.',
   'notif.trigger.overcommitted': 'The plan runs long',
-  'notif.trigger.overcommitted.hint': 'The number is already on the screen where '
-    + 'you do the planning, before the day starts. Never sent if you have not '
-    + 'said how long your day is — the app will not invent one for you.',
+  'notif.trigger.overcommitted.hint': 'Each morning, when today’s plan is longer than your working day. Needs a working day set.',
   'notif.trigger.notShutDown': "Today wasn't shut down",
-  'notif.trigger.notShutDown.hint': 'Habit-forming rather than informative: it '
-    + 'tells you nothing you do not know. Only for a day you actually planned.',
+  'notif.trigger.notShutDown.hint': 'In the evening, when a planned day hasn’t been shut down.',
   'notif.trigger.habitsLeft': 'Habits left today',
-  'notif.trigger.habitsLeft.hint': 'The app’s position is that a habit is never '
-    + 'coloured as a failure and nothing here scores your day, and this sits '
-    + 'awkwardly with both. It names what is left and nothing else — no streak, '
-    + 'no percentage, no count of misses.',
+  'notif.trigger.habitsLeft.hint': 'In the evening, the habits still open today.',
   'notif.trigger.linkBroken': 'A booking link is broken',
-  'notif.trigger.linkBroken.hint': 'A link you have shared pointing at a calendar '
-    + 'that no longer exists, so anyone opening it sees an error. Rare: deleting '
-    + 'a calendar in Smylte disables its links for you.',
+  'notif.trigger.linkBroken.hint': 'When an active booking link points at a deleted calendar.',
   'notif.trigger.syncRecovered': 'Sync is working again',
-  'notif.trigger.syncRecovered.hint': 'A second message to retract the first is '
-    + 'how people learn to stop reading alerts. On the other hand, if you fixed '
-    + 'it you may want to know it took.',
+  'notif.trigger.syncRecovered.hint': 'When sync works again after a failure message.',
   'notif.eveningTime': 'Evening rules at',
-  'notif.eveningTime.hint': 'When the two end-of-day rules above fire, if you '
-    + 'turn them on.',
+  'notif.eveningTime.hint': 'For the two evening rules above.',
   'notif.taskLead': 'Task warning',
-  'notif.taskLead.hint': 'Minutes of warning before a task is due, for "Before '
-    + 'every task is due". A reminder set on one task uses its own value instead.',
+  'notif.taskLead.hint': 'For “Before every task is due”. A task’s own reminder overrides it.',
   'notif.timing': 'Timing',
   'notif.digestTime': 'Digest arrives',
-  'notif.digestTime.hint': 'In your home timezone ({tz}). A digest more than '
-    + 'four hours late is skipped rather than sent — by then it is describing a '
-    + 'morning that already happened.',
-  'notif.digestTime.noTz': 'Set a home timezone under General first. Without '
-    + 'one the digest does not fire at all, because an hour resolved against the '
-    + "server's clock is not the hour you chose.",
+  'notif.digestTime.hint': 'In {tz}. Skipped if it would arrive more than four hours late.',
+  'notif.digestTime.noTz': 'Set a home timezone under General first. The digest isn’t sent without one.',
   'notif.eventLead': 'Meeting warning',
-  'notif.eventLead.hint': 'Minutes of warning before a meeting starts. Three is '
-    + 'the floor: syncing and checking together cost most of two minutes, and an '
-    + 'alert that would land after the meeting began is never sent.',
-  'notif.ceiling.hint': 'Past eight buzzing messages in a day the rest arrive '
-    + 'silently instead. Nothing is ever dropped — a channel that buzzes for '
-    + 'everything gets muted, and then it cannot tell you the meeting starts in '
-    + 'ten minutes.',
+  'notif.eventLead.hint': 'Minutes before an event starts. At least 3.',
+  'notif.ceiling.hint': 'After eight buzzing messages in a day, the rest arrive silently.',
   'settings.section.account': 'Account',
 
   'settings.tabs': 'Tabs',
 
   'settings.language': 'Language',
   'settings.language.aria': 'The language the app is shown in',
-  'settings.language.hint': 'The language the app writes in, and the calendar '
-    + 'it counts days by. Your lists, tasks and events keep whatever you '
-    + 'called them.',
+  'settings.language.hint': 'Also sets how dates are written.',
 
   'settings.clock': 'Clock',
   'settings.clock.aria': '12- or 24-hour clock',
-  'settings.clock.hint': 'The clock covers every time the app draws itself. '
-    + 'Date and time pickers are drawn by the browser — Chrome, Edge and the '
-    + 'desktop app follow this setting, Firefox follows your system’s.',
+  'settings.clock.hint': 'Date and time pickers follow it in Chrome, Edge and the desktop app. Firefox uses your system setting.',
   'clock.12h': '12-hour',
   'clock.24h': '24-hour',
 
   'settings.workingDay': 'Working day',
   // ── Settings → Focus ──
-  'settings.focus.intro': 'The clock the focus surface runs. Start it from Today.',
+  'settings.focus.intro': 'Start a focus session from Today.',
   'settings.focus.clock': 'The clock',
   'settings.focus.interval': 'Interval',
   'settings.focus.break': 'Break',
@@ -288,15 +229,15 @@ export const en = {
   'settings.focus.longEvery.never': 'never',
   'settings.focus.minutes': 'minutes',
   'settings.focus.intervals': 'intervals',
-  'settings.focus.clock.hint': 'A session freezes the lengths it started with, so a change here moves the next phase and never the one running.',
+  'settings.focus.clock.hint': 'Changes apply from the next phase.',
   'settings.focus.end': 'When an interval ends',
   'settings.focus.end.wait': 'Wait for me',
   'settings.focus.end.roll': 'Roll straight on',
-  'settings.focus.end.hint': 'Either way, a clock that runs out while you are away stops there. Rolling on is something a screen does while you are looking at it.',
+  'settings.focus.end.hint': 'Either way, the clock stops if it runs out while you’re away.',
   'settings.focus.cap': 'Estimates',
   'settings.focus.cap.open': 'Work until done',
   'settings.focus.cap.capped': 'Stop at the estimate',
-  'settings.focus.cap.hint': 'The default for a row that has not said. Any row can say otherwise on the focus surface.',
+  'settings.focus.cap.hint': 'The default for each row. You can change it per row while focusing.',
   'settings.focus.alerts': 'When it ends',
   'settings.focus.chime': 'Chime',
   'settings.focus.notify': 'Browser notification',
@@ -306,13 +247,12 @@ export const en = {
   'settings.focus.notifyGranted': 'Allowed by the browser.',
   'settings.focus.notifyDenied': 'Blocked in the browser',
   'settings.focus.notifyUnsupported': 'Not available in this browser.',
-  'settings.focus.notify.hint': 'The one alert that reaches you while the window is behind something else. Silent — the chime is the sound.',
+  'settings.focus.notify.hint': 'Shows even when the window is in the background. Silent.',
 
   'settings.timezone': 'Time zone',
   'settings.homeTimezone': 'Home timezone',
   'settings.homeTimezone.aria': 'Timezone your events are written in',
-  'settings.homeTimezone.title': 'Which clock your events are written on. '
-    + 'Scheduling links use it to know when you are really busy.',
+  'settings.homeTimezone.title': 'The timezone your events are written in. Booking links use it to find your busy times.',
   'settings.notSet': 'Not set',
 
   'settings.theme': 'Theme',
@@ -321,46 +261,30 @@ export const en = {
   'settings.appearance': 'Appearance',
   'settings.appearance.customize': 'Customize…',
   'settings.appearance.aria': 'Customize appearance',
-  'settings.appearance.hint': 'Customize opens the full editor over the design '
-    + 'system — every color token, the corner radius, the text scale and the '
-    + 'type families — and saves what you make as a named theme.',
   'settings.layout': 'Layout',
   'settings.layout.aria': 'Sidebar or classic layout',
-  'settings.layout.hint': 'Sidebar keeps the views, your lists and your calendars '
-    + 'in one column down the left. Classic is the tab strip across the top that '
-    + 'Smylte shipped with, where Tasks and Calendar each carry their own sidebar.',
+  'settings.layout.hint': 'Sidebar puts the views, lists and calendars in one column on the left. Classic uses tabs across the top.',
   'layout.sidebar': 'Sidebar',
   'layout.classic': 'Classic',
 
   'settings.calendarWindow': 'Calendar window',
   'settings.calendarFit.aria': 'Fixed or dynamic calendar grid',
-  'settings.calendarFit.title': 'Fixed keeps every week the same height; a day '
-    + 'with more than fits collapses into “+N more” instead of '
-    + 'stretching its week.',
-  'settings.calendarFit.hint': 'A fixed calendar window fits the whole month in '
-    + 'the pane: every week is the same height, and a day with more than fits '
-    + 'collapses into “+N more”. Dynamic lets a busy week grow and '
-    + 'the grid scroll.',
+  'settings.calendarFit.title': 'Fixed fits the month in the window. Busy days show “+N more”.',
+  'settings.calendarFit.hint': 'Fixed fits the whole month in the window, and busy days show “+N more”. Dynamic lets busy weeks grow and the grid scroll.',
   'calendarFit.fixed': 'Fixed',
   'calendarFit.dynamic': 'Dynamic',
 
   'settings.archivedCalendars': 'Archived calendars',
-  'settings.archived.hint': 'Archiving hides a calendar without deleting it. '
-    + 'Lists and calendars live on the Radicale CalDAV server — changes there '
-    + 'show up in every connected client, but an archive is Smylte’s own '
-    + 'and the collection stays on the wire.',
+  'settings.archived.hint': 'Archived calendars are hidden in Smylte only. They stay on the server and in your other apps.',
 
   'settings.completedTasks': 'Completed tasks',
   'settings.completedTasks.shown': 'Shown',
   'settings.completedTasks.hidden': 'Hidden',
-  'settings.completedTasks.hint': 'Whether completed tasks stay in the main '
-    + 'view. The sidebar’s “View completed” works either way.',
 
   'settings.signedInAs': 'Signed in as',
   'settings.staySignedIn': 'Stay signed in',
   'settings.staySignedIn.aria': 'How long to stay signed in',
-  'settings.session.hint': 'A shorter sign-in applies at once, on this device '
-    + 'and any other. A longer one starts from your next sign-in.',
+  'settings.session.hint': 'A shorter time applies at once, on every device. A longer one applies from your next sign-in.',
   'session.1d': '1 day',
   'session.7d': '7 days',
   'session.30d': '30 days',
@@ -370,7 +294,7 @@ export const en = {
 
   // ── archived calendars ──────────────────────────────────────────────────────
   'arch.loading': 'Loading…',
-  'arch.loadFailed': 'Couldn’t load your archived calendars.',
+  'arch.loadFailed': 'Couldn’t load archived calendars.',
   'arch.none': 'No archived calendars.',
   'arch.viewEvents': 'View events',
   'arch.restore': 'Restore',
@@ -385,20 +309,20 @@ export const en = {
   'conn.readOnly': 'Read only',
   'conn.noAccess': 'No access',
   'conn.loading': 'Loading…',
-  'conn.loadFailed': 'Couldn’t load your connected applications. Any grants you have are still live — this list could not be read, not emptied.',
-  'conn.none': 'Nothing is connected. Applications you connect through the MCP endpoint appear here.',
+  'conn.loadFailed': 'Couldn’t load connected apps.',
+  'conn.none': 'No connected apps yet.',
   'conn.anApplication': 'An application',
   'conn.connectedAt': 'Connected {when}',
   'conn.keep': 'Keep',
   'conn.disconnect': 'Disconnect',
-  'conn.hint': 'Disconnecting takes effect at once — the application has to be reconnected, and approved again, before it can read anything.',
+  'conn.hint': 'Disconnecting revokes access immediately.',
   // ── capacity ────────────────────────────────────────────────────────────────
   'capacity.mostDays': 'Most days',
   'capacity.notSet': 'not set',
   'capacity.defaultDay': 'the default working day',
   'capacity.sameAsMostDays': 'same as most days',
   'capacity.workingTimeFor': 'Working time for {name}',
-  'capacity.hint': 'Say it as {short} or {long} minutes. A day you have not given a length is never counted against you — the Today tab simply says nothing about how full it is.',
+  'capacity.hint': 'Enter {short} or {long} minutes. Days left blank aren’t tracked.',
   // ── sign in ─────────────────────────────────────────────────────────────────
   'login.invalid': 'Invalid credentials',
   'login.username': 'Username',
@@ -416,14 +340,14 @@ export const en = {
   // stamped on the FIRST miss and never rewritten, so a task pushed four times
   // still names the date it was actually promised for.
   'taskModal.originalDue': 'Originally due {date}',
-  'taskModal.forgetOriginalDue': 'Forget that',
+  'taskModal.forgetOriginalDue': 'Clear',
   'common.delete': 'Delete',
   'common.add': 'Add',
   'common.save': 'Save',
   // ── plan ritual ─────────────────────────────────────────────────────────────
   'plan.step.capacity': 'How long is today?',
   'plan.step.pick': 'What are you doing?',
-  'plan.step.shape': 'Shape it',
+  'plan.step.shape': 'Order and estimate',
   'plan.aria': 'Plan your day',
   'plan.stepOf': '{n} of {total}',
   'plan.total': '{planned} of {capacity}',
@@ -434,39 +358,39 @@ export const en = {
   'plan.done': 'Done',
   'plan.start': 'Start the day',
   'plan.next': 'Next',
-  'plan.warn': 'That is {amount} more than you said you would work. You can start anyway — but it is easier to move something now than at four o\'clock.',
+  'plan.warn': '{amount} over your working day.',
   'plan.stopping': 'When are you stopping today?',
-  'plan.capacityPlaceholder': 'until 6pm, or 5h',
+  'plan.capacityPlaceholder': 'until 6pm or 5h',
   'plan.capacityAria': 'How long you are working today',
   'plan.capacityRefused': 'Try {a} or {b}.',
-  'plan.capacityHint': 'Say it either way — {a} or {b}. It is only for today; Settings holds the one that fills this in.',
-  'plan.meetings': 'You already have {amount} on the calendar today.',
-  'plan.leftovers': 'You did not finish these last time',
-  'plan.nothingWaiting': 'Nothing waiting. Whatever else today needs, type it into the box behind this.',
+  'plan.capacityHint': 'Enter {a} or {b}. Applies to today only.',
+  'plan.meetings': '{amount} on the calendar today.',
+  'plan.leftovers': 'Unfinished from last time',
+  'plan.nothingWaiting': 'Nothing waiting.',
   'plan.addToToday': 'Add {task} to today',
   'common.task': 'Task',
   'plan.nothingOnToday': 'Nothing on today yet.',
-  'plan.shapeHint': 'Press an estimate to set it. Drag a row to move it.',
+  'plan.shapeHint': 'Tap an estimate to set it. Drag to reorder.',
   // ── parser examples ─────────────────────────────────────────────────────────
   'capacity.example.until': 'until 6pm',
   'capacity.example.length': '5h',
   // ── shutdown ritual ─────────────────────────────────────────────────────────
   'shut.step.done': 'How today went',
-  'shut.step.follows': 'What follows you',
+  'shut.step.follows': 'What carries over',
   'shut.step.reflect': 'Anything to note?',
   'shut.aria': 'Shut down the day',
   'shut.done': 'Done',
   'shut.shutDown': 'Shut down',
-  'shut.alreadyShutdown': 'You shut today down at {time}. Anything you change from here still lands on today.',
+  'shut.alreadyShutdown': 'Shut down at {time}. Changes still apply to today.',
   'shut.doneCount': '{done} of {total} done',
   'shut.plannedOf': ' · {done} of {planned} planned',
   'shut.unestimated': ' · {count} not estimated',
   'shut.offPlan': 'Done off-plan',
   'shut.doneMark': 'Done',
-  'shut.nothingAtAll': 'Nothing on today, and nothing finished off-plan.',
-  'shut.allDecided': 'Everything on today is decided. Nothing left to carry.',
-  'shut.allDone': 'Everything on today is done. Nothing to carry.',
-  'shut.followsHint': 'Leave anything alone and it carries by itself — this is for the ones you want to decide about. Deciding makes a row leave this list.',
+  'shut.nothingAtAll': 'Nothing planned or finished today.',
+  'shut.allDecided': 'Nothing left to carry over.',
+  'shut.allDone': 'All done. Nothing to carry over.',
+  'shut.followsHint': 'Anything you leave carries over by itself.',
   'shut.moveAll': 'Move all {count} to tomorrow',
   'shut.thisTask': '(this task)',
   'shut.moveToTomorrow': 'Move {task} to tomorrow',
@@ -475,9 +399,9 @@ export const en = {
   'shut.takeOff': 'Take {task} off the plan',
   'shut.offThePlan': 'Off the plan',
   'shut.howDidItGo': 'How did today go?',
-  'shut.reflectPlaceholder': 'A sentence is plenty.',
+  'shut.reflectPlaceholder': 'Optional',
   'shut.reflectAria': 'A note about today',
-  'shut.reflectHint': 'Kept with the day. You will see it whenever you look back at today.',
+  'shut.reflectHint': 'Shown when you look back at this day.',
   // ── task fields ─────────────────────────────────────────────────────────────
   'field.list': 'List',
   'field.due': 'Due',
@@ -506,8 +430,8 @@ export const en = {
   'bulk.truncated': 'Only the first {max} rows were kept.',
   'bulk.pasteHint': 'Paste a list of titles to fill several rows at once.',
   'bulk.failed': {
-    one: '1 task couldn\'t be created. Its row was kept — press Add to retry.',
-    other: '{count} tasks couldn\'t be created. Their rows were kept — press Add to retry.',
+    one: 'Couldn’t create 1 task. Press Add to retry.',
+    other: 'Couldn’t create {count} tasks. Press Add to retry.',
   },
   'bulk.progress': '{done} / {total}',
   'bulk.adding': 'Adding…',
@@ -526,13 +450,13 @@ export const en = {
   'module.mini_calendar': 'Mini calendar',
   'module.mini_calendar.blurb': 'This month, dotted in each calendar\'s color.',
   'module.completed': 'Recently completed',
-  'module.completed.blurb': 'What you have finished lately.',
+  'module.completed.blurb': 'Tasks you finished recently.',
   'module.booking_links': 'Booking links',
   'module.booking_links.blurb': 'Your scheduling links and their state.',
   'module.bookings': 'Upcoming bookings',
   'module.bookings.blurb': 'Who has booked time with you.',
   'module.quick_add': 'Quick add',
-  'module.quick_add.blurb': 'Drop a task straight onto a list.',
+  'module.quick_add.blurb': 'Add a task to a list.',
   'home.title': 'Home',
   'home.moduleCount': { one: '{count} module', other: '{count} modules' },
   'home.arrangeHint': 'Drag to move · corner to resize',
@@ -547,7 +471,7 @@ export const en = {
   'home.emptyOverdue': 'Nothing overdue.',
   'home.emptyUpcoming': 'Nothing in the next seven days.',
   'home.emptyCompleted': 'Nothing completed yet.',
-  'home.calPartial': 'Couldn’t load {cals} — some events may be missing.',
+  'home.calPartial': 'Couldn’t load {cals}. Some events may be missing.',
   'home.dayWithEvents': {
     one: '{day}, {count} event',
     other: '{day}, {count} events',
@@ -564,14 +488,14 @@ export const en = {
   'side.lists.one': 'List',
   'side.lists.new': 'New list',
   'side.lists.manage': 'Manage lists',
-  'side.lists.groupEmpty': 'Empty — assign a list from its ⋯ menu',
+  'side.lists.groupEmpty': 'Empty. Add a list from its ⋯ menu.',
   'side.lists.dropHere': 'Drag a list here',
   'side.lists.tapHint': 'Tap a list to show or hide it. Tap ⋯ to rename, recolor{archive} or delete.',
   'side.calendars.heading': 'Calendars',
   'side.calendars.one': 'Calendar',
   'side.calendars.new': 'New calendar',
   'side.calendars.manage': 'Manage calendars',
-  'side.calendars.groupEmpty': 'Empty — assign a calendar from its ⋯ menu',
+  'side.calendars.groupEmpty': 'Empty. Add a calendar from its ⋯ menu.',
   'side.calendars.dropHere': 'Drag a calendar here',
   'side.calendars.tapHint': 'Tap a calendar to show or hide it. Tap ⋯ to rename, recolor{archive} or delete.',
   'side.archiveClause': ', archive',
@@ -610,7 +534,7 @@ export const en = {
   'side.group': 'Group',
   'side.noGroup': 'No group',
   'side.reallyDelete': 'Really delete?',
-  'side.archiveTitle': 'Hide without deleting — restore later from Settings',
+  'side.archiveTitle': 'Hide without deleting. Restore from Settings.',
   'side.archive': 'Archive',
   // ── tasks tab ───────────────────────────────────────────────────────────────
   'tasks.view.list': 'List',
@@ -628,21 +552,21 @@ export const en = {
   'tasks.noCompleted': 'No completed tasks.',
   'common.loading': 'Loading…',
   'tasks.createListFirst': 'Create a list to get started.',
-  'tasks.allHidden': 'Every list is hidden — toggle one on from the sidebar.',
-  'tasks.partial': 'Couldn’t load {lists} — some tasks may be missing.',
+  'tasks.allHidden': 'All lists are hidden.',
+  'tasks.partial': 'Couldn’t load {lists}. Some tasks may be missing.',
   'common.retry': 'Retry',
   'tasks.nothingToDo': 'Nothing to do here.',
   'tasks.completedSection': 'Completed · {count}',
   'tasks.undatedHidden': {
-    one: '{count} undated task not shown — ',
-    other: '{count} undated tasks not shown — ',
+    one: '{count} undated task not shown. ',
+    other: '{count} undated tasks not shown. ',
   },
-  'tasks.switchToList': 'switch to List',
+  'tasks.switchToList': 'Switch to List',
   'tasks.overdueHidden': {
-    one: '{count} overdue task not shown — ',
-    other: '{count} overdue tasks not shown — ',
+    one: '{count} overdue task not shown. ',
+    other: '{count} overdue tasks not shown. ',
   },
-  'tasks.jumpToToday': 'jump to today',
+  'tasks.jumpToToday': 'Jump to today',
   'tasks.overdue': 'Overdue',
   'tasks.doneSection': 'Done · {count}',
   'tasks.colAdd': '+ Add',
@@ -667,8 +591,8 @@ export const en = {
   'cal.completedShown': 'Completed · shown',
   'cal.completedHidden': 'Completed · hidden',
   'cal.createCalendarFirst': 'Create a calendar to get started.',
-  'cal.allArchived': 'All calendars are archived — restore one from Settings.',
-  'cal.partial': 'Couldn’t load {cals} — this month may be missing events.',
+  'cal.allArchived': 'All calendars are archived. Restore one in Settings.',
+  'cal.partial': 'Couldn’t load {cals}. Some events may be missing.',
   'cal.grid': 'Month',
   'cal.newEvent': 'New event',
   'cal.repeatingTitle': '{summary} (repeating)',
@@ -684,8 +608,8 @@ export const en = {
   'cal.scope.this': 'This event',
   'cal.scope.following': 'This & following',
   'cal.scope.all': 'All events',
-  'cal.cadenceBlocked': 'The repeat change needs “This & following” or “All events” — a single occurrence has no schedule of its own.',
-  'cal.cadenceRefused': 'A repeat change cannot apply to a single occurrence. Use “This & following” or “All events”, or set Repeat back to “Keep current schedule”.',
+  'cal.cadenceBlocked': 'To change the repeat, choose “This & following” or “All events”.',
+  'cal.cadenceRefused': 'A single occurrence can’t change the repeat. Choose “This & following” or “All events”, or set Repeat back to “Keep current schedule”.',
   'cal.title': 'Title',
   'cal.startField': 'Start',
   'cal.endLastDay': 'End (last day)',
@@ -700,17 +624,17 @@ export const en = {
   'cal.showAs': 'Show as',
   'cal.busy': 'Busy',
   'cal.free': 'Free',
-  'cal.freeHint': 'Free time can still be booked — this will not block a slot on your booking links.',
+  'cal.freeHint': 'Doesn’t block slots on your booking links.',
   'cal.repeatUntil': 'Repeat until (optional)',
   'cal.calendarField': 'Calendar',
   'cal.location': 'Location',
   'cal.notes': 'Notes',
-  'cal.moveHint': '“All events” moves every occurrence by the same offset — use “This event” to move just one.',
+  'cal.moveHint': '“All events” shifts every occurrence by the same amount.',
   // ── scheduling tab ──────────────────────────────────────────────────────────
   'sched.title': 'Scheduling',
   'sched.newLink': 'New link',
-  'sched.loadFailed': 'Couldn’t load your booking links. This is a display problem — your links are still live and still taking bookings.',
-  'sched.empty': 'Create a booking link, share it with a client, and their pick lands on your calendar.',
+  'sched.loadFailed': 'Couldn’t load booking links.',
+  'sched.empty': 'No booking links yet.',
   'sched.calendarGone': 'The calendar this link books into no longer exists',
   'sched.linkLive': 'Link is live',
   'sched.linkOff': 'Link is off',
@@ -718,7 +642,7 @@ export const en = {
   'sched.live': 'Live',
   'sched.off': 'Off',
   'sched.minutes': '{n} min',
-  'sched.calendarDeleted': 'calendar deleted — pick another to re-enable',
+  'sched.calendarDeleted': 'calendar deleted, pick another to re-enable',
   'sched.showsBusy': ' · shows busy times',
   'sched.bookingCount': {
     one: '{count} booking',
@@ -730,9 +654,9 @@ export const en = {
   'sched.upcoming': 'Upcoming bookings',
   'sched.nothingBooked': 'Nothing booked yet.',
   'sched.err.title': 'Give the link a title.',
-  'sched.err.calendar': 'Pick a calendar for bookings to land on.',
-  'sched.err.tz': 'Set the timezone your availability is in.',
-  'sched.err.noDays': 'Turn on at least one day, or nobody can book anything.',
+  'sched.err.calendar': 'Pick a calendar.',
+  'sched.err.tz': 'Set a timezone.',
+  'sched.err.noDays': 'Turn on at least one day.',
   'sched.err.ranges': 'Fix the highlighted time ranges.',
   'sched.err.bothTimes': 'Fill in both times, or remove the range.',
   'sched.err.startBeforeEnd': 'Each range must start before it ends.',
@@ -744,14 +668,14 @@ export const en = {
   'sched.description': 'Description (shown to clients)',
   'sched.calendarField': 'Calendar',
   'sched.duration': 'Duration (min)',
-  'sched.timezone': 'Timezone (your availability is in this zone)',
+  'sched.timezone': 'Availability timezone',
   'sched.weekly': 'Weekly availability',
   'sched.removeRange': 'Remove range',
   'sched.addRange': 'Add another range',
   'sched.addRangeShort': '+ range',
   'sched.unavailable': 'Unavailable',
   'sched.showBusy': 'Show my busy times on the booking page',
-  'sched.showBusyHint': 'Clients see unlabeled “Busy” blocks — never event names or details. Booked and existing timed events always block slots; all-day events (birthdays, trips) don\'t.',
+  'sched.showBusyHint': 'Shown as unlabeled “Busy” blocks. Timed events always block slots. All-day events don’t.',
   'sched.buffer': 'Buffer (min)',
   'sched.notice': 'Min notice (hrs)',
   'sched.horizon': 'Days ahead',
@@ -788,30 +712,30 @@ export const en = {
   'today.shutDown': 'Shut down',
   'today.habits': 'Habits',
   'today.addAria': 'Add to today',
-  'today.addPlaceholder': 'Add to today — “invoice friday”, “gym at 7”…',
+  'today.addPlaceholder': 'Add to today, e.g. “invoice friday” or “gym at 7”',
   'today.addAsTask': 'Add as task',
   'today.addAsNote': 'Add as note',
   'today.willAdd': 'will add',
   'today.guess': ' (guess)',
-  'today.fate.note': 'on this day only — it never leaves Smylte',
-  'today.fate.taskAnyList': 'it shows up in your other apps too',
-  'today.fate.taskNamedList': 'on {list} — it shows up in your other apps too',
+  'today.fate.note': 'this day only, not synced',
+  'today.fate.taskAnyList': 'synced to your other apps',
+  'today.fate.taskNamedList': 'on {list}, synced to your other apps',
   'today.yourLists': 'your lists',
   'today.makeItNote': 'Make it a note',
   'today.makeItTask': 'Make it a task',
   'today.listForNewTask': 'List for the new task',
-  'today.bandNoCapacity': 'Plan your day — say how long it is, then what goes on it.',
+  'today.bandNoCapacity': 'Today isn’t planned yet.',
   'today.planMyDay': 'Plan my day',
   'today.notNow': 'Not now',
   'today.loadFigure': '{planned} of {capacity}',
   'today.loadCalendar': ' · {amount} on the calendar',
   'today.loadUnestimated': ' · {count} not estimated',
-  'today.over': 'That is {amount} more than you said you would work.',
+  'today.over': '{amount} over your working day.',
   'today.readFailed': 'Couldn’t read today.',
   'today.tryAgain': 'Try again',
-  'today.emptyBefore': 'Nothing on today yet. Type a line above, add one of the tasks below, or ',
+  'today.emptyBefore': 'Nothing on today yet. Add something above, or ',
   'today.setUpHabit': 'set up a habit',
-  'today.habitsHint': 'A habit is a rule that puts a line on your day, on the days you choose. It never becomes a task, and it never leaves this app. ',
+  'today.habitsHint': 'Habits add a line to your day on the days you choose. ',
   'today.setOneUp': 'Set one up',
   // The day's OWN rows, named — see TodayView, where the heading is added.
   // Short, and a noun rather than a verb: it sits between "Habits" and "On
@@ -823,8 +747,8 @@ export const en = {
   'today.howItWent': 'How it went',
   'today.doneOffPlan': 'Done off-plan',
   'today.doneMark': 'Done',
-  'today.reviewEmptyLive': 'Nothing on today yet, and nothing finished so far.',
-  'today.reviewEmptyPast': 'Nothing was planned on this day, and nothing was finished on it.',
+  'today.reviewEmptyLive': 'Nothing planned or finished yet.',
+  'today.reviewEmptyPast': 'Nothing planned or finished.',
   'today.noCalendar': 'Nothing on the calendar today.',
   'today.estimateAria': 'Estimate {entry}',
   'today.estimatedAt': '{entry} is estimated at {amount} — change it',
@@ -844,7 +768,7 @@ export const en = {
   'focus.phase.breakOver': 'Break over',
   'focus.phase.paused': 'Paused',
   'focus.phase.away': 'Interval over · you were away',
-  'focus.awayHint': 'The clock stopped at the end of the interval. Nothing rolled on without you.',
+  'focus.awayHint': 'The clock stopped when the interval ended.',
   'focus.now': 'Now',
   'focus.upNext': 'Up next',
   'focus.next': 'Next',
@@ -868,7 +792,7 @@ export const en = {
   'focus.readyHeadline': { one: '1 thing on the day.', other: '{count} things on the day.' },
   'focus.pickRow': 'Work this one instead',
   'focus.notPlanned': 'Today isn\'t planned yet.',
-  'focus.notPlannedHint': 'Open Today first — a session never plans a day for you.',
+  'focus.notPlannedHint': 'Open Today first.',
   'focus.queueEmpty': 'Nothing left in the queue.',
   'focus.setAside': { one: '1 set aside', other: '{count} set aside' },
   'focus.again': 'Go round again',
@@ -891,12 +815,10 @@ export const en = {
   'today.weekCountThat': '{done} of {total} that week so far',
   'today.movedTo': '→ {day}',
   'today.removeFromToday': 'Remove {entry} from today',
-  'habit.sheet.blurb': 'A habit is a rule that puts a line on your day — one that '
-    + 'never becomes a task and never leaves this app. You estimate it once, here '
-    + 'or on any day’s row, and every day it comes up starts with that estimate.',
+  'habit.sheet.blurb': 'Habits add a line to your day on the days you choose. They stay in Smylte and aren’t synced. An estimate set here applies every day.',
   'habit.none': 'No habits yet.',
   'habit.newAria': 'New habit',
-  'habit.addPlaceholder': 'Add a habit — “read”, “stretch”…',
+  'habit.addPlaceholder': 'Add a habit',
   'habit.rename': 'Rename {habit}',
   'habit.resumeAria': 'Resume {habit}',
   'habit.pauseAria': 'Pause {habit}',
@@ -915,13 +837,13 @@ export const en = {
   'habit.estimateAria': 'How long {habit} takes',
   'habit.estimatedAt': '{habit} takes {amount} each time — change it',
   'habit.minutesFor': 'Minutes each time for {habit}',
-  'habit.deleteWarn': 'The rule stops coming back. Every day it has already run on keeps the line it put there — a past day is a finished record, not a projection of today’s rules.',
+  'habit.deleteWarn': 'Past days keep their entries.',
   // ── the shell's own messages ────────────────────────────────────────────────
-  'app.settingsLoadFailed': 'Couldn\'t load your preferences — changes won\'t be saved until this reloads',
-  'app.settingsNotLoaded': 'Your preferences didn\'t load, so this change wasn\'t saved — reload to try again',
+  'app.settingsLoadFailed': 'Couldn’t load preferences. Changes won’t be saved until you reload.',
+  'app.settingsNotLoaded': 'Not saved. Reload and try again.',
   'app.settingsSaveFailed': 'Couldn\'t save your preferences: {error}',
-  'app.logoutFailed': 'Couldn\'t sign out — you are still signed in on this device.',
-  'app.offline': 'Can’t reach the server — showing what was last saved on this device. You are still signed in.',
+  'app.logoutFailed': 'Couldn’t sign out.',
+  'app.offline': 'Can’t reach the server. Showing saved data.',
   // ── appearance — design tokens ──────────────────────────────────────────────
   'token.bg': 'Background',
   'token.bgElev': 'Raised',
@@ -955,9 +877,9 @@ export const en = {
   'token.labelCase.uppercase': 'Uppercase',
   'token.labelCase.none': 'Sentence case',
   'token.tracking': 'Label tracking',
-  'token.tracking.hint': 'Letter-spacing on those same labels. 0 closes it up.',
+  'token.tracking.hint': 'Letter spacing on those labels.',
   'token.gutter': 'Gutter',
-  'token.gutter.hint': 'Horizontal breathing room around content.',
+  'token.gutter.hint': 'Horizontal space around content.',
   'token.rowY': 'Row height',
   'token.rowY.hint': 'Vertical padding inside a task row.',
   'tokenGroup.Surfaces': 'Surfaces',
@@ -968,7 +890,7 @@ export const en = {
   'tokenGroup.Shape': 'Shape',
   'tokenGroup.Density': 'Density',
   'tokenGroup.Type': 'Type',
-  'appear.atCap': 'You can keep {max} themes — delete one first.',
+  'appear.atCap': 'You can keep up to {max} themes. Delete one first.',
   'appear.copySuffix': '{name} copy',
   'appear.custom': 'Custom',
   'appear.notATheme': 'That file is not a Smylte theme.',
@@ -982,10 +904,10 @@ export const en = {
   'appear.export': 'Export',
   'appear.import': 'Import',
   'appear.themeName': 'Theme name',
-  'appear.presetHint': '{name} is a built-in theme. Change anything below and it forks into a theme of your own.',
-  'appear.classicHint': 'Classic is the design Smylte shipped until September 2026. A theme forked from it keeps its type, square corners and capitals; its controls, shadows and motion follow the current design.',
-  'appear.editingHint': 'Editing this theme. Smylte’s own design is never modified — switch back to it any time.',
-  'appear.shippedHint': 'Smylte’s shipped design. Change anything below and it forks into a theme of your own.',
+  'appear.presetHint': '{name} is built in. Editing it creates your own copy.',
+  'appear.classicHint': 'A copy of Classic keeps its fonts, square corners and capitals, but uses the current controls, shadows and motion.',
+  'appear.editingHint': 'Editing your theme.',
+  'appear.shippedHint': 'The default design. Editing it creates your own copy.',
   'appear.editingMode': 'Editing mode',
   'appear.light': 'Light',
   'appear.dark': 'Dark',
@@ -999,16 +921,16 @@ export const en = {
   'appear.resetMode': 'Reset {mode}',
   'appear.deleteTheme': 'Delete theme',
   'appear.done': 'Done',
-  'appear.resetToken': 'Back to the Smylte value',
+  'appear.resetToken': 'Reset to default',
   'appear.resetNamed': 'Reset {token}',
   'appear.pickColor': '{token} — pick a color',
   'appear.customFont': 'Custom ({family})',
   // ── the public booking page ─────────────────────────────────────────────────
-  'book.loading': 'Loading the available times…',
+  'book.loading': 'Loading times…',
   'book.notFound': 'This booking link is no longer available.',
-  'book.notFoundHint': 'It may have been turned off or removed. Ask the person who sent it for a fresh link.',
+  'book.notFoundHint': 'Ask the person who sent it for a new link.',
   'book.unavailable': 'Couldn’t load this page just now.',
-  'book.unavailableHint': 'The link is probably fine — something went wrong on the way. Try again in a moment.',
+  'book.unavailableHint': 'Try again in a moment.',
   'book.tryAgain': 'Try again',
   'book.confirmed': 'Confirmed',
   'book.range': '{from}–{to}',
@@ -1016,7 +938,7 @@ export const en = {
   'book.bookATime': 'Book a time',
   'book.minutes': '{n} min',
   'book.timesShownIn': 'Times shown in {tz}',
-  'book.noTimes': 'No open times right now — check back later.',
+  'book.noTimes': 'No open times right now.',
   'book.hostBusy': 'The host is busy during this time',
   'book.busyRange': 'Busy {from}–{to}',
   'book.change': 'Change',
@@ -1026,13 +948,13 @@ export const en = {
   'book.notesPlaceholder': 'Anything the host should know?',
   'book.booking': 'Booking…',
   'book.confirm': 'Confirm booking',
-  'book.taken': 'That time was just taken — please pick another.',
+  'book.taken': 'That time was just taken. Pick another.',
   // ── today — the tomorrow suggestion ─────────────────────────────────────────
   'today.sug.tomorrow': 'Due tomorrow',
   // ── home — the day-plan module ──────────────────────────────────────────────
   'module.day_plan': 'Today\'s plan',
-  'module.day_plan.blurb': 'What you chose to do today, plus your habits and notes.',
-  'home.planEmpty': 'Nothing on today yet. Plan it from the Today tab.',
+  'module.day_plan.blurb': 'Today’s plan, habits and notes.',
+  'home.planEmpty': 'Nothing planned yet.',
   'home.planUncheck': 'Uncheck {entry}',
   'home.planCheck': 'Check {entry}',
   // ── 2026-09-03 sweep — fe-a (shell, Focus, Home) ─────────────────────────
@@ -1041,10 +963,10 @@ export const en = {
   'today.taskUnavailable': 'Task in a list that couldn’t load',
   // The Focus surface's own read failed — the day or the session. Retryable,
   // like `today.readFailed` one surface over.
-  'focus.readFailed': 'Couldn’t load the focus surface.',
+  'focus.readFailed': 'Couldn’t load the focus session.',
   // The dashboard's scheduling modules over a failed fetch: short copy for a
   // card, but the same rule as `sched.loadFailed` — never the empty state.
-  'home.linksFailed': 'Couldn’t load your booking links — they’re still live.',
+  'home.linksFailed': 'Couldn’t load booking links.',
   'home.bookingsFailed': 'Couldn’t load your bookings.',
   // ── 2026-09-03 sweep — the priority picker's choices ────────────────────────
   // The option TEXT for api.ts's PRIORITIES; the option value stays the wire word.
@@ -1059,7 +981,7 @@ export const en = {
   // The shutdown's first step over a day every row was moved or dropped from:
   // not "0 of 0 done" and not "Nothing on today", both of which describe a day
   // that had nothing on it.
-  'shut.nothingLeft': 'Nothing left on today — what was on it was moved to another day or taken off the plan.',
+  'shut.nothingLeft': 'Nothing left. Everything was moved or taken off the plan.',
   // ── 2026-09-03 sweep — the display page's own three strings, and the
   //    imported-theme fallback name (fe-c) ─────────────────────────────────
   'display.stale': 'Not updated recently',
@@ -1081,8 +1003,8 @@ export const en = {
   'tasks.parkedOn': 'since {when}',
   'tasks.park': 'Park it',
   'tasks.unpark': 'Bring it back',
-  'tasks.parkHint': 'Sets it aside without finishing it. It leaves your lists and your day, and comes back whenever you want it.',
-  'tasks.parkedHint': 'Set aside. Bringing it back puts it in your lists and your day again, exactly as it was.',
+  'tasks.parkHint': 'Hides it from your lists and your day until you bring it back. Other apps still show it.',
+  'tasks.parkedHint': 'Parked. Bring it back to return it to your lists.',
   'tasks.wontDoAction': 'Won’t do',
   'side.viewParked': '⏸ View parked',
   'side.viewParkedShort': 'View parked',
@@ -1091,13 +1013,10 @@ export const en = {
   //    Worded as what it DOES rather than as "auto-complete": the owner is
   //    agreeing to a write that reaches their other CalDAV clients, so the hint
   //    says that plainly rather than describing it as a display convenience.
-  'settings.autoCloseParents': 'Finish a checklist with its last step',
+  'settings.autoCloseParents': 'Complete a task when its last subtask is done',
   'settings.autoCloseParents.on': 'On',
   'settings.autoCloseParents.off': 'Off',
-  'settings.autoCloseParents.hint': 'When you tick the last open step of a task, '
-    + 'the task itself is completed too. A step you have marked won’t-do counts '
-    + 'as nothing left to do; a parked one does not, since it is still coming back. '
-    + 'This writes a real completion, so it shows up in your other calendar apps.',
+  'settings.autoCloseParents.hint': 'Subtasks marked won’t-do count as done. Parked ones don’t. The completion syncs to your other apps.',
 
   // ── an overfull day, named at the moment it is committed ───────────────────
   //    Nothing here is a refusal. `plan.commitAnyway` is one press, exactly as
@@ -1109,7 +1028,7 @@ export const en = {
   'today.sugWouldBeOver': '+{amount} over',
   //    Read back afterwards. A fact about the day, not a mark against it —
   //    nothing on the look-back scores anything.
-  'today.committedOver': 'Started {amount} over what you said you would work.',
+  'today.committedOver': 'Started {amount} over your working day.',
   // ── work late enough to need a decision rather than another offer ──────────
   //    The heading is the ask. Nothing here calls it a failure or counts how
   //    long it has been: the row exists to end a loop, not to report on it.
@@ -1127,38 +1046,29 @@ export const en = {
   // countable — `today.wasDue` stays for the deadline missed earlier the same
   // day, where the honest count is no count rather than zero.
   'today.wasDueDays': 'was due {date} · {days}d',
-  'settings.staleOverdue': 'Ask about work more than this many days late',
-  'settings.staleOverdue.hint': 'Past this, a task stops being offered to your '
-    + 'day as ordinary work and is asked about instead: give it a new date, or '
-    + 'park it. It is never hidden — the Tasks tab still shows everything. Set '
-    + 'it to 0 to turn this off.',
-  'settings.staleOverdue.off': 'Off. Overdue work is offered to your day like '
-    + 'anything else, however long it has been waiting.',
+  'settings.staleOverdue': 'Days overdue before asking',
+  'settings.staleOverdue.hint': 'After this, an overdue task asks for a new date or to be parked instead of being offered for today. 0 turns this off.',
+  'settings.staleOverdue.off': 'Off. Overdue tasks are offered for today however late they are.',
   // Worded as the RULE rather than as the button, because it is not about the
   // button: the date field beside it does the same thing when you pick the same
   // day. Saying "when you press Due today" would describe half of what it does.
-  'settings.planOnDueToday': 'Put it on your day when you move it onto today',
+  'settings.planOnDueToday': 'Plan tasks moved to today',
   'settings.planOnDueToday.on': 'On',
   'settings.planOnDueToday.off': 'Off',
-  'settings.planOnDueToday.hint': 'Those answers move a deadline, so “today” '
-    + 'leaves a task due today without it being planned for today — you still '
-    + 'have to find it again and add it. With this on, moving one onto the day '
-    + 'you are planning adds it to that day as well. Only onto that day: a task '
-    + 'you move to Thursday is scheduled, not planned.',
+  'settings.planOnDueToday.hint': 'Moving a task’s due date to today also adds it to today’s plan.',
   // Shown in place of the hint when the threshold above is 0. The switch stays
   // on screen — a control that vanishes is one nobody can find again to work
   // out why it stopped mattering — so the line says why it is doing nothing.
-  'settings.planOnDueToday.moot': 'Nothing to do while the setting above is 0: '
-    + 'with no work being asked about, there are no answers for this to change.',
+  'settings.planOnDueToday.moot': 'Has no effect while the setting above is 0.',
   'home.overdueWaiting': {
-    one: '{count} has been waiting long enough to need a decision.',
-    other: '{count} have been waiting long enough to need a decision.',
+    one: '{count} waiting on a decision.',
+    other: '{count} waiting on a decision.',
   },
   // ── what you finished this week ────────────────────────────────────────────
   //    A number and no verdict. There is nothing to compare it against on
   //    purpose: no target, no goal, nothing marked good or bad.
   'module.week': 'Finished this week',
-  'module.week.blurb': 'How many tasks you have completed, week by week.',
+  'module.week.blurb': 'Tasks completed per week.',
   'module.week.thisWeek': 'this week',
   'module.week.lastWeek': 'last week',
   'module.week.weeksAgo': '{n} weeks ago',
@@ -1172,7 +1082,7 @@ export const en = {
   'settings.section.about': 'About',
   'about.licence': 'Licence',
   'about.source': 'Source code',
-  'about.hint': 'This is the source for the version running here. The licence asks anyone running a modified copy to offer its source to the people using it — this link is how Smylte does that, so point it at your own repository if you change anything.',
+  'about.hint': 'Source for the version running here. If you run a modified copy, the AGPL requires you to link your own source.',
   // ── email ingestion ────────────────────────────────────────────────────────
   //    Reads the owner's mail through Proton Mail Bridge and PROPOSES tasks. The
   //    wording keeps one promise in view throughout: nothing becomes a task, or
@@ -1180,12 +1090,12 @@ export const en = {
   //    and the copy says so where they are typed rather than leaving it to be
   //    inferred from a field that never shows what it holds.
   'settings.section.mail': 'Email',
-  'mail.intro': 'Reads your mail through Proton Mail Bridge and suggests tasks for the requests in it. Nothing becomes a task until you approve it.',
-  'mail.loadFailed': 'The email settings could not be loaded.',
+  'mail.intro': 'Suggests tasks and events from your mail, through Proton Mail Bridge. Nothing is added until you approve it.',
+  'mail.loadFailed': 'Couldn’t load email settings.',
   'mail.deploymentOff': 'Turned off for this deployment (SMYLTE_MAIL_ENABLED=false).',
   'mail.secretsUnavailable': 'Secrets can’t be stored right now: {error}',
   'mail.enabled': 'Read my email',
-  'mail.enabled.hint': 'The first check reads the last {days} days. Turn this on once the connection test passes and your sender lists are set.',
+  'mail.enabled.hint': 'The first check reads the last {days} days.',
   'mail.on': 'On',
   'mail.off': 'Off',
   'mail.head.anthropic': 'Anthropic',
@@ -1205,17 +1115,17 @@ export const en = {
   'mail.secret.save': 'Save',
   'mail.secret.cancel': 'Cancel',
   'mail.secret.placeholder': 'Paste it here',
-  'mail.secret.hint': 'Write-only: once saved it is never shown again, by this page or any other.',
-  'mail.workspace': 'Workspace ID (only for keys not scoped to a workspace)',
-  'mail.workspace.hint': 'Leave empty unless Anthropic says the key needs an anthropic-workspace-id.',
+  'mail.secret.hint': 'Not shown again after saving.',
+  'mail.workspace': 'Workspace ID (optional)',
+  'mail.workspace.hint': 'Only needed if Anthropic asks for an anthropic-workspace-id.',
   'mail.model': 'Model',
   'mail.model.other': 'Other…',
   'mail.model.needKey': 'Save an API key to choose from Anthropic’s list.',
-  'mail.model.hint': 'Read before every email, so a change applies to the next one.',
+  'mail.model.hint': 'Applies from the next email.',
   'mail.test.key': 'Test API key',
   'mail.test.imap': 'Test connection',
   'mail.test.running': 'Testing…',
-  'mail.imap.rebind': 'Changing the server, port, encryption, certificate or username forgets the saved password — enter it again afterwards.',
+  'mail.imap.rebind': 'Changing the host, port, encryption, certificate or username clears the saved password.',
   'mail.imap.host': 'Host',
   'mail.imap.port': 'Port',
   'mail.imap.user': 'Bridge username',
@@ -1229,20 +1139,20 @@ export const en = {
   'mail.cert.pem': 'Certificate (PEM)',
   'mail.cert.pemHint': 'In Bridge: Settings → Advanced settings → Export TLS certificates. Paste cert.pem here.',
   'mail.cert.fingerprint': 'SHA-256 {fp}',
-  'mail.cert.insecureWarning': 'Certificate checks are off. Anything that can see this connection can read your mail and your Bridge password. Only allowed for 127.0.0.1, ::1 or localhost — pin Bridge’s certificate instead if you can.',
-  'mail.imap.hint': 'Bridge’s own username and password from its mailbox settings — not your Proton login.',
-  'mail.imap.authres.ok': 'Authentication-Results headers come through ({ids}); allow-listed senders can skip the bulk filter.',
+  'mail.cert.insecureWarning': 'Certificate checks are off, so anyone on this connection can read your mail and Bridge password. Only allowed for localhost. Pin the certificate if you can.',
+  'mail.imap.hint': 'Use Bridge’s username and password from its mailbox settings, not your Proton login.',
+  'mail.imap.authres.ok': 'Authentication-Results headers found ({ids}). Always-read senders can bypass the bulk filter.',
   'mail.imap.authres.untrusted': 'Authentication-Results headers come from {ids}, which isn’t in the trusted list below.',
-  'mail.imap.authres.missing': 'No Authentication-Results header on the newest INBOX messages; allow-listed senders will be treated as ordinary mail.',
+  'mail.imap.authres.missing': 'No Authentication-Results header on recent INBOX mail. Always-read senders are treated as ordinary mail.',
   'mail.folders': 'Folders',
   'mail.folders.hint': 'One per line. Sent, Drafts, All Mail, Spam and Trash are never read.',
   'mail.folders.never': 'never read',
   'mail.self': 'My addresses',
-  'mail.self.hint': 'Every address and alias you send from. Your own mail is skipped unless it’s a note to yourself.',
+  'mail.self.hint': 'Every address and alias you send from. Your own mail is skipped, except notes to yourself.',
   'mail.always': 'Always read',
   'mail.never': 'Never read',
   'mail.patterns.hint': 'One per line: an address, a domain (school.org), or *.school.org for its subdomains.',
-  'mail.always.hint': 'Read even when it looks like bulk mail — but only when Proton confirms the sender (DMARC).',
+  'mail.always.hint': 'Read even if it looks like bulk mail, when DMARC confirms the sender.',
   'mail.notesSelf': 'Notes to myself become suggestions',
   //    Who decides task or event. "rules" is a small validated language, never
   //    code: the hint is the whole grammar, because a rule that does not parse
@@ -1252,11 +1162,11 @@ export const en = {
   'mail.kindDecider.jev': 'TypeSafe Jev decides',
   'mail.kindDecider.rules': 'My rules decide',
   'mail.kindRules': 'Rules',
-  'mail.kindRules.hint': 'One per line, first match wins: conditions, then -> task or -> event. Conditions: from:school.org, subject:"parent evening", body:invoice, has:time, has:date, has:location, model:event; put - in front to negate. With rules deciding, anything no rule matches becomes a task — end with model:event -> event to let the model decide the rest.',
+  'mail.kindRules.hint': 'One per line, first match wins: conditions, then -> task or -> event. Conditions: from:school.org, subject:"parent evening", body:invoice, has:time, has:date, has:location, model:event. Put - in front to negate. Mail no rule matches becomes a task. End with model:event -> event to let the model decide the rest.',
   'mail.typesafeKey': 'TypeSafe API key',
   'mail.jevModel': 'Jev model',
   'mail.test.typesafe': 'Test TypeSafe key',
-  'mail.jev.hint': 'Jev answers two narrow questions — task or event, and is this the same piece of work as one you already have — with a calibrated confidence; Claude decides whenever Jev is unsure, unreachable, or has no key. Leave the key empty to keep everything with Claude.',
+  'mail.jev.hint': 'Jev decides task or event, and whether an item duplicates one you already have. Claude decides when Jev is unsure or unavailable. Leave the key empty to use Claude only.',
   'mail.dedupDecider': 'Duplicate check',
   'mail.dedupDecider.jev': 'TypeSafe Jev, Claude when unsure',
   'mail.dedupDecider.model': 'Claude',
@@ -1286,7 +1196,7 @@ export const en = {
     one: '{count} waiting',
     other: '{count} waiting',
   },
-  'mail.sug.empty': 'Nothing waiting. Requests found in your email show up here for you to approve.',
+  'mail.sug.empty': 'Nothing waiting.',
   'mail.sug.kind.task': 'Task',
   'mail.sug.kind.update': 'Update',
   'mail.sug.kind.event': 'Event',

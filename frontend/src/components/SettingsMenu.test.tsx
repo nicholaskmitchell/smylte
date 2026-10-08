@@ -255,10 +255,10 @@ describe('<SettingsMenu> finishing a checklist with its last step', () => {
     // Named by its <label htmlFor>, not by its own text — which is the point of
     // the pairing: a screen reader reads what the switch is FOR, and
     // `aria-pressed` carries which way it is set.
-    const toggle = screen.getByRole('button', { name: 'Finish a checklist with its last step' })
+    const toggle = screen.getByRole('button', { name: 'Complete a task when its last subtask is done' })
     expect(toggle).toHaveAttribute('aria-pressed', 'true')
     expect(toggle).toHaveTextContent('On')
-    expect(panel()).toHaveTextContent(/shows up in your other calendar apps/)
+    expect(panel()).toHaveTextContent(/syncs to your other apps/)
 
     await user.click(toggle)
     expect(onToggle).toHaveBeenCalled()
@@ -271,7 +271,7 @@ describe('<SettingsMenu> finishing a checklist with its last step', () => {
     const user = userEvent.setup()
     show({ autoCloseParents: false })
     await user.click(nav('Tasks'))
-    const toggle = screen.getByRole('button', { name: 'Finish a checklist with its last step' })
+    const toggle = screen.getByRole('button', { name: 'Complete a task when its last subtask is done' })
     expect(toggle).toHaveAttribute('aria-pressed', 'false')
     expect(toggle).toHaveTextContent('Off')
   })
@@ -288,7 +288,7 @@ describe('<SettingsMenu> asking about work that has waited', () => {
     show({ staleOverdue: 3, onStaleOverdueChange: onChange })
     await user.click(nav('Tasks'))
 
-    const field = screen.getByLabelText('Ask about work more than this many days late')
+    const field = screen.getByLabelText('Days overdue before asking')
     await user.clear(field)
     await user.type(field, '14')
     expect(onChange).not.toHaveBeenCalled()
@@ -306,7 +306,7 @@ describe('<SettingsMenu> asking about work that has waited', () => {
     show({ staleOverdue: 3, onStaleOverdueChange: onChange })
     await user.click(nav('Tasks'))
 
-    const field = screen.getByLabelText('Ask about work more than this many days late')
+    const field = screen.getByLabelText('Days overdue before asking')
     await user.clear(field)
     await user.type(field, '900')
     await user.tab()
@@ -321,7 +321,7 @@ describe('<SettingsMenu> asking about work that has waited', () => {
     show({ staleOverdue: 3, onStaleOverdueChange: onChange })
     await user.click(nav('Tasks'))
 
-    const field = screen.getByLabelText('Ask about work more than this many days late')
+    const field = screen.getByLabelText('Days overdue before asking')
     await user.clear(field)
     await user.tab()
     expect(onChange).not.toHaveBeenCalled()
@@ -337,7 +337,7 @@ describe('<SettingsMenu> asking about work that has waited', () => {
     show({ staleOverdue: 3, onStaleOverdueChange: onChange })
     await user.click(nav('Tasks'))
 
-    const field = screen.getByLabelText('Ask about work more than this many days late')
+    const field = screen.getByLabelText('Days overdue before asking')
     await user.clear(field)
     await user.type(field, '-5')
     await user.tab()
@@ -349,14 +349,14 @@ describe('<SettingsMenu> asking about work that has waited', () => {
     const user = userEvent.setup()
     show({ staleOverdue: 0 })
     await user.click(nav('Tasks'))
-    expect(panel()).toHaveTextContent(/Overdue work is offered to your day like anything else/)
+    expect(panel()).toHaveTextContent(/Overdue tasks are offered for today however late/)
   })
 })
 
 describe('<SettingsMenu> planning the work you answer with today', () => {
   beforeEach(() => stubMatchMedia(false))
 
-  const NAME = 'Put it on your day when you move it onto today'
+  const NAME = 'Plan tasks moved to today'
 
   it('offers the switch, off by default, and says what it would do', async () => {
     // Worded as the RULE rather than as the button: the date field beside "Due
@@ -373,7 +373,7 @@ describe('<SettingsMenu> planning the work you answer with today', () => {
     // The hint has to carry the exclusion, because it is the half that is not
     // obvious from the label: a task moved to Thursday is scheduled, not
     // planned, and there is no day plan to put it on.
-    expect(panel()).toHaveTextContent(/move to Thursday is scheduled, not planned/)
+    expect(panel()).toHaveTextContent(/adds it to today’s plan/)
 
     await user.click(toggle)
     expect(onToggle).toHaveBeenCalled()
@@ -397,6 +397,6 @@ describe('<SettingsMenu> planning the work you answer with today', () => {
     show({ staleOverdue: 0, planOnDueToday: true })
     await user.click(nav('Tasks'))
     expect(screen.getByRole('button', { name: NAME })).toBeInTheDocument()
-    expect(panel()).toHaveTextContent(/Nothing to do while the setting above is 0/)
+    expect(panel()).toHaveTextContent(/Has no effect while the setting above is 0/)
   })
 })

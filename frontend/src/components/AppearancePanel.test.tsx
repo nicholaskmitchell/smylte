@@ -28,7 +28,7 @@ describe('<AppearancePanel> protecting the default', () => {
   it('opens on the shipped design with nothing overridden', () => {
     setup()
     expect(screen.getByRole('combobox', { name: 'Theme' })).toHaveValue('')
-    expect(screen.getByText(/forks into a theme of your own/i)).toBeInTheDocument()
+    expect(screen.getByText(/Editing it creates your own copy/i)).toBeInTheDocument()
   })
 
   it('shows the shipped values as the starting point', () => {

@@ -285,30 +285,30 @@ describe('2026-09-03 — the Settings hints in German', () => {
     const panel = () => screen.getByRole('tabpanel')
 
     await userEvent.click(screen.getByRole('tab', { name: 'Darstellung' }))
-    expect(within(panel()).queryByText(/Customize opens the full editor/)).toBeNull()
-    expect(within(panel()).getByText(/Anpassen öffnet den vollständigen Editor/)).toBeInTheDocument()
+    expect(within(panel()).queryByText(/Sidebar puts the views/)).toBeNull()
+    expect(within(panel()).getByText(/Seitenleiste zeigt Ansichten/)).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('tab', { name: 'Kalender' }))
-    expect(within(panel()).queryByText(/A fixed calendar window/)).toBeNull()
-    expect(within(panel()).getByText(/Eine feste Kalenderansicht/)).toBeInTheDocument()
-    expect(within(panel()).queryByText(/Archiving hides a calendar/)).toBeNull()
-    expect(await within(panel()).findByText(/Archivieren blendet einen Kalender aus/)).toBeInTheDocument()
+    expect(within(panel()).queryByText(/Fixed fits the whole month/)).toBeNull()
+    expect(within(panel()).getByText(/Fest bringt den ganzen Monat/)).toBeInTheDocument()
+    expect(within(panel()).queryByText(/Archived calendars are hidden/)).toBeNull()
+    expect(await within(panel()).findByText(/Archivierte Kalender sind nur in Smylte/)).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('tab', { name: 'Aufgaben' }))
-    expect(within(panel()).queryByText(/Whether completed tasks/)).toBeNull()
-    expect(within(panel()).getByText(/Ob erledigte Aufgaben/)).toBeInTheDocument()
+    expect(within(panel()).queryByText(/Subtasks marked won’t-do/)).toBeNull()
+    expect(within(panel()).getByText(/Unterpunkte auf „wird nichts“/)).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('tab', { name: 'Konto' }))
-    expect(within(panel()).queryByText(/A shorter sign-in applies/)).toBeNull()
-    expect(within(panel()).getByText(/Eine kürzere Anmeldung gilt sofort/)).toBeInTheDocument()
+    expect(within(panel()).queryByText(/A shorter time applies/)).toBeNull()
+    expect(within(panel()).getByText(/Eine kürzere Dauer gilt sofort/)).toBeInTheDocument()
   })
 
   it('CONTROL: the English sheet still reads the same five sentences', async () => {
     showSettings('en')
     await userEvent.click(screen.getByRole('tab', { name: 'Appearance' }))
-    expect(screen.getByText(/Customize opens the full editor/)).toBeInTheDocument()
+    expect(screen.getByText(/Sidebar puts the views/)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('tab', { name: 'Account' }))
-    expect(screen.getByText(/A shorter sign-in applies at once/)).toBeInTheDocument()
+    expect(screen.getByText(/A shorter time applies at once/)).toBeInTheDocument()
   })
 })
 

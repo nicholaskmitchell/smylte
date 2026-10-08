@@ -90,8 +90,8 @@ describe('<TabsSection> hint', () => {
   // prop from the same value SettingsMenu is given — one source, so a menu
   // rendered with no shell around it still says the right thing.
   it.each([
-    ['sidebar', /order down the sidebar/],
-    ['classic', /order across the top/],
+    ['sidebar', /order in the sidebar/],
+    ['classic', /order of the tabs/],
   ] as const)('says where the order shows under %s', (layout, text) => {
     render(<TabsSection layout={layout} order={['today', 'home', 'tasks', 'calendar', 'scheduling']}
       start="home" onOrderChange={vi.fn()} onStartChange={vi.fn()} />)
