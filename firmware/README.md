@@ -1,122 +1,87 @@
 # A Smylte panel on a microcontroller
 
 `pico_epaper_7in5/main.py` turns a **Raspberry Pi Pico 2 W** and a **Waveshare
-Pico-ePaper-7.5** (800×480, black and white) into a Smylte display: a screen on a
-wall showing the month, or today's habits, with nothing to tap.
-
-It is an **example, not a library and not a product**. It is about sixty lines
-because the server does the hard part — `/api/public/display/<token>.bin` answers
-with the packed framebuffer the panel already wants, so the whole client is
-"read the socket into `epd.buffer` and show it".
+Pico-ePaper-7.5** (800×480, black and white) into a Smylte display. It is an
+example, not a library. It is about sixty lines because
+`/api/public/display/<token>.bin` returns the framebuffer the panel already
+uses, so the client reads the socket into `epd.buffer` and shows it.
 
 ## What you need
 
 | | |
 | --- | --- |
-| Board | **Pico 2 W** — the plain Pico 2 has no radio, and this needs wifi |
+| Board | **Pico 2 W** (the plain Pico 2 has no wifi) |
 | Panel | Waveshare Pico-ePaper-7.5, 800×480, 1-bit |
 | Firmware | MicroPython for RP2350 (Pico 2 W build) |
-| Driver | Waveshare's own `Pico_ePaper-7.5.py`, copied onto the board as `epaper.py` |
+| Driver | Waveshare's `Pico_ePaper-7.5.py`, copied to the board as `epaper.py` |
 
-The driver is **not vendored here**. It is third-party code under its own
-licence (GPL-3.0) and its own release cadence, and a stale copy in this repo
-would be worse than no copy — get it from
+The driver isn't included here. Get it from
 [waveshareteam/Pico_ePaper_Code](https://github.com/waveshareteam/Pico_ePaper_Code).
-That is also why the contract test in `backend/tests/` parses this file rather
-than importing it: `epaper`, `machine`, `framebuf` and `network` do not exist
-under CPython.
 
 ## Setting it up
 
 1. Flash MicroPython for the Pico 2 W.
 2. Copy Waveshare's `Pico_ePaper-7.5.py` to the board as `epaper.py`.
-3. In Settings → Displays, make a display, set its **Screen** to *E-ink* and its
-   **Panel size** to 800 × 480, and copy the URL it shows you.
-4. Edit the four constants at the top of `main.py` — `WIFI_SSID`,
-   `WIFI_PASSWORD`, `HOST`, `TOKEN` — and read the TLS section below before
-   leaving `CA_FILE` empty.
+3. In Settings → Displays, add a display, set **Screen** to *E-ink* and
+   **Panel size** to 800 × 480, and copy its URL.
+4. Edit the constants at the top of `main.py`: `WIFI_SSID`, `WIFI_PASSWORD`,
+   `HOST`, `TOKEN`. Read the TLS section below before leaving `CA_FILE` empty.
 5. Copy `main.py` to the board. It runs on power-up.
 
 ## The wire format
 
-`.bin` is the panel's framebuffer and nothing else — no header, no compression,
-no row order to undo:
+`.bin` is the framebuffer and nothing else: no header, no compression.
 
 | | |
 | --- | --- |
 | Packing | 8 pixels per byte, **MSB is the leftmost pixel** |
-| Polarity | **bit 1 = white paper, 0 = black ink** — Waveshare's own convention (`Clear(0xff)` blanks a panel) |
+| Polarity | **1 = white, 0 = black** (Waveshare's convention) |
 | Rows | top to bottom, each padded to a whole byte: `stride = ceil(width / 8)` |
-| Length | `stride × height` — **exactly 48,000 bytes** at 800×480 |
+| Length | `stride × height`, **exactly 48,000 bytes** at 800×480 |
 
-That is `framebuf.MONO_HLSB`, which is what the driver's `epd.buffer` already
-is. Hence `readinto(epd.buffer)` and no transformation at either end.
+That is `framebuf.MONO_HLSB`, the same layout as `epd.buffer`. If your
+controller uses 0 for white, add `?invert=1`. `X-Display-Format` says which was
+sent: `mono-hlsb` or `mono-hlsb-inverted`.
 
-If your controller's convention is the other way round — 0 for white — add
-`?invert=1` and the server flips the bits for you, which is cheaper there than
-on a board with 520 KB of RAM. The response says which it sent in
-`X-Display-Format`: `mono-hlsb` or `mono-hlsb-inverted`.
+**Check the headers before reading the body.** The response carries
+`X-Display-Width`, `X-Display-Height`, `X-Display-Stride` and `X-Display-Format`,
+and `Content-Length` must equal `stride × height`. `main.py` checks all five
+before reading, because the body goes straight into the panel's live buffer. It
+also sends `Accept-Encoding: identity` and rejects chunked or encoded bodies,
+since the board can't decompress.
 
-**Check before you paint, and check before you *read*.** The response carries
-`X-Display-Width`, `X-Display-Height`, `X-Display-Stride` and
-`X-Display-Format`, and `Content-Length` must equal `stride × height`.
-`main.py` compares all five against its own constants **before it reads a byte
-of the body**, because the body is read straight into `epd.buffer` — the
-panel's live framebuffer — and refusing afterwards leaves the mis-shaped frame
-sitting in the thing that gets clocked onto the glass. It also sends
-`Accept-Encoding: identity` and rejects a chunked or re-encoded body: RFC 9110
-§12.5.3 says an absent `Accept-Encoding` means any coding is acceptable, and a
-gzipped framebuffer is not something this board can undo. The failure mode all
-of this avoids is diagonal garbage on a wall in another room, with nothing on
-screen to say why.
+## Hardware rules
 
-## Two rules that are about the hardware
+- **Refresh no more than every 180 seconds, and sleep the panel in between.**
+  Waveshare says leaving it powered damages it permanently. `main.py` enforces
+  `MIN_REFRESH_S = 180`, calls `epd.sleep()` on every path, and treats the
+  server's `X-Display-Refresh-Seconds` as a minimum only.
+- **Honour the ETag.** Send `If-None-Match` and do nothing on a **304**. A full
+  refresh takes seconds and flashes the panel.
 
-**Refresh no more than every 180 seconds, and sleep the panel in between.**
-Waveshare are explicit: leaving the screen powered holds it at high voltage and
-*"will damage the e-Paper and cannot be repaired"*. `main.py` has its own
-`MIN_REFRESH_S = 180` floor and calls `epd.sleep()` on every path including the
-error one. The server's `X-Display-Refresh-Seconds` is advisory — the firmware
-takes `max()` of the two and never the server's word alone.
+## Memory
 
-**Honour the ETag.** Send `If-None-Match` and do nothing at all on a **304**. A
-full refresh of this panel is seconds of power and a visible flash across the
-room, and most polls have nothing new in them. This is the difference between a
-panel that flashes at you 288 times a day and one that redraws when the month
-changes.
+The 48,000-byte buffer is allocated once, before the loop. TLS needs most of
+the rest of the RP2350's 520 KB.
 
-## Memory, and why the loop looks like that
-
-48,000 bytes of framebuffer against the RP2350's 520 KB, allocated **once**
-before the loop — plus whatever mbedTLS wants for the handshake, which is the
-real pressure. Two consequences visible in the code:
-
-- **Raw sockets, not `urequests`.** That library buffers the entire body into a
-  second object before handing it over, which doubles the frame in RAM for no
-  reason. It needs to read the headers itself anyway.
-- **`readinto` in a loop.** Socket reads are short — one call is not one frame.
-  Assuming otherwise leaves the buffer half new and half last-hour, and it
-  paints as a calendar torn across the middle. If the stream ends early the
-  frame is discarded and the ETag is *not* saved, so the next poll refetches.
+- **Raw sockets, not `urequests`**, which would keep a second copy of the body.
+- **`readinto` in a loop.** A socket read can return part of the frame. If the
+  stream ends early, the frame is discarded and the ETag isn't saved, so the
+  next poll fetches again.
 
 ## Wifi drops
 
-The join is not for life. On the rp2/cyw43 port the station does **not**
-re-associate on its own once the access point goes away — after a router reboot
-or a channel change `wlan.isconnected()` stays `False` until something calls
-`connect()` again. So the loop checks the link at the top of every cycle and
-calls `connect_wifi()` again when it is down, which retries for a while and then
-`machine.reset()`s the board if the network stays gone. Between the drop and the
-re-join the panel keeps showing the last good frame, which is the whole
-advantage of e-paper; what it must never do is keep showing it forever.
+On the rp2 port the station doesn't reconnect by itself after the access point
+goes away. The loop checks the link each cycle and calls `connect_wifi()` again,
+which retries and then resets the board if the network stays down. The panel
+shows the last good frame meanwhile.
 
 ## Deep sleep
 
-`main.py` uses `machine.lightsleep`, which retains RAM — so the ETag survives as
-an ordinary variable. On the rp2 port **`machine.deepsleep` resets the board**,
-which loses it and makes every wake a full repaint, undoing the one optimisation
-that matters. If you need deepsleep for battery life, persist the ETag to a file
-and write it only when it changes:
+`main.py` uses `machine.lightsleep`, which keeps RAM and so keeps the ETag. On
+the rp2 port `machine.deepsleep` resets the board, which loses the ETag and
+repaints on every wake. To use deep sleep, save the ETag to a file, and write it
+only when it changes, since flash endurance is limited:
 
 ```python
 try:
@@ -129,71 +94,39 @@ if new_etag != etag:
         f.write(new_etag)
 ```
 
-Flash on these boards is rated in the tens of thousands of writes per sector, so
-the "only when it changes" is the part that matters.
+## The token and TLS
 
-## The token, and what TLS here does and does not do
+`TOKEN` is a credential: anyone with it can read what the screen shows.
+`USE_TLS` is on by default, but **MicroPython doesn't verify certificates unless
+told to**. `ssl.wrap_socket` defaults to `CERT_NONE`, so the connection is
+protected from passive listeners but not from anyone who can impersonate your
+host.
 
-`TOKEN` is a bearer credential for your calendar: anyone holding it can read
-everything the screen shows. `USE_TLS` is on by default, but **MicroPython does
-not verify certificates unless you tell it to** — `ssl.wrap_socket` defaults to
-`cert_reqs=CERT_NONE`, and `server_hostname` only sets the SNI extension. Left
-that way, the handshake succeeds against any certificate at all, so the token is
-protected from someone passively listening and not from anyone able to answer
-for your host. On the wifi a wall panel lives on, the second is the likelier of
-the two.
-
-To verify properly, export the issuing CA in DER and point `CA_FILE` at it:
+To verify, export the issuing CA as DER and set `CA_FILE`:
 
 ```sh
-openssl x509 -in ca.pem -outform der -out ca.der   # then copy ca.der to the board
+openssl x509 -in ca.pem -outform der -out ca.der   # copy ca.der to the board
 ```
 
-`main.py` then builds an `SSLContext` with `CERT_REQUIRED`, which also checks
-the hostname. A validity check needs a roughly correct clock, so set the board's
-time from NTP at boot if you do this.
+`main.py` then uses `CERT_REQUIRED`, which also checks the hostname. Set the
+board's clock from NTP at boot so validity checks work.
 
 ## Other hardware
 
-Nothing here is Pico-specific except the driver import and `machine`. An ESP32,
-an Inkplate, anything that can open a socket and push bits at a panel wants the
-same endpoint and the same four checks. The two things to get right are the
-polarity (`?invert=1` if your driver wants 0 for white) and the stride at a width
-that is not a multiple of eight — 250 pixels is 32 bytes a row, not 31.25, and a
-client that divides rather than reading `X-Display-Stride` shears its picture a
-little further on every row.
+Only the driver import and `machine` are Pico-specific. Any board that can open a
+socket and drive a panel can use the same endpoint and checks. Get the polarity
+right (`?invert=1` for 0 = white), and read `X-Display-Stride` instead of
+dividing: a 250-pixel row is 32 bytes, not 31.25.
+
+`backend/tests/` parses this file and checks its constants against the server.
+It doesn't import it, because `epaper`, `machine`, `framebuf` and `network` don't
+exist under CPython.
 
 ## Licence
 
-**Everything in this directory is MIT** — `LICENSE` here — where the rest of
-Smylte is AGPL-3.0-only. The split is deliberate and it is narrow: only
-`firmware/` moves. The `.bin` route that serves the framebuffer and the
-renderer behind it (`backend/smylted/display/`) are the server, and they stay
-AGPL.
-
-Two reasons, and the second is the real one.
-
-The AGPL's whole distinguishing feature is §13 — run a modified copy that
-people reach **over a network** and you owe them its source. A panel on a wall
-is a pure client: it makes outbound requests and nothing ever connects to it,
-so there is no remote interaction for §13 to fire on. Labelling this file with
-a clause that cannot apply to it says something untrue about what it is.
-
-And what it is, per the top of this page, is *an example, not a library and not
-a product*. Its value is being copied and changed — the section above is
-literally an invitation to port it to an ESP32 or an Inkplate. Sixty lines that
-somebody has to relicense their whole project to borrow are sixty lines nobody
-borrows.
-
-**What this does not do is hand you a permissive stack.** Waveshare's driver is
-GPL-3.0 and `main.py` imports it, so the thing actually running on your board is
-a GPL-3.0 combined work whatever the licence on this file says. What MIT buys is
-the right to lift *this* file somewhere the Waveshare driver is not — a
-different panel, a different driver, a framebuffer client on a Linux box. The
-interesting part here was never the `epd` calls; it is fetch-URL-to-raw-buffer,
-and that part is portable.
-
-One consequence worth stating for anyone tempted to make setup easier: because
-the driver is fetched by you rather than shipped by this repo, nobody here
-distributes that combined work. Vendor it, or publish a flash-ready image with
-both in it, and you are conveying GPL-3.0 code and take on its terms.
+This directory is **MIT** (`LICENSE`). The rest of Smylte, including the `.bin`
+route and renderer in `backend/smylted/display/`, is AGPL-3.0-only. Waveshare's
+driver is GPL-3.0, so what runs on the board is a GPL-3.0 combined work. MIT
+covers reusing `main.py` without that driver. If you ship the driver with it, for
+example in a flash image, you're distributing GPL-3.0 code. The reasoning is in
+[`docs/DESIGN.md`](../docs/DESIGN.md#panel-firmware).
