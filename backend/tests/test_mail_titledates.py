@@ -106,6 +106,12 @@ CASES = [
     ("Essay (worth 10%, due Oct 20)", ["2026-10-20"], "Essay (worth 10%)"),
     ("Mark 3 essays", ["2026-10-13"], None),
     ("Leaders of Tomorrow.", ["2026-10-13"], None),
+    ("Friday: eBay listing", ["2026-10-16"], "eBay listing"),
+    ("Tomorrow: iPhone pickup", ["2026-10-13"], "iPhone pickup"),
+    ("Start diet from tomorrow", ["2026-10-13"], None),
+    ("Neue Busroute ab morgen", ["2026-10-13"], None),
+    ("Call the day after tomorrow", ["2026-10-14"], None),
+    ("Bring cake on Sat.", ["2026-10-17"], "Bring cake"),
 ]
 
 
