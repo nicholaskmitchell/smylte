@@ -1007,7 +1007,20 @@ def test_the_event_day_due_is_only_for_a_new_task_suggestion(svc, secrets):
         INBOX, eml("pipe_reply_quoting"), uid=1)
     assert out.outcome == "staged"
     [s] = pending(svc)
-    assert s["kind"] == "update" and s["due"] is None and s["notes"] == ex.notes
+    assert s["kind"] == "update" and s["due"] is None
+    assert s["notes"] == "Bring a coat.\n2026-10-17 14:00"
+
+
+def test_a_task_with_a_reply_date_keeps_the_events_day_time_and_place_in_notes(svc, secrets):
+    set_config(svc, kind_decider="model")
+    llm = FakeLlm(extract=extraction("RSVP to Emil's party", kind="task", due=date(2026, 10, 10),
+                                     event_start=datetime(2026, 10, 17, 14, 0),
+                                     location="JumpZone", notes="Annika invited us."))
+    out = ingestor(svc, secrets, llm).process_message(INBOX, eml("pipe_request"), uid=1)
+    assert out.outcome == "staged"
+    [s] = pending(svc)
+    assert s["kind"] == "task" and s["due"] == "2026-10-10"
+    assert s["notes"] == "Annika invited us.\n2026-10-17 14:00 · JumpZone"
 
 
 # ── invitations (review fix A5) ──

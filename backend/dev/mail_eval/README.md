@@ -4,7 +4,8 @@
 `TYPESAFE_API_KEY`; `--claude` also needs `SMYLTE_ANTHROPIC_API_KEY` (and
 `ANTHROPIC_WORKSPACE_ID` for a key that is not scoped to a workspace). Claude
 is always `claude-haiku-5-5` — the production default — with a $2 cap.
-`--report-only` re-prints the tables from a saved results file.
+`--report-only` re-prints the tables from a saved results file (an older file
+is reported on the emails it covers).
 
 ## The data
 `emails.jsonl` (178 emails, 88 actionable / 90 not, 42 in German) and
@@ -32,8 +33,10 @@ was declined. The labels follow that standard now:
   examples in fictional form, other account notices, learning-platform,
   professor and registrar mail, an RSVP by a date, business invoices, a failed
   domain renewal that would take the owner's business site down, a returned
-  insurance premium, cold outreach and a vendor's launch party. Tasks carry
-  `gold_due`.
+  insurance premium, cold outreach and a vendor's launch party. The tasks
+  among them and the three relabelled RSVP tasks carry `gold_due`, which the
+  report checks; the new rows also carry `gold_title_hint`, an ideal title
+  for a reader, which nothing scores.
 - The extraction now names a category, and only coursework, work, personal,
   appointment, official and errand mail becomes a suggestion (see `llm.py`,
   `pipeline.py`). `--claude` reports requests the category dropped (`gated`),
@@ -85,5 +88,7 @@ list. Jev fired on plain rewordings (0.5–0.9) — the indirection its docs war
 about — and the only threshold that rescued it (0.9) collapsed at 0.95.
 
 ## Cost of one full run
-Jev: ~250k input tokens (≈ $0.01). Claude Haiku: ~370k input + ~40k output
-tokens (≈ $0.57).
+Jev: ~250k input tokens (≈ $0.01). Claude Haiku 5.5 with the 2026-10-12
+prompt, which is about 1.5k tokens longer: roughly 0.7M input + ~45k output
+tokens (≈ $0.10), an estimate until the next run. The 2026-10-05 run (Haiku
+4.5, the old prompt, 156 emails) took ~370k input + ~40k output (≈ $0.57).

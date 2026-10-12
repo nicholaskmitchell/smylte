@@ -1186,7 +1186,7 @@ export const de: Catalogue = {
   'mail.always': 'Immer lesen',
   'mail.never': 'Nie lesen',
   'mail.patterns.hint': 'Eine pro Zeile: eine Adresse, eine Domain (schule.org) oder *.schule.org für ihre Subdomains.',
-  'mail.always.hint': 'Auch lesen, wenn es nach Massenmail aussieht, sofern DMARC den Absender bestätigt.',
+  'mail.always.hint': 'Auch lesen, wenn es nach Massenmail oder einer Benachrichtigung aussieht, sofern DMARC den Absender bestätigt.',
   'mail.notesSelf': 'Notizen an mich selbst werden zu Vorschlägen',
   'mail.kindDecider': 'Aufgabe oder Termin?',
   'mail.kindDecider.model': 'Das Modell entscheidet',

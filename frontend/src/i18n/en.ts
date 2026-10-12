@@ -1152,7 +1152,7 @@ export const en = {
   'mail.always': 'Always read',
   'mail.never': 'Never read',
   'mail.patterns.hint': 'One per line: an address, a domain (school.org), or *.school.org for its subdomains.',
-  'mail.always.hint': 'Read even if it looks like bulk mail, when DMARC confirms the sender.',
+  'mail.always.hint': 'Read even if it looks like bulk mail or a notice, when DMARC confirms the sender.',
   'mail.notesSelf': 'Notes to myself become suggestions',
   //    Who decides task or event. "rules" is a small validated language, never
   //    code: the hint is the whole grammar, because a rule that does not parse

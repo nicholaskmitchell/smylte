@@ -95,6 +95,17 @@ CASES = [
     ("Register for Leaders of Tomorrow", ["2026-10-14"], None),
     ("Watch The Day After Tomorrow", ["2026-10-13"], None),
     ("Sag Oma Guten Morgen", ["2026-10-13"], None),
+    ("Bring the snack list for tomorrow", ["2026-10-13"], "Bring the snack list"),
+    ("Prepare for tomorrow", ["2026-10-13"], "Prepare"),
+    ("Plan for tonight", ["2026-10-12"], "Plan"),
+    ("Kuchen für morgen", ["2026-10-13"], "Kuchen"),
+    ("Tomorrow: dentist", ["2026-10-13"], "Dentist"),
+    ("Friday: submit essay", ["2026-10-16"], "Submit essay"),
+    ("Call bank today.", ["2026-10-12"], "Call bank."),
+    ("Call Mom on Sunday.", ["2026-10-18"], "Call Mom."),
+    ("Essay (worth 10%, due Oct 20)", ["2026-10-20"], "Essay (worth 10%)"),
+    ("Mark 3 essays", ["2026-10-13"], None),
+    ("Leaders of Tomorrow.", ["2026-10-13"], None),
 ]
 
 

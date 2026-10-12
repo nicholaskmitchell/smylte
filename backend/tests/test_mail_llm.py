@@ -192,6 +192,8 @@ def test_system_prompt_braces_and_categories():
         assert f'"{name}"' in SYSTEM_EXTRACT
     assert llm.WANTED_CATEGORIES | llm.IGNORED_CATEGORIES == set(llm.CATEGORIES)
     assert not llm.WANTED_CATEGORIES & llm.IGNORED_CATEGORIES
+    assert "deadline time" in SYSTEM_EXTRACT
+    assert "(not a subscription to an app or online service)" in SYSTEM_EXTRACT
 
 
 def test_markers_inside_the_email_are_neutralised():
