@@ -81,6 +81,9 @@ _TRAILING = re.compile(
 _LEADING = re.compile(rf"^\s*(?:{_TRIGGER}\s+)?(?P<d>{_PHRASE})(?P<r>)\s*[:–—-]\s+", _I)
 # A full stop that ends a date or time rather than the title.
 _DATE_DOT = re.compile(r"(?:\d|\b[ap]\.?m|\b[^\W\d_]{2,4})\.$", _I)
+# "from tomorrow", "the day after tomorrow", "ab morgen": the day word starts
+# or shifts a span, so the title keeps it.
+_SINCE = re.compile(r"\b(?:from|after|starting|since|ab|von|seit)\s*$", _I)
 _NEGATION = re.compile(r"\b(?:not|never|nicht|nie|kein\w*)\b|n['’]t\b", _I)
 
 _ISO_P = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
@@ -169,14 +172,14 @@ def strip_dates(title: str, dates: Iterable[date | None], anchor: date) -> str:
                 # A bare day word ends the title: "tomorrow" is a date,
                 # "Leaders of Tomorrow" a name.
                 phrase = m.group("r")
-                if not phrase.islower():
+                if not phrase.islower() or _SINCE.search(m.string[:m.start()]):
                     return m.group(0)
             return gap if _means(phrase, targets, anchor) else m.group(0)
         return replace
 
     out = _LEADING.sub(cut(""), title)
-    if out != title:
-        out = out[:1].upper() + out[1:]       # "Friday: submit essay" -> "Submit essay"
+    if out != title and out.split(" ", 1)[0].islower():
+        out = out[:1].upper() + out[1:]       # "Friday: submit essay" -> "Submit essay", not "IPhone"
     out = _BRACKETED.sub(cut(" "), out)
     out = _TRIGGERED.sub(cut(" "), out)
     out = _TRAILING.sub(cut(""), out)

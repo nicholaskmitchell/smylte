@@ -45,9 +45,10 @@ import httpx
 
 HERE = Path(__file__).resolve().parent
 API = "https://api.typesafe.ai/v1/systemone"
-# A month name with a day, a day with a month name, a numeric date, "today" and
-# friends, a weekday: what a title should not carry. Whole words only, so
-# "Mark 3 essays" and "Version 2.0" are not dates.
+# A month name with a day, a day with a month name, a numeric or ISO date,
+# "today" and friends, a weekday: what a title should not carry. Whole words
+# only, so "Mark 3 essays" is not a date; a weekday in a name ("Black Friday")
+# is a false hit, which is why the report lists ids for a person to look at.
 _MONTHS = (r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?"
            r"|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
            r"|januar|februar|märz|mai|juni|juli|okt(?:ober)?|dez(?:ember)?)")
@@ -56,7 +57,7 @@ _WEEKDAYS = (r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday"
 DATE_IN_TITLE = re.compile(
     rf"\b{_MONTHS}\.?\s+\d{{1,2}}(?:st|nd|rd|th)?\b"
     rf"|\b\d{{1,2}}(?:st|nd|rd|th|\.)?\s*(?:of\s+)?{_MONTHS}\b"
-    r"|\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b|\b\d{1,2}\.\d{1,2}\.(?:\d{2,4})?"
+    r"|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b|\b\d{1,2}\.\d{1,2}\.(?:\d{2,4})?"
     r"|\b(?:today|tomorrow|tonight|heute|morgen)\b"
     rf"|\b{_WEEKDAYS}\b|\b(?:by|due|on|bis|am)\s+(?:mon|tue|wed|thu|fri|sat|sun)\b", re.I)
 MODEL = os.environ.get("JEV_MODEL", "jev-latest")
