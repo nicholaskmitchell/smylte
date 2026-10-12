@@ -116,13 +116,14 @@ def source_factory(source: FakeMailSource) -> Callable:
 
 def extraction(title: str = "", *, actionable: bool = True, kind: str = "task", notes: str = "",
                due: date | None = None, event_start=None, event_end=None, location: str = "",
-               confidence: float = 0.9) -> Extraction:
+               confidence: float = 0.9, category: str = "") -> Extraction:
     if not actionable:
         return Extraction(is_actionable=False, kind="task", title="", notes="", due=None,
-                          event_start=None, event_end=None, location="", confidence=confidence)
+                          event_start=None, event_end=None, location="", confidence=confidence,
+                          category=category)
     return Extraction(is_actionable=True, kind=kind, title=title, notes=notes, due=due,
                       event_start=event_start, event_end=event_end, location=location,
-                      confidence=confidence)
+                      confidence=confidence, category=category)
 
 
 def _answer(script, *args):
@@ -191,11 +192,14 @@ def response(*blocks, stop_reason: str = "tool_use"):
 
 def extraction_response(title: str, *, kind: str = "task", due: str | None = None,
                         notes: str = "", confidence: float = 0.9, actionable: bool = True,
-                        event_start: str | None = None):
-    return response(tool_use(EXTRACT_TOOL_NAME, {
+                        event_start: str | None = None, category: str | None = None):
+    tool_input = {
         "is_actionable": actionable, "kind": kind, "title": title, "notes": notes, "due": due,
         "event_start": event_start, "event_end": None, "location": "", "confidence": confidence,
-    }))
+    }
+    if category is not None:
+        tool_input["category"] = category
+    return response(tool_use(EXTRACT_TOOL_NAME, tool_input))
 
 
 def match_response(decision: str = "new", target: str = "none"):

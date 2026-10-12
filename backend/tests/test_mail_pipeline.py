@@ -536,7 +536,7 @@ def test_jev_choosing_event_overrides_the_model(svc, jev_secrets):
     jev = FakeJev(verdict("event", confidence=0.9))
     llm = FakeLlm(extract=extraction("Match on Saturday", kind="task",
                                      event_start=datetime(2026, 10, 10, 10, 0),
-                                     due=date(2026, 10, 9)))
+                                     due=date(2026, 10, 10)))
     out = ingestor(svc, jev_secrets, llm, jev=jev).process_message(
         INBOX, eml("pipe_request"), uid=1)
     assert [s["kind"] for s in pending(svc)] == ["event"]
@@ -996,6 +996,20 @@ def test_a_dismissed_update_to_the_threads_task_stays_dismissed(svc, secrets):
     assert pending(svc) == []
 
 
+def test_the_event_day_due_is_only_for_a_new_task_suggestion(svc, secrets):
+    svc.mail(store.mail_upsert_thread, "mid:req-1@club.example", task_list="/c/l/",
+             task_uid="t1")
+    set_config(svc, kind_decider="rules", kind_rules=['subject:"no such subject" -> event'])
+    ex = extraction("Parent evening", kind="event", notes="Bring a coat.",
+                    event_start=datetime(2026, 10, 17, 14, 0))
+    llm = FakeLlm(extract=ex)
+    out = ingestor(svc, secrets, llm, host=_TaskHost(svc)).process_message(
+        INBOX, eml("pipe_reply_quoting"), uid=1)
+    assert out.outcome == "staged"
+    [s] = pending(svc)
+    assert s["kind"] == "update" and s["due"] is None and s["notes"] == ex.notes
+
+
 # ── invitations (review fix A5) ──
 
 def _invite(n: int, *, start=b"20261014T180000", end=b"20261014T193000") -> bytes:
@@ -1298,3 +1312,146 @@ def test_a_long_body_is_cut_to_body_max_chars_before_the_model(svc, secrets):
     marker = "\n[…truncated]"
     assert email.body.startswith("Sign the form. word")
     assert email.body.endswith(marker) and len(email.body) == 500 + len(marker)
+
+
+# ── categories: only wanted mail becomes a suggestion ──
+
+@pytest.mark.parametrize("category", ["account", "other"])
+def test_an_unwanted_category_is_not_suggested(svc, secrets, category):
+    llm = FakeLlm(extract=extraction("Update Cursor payment information", category=category,
+                                     due=date(2026, 10, 9)))
+    out = ingestor(svc, secrets, llm).process_message(INBOX, eml("pipe_request"), uid=1)
+    assert (out.stage, out.outcome) == ("extract", "not_actionable")
+    row = ledger(svc, "mid:req-1@club.example")
+    assert (row["stage"], row["outcome"]) == ("extract", "not_actionable")
+    assert f"category {category} is not suggested" in row["detail"]
+    assert pending(svc) == []
+
+
+def test_a_note_to_self_passes_whatever_its_category(svc, secrets):
+    llm = FakeLlm(extract=extraction("Buy stamps for the school forms", category="account"))
+    out = ingestor(svc, secrets, llm).process_message(INBOX, eml("pipe_note_to_self"), uid=1)
+    assert out.outcome == "staged"
+    assert [s["title"] for s in pending(svc)] == ["Buy stamps for the school forms"]
+    assert "category account, kept: a note to yourself" in out.detail
+
+
+def test_an_authenticated_always_parse_sender_passes_whatever_its_category(svc, secrets):
+    llm = FakeLlm(extract=extraction("Sign the field trip permission slip", category="notification",
+                                     due=date(2026, 10, 9)))
+    out = ingestor(svc, secrets, llm).process_message(
+        INBOX, eml("pipe_school_noreply_dmarc_pass"), uid=1)
+    assert out.outcome == "staged"
+    assert len(pending(svc)) == 1
+    assert "kept: always_parse sender" in out.detail
+
+
+def test_an_authenticated_always_parse_senders_marketing_is_still_gated(svc, secrets):
+    llm = FakeLlm(extract=extraction("Sign up for the spring sale", category="marketing",
+                                     due=date(2026, 10, 9)))
+    out = ingestor(svc, secrets, llm).process_message(
+        INBOX, eml("pipe_school_noreply_dmarc_pass"), uid=1)
+    assert (out.stage, out.outcome) == ("extract", "not_actionable")
+    assert "category marketing is not suggested" in out.detail
+    assert pending(svc) == []
+
+
+def test_a_wanted_category_is_staged_and_noted(svc, secrets):
+    llm = FakeLlm(extract=extraction("Bring the team snack list", category="coursework",
+                                     due=date(2026, 10, 9)))
+    out = ingestor(svc, secrets, llm).process_message(INBOX, eml("pipe_request"), uid=1)
+    assert out.outcome == "staged"
+    assert "category coursework" in ledger(svc, "mid:req-1@club.example")["detail"]
+
+
+def test_a_not_actionable_answer_names_its_category(svc, secrets):
+    llm = FakeLlm(extract=extraction(actionable=False, category="receipt", confidence=0.8))
+    out = ingestor(svc, secrets, llm).process_message(INBOX, eml("pipe_request"), uid=1)
+    assert (out.stage, out.outcome) == ("extract", "not_actionable")
+    assert out.detail.startswith("category receipt; confidence")
+    assert pending(svc) == []
+
+
+# ── an invitation with a reply date stays a task ──
+
+def test_a_decider_cannot_turn_an_rsvp_task_into_an_event(svc, jev_secrets):
+    set_config(svc, kind_decider="jev")
+    jev = FakeJev(verdict("event", confidence=0.9))
+    llm = FakeLlm(extract=extraction("RSVP to Emil's party", kind="task", due=date(2026, 10, 10),
+                                     event_start=datetime(2026, 10, 17, 14, 0)))
+    out = ingestor(svc, jev_secrets, llm, jev=jev).process_message(
+        INBOX, eml("pipe_request"), uid=1)
+    [s] = pending(svc)
+    assert s["kind"] == "task" and s["due"] == "2026-10-10"
+    assert "kept as a task" in ledger(svc, "mid:req-1@club.example")["detail"]
+    assert "kept as a task" in out.detail
+
+
+def test_a_decider_may_still_make_a_task_with_the_events_own_day_an_event(svc, jev_secrets):
+    set_config(svc, kind_decider="jev")
+    jev = FakeJev(verdict("event", confidence=0.9))
+    llm = FakeLlm(extract=extraction("Match on Saturday", kind="task", due=date(2026, 10, 17),
+                                     event_start=datetime(2026, 10, 17, 14, 0)))
+    ingestor(svc, jev_secrets, llm, jev=jev).process_message(INBOX, eml("pipe_request"), uid=1)
+    assert [s["kind"] for s in pending(svc)] == ["event"]
+
+
+def test_the_rsvp_guard_needs_the_models_own_task(svc, secrets):
+    set_config(svc, kind_decider="model")
+    llm = FakeLlm(extract=extraction("Parent evening", kind="event", due=date(2026, 10, 10),
+                                     event_start=datetime(2026, 10, 17, 19, 0)))
+    ingestor(svc, secrets, llm).process_message(INBOX, eml("pipe_request"), uid=1)
+    assert [s["kind"] for s in pending(svc)] == ["event"]
+
+
+# ── an event that becomes a task keeps its day, time and place ──
+
+def _rules_make_a_task(svc):
+    set_config(svc, kind_decider="rules", kind_rules=['subject:"parent evening" -> event'])
+
+
+def test_an_event_made_a_task_is_due_on_the_events_day(svc, secrets):
+    _rules_make_a_task(svc)
+    llm = FakeLlm(extract=extraction("Parent evening", kind="event", notes="Bring a coat.",
+                                     event_start=datetime(2026, 10, 14, 18, 0),
+                                     location="Main hall"))
+    ingestor(svc, secrets, llm).process_message(INBOX, eml("pipe_request"), uid=1)
+    [s] = pending(svc)
+    assert s["kind"] == "task" and s["due"] == "2026-10-14"
+    assert s["notes"].endswith("18:00 · Main hall")
+    assert s["notes"].startswith("Bring a coat.")
+
+
+def test_an_all_day_event_made_a_task_is_due_on_its_day_with_notes_unchanged(svc, secrets):
+    _rules_make_a_task(svc)
+    llm = FakeLlm(extract=extraction("Parent evening", kind="event", notes="Bring a coat.",
+                                     event_start=date(2026, 10, 14)))
+    ingestor(svc, secrets, llm).process_message(INBOX, eml("pipe_request"), uid=1)
+    [s] = pending(svc)
+    assert s["kind"] == "task" and s["due"] == "2026-10-14" and s["notes"] == "Bring a coat."
+
+
+def test_an_event_made_a_task_leaves_dedup_comparing_the_emails_own_deadline(svc, secrets):
+    _rules_make_a_task(svc)
+    llm = FakeLlm(extract=[
+        extraction("Bring the team snack list", due=date(2026, 10, 10)),
+        extraction("Parent evening", kind="event", event_start=datetime(2026, 10, 17, 14, 0))])
+    ing = ingestor(svc, secrets, llm)
+    first = ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    second = ing.process_message(INBOX, eml("pipe_reply_quoting"), uid=2)
+    assert first.outcome == "staged"
+    assert (second.stage, second.outcome) == ("dedup", "attached")
+    assert "same thread" in second.detail
+    [s] = pending(svc)
+    assert s["due"] == "2026-10-10"
+
+
+# ── dates are taken out of titles ──
+
+def test_a_date_in_the_title_that_is_the_due_date_is_removed(svc, secrets):
+    client, _sdk = make_llm_client([extraction_response("RSVP to Emil's party by Nov 1st",
+                                                        due="2026-11-01")])
+    out = ingestor(svc, secrets, client).process_message(INBOX, eml("pipe_request"), uid=1)
+    assert out.outcome == "staged"
+    [s] = pending(svc)
+    assert s["title"] == "RSVP to Emil's party" and s["due"] == "2026-11-01"

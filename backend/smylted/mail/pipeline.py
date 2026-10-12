@@ -13,7 +13,7 @@ message should become:
  5. always_parse— the owner's allow list, honoured only for authenticated mail
  6. bulk        — newsletters and robots (List-Unsubscribe, Precedence, ...)
  7. fast path   — an attached invite becomes an event without the model
- 8. extract     — the model reads what is left of the body
+ 8. extract     — the model reads what is left of the body and names its category
  9. dedup       — same thread, an open task, a pending or a dismissed suggestion
 10. stage       — write the suggestion
 
@@ -76,6 +76,16 @@ Why it is built this way:
 - **Task or event** is decided after extraction, by the model, the owner's
   rules (`kindrules`) or Jev, as Settings says. Jev failing never stops the
   pipeline: the extraction model's choice stands and the ledger says so.
+- **Only wanted mail becomes a suggestion.** The model names a category
+  first; account, receipt, marketing, notification and "other" mail is
+  settled as not actionable even when it asks for something ("update your
+  payment information", "save your files before they are deleted"), because
+  that is mail the owner manages, or ignores, without a to-do. A note to self
+  passes whatever its category, and so does an authenticated always_parse
+  sender's mail unless it is marketing: the allow list is how the owner
+  rescues a sender the model misfiles, not a way in for its promotions. An
+  unknown category (a model that ignored the schema) passes, as everything
+  did before.
 - **Jev needs a key to be asked at all.** "jev" is the default for both
   decisions, but without a TypeSafe key the model decides, silently: the
   key's presence is the owner's opt-in to sending email text to TypeSafe,
@@ -104,7 +114,8 @@ from .imap import FolderInfo, ImapConfig, MailConnectError
 from .jev import CHANGED_T as JEV_CHANGED_T
 from .jev import MIN_CONFIDENCE as JEV_MIN_CONFIDENCE
 from .jev import JevClient, JevError
-from .llm import Candidate, EmailForExtraction, Extraction, LlmClient, LlmError, Match
+from .llm import (IGNORED_CATEGORIES, NOTES_MAX, Candidate, EmailForExtraction, Extraction,
+                  LlmClient, LlmError, Match)
 from .message import ParsedMessage
 from .redact import redact, redact_exc
 from .secrets import SecretStoreError
@@ -266,6 +277,10 @@ def _load_updates(raw: Any) -> list:
 
 def _all_day(start: date | datetime) -> bool:
     return isinstance(start, date) and not isinstance(start, datetime)
+
+
+def _day(value: date | datetime) -> date:
+    return value.date() if isinstance(value, datetime) else value
 
 
 class Ingestor:
@@ -752,8 +767,23 @@ class Ingestor:
                 sent=c.sent, body=body))
         except LlmError as e:
             return self._llm_failed(c, "extract", e)
+        category = f"category {ex.category}; " if ex.category else ""
         if not ex.is_actionable:
-            return self._settle(c, "extract", "not_actionable", f"confidence {ex.confidence:.2f}")
+            return self._settle(c, "extract", "not_actionable",
+                                f"{category}confidence {ex.confidence:.2f}")
+        # Only the categories the owner wants become suggestions. A note to
+        # self is the owner's own say-so whatever the model called it; an
+        # authenticated always_parse sender is trusted to matter, but not
+        # its advertising.
+        if ex.category in IGNORED_CATEGORIES:
+            if not (note_to_self or (bypass_bulk and ex.category != "marketing")):
+                return self._settle(c, "extract", "not_actionable",
+                                    f"category {ex.category} is not suggested; "
+                                    f"confidence {ex.confidence:.2f}")
+            c.extra.append(f"category {ex.category}, kept: "
+                           + ("a note to yourself" if note_to_self else "always_parse sender"))
+        elif ex.category:
+            c.extra.append(f"category {ex.category}")
 
         kind, why = self._decide_kind(c, ex, body)
         c.extra.append(why)
@@ -807,6 +837,12 @@ class Ingestor:
                 has_location=bool(ex.location))
             kind, why = kindrules.decide(cfg.kind_decider, kindrules.load_rules(cfg.kind_rules),
                                          facts)
+        # An invitation with a reply date is a task to reply (the prompt says
+        # so); a decider that reads the email as the event must not turn it
+        # into one, or the reply deadline is lost: an event has no due.
+        if (kind == "event" and ex.kind == "task" and ex.due is not None
+                and ex.event_start is not None and ex.due < _day(ex.event_start)):
+            kind, why = "task", why + "; replies are due before the event, kept as a task"
         if kind == "event" and ex.event_start is None:
             kind, why = "task", why + "; no start time, kept as a task"
         return kind, why
@@ -1018,8 +1054,21 @@ class Ingestor:
                 event_end=ex.event_end.isoformat() if ex.event_end else None,
                 event_all_day=int(_all_day(ex.event_start)), location=ex.location or None)
         else:
-            out.update(title=ex.title, notes=ex.notes,
-                       due=ex.due.isoformat() if ex.due else None, confidence=ex.confidence)
+            due, notes = ex.due, ex.notes
+            if kind == "task" and due is None and ex.event_start is not None:
+                # An event that Jev or the owner's rules made a task: due on the
+                # event's day, its time and place in the notes (a task has
+                # neither). Only here, for a new suggestion: dedup and merges
+                # compare the email's own deadline.
+                due = _day(ex.event_start)
+                parts = ([ex.event_start.strftime("%H:%M")]
+                         if isinstance(ex.event_start, datetime) else [])
+                if ex.location:
+                    parts.append(ex.location)
+                if parts:
+                    notes = "\n".join(p for p in (notes, " · ".join(parts)) if p)[:NOTES_MAX]
+            out.update(title=ex.title, notes=notes,
+                       due=due.isoformat() if due else None, confidence=ex.confidence)
         if target is not None:
             out.update(target_list=target[0], target_uid=target[1])
         return out

@@ -23,7 +23,10 @@ either marked borderline, are reported separately from the clean set.
 
 With --claude and SMYLTE_ANTHROPIC_API_KEY (or ANTHROPIC_API_KEY) set, the same
 cases also run through smylted.mail.llm.LlmClient — the production extraction
-and match calls — so the two can be compared on one machine. TYPESAFE_API_KEY
+and match calls — so the two can be compared on one machine. It also measures
+the extraction's categories: requests the category gate dropped, titles that
+still carry a date, due dates that differ from the label, and labelled
+actionable mail the bulk filter would drop before the model. TYPESAFE_API_KEY
 (or SMYLTE_TYPESAFE_API_KEY) is required for the Jev half.
 """
 from __future__ import annotations
@@ -31,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -41,6 +45,9 @@ import httpx
 
 HERE = Path(__file__).resolve().parent
 API = "https://api.typesafe.ai/v1/systemone"
+# A month name with a day, a day with a month name, a numeric date, "today" and
+# friends, or "by Friday": what a title should not carry.
+DATE_IN_TITLE = re.compile(r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|januar|februar|märz|mai|juni|juli|okt|dez)[a-z]*\.?\s*\d|\d{1,2}(?:st|nd|rd|th)?\.?\s*(?:of\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|januar|februar|märz|mai|juni|juli|okt|dez)|\d{1,2}[./]\d{1,2}[./]|\b(?:today|tomorrow|tonight|heute|morgen)\b|\b(?:by|due|bis)\s+(?:mon|tue|wed|thu|fri|sat|sun|montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)", re.I)
 MODEL = os.environ.get("JEV_MODEL", "jev-latest")
 
 # ── pre-filter questions ─────────────────────────────────────────────────────
@@ -200,7 +207,8 @@ def run_claude(emails: list[dict], dedup: list[dict]) -> dict | None:
         return None
     sys.path.insert(0, str(HERE.parent))
     import anthropic  # noqa: E402
-    from smylted.mail.llm import Candidate, EmailForExtraction, Extraction, LlmClient  # noqa: E402
+    from smylted.mail.llm import (IGNORED_CATEGORIES, Candidate, EmailForExtraction,  # noqa: E402
+                                  Extraction, LlmClient)
     # Haiku only, deliberately not configurable here: this is a cost-bounded
     # comparison against the production default, not a model sweep.
     model = "claude-haiku-5-5"
@@ -233,7 +241,10 @@ def run_claude(emails: list[dict], dedup: list[dict]) -> dict | None:
         try:
             ex = llm.extract(EmailForExtraction(sender_name=c["from_name"], sender_addr=c["from_addr"],
                                                 subject=c["subject"], sent=sent, body=c["body"][:8000]))
-            out["extract"][c["id"]] = {"actionable": ex.is_actionable, "kind": ex.kind}
+            out["extract"][c["id"]] = {
+                "actionable": ex.is_actionable and ex.category not in IGNORED_CATEGORIES,
+                "asked": ex.is_actionable, "kind": ex.kind, "category": ex.category,
+                "title": ex.title, "due": ex.due.isoformat() if ex.due else None}
         except Exception as e:  # noqa: BLE001
             out["extract"][c["id"]] = {"error": str(e)}
     for c in dedup:
@@ -270,6 +281,24 @@ def report(out: dict, emails: list[dict], dedup: list[dict]) -> str:
             miss = [e["id"] for e in act if not cl["extract"][e["id"]].get("actionable")]
             junk = [e["id"] for e in non if cl["extract"][e["id"]].get("actionable")]
             lines.append(f"  Claude extraction alone: misses {len(miss)} {miss}, junk suggestions {len(junk)}")
+            gated = [e["id"] for e in act if cl["extract"][e["id"]].get("asked")
+                     and not cl["extract"][e["id"]].get("actionable")]
+            lines.append(f"  gated (the model saw a request, the category dropped it): "
+                         f"{len(gated)} gold-actionable {gated}")
+            dated = [e["id"] for e in cs if cl["extract"][e["id"]].get("actionable")
+                     and DATE_IN_TITLE.search(cl["extract"][e["id"]].get("title") or "")]
+            lines.append(f"  titles with a date: {len(dated)} {dated}")
+            wrong = [f"{e['id']}: {cl['extract'][e['id']].get('due')} → {e['gold_due']}"
+                     for e in cs if "gold_due" in e and "due" in cl["extract"][e["id"]]
+                     and cl["extract"][e["id"]].get("actionable")
+                     and cl["extract"][e["id"]].get("due") != e["gold_due"]]
+            lines.append(f"  due mismatches: {len(wrong)} {wrong}")
+            # The bulk filter runs before the model, so the model cannot save these.
+            sys.path.insert(0, str(HERE.parent))
+            from smylted.mail.addresses import noreply_local_part  # noqa: E402
+            dropped = [e["id"] for e in act if noreply_local_part(e["from_addr"])]
+            lines.append(f"  gold actionable from no-reply senders "
+                         f"(the bulk filter drops them before the model): {dropped}")
     act = [e for e in emails if e["clean"] and e["gold"] == "actionable"]
     lines.append(f"KIND (clean actionable: {len(act)})")
     lines.append(f"  Jev alone: {sum(1 for e in act if pre[e['id']]['kind'] == e['gold_kind'])}")
