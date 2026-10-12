@@ -7,15 +7,48 @@ is always `claude-haiku-5-5` — the production default — with a $2 cap.
 `--report-only` re-prints the tables from a saved results file.
 
 ## The data
-`emails.jsonl` (156 emails, 78 actionable / 78 not, 40 in German) and
+`emails.jsonl` (178 emails, 88 actionable / 90 not, 42 in German) and
 `dedup.jsonl` (98 duplicate-check cases: 37 new, 29 duplicate, 32 update) are
 synthetic, written to a label by one model and re-labelled blind by another;
-`clean` is true where the two agreed and neither called it borderline (121
+`clean` is true where the two agreed and neither called it borderline (137
 emails, 95 dedup cases). Every domain is fictional. It is a stand-in for the
 owner's mail, not a sample of it — the numbers say which design is safer, not
 what accuracy to expect at home.
 
-## Results (2026-10-05, jev-1.13.0 and claude-haiku-4-5)
+## What counts as actionable (since 2026-10-12)
+The owner wants fewer, better suggestions: coursework, work and business
+deadlines, appointments, official and household matters — not notices about
+their own accounts. Their examples: "save your files" after cancelling an
+office suite, and "Update payment information" after a subscription's card
+was declined. The labels follow that standard now:
+
+- Relabelled, each with the old label in `relabel`: `com7` (a streaming
+  plan's declined card) and `com9` ("was this you?" sign-in check) are
+  account notices, not actionable; `com18` (a failed delivery that is retried
+  automatically) is delivery news; `per16`, `adv20` and `de17` (invitations
+  with a reply date) are tasks to reply by that date, not events; `sch-24` (a
+  confirmed volunteer slot) is an event, like `com11`.
+- `new1`–`new22` are written and blind-labelled the same way: the owner's two
+  examples in fictional form, other account notices, learning-platform,
+  professor and registrar mail, an RSVP by a date, business invoices, a failed
+  domain renewal that would take the owner's business site down, a returned
+  insurance premium, cold outreach and a vendor's launch party. Tasks carry
+  `gold_due`.
+- The extraction now names a category, and only coursework, work, personal,
+  appointment, official and errand mail becomes a suggestion (see `llm.py`,
+  `pipeline.py`). `--claude` reports requests the category dropped (`gated`),
+  titles that still carry a date, due mismatches, and actionable mail from
+  no-reply senders, which the bulk filter drops before any model reads it.
+
+The results below predate this and were measured on the old labels. The new
+prompt has not been run against Claude Haiku yet (the change was made without
+an Anthropic key). A dry run with a stronger model reading the prompt as
+written, on 177 of the 178 emails, decided actionable or not correctly for
+every clean one and 173 of all; it put no date in any title, matched every
+`gold_due`, and chose the right kind for 70 of 71 clean actionable emails.
+That says the prompt reads as intended, not what Haiku will score.
+
+## Results (2026-10-05, jev-1.13.0 and claude-haiku-4-5, old labels)
 
 **Pre-filter — not adopted.** Skipping the extraction call when Jev's
 p(actionable) < 0.05 dropped no real request and skipped 16 of 78 non-actionable
