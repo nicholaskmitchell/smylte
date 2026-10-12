@@ -149,8 +149,11 @@ def test_extraction_request_shape():
     schema = tool["input_schema"]
     assert schema["additionalProperties"] is False
     assert set(schema["required"]) == set(schema["properties"]) == {
-        "is_actionable", "kind", "title", "notes", "due", "event_start", "event_end",
+        "category", "is_actionable", "kind", "title", "notes", "due", "event_start", "event_end",
         "location", "confidence"}
+    assert list(schema["properties"])[0] == "category"
+    assert schema["required"][0] == "category"
+    assert schema["properties"]["category"] == {"type": "string", "enum": list(llm.CATEGORIES)}
     assert schema["properties"]["kind"] == {"type": "string", "enum": ["task", "event"]}
     assert req["tool_choice"] == {"type": "tool", "name": EXTRACT_TOOL_NAME}
 
@@ -180,6 +183,15 @@ def test_system_prompt_is_static():
     a = llm.build_extraction_request(_email(), model="m", nonce="aaaa", forced=True)
     b = llm.build_extraction_request(_email(), model="m", nonce="bbbb", forced=True)
     assert a["system"] is b["system"] is SYSTEM_EXTRACT
+
+
+def test_system_prompt_braces_and_categories():
+    assert "{" not in SYSTEM_EXTRACT.replace("{nonce}", "")
+    assert "}" not in SYSTEM_EXTRACT.replace("{nonce}", "")
+    for name in llm.CATEGORIES:
+        assert f'"{name}"' in SYSTEM_EXTRACT
+    assert llm.WANTED_CATEGORIES | llm.IGNORED_CATEGORIES == set(llm.CATEGORIES)
+    assert not llm.WANTED_CATEGORIES & llm.IGNORED_CATEGORIES
 
 
 def test_markers_inside_the_email_are_neutralised():
@@ -594,3 +606,49 @@ def test_unregistered_key_from_the_provider_is_registered():
     with pytest.raises(LlmError) as info:
         client.extract(_email())
     assert odd_key not in str(info.value)
+
+
+# ── category and dates in titles ──
+
+def test_parse_category():
+    ex = _parse(category="account")
+    assert ex.category == "account" and ex.is_actionable is True
+    assert ex.title == "Sign the permission slip"
+    assert _parse(category="Account ").category == "account"
+    assert _parse().category == ""                  # the key is missing
+    assert _parse(category="spam").category == ""
+    assert _parse(category=5).category == ""
+    assert _parse(is_actionable=False, category="receipt").category == "receipt"
+
+
+def test_parse_removes_a_date_from_the_title_when_it_is_the_due():
+    ex = _parse(title="RSVP to Emil's party by Nov 1st", due="2026-11-01")
+    assert ex.title == "RSVP to Emil's party"
+    # no date carried by the extraction: the title is left alone
+    assert _parse(title="RSVP to Emil's party by Nov 1st", due=None).title == \
+        "RSVP to Emil's party by Nov 1st"
+    # a different date: the title is left alone
+    assert _parse(title="RSVP to Emil's party by Nov 1st", due="2026-11-02").title == \
+        "RSVP to Emil's party by Nov 1st"
+
+
+def test_parse_anchors_title_dates_on_the_sent_date():
+    # SENT is Monday 2026-10-05, so "Friday" is the 9th whatever today is
+    assert _parse(title="Sign the slip by Friday", due="2026-10-09").title == "Sign the slip"
+
+
+def test_parse_counts_the_event_end_as_a_carried_date():
+    ex = _parse(kind="event", title="Open day until Oct 10", due=None,
+                event_start="2026-10-08T09:00", event_end="2026-10-10T17:00")
+    assert ex.title == "Open day"
+
+
+def test_system_prompt_quotes_no_eval_answers():
+    for answer in ("HIST 210", "Pixelhost", "Emils Geburtstag"):
+        assert answer not in SYSTEM_EXTRACT
+
+
+def test_parse_removes_a_date_from_an_event_title():
+    ex = _parse(kind="event", title="Parent evening, Thursday 8 October, 19:00", due=None,
+                event_start="2026-10-08T19:00")
+    assert ex.title == "Parent evening"
