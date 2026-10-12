@@ -76,8 +76,11 @@ _BRACKETED = re.compile(rf"\s*[(\[]\s*(?:{_TRIGGER}\s+)?(?P<d>{_PHRASE_AFTER_TRI
 _TRIGGERED = re.compile(rf"(?:{_SEP})?\s*\b{_TRIGGER}\s+(?P<d>{_PHRASE_AFTER_TRIGGER}){_END}", _I)
 _TRAILING = re.compile(
     rf"(?:{_SEP}(?:(?:on|am)\s+)?|\s+on\s+|\s+am\s+(?=(?:{_WD_PREFIX},?\s*)?\d))"
-    rf"(?P<d>{_PHRASE}){_END}\s*$|\s+(?P<r>{_alt(_DAY_WORDS)}){_PART}{_TIME}\s*$", _I)
+    rf"(?P<d>{_PHRASE}){_END}\s*[.!?]?\s*$"
+    rf"|\s+(?:(?:for|für)\s+)?(?P<r>{_alt(_DAY_WORDS)}){_PART}{_TIME}\s*[.!?]?\s*$", _I)
 _LEADING = re.compile(rf"^\s*(?:{_TRIGGER}\s+)?(?P<d>{_PHRASE})(?P<r>)\s*[:–—-]\s+", _I)
+# A full stop that ends a date or time rather than the title.
+_DATE_DOT = re.compile(r"(?:\d|\b[ap]\.?m|\b[^\W\d_]{2,4})\.$", _I)
 _NEGATION = re.compile(r"\b(?:not|never|nicht|nie|kein\w*)\b|n['’]t\b", _I)
 
 _ISO_P = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
@@ -172,12 +175,21 @@ def strip_dates(title: str, dates: Iterable[date | None], anchor: date) -> str:
         return replace
 
     out = _LEADING.sub(cut(""), title)
+    if out != title:
+        out = out[:1].upper() + out[1:]       # "Friday: submit essay" -> "Submit essay"
     out = _BRACKETED.sub(cut(" "), out)
     out = _TRIGGERED.sub(cut(" "), out)
     out = _TRAILING.sub(cut(""), out)
     out = re.sub(r"([(\[])\s*[,;:]\s*", r"\1", out)
     out = re.sub(r"\s+([,;:.!?)\]])", r"\1", out)
     out = re.sub(r"\s+", " ", out).strip(" ,;:–—-")
+    # The cut may take the title's closing mark with it ("on Sunday.", where
+    # "Sunday." reads as an abbreviation): give it back, unless the full stop
+    # belonged to the date itself ("30.09.", "Oct.", "5 p.m.").
+    end = title.rstrip()[-1:]
+    keep = end in ("!", "?") or (end == "." and not _DATE_DOT.search(title.rstrip()))
+    if keep and not out.endswith(end):
+        out += end
     if out == title.strip():
         return title
     return out if len(re.findall(r"[^\W\d_]", out)) >= 3 else title

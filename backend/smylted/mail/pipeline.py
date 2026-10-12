@@ -1054,19 +1054,21 @@ class Ingestor:
                 event_end=ex.event_end.isoformat() if ex.event_end else None,
                 event_all_day=int(_all_day(ex.event_start)), location=ex.location or None)
         else:
-            due, notes = ex.due, ex.notes
-            if kind == "task" and due is None and ex.event_start is not None:
-                # An event that Jev or the owner's rules made a task: due on the
-                # event's day, its time and place in the notes (a task has
-                # neither). Only here, for a new suggestion: dedup and merges
-                # compare the email's own deadline.
-                due = _day(ex.event_start)
-                parts = ([ex.event_start.strftime("%H:%M")]
-                         if isinstance(ex.event_start, datetime) else [])
-                if ex.location:
-                    parts.append(ex.location)
-                if parts:
-                    notes = "\n".join(p for p in (notes, " · ".join(parts)) if p)[:NOTES_MAX]
+            due, notes, start = ex.due, ex.notes, ex.event_start
+            if kind in ("task", "update") and start is not None:
+                # A task or an update has no start. An event that Jev or the
+                # owner's rules made a task is due on the event's day; and the
+                # event's day (unless it is the due), time and place go in the
+                # notes, so that the title, which carries no dates, loses none.
+                # Only here, as a suggestion is built: dedup and merges compare
+                # the email's own deadline.
+                if kind == "task" and due is None:
+                    due = _day(start)
+                when = " ".join(([] if due == _day(start) else [_day(start).isoformat()])
+                                + ([start.strftime("%H:%M")] if isinstance(start, datetime) else []))
+                extra = " · ".join(p for p in (when, ex.location) if p)
+                if extra:
+                    notes = "\n".join(p for p in (notes, extra) if p)[:NOTES_MAX]
             out.update(title=ex.title, notes=notes,
                        due=due.isoformat() if due else None, confidence=ex.confidence)
         if target is not None:

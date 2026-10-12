@@ -46,8 +46,19 @@ import httpx
 HERE = Path(__file__).resolve().parent
 API = "https://api.typesafe.ai/v1/systemone"
 # A month name with a day, a day with a month name, a numeric date, "today" and
-# friends, or "by Friday": what a title should not carry.
-DATE_IN_TITLE = re.compile(r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|januar|februar|märz|mai|juni|juli|okt|dez)[a-z]*\.?\s*\d|\d{1,2}(?:st|nd|rd|th)?\.?\s*(?:of\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|januar|februar|märz|mai|juni|juli|okt|dez)|\d{1,2}[./]\d{1,2}[./]|\b(?:today|tomorrow|tonight|heute|morgen)\b|\b(?:by|due|bis)\s+(?:mon|tue|wed|thu|fri|sat|sun|montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)", re.I)
+# friends, a weekday: what a title should not carry. Whole words only, so
+# "Mark 3 essays" and "Version 2.0" are not dates.
+_MONTHS = (r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?"
+           r"|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+           r"|januar|februar|märz|mai|juni|juli|okt(?:ober)?|dez(?:ember)?)")
+_WEEKDAYS = (r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+             r"|montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)")
+DATE_IN_TITLE = re.compile(
+    rf"\b{_MONTHS}\.?\s+\d{{1,2}}(?:st|nd|rd|th)?\b"
+    rf"|\b\d{{1,2}}(?:st|nd|rd|th|\.)?\s*(?:of\s+)?{_MONTHS}\b"
+    r"|\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b|\b\d{1,2}\.\d{1,2}\.(?:\d{2,4})?"
+    r"|\b(?:today|tomorrow|tonight|heute|morgen)\b"
+    rf"|\b{_WEEKDAYS}\b|\b(?:by|due|on|bis|am)\s+(?:mon|tue|wed|thu|fri|sat|sun)\b", re.I)
 MODEL = os.environ.get("JEV_MODEL", "jev-latest")
 
 # ── pre-filter questions ─────────────────────────────────────────────────────
@@ -268,7 +279,14 @@ def report(out: dict, emails: list[dict], dedup: list[dict]) -> str:
     pre = {r["id"]: r for r in out["prefilter_raw"]}
     dd = {r["id"]: r for r in out["dedup_raw"]}
     cl = out.get("claude")
+    # A results file saved before emails were added has no answers for them:
+    # report on the ones it covers, and say how many it leaves out.
+    covered = [e for e in emails if e["id"] in pre and (not cl or e["id"] in cl["extract"])]
     lines = []
+    if len(covered) < len(emails):
+        lines.append(f"(the results cover {len(covered)} of {len(emails)} emails; "
+                     "the rest were added after they were saved)")
+    emails = covered
     for name, cs in (("clean", [e for e in emails if e["clean"]]), ("all", emails)):
         act = [e for e in cs if e["gold"] == "actionable"]
         non = [e for e in cs if e["gold"] == "not_actionable"]
@@ -289,7 +307,8 @@ def report(out: dict, emails: list[dict], dedup: list[dict]) -> str:
                      and DATE_IN_TITLE.search(cl["extract"][e["id"]].get("title") or "")]
             lines.append(f"  titles with a date: {len(dated)} {dated}")
             wrong = [f"{e['id']}: {cl['extract'][e['id']].get('due')} → {e['gold_due']}"
-                     for e in cs if "gold_due" in e and "due" in cl["extract"][e["id"]]
+                     for e in cs if e.get("gold_kind") == "task" and e.get("gold_due")
+                     and "due" in cl["extract"][e["id"]]
                      and cl["extract"][e["id"]].get("actionable")
                      and cl["extract"][e["id"]].get("due") != e["gold_due"]]
             lines.append(f"  due mismatches: {len(wrong)} {wrong}")
