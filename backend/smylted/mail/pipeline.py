@@ -322,22 +322,42 @@ def _with_event_day(ex: Extraction) -> Extraction:
     return ex
 
 
-def _wall(stamp: str | None, tz) -> str:
-    """A stored start as the owner's wall clock, comparable with a start read
-    from prose (which is naive): an aware one converted to their home zone (none
-    set: as stamped) with its zone dropped. A date stays a date; "" for none."""
-    if not stamp or len(stamp) <= 10:
-        return stamp or ""
+def _walls(stamp: str | None, tz) -> tuple[str, ...]:
+    """The wall clocks a start read from prose (naive) may restate a stored
+    start as. Its own, zone dropped: the model reads prose in the zone the email
+    uses, so an invite from New York at 20:00 is "8pm" in the reply. And, for an
+    aware start with a home zone set, the owner's: a UTC stamp (ics keeps a Z
+    time as UTC) is a machine's time that nobody writes back. A date stays a
+    date; () for none."""
+    if not stamp:
+        return ()
+    if len(stamp) <= 10:
+        return (stamp,)
     try:
         moment = datetime.fromisoformat(stamp)
     except ValueError:
-        return stamp
-    if moment.tzinfo is not None and tz is not None:
-        try:
-            moment = moment.astimezone(tz)
-        except (OverflowError, ValueError):
-            pass  # a start at the edge of the calendar (an invite says what it likes): as stamped
-    return moment.replace(tzinfo=None).isoformat()
+        return (stamp,)
+    own = moment.replace(tzinfo=None).isoformat()
+    if moment.tzinfo is None or tz is None:
+        return (own,)
+    try:
+        home = moment.astimezone(tz).replace(tzinfo=None).isoformat()
+    except (OverflowError, ValueError):
+        return (own,)  # a start at the edge of the calendar (an invite says what it likes)
+    return (own,) if home == own else (own, home)
+
+
+def _day_of(stamp: str | None, tz) -> str | None:
+    """The one day a stored start is shown as to the duplicate question: its
+    own, except a UTC stamp, which is the owner's (see `_walls`)."""
+    walls = _walls(stamp, tz)
+    if not walls:
+        return None
+    try:
+        utc = datetime.fromisoformat(stamp).utcoffset() == timedelta(0)
+    except ValueError:
+        utc = False
+    return walls[-1][:10] if utc else walls[0][:10]
 
 
 class Ingestor:
@@ -988,7 +1008,7 @@ class Ingestor:
             tz = self._home_tz()
             day = (start.date() if isinstance(start, datetime) else start).isoformat()
             if any(s["kind"] == "event" and s["status"] in ("approved", "approving")
-                   and _wall(s["event_start"], tz)[:10] == day
+                   and day in {w[:10] for w in _walls(s["event_start"], tz)}
                    for s in host.mail(store.mail_suggestions_for_thread, c.tid)):
                 return self._settle(c, "dedup", "duplicate", "already added as an event")
 
@@ -1046,7 +1066,7 @@ class Ingestor:
             label = f"S{i}"
             # an event has no due; its day stands in, as an event-made item's does (_with_event_day)
             candidates.append(Candidate(label, s["title"], s["notes"] or "",
-                                        s["due"] or _wall(s["event_start"], tz)[:10] or None))
+                                        s["due"] or _day_of(s["event_start"], tz)))
             targets[label] = s
         for i, r in enumerate(list(reversed(rejected))[:MAX_CANDIDATE_REJECTIONS], 1):
             label = f"R{i}"
@@ -1155,8 +1175,9 @@ class Ingestor:
         if not keep_due and kind == "task":
             notes = "\n".join(p for p in (ex.notes, _when_where(ex, ex.due)) if p)[:NOTES_MAX]
         elif (not keep_due and kind == "event" and ex.event_start is not None
-              # Day and clock time: an invite's start carries its zone, a reply in prose does not.
-              and ex.event_start.isoformat()[:16] != _wall(s["event_start"], self._home_tz())[:16]):
+              # Day and clock time, on the invite's own clock or the owner's (`_walls`).
+              and ex.event_start.isoformat()[:16]
+              not in {w[:16] for w in _walls(s["event_start"], self._home_tz())}):
             notes = "\n".join(p for p in (ex.notes, _when_where(ex, None)) if p)[:NOTES_MAX]
         entry = self._update_entry(c, notes=notes,
                                    due=ex.due.isoformat() if ex.due else None)
