@@ -301,9 +301,25 @@ def _day(value: date | datetime) -> date:
     return value.date() if isinstance(value, datetime) else value
 
 
-def _slug(x: str) -> str:
-    """A list's short id from an href, or the id itself."""
-    return x.rstrip("/").rsplit("/", 1)[-1]
+def _when_where(ex: Extraction, due: date | None) -> str:
+    """An event's day (unless it is `due`), time and place, for the notes of a
+    task or update made from it: the title carries no dates. "" without a start."""
+    start = ex.event_start
+    if start is None:
+        return ""
+    when = " ".join(([] if due == _day(start) else [_day(start).isoformat()])
+                    + ([start.strftime("%H:%M")] if isinstance(start, datetime) else []))
+    return " · ".join(p for p in (when, ex.location) if p)
+
+
+def _with_event_day(ex: Extraction) -> Extraction:
+    """`ex` as the duplicate question should see it. An event that Jev or the
+    owner's rules made a task is about the event's day, which it carries only in
+    `event_start` (its title has no dates): without it "Team photo" on the 9th
+    and on the 12th are the same item to the model and to Jev."""
+    if ex.due is None and ex.event_start is not None:
+        return dataclasses.replace(ex, due=_day(ex.event_start))
+    return ex
 
 
 class Ingestor:
@@ -954,16 +970,17 @@ class Ingestor:
                 # is a duplicate, not an update the owner has to dismiss.
                 cand = [Candidate("T1", task["summary"] or "", task.get("notes") or "",
                                   task.get("due"))]
-                m = (self._jev_match(c, ex, cand) if self._jev_ready(c.cfg.dedup_decider)
+                mx = _with_event_day(ex)
+                m = (self._jev_match(c, mx, cand) if self._jev_ready(c.cfg.dedup_decider)
                      else None)
                 if m is None:
                     try:
-                        m = self.llm.match(ex, cand)
+                        m = self.llm.match(mx, cand)
                     except LlmError as e:
                         if e.kind in ("transient", "config"):
                             return self._llm_failed(c, "dedup", e)
                         m = Match("update", "T1")
-                moved = ex.due is not None and ex.due.isoformat() != (task.get("due") or "")[:10]
+                moved = mx.due is not None and mx.due.isoformat() != (task.get("due") or "")[:10]
                 if m.decision == "duplicate" and not moved:
                     return self._settle(c, "dedup", "duplicate",
                                         "nothing new for the thread's task")
@@ -978,14 +995,10 @@ class Ingestor:
             # Titles no longer carry the class, so "Unit 1 Exam" in two classes
             # would otherwise look like one task: compare within the item's list
             # and the default list (where everything filed before filing existed
-            # lives). Searched wider first, so tasks in other lists cannot crowd
-            # the right one out of the few that are asked about.
-            if c.list_slug:
-                keep = {c.list_slug, c.default_list}
-                tasks = [t for t in host.search_open_tasks_any(_terms(ex), limit=50)
-                         if _slug(t["list"]) in keep]
-            else:
-                tasks = host.search_open_tasks_any(_terms(ex), limit=MAX_CANDIDATE_TASKS)
+            # lives). Filtered in the search itself, so tasks in other
+            # lists cannot crowd the right one out of the few that are asked about.
+            keep = [x for x in (c.list_slug, c.default_list) if x] if c.list_slug else None
+            tasks = host.search_open_tasks_any(_terms(ex), limit=MAX_CANDIDATE_TASKS, lists=keep)
             for i, t in enumerate(tasks[:MAX_CANDIDATE_TASKS], 1):
                 label = f"T{i}"
                 candidates.append(Candidate(label, t["summary"] or "", t.get("notes") or "",
@@ -1008,10 +1021,11 @@ class Ingestor:
         if not candidates:
             return self._stage_new(c, ex, kind)
 
-        m = self._jev_match(c, ex, candidates) if self._jev_ready(c.cfg.dedup_decider) else None
+        mx = _with_event_day(ex) if kind == "task" else ex
+        m = self._jev_match(c, mx, candidates) if self._jev_ready(c.cfg.dedup_decider) else None
         if m is None:
             try:
-                m = self.llm.match(ex, candidates)
+                m = self.llm.match(mx, candidates)
             except LlmError as e:
                 if e.kind in ("transient", "config"):
                     return self._llm_failed(c, "dedup", e)
@@ -1103,7 +1117,13 @@ class Ingestor:
         add notes no approval will ever carry.
         """
         sid = s["id"]
-        entry = self._update_entry(c, notes="" if keep_due else ex.notes,
+        notes = "" if keep_due else ex.notes
+        if not keep_due and kind == "task":
+            notes = "\n".join(p for p in (ex.notes, _when_where(ex, ex.due)) if p)[:NOTES_MAX]
+        elif (not keep_due and kind == "event" and ex.event_start is not None
+              and ex.event_start.isoformat() != (s["event_start"] or "")):
+            notes = "\n".join(p for p in (ex.notes, _when_where(ex, None)) if p)[:NOTES_MAX]
+        entry = self._update_entry(c, notes=notes,
                                    due=ex.due.isoformat() if ex.due else None)
         d = _detail(detail, c.extra)
 
@@ -1116,6 +1136,10 @@ class Ingestor:
                 if (not keep_due and ex.due and row["kind"] in ("task", "update")
                         and ex.due.isoformat() != row["due"]):
                     patch["due"] = ex.due.isoformat()
+                if (kind == "task" and row["kind"] == "task" and c.list_slug
+                        and not row["suggested_list"]):
+                    patch["suggested_list"] = c.list_slug
+                    patch["list_group"] = c.group or None
                 store.mail_update_suggestion(conn, sid, **patch)
                 store.mail_upsert_thread(conn, c.tid, suggestion_id=sid)
                 store.mail_settle(conn, c.key, stage="dedup", outcome="attached", detail=d,
@@ -1155,16 +1179,17 @@ class Ingestor:
             due, notes, start = ex.due, ex.notes, ex.event_start
             if kind in ("task", "update") and start is not None:
                 # A task or an update has no start. An event that Jev or the
-                # owner's rules made a task is due on the event's day; and the
-                # event's day (unless it is the due), time and place go in the
-                # notes, so that the title, which carries no dates, loses none.
-                # Only here, as a suggestion is built: dedup and merges compare
-                # the email's own deadline.
+                # owner's rules made a task is due on the event's day when it is
+                # a new task; an update, like a message merged into a pending
+                # suggestion, carries the day in its notes instead, since it is
+                # not a deadline for a task that already has one. Either way the
+                # day (unless it is the due), time and place go in the notes, so
+                # that the title, which carries no dates, loses none. The
+                # duplicate question is shown the event's day as the item's due
+                # (`_with_event_day`), so a moved day reads as one.
                 if kind == "task" and due is None:
                     due = _day(start)
-                when = " ".join(([] if due == _day(start) else [_day(start).isoformat()])
-                                + ([start.strftime("%H:%M")] if isinstance(start, datetime) else []))
-                extra = " · ".join(p for p in (when, ex.location) if p)
+                extra = _when_where(ex, due)
                 if extra:
                     notes = "\n".join(p for p in (notes, extra) if p)[:NOTES_MAX]
             out.update(title=ex.title, notes=notes,
