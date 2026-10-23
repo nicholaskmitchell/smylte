@@ -784,6 +784,8 @@ CREATE TABLE IF NOT EXISTS mail_suggestions (
     event_rrule   TEXT,
     target_list   TEXT,                             -- collection href (update target, or the approved result)
     target_uid    TEXT,
+    suggested_list TEXT,                            -- task: slug of the owner's list the item was filed under, NULL for the default
+    list_group    TEXT,                             -- task: the class or group the email named, the key the filing memory learns
     sender        TEXT NOT NULL,
     sender_name   TEXT,
     subject       TEXT,

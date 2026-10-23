@@ -78,7 +78,11 @@ function Row({ s, lists, calendars, onApprove, onReject }: {
   const [dueEdit, setDueEdit] = useState<string | null>(null)
   const title = titleEdit ?? s.title
   const due = dueEdit ?? (s.due ? dayKey(s.due) : '')
-  const [list, setList] = useState('')
+  // The list the pipeline filed it under is the starting choice, derived like
+  // the title and date so a reload that refiles the row is followed.
+  const [listEdit, setListEdit] = useState<string | null>(null)
+  const suggested = s.kind === 'task' && s.list && lists.some((l) => l.id === s.list) ? s.list : ''
+  const list = listEdit ?? suggested
   const [calendar, setCalendar] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -97,11 +101,13 @@ function Row({ s, lists, calendars, onApprove, onReject }: {
   const approve = () => {
     // Only what the owner edited is sent, so the server's current values win
     // for the rest. A cleared date is a statement (`null`), not an omission. An
-    // event has no date to edit: its time is the email's.
+    // event has no date to edit: its time is the email's. A filed list the
+    // owner leaves as it is is not sent either: the server files under it
+    // anyway, and only a list the owner picks teaches the filing memory.
     const body: ApproveSuggestionBody = {}
     if (titleEdit !== null) body.title = titleEdit.trim()
     if (dated && dueEdit !== null) body.due = dueEdit || null
-    if (s.kind === 'task' && list) body.list = list
+    if (s.kind === 'task' && listEdit !== null && list) body.list = list
     if (isEvent && calendar) body.calendar = calendar
     return run(() => onApprove(s.id, body))
   }
@@ -188,8 +194,12 @@ function Row({ s, lists, calendars, onApprove, onReject }: {
         {s.kind === 'task' && (
           <select className="input mail-sug-pick" value={list}
             aria-label={tr('mail.sug.listAria')}
-            onChange={(e) => setList(e.target.value)}>
-            <option value="">{tr('mail.sug.defaultList')}</option>
+            onChange={(e) => setListEdit(e.target.value)}>
+            {!suggested && (
+              <option value="">
+                {tr(s.list && lists.length === 0 ? 'mail.sug.suggestedList' : 'mail.sug.defaultList')}
+              </option>
+            )}
             {lists.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
           </select>
         )}

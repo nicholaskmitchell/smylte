@@ -406,6 +406,56 @@ def test_init_db_adds_interrupted_and_released_to_an_old_ledger_table(db):
     assert store.mail_recover_unsettled(db, max_interrupted=3) == (1, 0)
 
 
+def test_init_db_adds_the_filing_columns_to_an_old_suggestions_table(db):
+    db.execute("DROP TABLE mail_suggestions")
+    db.execute("CREATE TABLE mail_suggestions (id TEXT PRIMARY KEY, kind TEXT NOT NULL, "
+               "status TEXT NOT NULL DEFAULT 'pending', title TEXT NOT NULL, "
+               "notes TEXT NOT NULL DEFAULT '', due TEXT, confidence REAL, event_start TEXT, "
+               "event_end TEXT, event_all_day INTEGER NOT NULL DEFAULT 0, location TEXT, "
+               "ics_uid TEXT, event_rrule TEXT, target_list TEXT, target_uid TEXT, "
+               "sender TEXT NOT NULL, sender_name TEXT, subject TEXT, sent_at TEXT, "
+               "message_key TEXT NOT NULL, message_id TEXT, thread_id TEXT NOT NULL, "
+               "folder TEXT, updates TEXT NOT NULL DEFAULT '[]', "
+               "created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), "
+               "updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), "
+               "decided_at TEXT)")
+    db.execute("INSERT INTO mail_suggestions (id, kind, title, sender, message_key, thread_id) "
+               "VALUES ('old', 'task', 'Pay it', 'a@x', 'mid:a@x', 'mid:a@x')")
+    init_db(db)
+    row = store.mail_get_suggestion(db, "old")
+    assert (row["suggested_list"], row["list_group"]) == (None, None)
+    store.mail_update_suggestion(db, "old", suggested_list="psy", list_group="DC Psychology")
+    row = store.mail_get_suggestion(db, "old")
+    assert (row["suggested_list"], row["list_group"]) == ("psy", "DC Psychology")
+
+
+def test_the_list_memory_starts_empty_and_remembers_a_group(db):
+    assert store.mail_list_memory(db) == {}
+    store.mail_remember_list(db, "math", "trig")
+    store.mail_remember_list(db, "", "trig")
+    store.mail_remember_list(db, "english", "")
+    assert store.mail_list_memory(db) == {"math": "trig"}
+
+
+def test_the_list_memory_drops_the_least_recently_set_group(db):
+    for i in range(store.MAIL_LIST_MEMORY_MAX + 5):
+        store.mail_remember_list(db, f"group {i}", "l")
+    memory = store.mail_list_memory(db)
+    assert len(memory) == store.MAIL_LIST_MEMORY_MAX
+    assert "group 0" not in memory and "group 4" not in memory and "group 5" in memory
+
+
+def test_setting_a_remembered_group_again_moves_it_to_the_end(db):
+    store.mail_remember_list(db, "a", "l1")
+    store.mail_remember_list(db, "b", "l2")
+    store.mail_remember_list(db, "a", "l3")
+    assert list(store.mail_list_memory(db).items()) == [("b", "l2"), ("a", "l3")]
+    for i in range(store.MAIL_LIST_MEMORY_MAX - 1):
+        store.mail_remember_list(db, f"g{i}", "l")
+    memory = store.mail_list_memory(db)
+    assert "b" not in memory and memory["a"] == "l3"
+
+
 def test_init_db_twice_is_idempotent(db):
     _claim(db)
     _suggestion(db)

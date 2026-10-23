@@ -1158,6 +1158,9 @@ export interface MailSuggestion {
   notes: string
   due: string | null
   confidence: number | null
+  /** The list the pipeline filed a task under, by id; the class the email named. */
+  list?: string | null
+  group?: string | null
   event: {
     start: string
     end: string | null
