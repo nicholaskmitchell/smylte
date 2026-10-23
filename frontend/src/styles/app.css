@@ -3120,8 +3120,10 @@ button.menu-toggle:active { scale: var(--press-scale); }
      it. */
   .today-row > .today-meta:empty { display: none; }
   /* `.today-row >` because the bare class is (0,1,0) and lost to the
-     first-line rule, so the `transform: none` this needs never applied and the
-     count sat half a line lower than the 3px described above. The margin is
+     first-line rule, so the `transform: none` this needs never applied: a
+     one-line count sat 3px (times the text scale) lower than the 3px described
+     above, and a count that wrapped to two lines (German, in a look-back) was
+     lifted 6-7px onto the cells or the title. The margin is
      for a row whose cells took a line of their own before it: they hang 3px x
      the text scale below that line, and this keeps the count about 2px clear of
      them, which WebKit's text metrics take a fraction of (and adds 2px at the
