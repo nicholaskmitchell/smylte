@@ -329,7 +329,7 @@ class UpdateHost(TaskHost):
         super().__init__(svc)
         self.edits: list[dict] = []
 
-    def search_open_tasks_any(self, terms, *, limit):
+    def search_open_tasks_any(self, terms, *, limit, lists=None):
         return [dict(self.TASK)]
 
     def get_task(self, href, uid):

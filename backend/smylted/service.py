@@ -19,6 +19,7 @@ import re
 import secrets
 import threading
 import uuid
+from collections.abc import Iterable
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -3494,10 +3495,20 @@ class SmylteService:
         """Tell open tabs the Suggested list or the mail status changed."""
         self._publish({"type": "mail_updated"})
 
-    def search_open_tasks_any(self, terms: list[str], *, limit: int = 5) -> list[dict[str, Any]]:
-        """Open tasks whose text shares any of `terms`, best first, as task DTOs."""
+    def search_open_tasks_any(
+        self, terms: list[str], *, limit: int = 5, lists: Iterable[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Open tasks whose text shares any of `terms`, best first, as task DTOs.
+
+        `lists`, when given, keeps only tasks in those task lists (ids or
+        hrefs; one that does not resolve is ignored).
+        """
         with self._lock:
-            rows = store.search_open_tasks_any(self._conn, terms, limit=limit)
+            hrefs = None
+            if lists is not None:
+                found_hrefs = (self.resolve_list(x, component="VTODO") for x in lists)
+                hrefs = {h for h in found_hrefs if h}
+            rows = store.search_open_tasks_any(self._conn, terms, limit=limit, collections=hrefs)
             found = [self.get_task(r["collection_href"], r["uid"]) for r in rows]
         return [t for t in found if t is not None]
 

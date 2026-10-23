@@ -12,6 +12,7 @@ import json
 import logging
 import re
 import sqlite3
+from collections.abc import Collection
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -2694,7 +2695,8 @@ def mail_is_rejected_message(conn: sqlite3.Connection, message_key: str) -> bool
 
 
 def search_open_tasks_any(
-    conn: sqlite3.Connection, terms: list[str], *, limit: int = 5
+    conn: sqlite3.Connection, terms: list[str], *, limit: int = 5,
+    collections: Collection[str] | None = None,
 ) -> list[sqlite3.Row]:
     """Open tasks sharing ANY of `terms`, best match first — candidate retrieval
     for de-duplicating a new suggestion against what is already on the list.
@@ -2708,21 +2710,31 @@ def search_open_tasks_any(
     before they reach MATCH, which also makes quoting unnecessary: FTS5
     operator characters cannot survive the filter. A malformed MATCH still
     must never break ingestion, so an OperationalError is an empty result.
+
+    `collections`, when given, keeps only tasks in those collection hrefs,
+    filtered in the query so that tasks elsewhere cannot use up `limit`; an
+    empty one finds nothing.
     """
     clean = list(dict.fromkeys(
         t.lower() for t in terms if len(t) >= 3 and t.isalnum()
     ))[:12]
     if not clean:
         return []
+    if collections is not None and not collections:
+        return []
     match = " OR ".join(f'"{t}"*' for t in clean)
+    hrefs = sorted(set(collections)) if collections is not None else []
+    in_clause = f" AND i.collection_href IN ({', '.join('?' * len(hrefs))})" if hrefs else ""
     try:
         return list(conn.execute(
+            # Only "?" placeholders are built into the statement; the values are bound.
             """SELECT i.* FROM items_fts f
                JOIN items i ON i.collection_href=f.collection_href AND i.uid=f.uid
                WHERE items_fts MATCH ? AND i.component='VTODO' AND i.completed IS NULL
-                 AND (i.status IS NULL OR i.status NOT IN ('COMPLETED','CANCELLED'))
+                 AND (i.status IS NULL OR i.status NOT IN ('COMPLETED','CANCELLED'))"""
+            + in_clause + """
                ORDER BY rank LIMIT ?""",
-            (match, max(1, min(limit, 50))),
+            (match, *hrefs, max(1, min(limit, 50))),
         ))
     except sqlite3.OperationalError:
         # No exc_info: the terms came from an email, and SQLite's message can quote them.

@@ -188,7 +188,8 @@ Calendar invitations become events without a model call.
 What's left goes to Claude with quoted replies removed, in one call whose only
 tool records an answer. The model never has a tool that touches Smylte, and the
 email is passed as data between markers it can't forge. A reply in a thread that
-already has a task becomes an update to it.
+already has a task becomes an update to it, unless it adds nothing (then it is
+settled as a duplicate); a moved deadline is always an update.
 
 Two narrow decisions can go to TypeSafe's Jev: task or event, and whether a new
 item duplicates an existing task. Claude decides when Jev is unsure,

@@ -8,7 +8,7 @@ is always `claude-haiku-5-5` — the production default — with a $2 cap.
 is reported on the emails it covers).
 
 ## The data
-`emails.jsonl` (190 emails, 94 actionable / 96 not, 42 in German) and
+`emails.jsonl` (190 emails, 95 actionable / 95 not, 42 in German) and
 `dedup.jsonl` (98 duplicate-check cases: 37 new, 29 duplicate, 32 update) are
 synthetic, written to a label by one model and re-labelled blind by another;
 `clean` is true where the two agreed and neither called it borderline (147
@@ -51,23 +51,33 @@ Psychology list), every task in the default list, school-wide announcements
 (a signing day, a career fair) and meeting times still being traded. So:
 
 - `new23`–`new34`, written and blind-labelled the same way, carry
-  `gold_title` and `gold_list` (a name from `mail_eval.OWNER_LISTS`, a fixed
-  fictional owner's lists passed with every email). `--claude` reports lists
-  right, exact titles and coursework titles that still start with a verb.
-- Relabelled: `sch-07` (a teacher offering two lesson slots) and `per23` (a
-  date poll) are not actionable — the owner wants nothing while a time is
-  being agreed, only the email that sets it. `new30` (a proposed meeting date)
-  was written as a reply task and is labelled not actionable for the same
-  reason; `new32` restates a task the owner already has, which only the
-  pipeline's dedup can know, so as a single email it is a request.
+  `gold_list` (a name from `mail_eval.OWNER_LISTS`, a fixed fictional owner's
+  lists passed with every email, or `none`) and, for the tasks, `gold_title`.
+  `--claude` reports lists right, exact titles and coursework titles that
+  still start with a verb.
+- Both models are now given the body the pipeline gives them, with quoted
+  replies removed (`body_of`); until now they read the whole thread, so a reply
+  whose only date sat in the quote it answered was scored on a date it never
+  sees at home. 15 emails change.
+- Relabelled: `sch-07` (a teacher offering two lesson slots), `sch-13` and
+  `per23` (date polls) are not actionable — the owner wants nothing while a
+  time is being agreed, only the email that sets it. For the same reason
+  `per13` and `adv10`, replies confirming a time the owner proposed, are now
+  events. `new30` (a proposed meeting date) was written as a reply task and is
+  labelled not actionable; `new32` restates a task the owner already has,
+  which only the pipeline's dedup can know, so as a single email it is a
+  request.
 
 The results below predate both rounds and were measured on the old labels.
 The current prompt has not been run against Claude Haiku yet (both changes
-were made without an Anthropic key). A dry run with a stronger model reading
-the prompt as written decided actionable or not correctly for all 147 clean
-emails and 186 of 190; for the tasks with a `gold_list` or `gold_title` it
-filed 7 of 7 in the right list with the exact title, and it put no date in a
-title except one that is part of the item's name ("2026/27"). That says the
+were made without an Anthropic key). A dry run of the final prompt, with a
+stronger model reading it as written and the labels above (on the full bodies,
+before `body_of`), decided actionable or not correctly for all 147 clean
+emails and 188 of 190 (`adv7`, a newsletter whose one request is for a class
+the email does not say is the owner's, and `adv9`, a bare "?"). It routed all
+12 rows with a `gold_list` as labelled (6 to a list, 6 to none), gave the
+exact title for all 7 with a `gold_title`, and put no date in a title except
+one that is part of the item's name ("2026/27", "Spring 2027"). That says the
 prompt reads as intended, not what Haiku will score.
 
 ## Results (2026-10-05, jev-1.13.0 and claude-haiku-4-5, old labels)
