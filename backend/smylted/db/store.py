@@ -248,6 +248,12 @@ def init_db(conn: sqlite3.Connection) -> None:
         # 0 reads as "held": the next run start releases an unsettled claim and
         # counts it, which is what the old code's release did, less the forgetting.
         conn.execute("ALTER TABLE mail_ledger ADD COLUMN released INTEGER NOT NULL DEFAULT 0")
+    mail_suggestion_cols = {r["name"] for r in conn.execute("PRAGMA table_info(mail_suggestions)")}
+    for col in ("suggested_list", "list_group"):
+        if col not in mail_suggestion_cols:
+            # NULL on rows written before filing existed, which reads as "the
+            # default list", as those rows did.
+            conn.execute(f"ALTER TABLE mail_suggestions ADD COLUMN {col} TEXT")
 
 
 # ── collections ──────────────────────────────────────────────────────────────
@@ -2276,7 +2282,7 @@ _MAIL_SUGGESTION_COLUMNS = frozenset({
     "kind", "status", "title", "notes", "due", "confidence", "event_start", "event_end",
     "event_all_day", "location", "ics_uid", "event_rrule", "target_list", "target_uid",
     "sender", "sender_name", "subject", "sent_at", "message_key", "message_id",
-    "thread_id", "folder", "updates", "updated_at", "decided_at",
+    "thread_id", "folder", "updates", "updated_at", "decided_at", "suggested_list", "list_group",
 })
 _MAIL_THREAD_COLUMNS = frozenset({"suggestion_id", "task_list", "task_uid"})
 _MAIL_NOW = "strftime('%Y-%m-%dT%H:%M:%fZ','now')"
@@ -2315,6 +2321,31 @@ def get_meta_json(conn: sqlite3.Connection, key: str) -> dict:
 
 def set_meta_json(conn: sqlite3.Connection, key: str, value: dict) -> None:
     set_meta(conn, key, json.dumps(value))
+
+
+MAIL_LIST_MEMORY_KEY = "mail_list_memory"
+MAIL_LIST_MEMORY_MAX = 300
+
+
+def mail_list_memory(conn: sqlite3.Connection) -> dict:
+    """Where the owner filed each group last: {normalised group: list slug}."""
+    return get_meta_json(conn, MAIL_LIST_MEMORY_KEY)
+
+
+def mail_remember_list(conn: sqlite3.Connection, group: str, slug: str) -> None:
+    """Record that the owner filed `group` under `slug`; the most recent last.
+
+    Re-inserted rather than updated so the oldest entry is the least recently
+    used one, which is the one dropped past MAIL_LIST_MEMORY_MAX.
+    """
+    if not group or not slug:
+        return
+    memory = get_meta_json(conn, MAIL_LIST_MEMORY_KEY)
+    memory.pop(group, None)
+    memory[group] = slug
+    while len(memory) > MAIL_LIST_MEMORY_MAX:
+        memory.pop(next(iter(memory)))
+    set_meta_json(conn, MAIL_LIST_MEMORY_KEY, memory)
 
 
 def merge_meta_json(conn: sqlite3.Connection, key: str, patch: dict) -> dict:

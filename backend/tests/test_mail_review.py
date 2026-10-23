@@ -245,6 +245,62 @@ def test_an_approved_task_carries_the_merged_notes(svc, tmp_path):
         "(via email)")
 
 
+class TwoListHost(TaskHost):
+    """A task host with two lists, so which one was used says how it was chosen."""
+
+    HREFS = {"family": "/dav/me/family/", "inbox": "/dav/me/inbox/"}
+
+    def list_lists(self):
+        return [{"id": "inbox"}]
+
+    def resolve_list(self, list_id, *, component=None):
+        return self.HREFS.get(list_id) if component == "VTODO" else None
+
+
+def _filed(svc, tmp_path, *, suggested_list, group="DC Psychology"):
+    [out] = ingest(svc, tmp_path, extraction("4.2 - Anxiety Disorders"))
+    svc.mail(store.mail_update_suggestion, out.suggestion_id,
+             suggested_list=suggested_list, list_group=group)
+    return out.suggestion_id
+
+
+def test_approving_without_a_list_uses_the_one_the_pipeline_filed_it_under(svc, tmp_path):
+    sid = _filed(svc, tmp_path, suggested_list="family")
+    host = TwoListHost(svc)
+    review.approve(host, sid, config=MailConfig())
+    assert [t["href"] for t in host.tasks] == ["/dav/me/family/"]
+    # Not learned: the owner chose nothing.
+    assert svc.mail(store.mail_list_memory) == {}
+
+
+def test_approving_falls_back_when_the_filed_list_is_gone(svc, tmp_path):
+    sid = _filed(svc, tmp_path, suggested_list="gone")
+    host = TwoListHost(svc)
+    review.approve(host, sid, config=MailConfig())
+    assert [t["href"] for t in host.tasks] == ["/dav/me/inbox/"]
+    assert svc.mail(store.mail_list_memory) == {}
+
+
+def test_a_list_chosen_on_the_card_wins_and_is_learned_for_the_group(svc, tmp_path):
+    sid = _filed(svc, tmp_path, suggested_list="inbox")
+    host = TwoListHost(svc)
+    review.approve(host, sid, config=MailConfig(), list_id="family")
+    assert [t["href"] for t in host.tasks] == ["/dav/me/family/"]
+    assert svc.mail(store.mail_list_memory) == {"dc psychology": "family"}
+
+
+def test_nothing_is_learned_without_a_group(svc, tmp_path):
+    sid = _filed(svc, tmp_path, suggested_list=None, group=None)
+    review.approve(TwoListHost(svc), sid, config=MailConfig(), list_id="family")
+    assert svc.mail(store.mail_list_memory) == {}
+
+
+def test_the_dto_carries_the_filed_list_and_group(svc, tmp_path):
+    sid = _filed(svc, tmp_path, suggested_list="family")
+    dto = review.suggestion_dto(svc.mail(store.mail_get_suggestion, sid))
+    assert (dto["list"], dto["group"]) == ("family", "DC Psychology")
+
+
 def test_reject_records_merged_messages_under_their_own_thread(svc, tmp_path):
     a = eml("pipe_request")                                            # thread req-1
     b = a.replace(b"<req-1@club.example>", b"<other-1@club.example>")  # another thread
@@ -299,14 +355,16 @@ def test_approving_an_update_maps_its_thread_to_the_task(svc, tmp_path):
     assert (th["task_list"], th["task_uid"], th["suggestion_id"]) == ("/dav/me/family/", "t1",
                                                                       None)
 
-    # A later reply is an update to the same task, without asking again.
+    # A later reply is checked against that task alone (one match call for it,
+    # after the one that found the task); the answer "update" stages an update.
     out = ing.process_message(INBOX, eml("pipe_reply_quoting"), uid=2)
     assert (out.stage, out.outcome) == ("dedup", "staged")
     assert out.detail.startswith("update to the thread's task")
     upd = svc.mail(store.mail_get_suggestion, out.suggestion_id)
     assert (upd["kind"], upd["target_list"], upd["target_uid"]) == ("update", "/dav/me/family/",
                                                                     "t1")
-    assert len(llm.match_calls) == 1
+    assert len(llm.match_calls) == 2
+    assert [c.label for c in llm.match_calls[1][1]] == ["T1"]
 
 
 def test_an_update_names_merged_senders_by_name(svc, tmp_path):
