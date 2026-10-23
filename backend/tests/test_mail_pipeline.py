@@ -2104,7 +2104,7 @@ def test_a_mail_from_someone_else_with_no_text_is_not_read(svc, secrets):
     assert llm.extract_calls == []
 
 
-# ── a stored start is the owner's wall clock ──
+# ── a stored start is read on one clock: its own, a UTC one on the owner's ──
 
 def _utc_invite(start=b"20261014T160000Z", end=b"20261014T173000Z") -> bytes:
     return (eml("pipe_invite")
@@ -2143,26 +2143,24 @@ def test_a_pending_utc_event_is_offered_on_its_local_day(svc, secrets):
     assert [(c.label, c.due) for c in candidates] == [("S1", "2026-10-15")]
 
 
-@pytest.mark.parametrize("stamp, walls, day", [
-    # UTC: a machine's time, so the owner's clock too, and the owner's day
-    ("2026-10-14T22:30:00+00:00", ("2026-10-14T22:30:00", "2026-10-15T00:30:00"), "2026-10-15"),
-    # the sender's zone: its own clock is what prose restates, and its own day
-    ("2026-10-14T20:00:00-04:00", ("2026-10-14T20:00:00", "2026-10-15T02:00:00"), "2026-10-14"),
-    # already the owner's zone, naive, a date, nothing, junk
-    ("2026-10-14T18:00:00+02:00", ("2026-10-14T18:00:00",), "2026-10-14"),
-    ("2026-10-14T18:00:00", ("2026-10-14T18:00:00",), "2026-10-14"),
-    ("2026-10-14", ("2026-10-14",), "2026-10-14"),
-    (None, (), None),
-    ("not a date", ("not a date",), "not a date"),
+@pytest.mark.parametrize("stamp, berlin, no_zone", [
+    # UTC: a machine's time, read on the owner's clock when there is one
+    ("2026-10-14T22:30:00+00:00", "2026-10-15T00:30:00", "2026-10-14T22:30:00"),
+    # the sender's zone, or the owner's: its own clock
+    ("2026-10-14T20:00:00-04:00", "2026-10-14T20:00:00", "2026-10-14T20:00:00"),
+    ("2026-10-14T18:00:00+02:00", "2026-10-14T18:00:00", "2026-10-14T18:00:00"),
+    # naive, a date, nothing, junk
+    ("2026-10-14T18:00:00", "2026-10-14T18:00:00", "2026-10-14T18:00:00"),
+    ("2026-10-14", "2026-10-14", "2026-10-14"),
+    (None, "", ""),
+    ("not a date", "not a date", "not a date"),
     # the edge of the calendar: as stamped, never an error
-    ("9999-12-31T23:30:00+00:00", ("9999-12-31T23:30:00",), "9999-12-31"),
+    ("9999-12-31T23:30:00+00:00", "9999-12-31T23:30:00", "9999-12-31T23:30:00"),
 ])
-def test_a_stored_start_reads_on_its_own_clock_and_the_owners(stamp, walls, day):
+def test_a_stored_start_is_read_on_one_clock(stamp, berlin, no_zone):
     from zoneinfo import ZoneInfo
-    berlin = ZoneInfo("Europe/Berlin")
-    assert pipeline._walls(stamp, berlin) == walls
-    assert pipeline._day_of(stamp, berlin) == day
-    assert pipeline._walls(stamp, None) == walls[:1]
+    assert pipeline._wall_clock(stamp, ZoneInfo("Europe/Berlin")) == berlin
+    assert pipeline._wall_clock(stamp, None) == no_zone
 
 
 def _new_york_invite() -> bytes:
@@ -2188,6 +2186,60 @@ def test_a_reply_restating_a_foreign_invites_own_time_adds_no_time(svc, secrets)
     [s] = pending(svc)
     [u] = review.suggestion_dto(s)["updates"]
     assert "20:00" not in u["notes"]
+
+
+def test_a_reply_moving_a_utc_invite_onto_its_utc_reading_is_a_move(svc, secrets):
+    # 16:00Z is 18:00 in Berlin; a reply moving it to 16:00 Berlin time is a
+    # move, even though 16:00 is what the stamp says in UTC.
+    svc.update_settings({"home_timezone": "Europe/Berlin"})
+    set_config(svc, kind_decider="model")
+    llm = FakeLlm(extract=extraction("Parent evening", kind="event",
+                                     event_start=datetime(2026, 10, 14, 16, 0)))
+    ing = ingestor(svc, secrets, llm)
+    ing.process_message(INBOX, _utc_invite(), uid=1)
+    out = ing.process_message(
+        INBOX, reply(2, "We have to start at 16:00 instead.", root="invite-1@school.example"), uid=2)
+    assert (out.stage, out.outcome) == ("dedup", "attached")
+    [s] = pending(svc)
+    [u] = review.suggestion_dto(s)["updates"]
+    assert "2026-10-14 16:00" in u["notes"]
+
+
+def test_a_reply_moving_a_foreign_invite_onto_the_owners_reading_is_a_move(svc, secrets):
+    # 18:00 in London (summer) is 19:00 in Berlin; "pushed back an hour" to
+    # 19:00 London time is a move, though 19:00 is the owner's reading.
+    svc.update_settings({"home_timezone": "Europe/Berlin"})
+    set_config(svc, kind_decider="model")
+    llm = FakeLlm(extract=extraction("Parent evening", kind="event",
+                                     event_start=datetime(2026, 10, 14, 19, 0)))
+    ing = ingestor(svc, secrets, llm)
+    london = eml("pipe_invite").replace(b"TZID=Europe/Berlin", b"TZID=Europe/London")
+    ing.process_message(INBOX, london, uid=1)
+    [s] = pending(svc)
+    assert s["event_start"] == "2026-10-14T18:00:00+01:00"
+    out = ing.process_message(
+        INBOX, reply(2, "Pushed back an hour.", root="invite-1@school.example"), uid=2)
+    assert (out.stage, out.outcome) == ("dedup", "attached")
+    [s] = pending(svc)
+    [u] = review.suggestion_dto(s)["updates"]
+    assert "2026-10-14 19:00" in u["notes"]
+
+
+def test_an_approved_foreign_event_moved_to_the_next_day_is_staged(svc, secrets):
+    # 20:00 in New York is already the 15th in Berlin; the 15th at 20:00 New
+    # York time is a new day for the event, not the one on the calendar.
+    svc.update_settings({"home_timezone": "Europe/Berlin"})
+    set_config(svc, kind_decider="model")
+    # the invite takes the fast path, so the reply is the only model read
+    llm = FakeLlm(extract=extraction("Parent evening", kind="event",
+                                     event_start=datetime(2026, 10, 15, 20, 0)))
+    host = _EventHost(svc)
+    ing = ingestor(svc, secrets, llm, host=host)
+    first = ing.process_message(INBOX, _new_york_invite(), uid=1)
+    review.approve(host, first.suggestion_id, config=ing.config())
+    out = ing.process_message(
+        INBOX, reply(2, "Postponed to tomorrow, same time.", root="invite-1@school.example"), uid=2)
+    assert (out.stage, out.outcome) == ("stage", "staged")
 
 
 def test_an_approved_foreign_event_restated_on_its_own_day_is_not_staged_again(svc, secrets):
