@@ -2724,16 +2724,16 @@ def search_open_tasks_any(
         return []
     match = " OR ".join(f'"{t}"*' for t in clean)
     hrefs = sorted(set(collections)) if collections is not None else []
-    in_clause = f" AND i.collection_href IN ({', '.join('?' * len(hrefs))})" if hrefs else ""
+    in_lists = f" AND i.collection_href IN ({', '.join('?' * len(hrefs))})" if hrefs else ""
     try:
         return list(conn.execute(
-            # Only "?" placeholders are built into the statement; the values are bound.
-            """SELECT i.* FROM items_fts f
-               JOIN items i ON i.collection_href=f.collection_href AND i.uid=f.uid
-               WHERE items_fts MATCH ? AND i.component='VTODO' AND i.completed IS NULL
-                 AND (i.status IS NULL OR i.status NOT IN ('COMPLETED','CANCELLED'))"""
-            + in_clause + """
-               ORDER BY rank LIMIT ?""",
+            # Every fragment is a literal in this function: `in_lists` is "?"
+            # placeholders only, and the hrefs are bound like every other value.
+            "SELECT i.* FROM items_fts f "  # nosec B608
+            "JOIN items i ON i.collection_href=f.collection_href AND i.uid=f.uid "
+            "WHERE items_fts MATCH ? AND i.component='VTODO' AND i.completed IS NULL "
+            "AND (i.status IS NULL OR i.status NOT IN ('COMPLETED','CANCELLED'))"
+            f"{in_lists} ORDER BY rank LIMIT ?",
             (match, *hrefs, max(1, min(limit, 50))),
         ))
     except sqlite3.OperationalError:
