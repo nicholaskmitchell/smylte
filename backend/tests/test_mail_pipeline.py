@@ -1952,7 +1952,7 @@ def test_a_default_list_that_no_longer_exists_is_ignored_by_the_search(svc, secr
     assert [c.title for c in candidates] == ["Unit 1 Exam"]
 
 
-# ── review fixes: zones, pending events, dismissed event-made tasks, subject-only mail ──
+# ── review fixes: zones, pending events, dismissed event-made tasks, mail with nothing of its own ──
 
 def test_a_prose_reply_restating_an_invites_start_adds_no_time(svc, secrets):
     set_config(svc, kind_decider="model")
@@ -2143,17 +2143,67 @@ def test_a_pending_utc_event_is_offered_on_its_local_day(svc, secrets):
     assert [(c.label, c.due) for c in candidates] == [("S1", "2026-10-15")]
 
 
-@pytest.mark.parametrize("stamp, want", [
-    ("2026-10-14T22:30:00+00:00", "2026-10-15T00:30:00"),
-    ("2026-10-14T18:00:00", "2026-10-14T18:00:00"),
-    ("2026-10-14", "2026-10-14"),
-    (None, ""),
-    ("not a date", "not a date"),
-    ("9999-12-31T23:30:00+00:00", "9999-12-31T23:30:00"),
+@pytest.mark.parametrize("stamp, walls, day", [
+    # UTC: a machine's time, so the owner's clock too, and the owner's day
+    ("2026-10-14T22:30:00+00:00", ("2026-10-14T22:30:00", "2026-10-15T00:30:00"), "2026-10-15"),
+    # the sender's zone: its own clock is what prose restates, and its own day
+    ("2026-10-14T20:00:00-04:00", ("2026-10-14T20:00:00", "2026-10-15T02:00:00"), "2026-10-14"),
+    # already the owner's zone, naive, a date, nothing, junk
+    ("2026-10-14T18:00:00+02:00", ("2026-10-14T18:00:00",), "2026-10-14"),
+    ("2026-10-14T18:00:00", ("2026-10-14T18:00:00",), "2026-10-14"),
+    ("2026-10-14", ("2026-10-14",), "2026-10-14"),
+    (None, (), None),
+    ("not a date", ("not a date",), "not a date"),
+    # the edge of the calendar: as stamped, never an error
+    ("9999-12-31T23:30:00+00:00", ("9999-12-31T23:30:00",), "9999-12-31"),
 ])
-def test_a_stored_start_reads_as_the_owners_wall_clock(stamp, want):
+def test_a_stored_start_reads_on_its_own_clock_and_the_owners(stamp, walls, day):
     from zoneinfo import ZoneInfo
-    assert pipeline._wall(stamp, ZoneInfo("Europe/Berlin")) == want
+    berlin = ZoneInfo("Europe/Berlin")
+    assert pipeline._walls(stamp, berlin) == walls
+    assert pipeline._day_of(stamp, berlin) == day
+    assert pipeline._walls(stamp, None) == walls[:1]
+
+
+def _new_york_invite() -> bytes:
+    return (eml("pipe_invite")
+            .replace(b"DTSTART;TZID=Europe/Berlin:20261014T180000",
+                     b"DTSTART;TZID=America/New_York:20261014T200000")
+            .replace(b"DTEND;TZID=Europe/Berlin:20261014T193000",
+                     b"DTEND;TZID=America/New_York:20261014T213000"))
+
+
+def test_a_reply_restating_a_foreign_invites_own_time_adds_no_time(svc, secrets):
+    svc.update_settings({"home_timezone": "Europe/Berlin"})
+    set_config(svc, kind_decider="model")
+    llm = FakeLlm(extract=extraction("Parent evening", kind="event",
+                                     event_start=datetime(2026, 10, 14, 20, 0)))
+    ing = ingestor(svc, secrets, llm)
+    first = ing.process_message(INBOX, _new_york_invite(), uid=1)
+    [s] = pending(svc)
+    assert s["event_start"] == "2026-10-14T20:00:00-04:00"
+    out = ing.process_message(
+        INBOX, reply(2, "See you at 8pm.", root="invite-1@school.example"), uid=2)
+    assert (out.stage, out.outcome, out.suggestion_id) == ("dedup", "attached", first.suggestion_id)
+    [s] = pending(svc)
+    [u] = review.suggestion_dto(s)["updates"]
+    assert "20:00" not in u["notes"]
+
+
+def test_an_approved_foreign_event_restated_on_its_own_day_is_not_staged_again(svc, secrets):
+    svc.update_settings({"home_timezone": "Europe/Berlin"})
+    set_config(svc, kind_decider="model")
+    llm = FakeLlm(extract=extraction("Parent evening", kind="event",
+                                     event_start=datetime(2026, 10, 14, 20, 0)))
+    host = _EventHost(svc)
+    ing = ingestor(svc, secrets, llm, host=host)
+    first = ing.process_message(INBOX, _new_york_invite(), uid=1)
+    review.approve(host, first.suggestion_id, config=ing.config())
+    out = ing.process_message(
+        INBOX, reply(2, "See you at 8pm.", root="invite-1@school.example"), uid=2)
+    assert (out.stage, out.outcome) == ("dedup", "duplicate")
+    assert out.detail.startswith("already added as an event")
+    assert pending(svc) == []
 
 
 def test_an_approved_utc_event_restated_on_its_local_day_is_not_staged_again(svc, secrets):
