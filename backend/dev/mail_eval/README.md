@@ -8,10 +8,10 @@ is always `claude-haiku-5-5` — the production default — with a $2 cap.
 is reported on the emails it covers).
 
 ## The data
-`emails.jsonl` (178 emails, 88 actionable / 90 not, 42 in German) and
+`emails.jsonl` (190 emails, 94 actionable / 96 not, 42 in German) and
 `dedup.jsonl` (98 duplicate-check cases: 37 new, 29 duplicate, 32 update) are
 synthetic, written to a label by one model and re-labelled blind by another;
-`clean` is true where the two agreed and neither called it borderline (137
+`clean` is true where the two agreed and neither called it borderline (147
 emails, 95 dedup cases). Every domain is fictional. It is a stand-in for the
 owner's mail, not a sample of it — the numbers say which design is safer, not
 what accuracy to expect at home.
@@ -43,13 +43,32 @@ was declined. The labels follow that standard now:
   titles that still carry a date, due mismatches, and actionable mail from
   no-reply senders, which the bulk filter drops before any model reads it.
 
-The results below predate this and were measured on the old labels. The new
-prompt has not been run against Claude Haiku yet (the change was made without
-an Anthropic key). A dry run with a stronger model reading the prompt as
-written, on 177 of the 178 emails, decided actionable or not correctly for
-every clean one and 173 of all; it put no date in any title, matched every
-`gold_due`, and chose the right kind for 70 of 71 clean actionable emails.
-That says the prompt reads as intended, not what Haiku will score.
+## Titles, lists and what is not for the owner (since 2026-10-23)
+The owner's next round of examples: titles that wrapped an assignment's name
+in a verb and the class ("Complete assignment "4.2 - Anxiety Disorders" for DC
+Psychology" for what they keep as "4.2 - Anxiety Disorders" in their DC
+Psychology list), every task in the default list, school-wide announcements
+(a signing day, a career fair) and meeting times still being traded. So:
+
+- `new23`–`new34`, written and blind-labelled the same way, carry
+  `gold_title` and `gold_list` (a name from `mail_eval.OWNER_LISTS`, a fixed
+  fictional owner's lists passed with every email). `--claude` reports lists
+  right, exact titles and coursework titles that still start with a verb.
+- Relabelled: `sch-07` (a teacher offering two lesson slots) and `per23` (a
+  date poll) are not actionable — the owner wants nothing while a time is
+  being agreed, only the email that sets it. `new30` (a proposed meeting date)
+  was written as a reply task and is labelled not actionable for the same
+  reason; `new32` restates a task the owner already has, which only the
+  pipeline's dedup can know, so as a single email it is a request.
+
+The results below predate both rounds and were measured on the old labels.
+The current prompt has not been run against Claude Haiku yet (both changes
+were made without an Anthropic key). A dry run with a stronger model reading
+the prompt as written decided actionable or not correctly for all 147 clean
+emails and 186 of 190; for the tasks with a `gold_list` or `gold_title` it
+filed 7 of 7 in the right list with the exact title, and it put no date in a
+title except one that is part of the item's name ("2026/27"). That says the
+prompt reads as intended, not what Haiku will score.
 
 ## Results (2026-10-05, jev-1.13.0 and claude-haiku-4-5, old labels)
 
@@ -88,7 +107,8 @@ list. Jev fired on plain rewordings (0.5–0.9) — the indirection its docs war
 about — and the only threshold that rescued it (0.9) collapsed at 0.95.
 
 ## Cost of one full run
-Jev: ~250k input tokens (≈ $0.01). Claude Haiku 5.5 with the 2026-10-12
-prompt, which is about 1.5k tokens longer: roughly 0.7M input + ~45k output
-tokens (≈ $0.10), an estimate until the next run. The 2026-10-05 run (Haiku
-4.5, the old prompt, 156 emails) took ~370k input + ~40k output (≈ $0.57).
+Jev: ~250k input tokens (≈ $0.01). Claude Haiku 5.5 with the 2026-10-23
+prompt, about 3k tokens of instructions per email, on 190 emails: roughly
+0.9M input + ~50k output tokens (≈ $0.12), an estimate until the next run.
+The 2026-10-05 run (Haiku 4.5, the old prompt, 156 emails) took ~370k input +
+~40k output (≈ $0.57).

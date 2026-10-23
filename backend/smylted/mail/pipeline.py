@@ -13,7 +13,8 @@ message should become:
  5. always_parse— the owner's allow list, honoured only for authenticated mail
  6. bulk        — newsletters and robots (List-Unsubscribe, Precedence, ...)
  7. fast path   — an attached invite becomes an event without the model
- 8. extract     — the model reads what is left of the body and names its category
+ 8. extract     — the model reads what is left of the body, names its category
+                  and its class, and picks a list
  9. dedup       — same thread, an open task, a pending or a dismissed suggestion
 10. stage       — write the suggestion
 
@@ -82,10 +83,19 @@ Why it is built this way:
   payment information", "save your files before they are deleted"), because
   that is mail the owner manages, or ignores, without a to-do. A note to self
   passes whatever its category, and so does an authenticated always_parse
-  sender's mail unless it is marketing: the allow list is how the owner
-  rescues a sender the model misfiles, not a way in for its promotions. An
-  unknown category (a model that ignored the schema) passes, as everything
-  did before.
+  sender's mail unless it is marketing or an announcement to everyone: the
+  allow list is how the owner rescues a sender the model misfiles, not a way
+  in for its promotions. An unknown category (a model that ignored the
+  schema) passes, as everything did before.
+- **Filed where the owner would file it.** The model sees the owner's
+  list names and picks one for the item's class; `filing.route` checks an
+  exact name first, then where the owner filed that class before (learned
+  when they choose a list on the card), then the model's pick. Titles lose
+  the class the list already names ("4.2 - Anxiety Disorders", not
+  "Complete 4.2 for DC Psychology"), and dedup compares only items filed in
+  the same list, since two classes can both have a "Unit 1 Exam".
+- **A reply to a task's thread that adds nothing** is a duplicate, not an
+  update the owner has to dismiss; a moved deadline is always an update.
 - **Jev needs a key to be asked at all.** "jev" is the default for both
   decisions, but without a TypeSafe key the model decides, silently: the
   key's presence is the owner's opt-in to sending email text to TypeSafe,
@@ -97,6 +107,7 @@ keys, stages and outcomes, and every error string passes through `redact`.
 from __future__ import annotations
 
 import email
+import dataclasses
 import hashlib
 import json
 import logging
@@ -109,13 +120,13 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from ..db import store
-from . import addresses, authres, fastpaths, imap, kindrules, message, review, settings
+from . import addresses, authres, fastpaths, filing, imap, kindrules, message, review, settings
 from .imap import FolderInfo, ImapConfig, MailConnectError
 from .jev import CHANGED_T as JEV_CHANGED_T
 from .jev import MIN_CONFIDENCE as JEV_MIN_CONFIDENCE
 from .jev import JevClient, JevError
-from .llm import (IGNORED_CATEGORIES, NOTES_MAX, Candidate, EmailForExtraction, Extraction,
-                  LlmClient, LlmError, Match)
+from .llm import (IGNORED_CATEGORIES, MAX_LISTS, NOTES_MAX, Candidate, EmailForExtraction,
+                  Extraction, LlmClient, LlmError, Match)
 from .message import ParsedMessage
 from .redact import redact, redact_exc
 from .secrets import SecretStoreError
@@ -139,6 +150,9 @@ MAX_CANDIDATE_SUGGESTIONS = 5
 MAX_CANDIDATE_REJECTIONS = 5
 MAX_FASTPATH_EVENTS = 5
 MAX_DETAIL_CHARS = 500
+
+# an allow-listed sender is trusted to matter, not its advertising or its broadcasts
+_ALWAYS_PARSE_STILL_GATED = frozenset({"marketing", "announcement"})
 
 _BULK_PRECEDENCE = frozenset({"bulk", "list", "junk"})
 _STOPWORDS = frozenset({
@@ -188,6 +202,10 @@ class _Msg:
     internaldate: datetime | None
     cfg: MailConfig
     extra: list[str] = field(default_factory=list)   # reasons appended to the final ledger detail
+    list_slug: str | None = None                     # the owner's list the item is filed under
+    list_name: str = ""
+    group: str = ""
+    default_list: str | None = None                  # where a task with no list of its own lands
 
     @property
     def sent(self) -> datetime | None:
@@ -281,6 +299,11 @@ def _all_day(start: date | datetime) -> bool:
 
 def _day(value: date | datetime) -> date:
     return value.date() if isinstance(value, datetime) else value
+
+
+def _slug(x: str) -> str:
+    """A list's short id from an href, or the id itself."""
+    return x.rstrip("/").rsplit("/", 1)[-1]
 
 
 class Ingestor:
@@ -761,10 +784,15 @@ class Ingestor:
                                 "nothing left after removing quoted text")
         if len(body) > cfg.body_max_chars:
             body = body[:cfg.body_max_chars] + "\n[…truncated]"
+        lists = self._owner_lists()
+        # the list an unfiled task lands in: the same "configured, else first"
+        # rule review.approve uses
+        c.default_list = cfg.task_list or (lists[0][0] if lists else None)
         try:
             ex = self.llm.extract(EmailForExtraction(
                 sender_name=msg.from_name, sender_addr=sender, subject=msg.subject,
-                sent=c.sent, body=body))
+                sent=c.sent, body=body, lists=tuple(name for _, name in lists),
+                owner_role=self._owner_role(msg, cfg)))
         except LlmError as e:
             return self._llm_failed(c, "extract", e)
         category = f"category {ex.category}; " if ex.category else ""
@@ -774,9 +802,10 @@ class Ingestor:
         # Only the categories the owner wants become suggestions. A note to
         # self is the owner's own say-so whatever the model called it; an
         # authenticated always_parse sender is trusted to matter, but not
-        # its advertising.
+        # its advertising or its broadcasts.
         if ex.category in IGNORED_CATEGORIES:
-            if not (note_to_self or (bypass_bulk and ex.category != "marketing")):
+            if not (note_to_self
+                    or (bypass_bulk and ex.category not in _ALWAYS_PARSE_STILL_GATED)):
                 return self._settle(c, "extract", "not_actionable",
                                     f"category {ex.category} is not suggested; "
                                     f"confidence {ex.confidence:.2f}")
@@ -788,8 +817,47 @@ class Ingestor:
         kind, why = self._decide_kind(c, ex, body)
         c.extra.append(why)
 
+        # File a task where the owner would (an event keeps no list; a task
+        # made from an event by a decider is a task here).
+        if kind == "task":
+            memory = self._host.mail(store.mail_list_memory)
+            slug, how = filing.route(ex.group, ex.list_name, lists, memory)
+            if slug is not None:
+                c.list_slug = slug
+                c.list_name = next(name for s, name in lists if s == slug)
+                c.extra.append(f"list {c.list_name} ({how})")
+            c.group = ex.group
+            if ex.category == "coursework":
+                ex = dataclasses.replace(ex, title=filing.tidy_title(
+                    ex.title, [n for n in (ex.group, c.list_name) if n]))
+
         # 9 + 10. dedup, then stage
         return self._dedup(c, ex, kind)
+
+    def _owner_lists(self) -> list[tuple[str, str]]:
+        """The owner's task lists as (slug, name), for filing. Read from the
+        collection cache, not `list_lists`, which also counts every list's
+        items; a failure means no filing, never a failed message."""
+        try:
+            rows = self._host.mail(store.get_collections)
+        except Exception as exc:  # noqa: BLE001
+            self._log.warning("mail: could not read the task lists: %s", redact_exc(exc))
+            return []
+        out = []
+        for r in rows:
+            if "VTODO" in (r["components"] or "") and (r["displayname"] or "").strip():
+                out.append((r["href"].rstrip("/").rsplit("/", 1)[-1], r["displayname"].strip()))
+        return out[:MAX_LISTS]
+
+    @staticmethod
+    def _owner_role(msg: ParsedMessage, cfg: MailConfig) -> str:
+        if not cfg.self_addresses:
+            return ""
+        if any(addresses.is_self(a, cfg.self_addresses) for a in msg.to):
+            return "to"
+        if any(addresses.is_self(a, cfg.self_addresses) for a in msg.cc):
+            return "cc"
+        return ""
 
     @staticmethod
     def _bulk_reason(msg: ParsedMessage, sender: str) -> str | None:
@@ -882,6 +950,23 @@ class Ingestor:
         if kind == "task" and th is not None and th["task_uid"]:
             task = host.get_task(th["task_list"], th["task_uid"])
             if task and not task["completed"] and not task["cancelled"]:
+                # A reply is not new work by default, but one that adds nothing
+                # is a duplicate, not an update the owner has to dismiss.
+                cand = [Candidate("T1", task["summary"] or "", task.get("notes") or "",
+                                  task.get("due"))]
+                m = (self._jev_match(c, ex, cand) if self._jev_ready(c.cfg.dedup_decider)
+                     else None)
+                if m is None:
+                    try:
+                        m = self.llm.match(ex, cand)
+                    except LlmError as e:
+                        if e.kind in ("transient", "config"):
+                            return self._llm_failed(c, "dedup", e)
+                        m = Match("update", "T1")
+                moved = ex.due is not None and ex.due.isoformat() != (task.get("due") or "")[:10]
+                if m.decision == "duplicate" and not moved:
+                    return self._settle(c, "dedup", "duplicate",
+                                        "nothing new for the thread's task")
                 fields = self._fields("update", c, ex=ex,
                                       target=(th["task_list"], th["task_uid"]))
                 return self._stage(c, fields, "dedup", "update to the thread's task")
@@ -890,13 +975,26 @@ class Ingestor:
         candidates: list[Candidate] = []
         targets: dict[str, Any] = {}
         if kind == "task":
-            tasks = host.search_open_tasks_any(_terms(ex), limit=MAX_CANDIDATE_TASKS)
+            # Titles no longer carry the class, so "Unit 1 Exam" in two classes
+            # would otherwise look like one task: compare within the item's list
+            # and the default list (where everything filed before filing existed
+            # lives). Searched wider first, so tasks in other lists cannot crowd
+            # the right one out of the few that are asked about.
+            if c.list_slug:
+                keep = {c.list_slug, c.default_list}
+                tasks = [t for t in host.search_open_tasks_any(_terms(ex), limit=50)
+                         if _slug(t["list"]) in keep]
+            else:
+                tasks = host.search_open_tasks_any(_terms(ex), limit=MAX_CANDIDATE_TASKS)
             for i, t in enumerate(tasks[:MAX_CANDIDATE_TASKS], 1):
                 label = f"T{i}"
                 candidates.append(Candidate(label, t["summary"] or "", t.get("notes") or "",
                                             t.get("due")))
                 targets[label] = t
         pending = host.mail(store.mail_list_suggestions, status="pending", limit=200)
+        if c.list_slug:
+            pending = [s for s in pending
+                       if not s["suggested_list"] or s["suggested_list"] == c.list_slug]
         scored = [(_overlap(ex.title, s["title"]), i, s) for i, s in enumerate(pending)]
         scored = sorted((x for x in scored if x[0] > 0), key=lambda x: (-x[0], x[1]))
         for i, (_, _, s) in enumerate(scored[:MAX_CANDIDATE_SUGGESTIONS], 1):
@@ -1071,6 +1169,8 @@ class Ingestor:
                     notes = "\n".join(p for p in (notes, extra) if p)[:NOTES_MAX]
             out.update(title=ex.title, notes=notes,
                        due=due.isoformat() if due else None, confidence=ex.confidence)
+            if kind == "task":
+                out.update(suggested_list=c.list_slug, list_group=c.group or None)
         if target is not None:
             out.update(target_list=target[0], target_uid=target[1])
         return out

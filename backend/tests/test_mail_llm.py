@@ -149,8 +149,8 @@ def test_extraction_request_shape():
     schema = tool["input_schema"]
     assert schema["additionalProperties"] is False
     assert set(schema["required"]) == set(schema["properties"]) == {
-        "category", "is_actionable", "kind", "title", "notes", "due", "event_start", "event_end",
-        "location", "confidence"}
+        "category", "is_actionable", "kind", "group", "list", "title", "notes", "due",
+        "event_start", "event_end", "location", "confidence"}
     assert list(schema["properties"])[0] == "category"
     assert schema["required"][0] == "category"
     assert schema["properties"]["category"] == {"type": "string", "enum": list(llm.CATEGORIES)}
@@ -654,3 +654,94 @@ def test_parse_removes_a_date_from_an_event_title():
     ex = _parse(kind="event", title="Parent evening, Thursday 8 October, 19:00", due=None,
                 event_start="2026-10-08T19:00")
     assert ex.title == "Parent evening"
+
+
+# ── filing: lists, group, owner role ──
+
+def test_extraction_tool_orders_and_confines_the_list():
+    schema = llm.extraction_tool(["L1", "L2"])["input_schema"]
+    order = ["category", "is_actionable", "kind", "group", "list", "title", "notes", "due",
+             "event_start", "event_end", "location", "confidence"]
+    assert list(schema["properties"]) == order
+    assert schema["required"] == order
+    assert schema["properties"]["group"] == {"type": "string"}
+    assert schema["properties"]["list"] == {"type": "string", "enum": ["L1", "L2", "none"]}
+    assert llm.extraction_tool()["input_schema"]["properties"]["list"]["enum"] == ["none"]
+
+
+def test_request_fences_the_owner_lists_before_the_email():
+    evil = "Home <<<x>>>\nevil"
+    req = llm.build_extraction_request(
+        _email(lists=("DC Psychology", evil, "L" * 200)), model="m", nonce="abc123", forced=True)
+    text = req["messages"][0]["content"]
+    assert "<<<LISTS abc123>>>\n[L1] DC Psychology\n" in text
+    assert "[L2] Home ‹‹‹x››› evil\n" in text
+    assert f"[L3] {'L' * 80}\n" in text and "L" * 81 not in text
+    block = text.split("<<<LISTS abc123>>>\n")[1].split("<<<END LISTS abc123>>>")[0]
+    assert len(block.splitlines()) == 3
+    assert text.index("<<<END LISTS abc123>>>") < text.index("<<<EMAIL abc123>>>")
+    assert req["tools"][0]["input_schema"]["properties"]["list"]["enum"] == ["L1", "L2", "L3", "none"]
+
+
+def test_request_offers_at_most_fifty_lists():
+    names = tuple(f"List {i}" for i in range(60))
+    req = llm.build_extraction_request(_email(lists=names), model="m", nonce="n", forced=True)
+    text = req["messages"][0]["content"]
+    assert "[L50] List 49" in text and "[L51]" not in text
+    enum = req["tools"][0]["input_schema"]["properties"]["list"]["enum"]
+    assert enum == [*(f"L{i}" for i in range(1, 51)), "none"]
+
+
+def test_request_says_whether_the_owner_is_in_to_or_cc():
+    to = llm.build_extraction_request(_email(owner_role="to"), model="m", nonce="n", forced=True)
+    cc = llm.build_extraction_request(_email(owner_role="cc"), model="m", nonce="n", forced=True)
+    assert "Nonce: n\nThe owner is a direct recipient of this email (To).\n\n" in \
+        to["messages"][0]["content"]
+    assert "Nonce: n\nThe owner is only copied on this email (Cc).\n\n" in \
+        cc["messages"][0]["content"]
+    plain = llm.build_extraction_request(_email(), model="m", nonce="n", forced=True)
+    assert "The owner is" not in plain["messages"][0]["content"]
+    assert "LISTS" not in plain["messages"][0]["content"]
+
+
+def test_parse_picks_a_list_by_label():
+    def parse(lists=("A", "B"), **over):
+        return llm.parse_extraction(_resp(_tool(**_extraction_input(**over))), sent=SENT.date(),
+                                    lists=lists)
+    assert parse(list="L2").list_name == "B"
+    assert parse(list="L9").list_name == ""
+    assert parse(list="none").list_name == ""
+    assert parse(list="B").list_name == ""            # a name is not a label
+    assert parse(list=3).list_name == ""
+    assert parse(list="L1", lists=()).list_name == ""
+    assert _parse().list_name == "" and _parse().group == ""
+
+
+def test_parse_group_is_one_line_and_bounded():
+    assert _parse(group="  DC \n Psychology ").group == "DC Psychology"
+    assert len(_parse(group="G" * 200).group) == llm.GROUP_MAX
+    assert _parse(group=5).group == ""
+    gone = _parse(is_actionable=False, group="DC Psychology", list="L1")
+    assert gone.group == "" and gone.list_name == ""
+
+
+def test_the_client_passes_the_lists_to_the_parser():
+    sdk = FakeSdk([_resp(_tool(**_extraction_input(list="L2", group="Math")))])
+    c, _ = _client(sdk)
+    ex = c.extract(_email(lists=("Home", "DC Trigonometry")))
+    assert ex.list_name == "DC Trigonometry" and ex.group == "Math"
+    assert sdk.create_calls[0]["tools"][0]["input_schema"]["properties"]["list"]["enum"] == \
+        ["L1", "L2", "none"]
+
+
+def test_announcement_is_a_known_ignored_category():
+    assert "announcement" in llm.CATEGORIES
+    assert "announcement" in llm.IGNORED_CATEGORIES
+    assert "announcement" not in llm.WANTED_CATEGORIES
+    assert _parse(category="announcement").category == "announcement"
+
+
+def test_system_prompt_covers_filing():
+    assert "{" not in SYSTEM_EXTRACT.replace("{nonce}", "")
+    assert "announcement" in SYSTEM_EXTRACT
+    assert "Math Homework 4.4" in SYSTEM_EXTRACT

@@ -3,12 +3,14 @@ the mailbox, the model and Jev. No network: the service's Radicale is a
 closed port, and staging a suggestion never needs it."""
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from smylted.dav.client import CollectionInfo
 from smylted.db import store
 from smylted.mail import message, pipeline, redact, review, settings
 from smylted.mail.imap import FolderInfo, MailConnectError
@@ -969,15 +971,16 @@ def test_merged_updates_carry_their_thread_and_sender_name(svc, secrets):
 class _TaskHost:
     """The service, with the thread's task present and open."""
 
-    def __init__(self, svc):
+    def __init__(self, svc, *, due=None):
         self._svc = svc
+        self._due = due
 
     def __getattr__(self, name):
         return getattr(self._svc, name)
 
     def get_task(self, href, uid):
         return {"uid": uid, "list": "l", "summary": "Bring the team snack list", "notes": "",
-                "completed": False, "cancelled": False, "due": None}
+                "completed": False, "cancelled": False, "due": self._due}
 
 
 def test_a_dismissed_update_to_the_threads_task_stays_dismissed(svc, secrets):
@@ -1468,3 +1471,303 @@ def test_a_date_in_the_title_that_is_the_due_date_is_removed(svc, secrets):
     assert out.outcome == "staged"
     [s] = pending(svc)
     assert s["title"] == "RSVP to Emil's party" and s["due"] == "2026-11-01"
+
+
+# ── filing: lists, owner-style titles, announcements, thread replies ──
+
+def _task_lists(svc, *lists: tuple[str, str]) -> None:
+    """Put task lists (slug, name) in the collection cache, as a sync would."""
+    for slug, name in lists:
+        svc.mail(store.upsert_collection,
+                 CollectionInfo(href=f"/u/{slug}/", displayname=name, components={"VTODO"}))
+
+
+def filed(title: str, group: str, list_name: str = "", **kw):
+    """An extraction that names a group and, optionally, the list the model picked."""
+    return dataclasses.replace(extraction(title, **kw), group=group, list_name=list_name)
+
+
+def test_coursework_is_titled_by_its_name_and_filed_in_the_list_named_for_its_class(svc, secrets):
+    _task_lists(svc, ("home", "Home"), ("psy", "DC Psychology"))
+    llm = FakeLlm(extract=filed('Complete assignment "4.2 - Anxiety Disorders" for DC Psychology',
+                                "DC Psychology", category="coursework", due=date(2026, 10, 9)))
+    out = ingestor(svc, secrets, llm).process_message(INBOX, eml("pipe_request"), uid=1)
+    assert out.outcome == "staged"
+    [s] = pending(svc)
+    assert s["title"] == "4.2 - Anxiety Disorders"
+    assert (s["suggested_list"], s["list_group"]) == ("psy", "DC Psychology")
+    assert "list DC Psychology (name)" in ledger(svc, "mid:req-1@club.example")["detail"]
+    assert review.suggestion_dto(s)["list"] == "psy"
+
+
+def test_the_extraction_is_given_the_lists_and_the_owners_role(svc, secrets):
+    _task_lists(svc, ("home", "Home"), ("psy", "DC Psychology"))
+    llm = FakeLlm(extract=extraction("Bring the team snack list"))
+    ing = ingestor(svc, secrets, llm)
+    raw = eml("pipe_request")
+    cc = raw.replace(b"To: me@proton.me\n", b"To: team@club.example\nCc: me@proton.me\n")
+    other = raw.replace(b"To: me@proton.me\n", b"To: team@club.example\n")
+    assert cc != raw and other != raw
+    for uid, body in enumerate((raw, cc, other), 1):
+        ing.process_message(INBOX, body.replace(b"<req-1@", f"<role-{uid}@".encode()), uid=uid)
+    got = llm.extract_calls
+    assert [e.owner_role for e in got] == ["to", "cc", ""]
+    assert all(set(e.lists) == {"Home", "DC Psychology"} for e in got)
+
+
+def test_the_models_pick_files_a_class_the_names_do_not_match(svc, secrets):
+    _task_lists(svc, ("psy", "DC Psychology"), ("trig", "DC Trigonometry"))
+    llm = FakeLlm(extract=filed("Math homework 4.4", "Math", "DC Trigonometry",
+                                category="coursework"))
+    ingestor(svc, secrets, llm).process_message(INBOX, eml("pipe_request"), uid=1)
+    [s] = pending(svc)
+    assert s["suggested_list"] == "trig" and s["title"] == "Math homework 4.4"
+    assert "list DC Trigonometry (model)" in ledger(svc, "mid:req-1@club.example")["detail"]
+
+
+def test_where_the_owner_filed_a_class_before_beats_the_models_pick(svc, secrets):
+    _task_lists(svc, ("psy", "DC Psychology"), ("trig", "DC Trigonometry"))
+    svc.mail(store.mail_remember_list, "math", "trig")
+    llm = FakeLlm(extract=filed("Homework 4.4", "Math", "DC Psychology", category="coursework"))
+    ingestor(svc, secrets, llm).process_message(INBOX, eml("pipe_request"), uid=1)
+    [s] = pending(svc)
+    assert s["suggested_list"] == "trig"
+    assert "list DC Trigonometry (remembered)" in ledger(svc, "mid:req-1@club.example")["detail"]
+
+
+def test_a_title_outside_coursework_keeps_the_group_it_names(svc, secrets):
+    _task_lists(svc, ("home", "Home"))
+    llm = FakeLlm(extract=filed("Send photo and bio for Youth Voice Award", "Youth Voice Award",
+                                category="personal"))
+    ingestor(svc, secrets, llm).process_message(INBOX, eml("pipe_request"), uid=1)
+    [s] = pending(svc)
+    assert s["title"] == "Send photo and bio for Youth Voice Award"
+    assert s["suggested_list"] is None and s["list_group"] == "Youth Voice Award"
+
+
+def test_an_unfiled_task_and_an_event_carry_no_list(svc, secrets):
+    _task_lists(svc, ("psy", "DC Psychology"))
+    llm = FakeLlm(extract=[
+        filed("Bring the team snack list", "", category="personal"),
+        filed("Parent evening", "DC Psychology", "DC Psychology", kind="event",
+              category="appointment", event_start=datetime(2026, 10, 17, 14, 0))])
+    ing = ingestor(svc, secrets, llm)
+    ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    ing.process_message(INBOX, plain("ev-1@club.example", "Parent evening", "Thursday 14:00",
+                                     sender="coach@club.example"), uid=2)
+    rows = {r["kind"]: r for r in pending(svc)}
+    assert (rows["task"]["suggested_list"], rows["task"]["list_group"]) == (None, None)
+    assert (rows["event"]["suggested_list"], rows["event"]["list_group"]) == (None, None)
+
+
+def test_a_schools_announcement_to_everyone_is_not_suggested_even_from_an_allow_listed_sender(
+        svc, secrets):
+    llm = FakeLlm(extract=extraction("Join the college fair", category="announcement",
+                                     due=date(2026, 10, 9)))
+    out = ingestor(svc, secrets, llm).process_message(
+        INBOX, eml("pipe_school_noreply_dmarc_pass"), uid=1)
+    assert (out.stage, out.outcome) == ("extract", "not_actionable")
+    assert "category announcement is not suggested" in out.detail
+    assert pending(svc) == []
+
+
+class _OpenTaskHost:
+    """The service, with one open task a search finds."""
+
+    def __init__(self, svc, *, list_id: str):
+        self._svc = svc
+        self._task = {"uid": "t1", "list": list_id, "summary": "Unit 1 Exam", "notes": "",
+                      "completed": False, "cancelled": False, "due": None}
+
+    def __getattr__(self, name):
+        return getattr(self._svc, name)
+
+    def search_open_tasks_any(self, terms, *, limit):
+        return [dict(self._task)]
+
+
+def test_an_open_task_in_another_list_is_not_offered_as_a_duplicate(svc, secrets):
+    _task_lists(svc, ("psy", "DC Psychology"), ("trig", "DC Trigonometry"))
+    llm = FakeLlm(extract=filed("Unit 1 Exam", "DC Psychology", category="coursework"),
+                  match=Match("duplicate", "T1"))
+    out = ingestor(svc, secrets, llm, host=_OpenTaskHost(svc, list_id="trig")).process_message(
+        INBOX, eml("pipe_request"), uid=1)
+    assert (out.stage, out.outcome) == ("stage", "staged")
+    assert llm.match_calls == []
+
+
+def test_an_open_task_in_the_same_list_is_still_offered(svc, secrets):
+    _task_lists(svc, ("psy", "DC Psychology"), ("trig", "DC Trigonometry"))
+    llm = FakeLlm(extract=filed("Unit 1 Exam", "DC Psychology", category="coursework"),
+                  match=Match("new", None))
+    ingestor(svc, secrets, llm, host=_OpenTaskHost(svc, list_id="psy")).process_message(
+        INBOX, eml("pipe_request"), uid=1)
+    [(_, candidates)] = llm.match_calls
+    assert [c.title for c in candidates] == ["Unit 1 Exam"]
+
+
+def _exam_pair(svc, secrets, second_group):
+    _task_lists(svc, ("psy", "DC Psychology"), ("trig", "DC Trigonometry"))
+    llm = FakeLlm(extract=[filed("Unit 1 Exam", "DC Psychology", category="coursework"),
+                           filed("Unit 1 Exam", second_group, category="coursework")],
+                  match=Match("new", None))
+    ing = ingestor(svc, secrets, llm)
+    ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    ing.process_message(INBOX, plain("exam-2@club.example", "Exam", "Unit 1 exam on Friday.",
+                                     sender="teacher@club.example"), uid=2)
+    return llm
+
+
+def test_a_pending_suggestion_filed_in_another_list_is_not_offered_either(svc, secrets):
+    llm = _exam_pair(svc, secrets, "DC Trigonometry")
+    assert llm.match_calls == []
+    assert sorted(s["suggested_list"] for s in pending(svc)) == ["psy", "trig"]
+
+
+def test_a_pending_suggestion_filed_in_the_same_list_is_still_offered(svc, secrets):
+    llm = _exam_pair(svc, secrets, "DC Psychology")
+    [(_, candidates)] = llm.match_calls
+    assert [c.label for c in candidates] == ["S1"]
+
+
+def _thread_reply(svc, secrets, llm, *, due=None):
+    """A reply in the thread of an open task the owner already has."""
+    svc.mail(store.mail_upsert_thread, "mid:req-1@club.example", task_list="/c/l/",
+             task_uid="t1")
+    return ingestor(svc, secrets, llm, host=_TaskHost(svc, due=due)).process_message(
+        INBOX, eml("pipe_reply_quoting"), uid=1)
+
+
+def test_a_reply_that_adds_nothing_to_the_threads_task_is_a_duplicate(svc, secrets):
+    llm = FakeLlm(extract=extraction("Bring the team snack list"), match=Match("duplicate", "T1"))
+    out = _thread_reply(svc, secrets, llm)
+    assert (out.stage, out.outcome) == ("dedup", "duplicate")
+    assert out.detail.startswith("nothing new for the thread's task")
+    assert pending(svc) == []
+    [(_, candidates)] = llm.match_calls
+    assert [(c.label, c.title) for c in candidates] == [("T1", "Bring the team snack list")]
+
+
+def test_a_reply_that_moves_the_deadline_is_an_update_whatever_the_answer(svc, secrets):
+    llm = FakeLlm(extract=extraction("Bring the team snack list", due=date(2026, 10, 9)),
+                  match=Match("duplicate", "T1"))
+    out = _thread_reply(svc, secrets, llm)
+    assert (out.stage, out.outcome) == ("dedup", "staged")
+    [s] = pending(svc)
+    assert s["kind"] == "update" and s["target_uid"] == "t1" and s["due"] == "2026-10-09"
+
+
+def test_a_reply_the_model_calls_new_work_is_still_an_update_to_the_threads_task(svc, secrets):
+    llm = FakeLlm(extract=extraction("Bring cups"), match=Match("new", None))
+    out = _thread_reply(svc, secrets, llm)
+    assert (out.stage, out.outcome) == ("dedup", "staged")
+    assert out.detail.startswith("update to the thread's task")
+    [s] = pending(svc)
+    assert s["kind"] == "update" and s["target_uid"] == "t1"
+
+
+def test_a_reply_is_an_update_when_the_duplicate_question_fails_for_good(svc, secrets):
+    llm = FakeLlm(extract=extraction("Bring cups"),
+                  match=LlmError("refused", kind="permanent"))
+    out = _thread_reply(svc, secrets, llm)
+    assert (out.stage, out.outcome) == ("dedup", "staged")
+    assert [s["kind"] for s in pending(svc)] == ["update"]
+
+
+@pytest.mark.parametrize("task_due, reply_due", [
+    ("2026-10-09", date(2026, 10, 9)),
+    ("2026-10-09", None),
+    ("2026-10-09T17:00:00+02:00", date(2026, 10, 9)),
+])
+def test_a_reply_on_the_tasks_own_day_or_with_no_date_is_a_duplicate(
+        svc, secrets, task_due, reply_due):
+    llm = FakeLlm(extract=extraction("Bring the team snack list", due=reply_due),
+                  match=Match("duplicate", "T1"))
+    out = _thread_reply(svc, secrets, llm, due=task_due)
+    assert (out.stage, out.outcome) == ("dedup", "duplicate")
+    assert pending(svc) == []
+
+
+def test_a_reply_on_another_day_than_the_tasks_is_an_update(svc, secrets):
+    llm = FakeLlm(extract=extraction("Bring the team snack list", due=date(2026, 10, 12)),
+                  match=Match("duplicate", "T1"))
+    out = _thread_reply(svc, secrets, llm, due="2026-10-09")
+    assert (out.stage, out.outcome) == ("dedup", "staged")
+    [s] = pending(svc)
+    assert s["kind"] == "update" and s["target_uid"] == "t1" and s["due"] == "2026-10-12"
+
+
+def test_jev_calling_the_threads_task_the_same_with_no_change_is_a_duplicate(svc, jev_secrets):
+    set_config(svc, kind_decider="model", dedup_decider="jev")
+    llm = FakeLlm(extract=extraction("Bring the team snack list"))
+    jev = FakeJev(match=jev_match("T1", 0.93, changed=0.1))
+    svc.mail(store.mail_upsert_thread, "mid:req-1@club.example", task_list="/c/l/",
+             task_uid="t1")
+    out = ingestor(svc, jev_secrets, llm, jev=jev, host=_TaskHost(svc)).process_message(
+        INBOX, eml("pipe_reply_quoting"), uid=1)
+    assert (out.stage, out.outcome) == ("dedup", "duplicate")
+    assert "Jev p=0.93 (jev-1.13.0)" in out.detail
+    assert len(jev.match_calls) == 1 and llm.match_calls == []
+    assert pending(svc) == []
+
+
+def test_a_transient_failure_of_the_threads_duplicate_question_is_retried(svc, secrets):
+    llm = FakeLlm(extract=extraction("Bring cups"),
+                  match=LlmError("rate limited (429)", kind="transient"))
+    out = _thread_reply(svc, secrets, llm)
+    assert (out.stage, out.outcome, out.transient) == ("dedup", "retry", True)
+    assert pending(svc) == []
+    assert ledger(svc, "mid:req-2@club.example") is None
+
+
+def test_the_routed_lists_name_is_taken_out_of_the_title(svc, secrets):
+    _task_lists(svc, ("psy", "DC Psychology"), ("trig", "DC Trigonometry"))
+    llm = FakeLlm(extract=filed("Homework 4.4 for DC Trigonometry", "Math", "DC Trigonometry",
+                                category="coursework"))
+    ingestor(svc, secrets, llm).process_message(INBOX, eml("pipe_request"), uid=1)
+    [s] = pending(svc)
+    assert s["suggested_list"] == "trig" and s["title"] == "Homework 4.4"
+
+
+def test_a_pending_suggestion_with_no_list_is_offered_to_an_item_filed_under_one(svc, secrets):
+    _task_lists(svc, ("psy", "DC Psychology"))
+    llm = FakeLlm(extract=[filed("Unit 1 Exam", "", category="coursework"),
+                           filed("Unit 1 Exam", "DC Psychology", category="coursework")],
+                  match=Match("new", None))
+    ing = ingestor(svc, secrets, llm)
+    ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    [first] = pending(svc)
+    assert first["suggested_list"] is None
+    ing.process_message(INBOX, plain("exam-2@club.example", "Exam", "Unit 1 exam on Friday.",
+                                     sender="teacher@club.example"), uid=2)
+    [(_, candidates)] = llm.match_calls
+    assert [c.label for c in candidates] == ["S1"]
+
+
+class _ManyTasksHost:
+    """The service, with open tasks a search finds, cut to `limit` as the real one is."""
+
+    def __init__(self, svc, list_ids):
+        self._svc = svc
+        self._tasks = [{"uid": f"t-{i}", "list": f"/u/{lid}/", "summary": "Unit 1 Exam",
+                        "notes": lid, "completed": False, "cancelled": False, "due": None}
+                       for i, lid in enumerate(list_ids)]
+
+    def __getattr__(self, name):
+        return getattr(self._svc, name)
+
+    def search_open_tasks_any(self, terms, *, limit):
+        return [dict(t) for t in self._tasks[:limit]]
+
+
+def test_tasks_in_other_lists_cannot_crowd_out_the_routed_or_the_default_list(svc, secrets):
+    _task_lists(svc, ("psy", "DC Psychology"), ("def", "Home"), ("x1", "X1"), ("x2", "X2"),
+                ("x3", "X3"), ("x4", "X4"), ("x5", "X5"))
+    set_config(svc, task_list="def")
+    # the routed list comes last by rank; "x5" is a third named list
+    host = _ManyTasksHost(svc, ["x1", "x2", "x3", "x4", "x5", "def", "psy"])
+    llm = FakeLlm(extract=filed("Unit 1 Exam", "DC Psychology", category="coursework"),
+                  match=Match("new", None))
+    ingestor(svc, secrets, llm, host=host).process_message(INBOX, eml("pipe_request"), uid=1)
+    [(_, candidates)] = llm.match_calls
+    assert [(c.label, c.notes) for c in candidates] == [("T1", "def"), ("T2", "psy")]
