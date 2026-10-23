@@ -72,13 +72,17 @@ The results below predate both rounds and were measured on the old labels.
 The current prompt has not been run against Claude Haiku yet (both changes
 were made without an Anthropic key). A dry run of the final prompt, with a
 stronger model reading it as written and the labels above (with quoted replies
-removed, as `body_of` does), decided actionable or not correctly for all 147
-clean emails and 188 of 190 (`adv7`, a newsletter whose one request is for a
-class the email does not say is the owner's, and `adv9`, a bare "?"). It
-routed all 12 rows with a `gold_list` as labelled (6 to a list, 6 to none),
-gave the exact title for all 7 with a `gold_title`, and put no date in a title
-except one that is part of the item's name ("2026/27", "Spring 2027"). That
-says the prompt reads as intended, not what Haiku will score.
+removed, as `body_of` does), decided actionable or not correctly for 146 of
+the 147 clean emails and 187 of 190. The clean miss is `per6`, a note to self
+written in its subject line alone: the pipeline settles a message with nothing
+in its body without reading it, so the model never sees the subject (a known
+gap; the parsed text cannot yet tell "never had a body" from "only a quote" or
+"only an attachment"). The other two are `adv7`, a newsletter whose one
+request is for a class the email does not say is the owner's, and `adv9`, a
+bare "?". It routed all 12 rows with a `gold_list` as labelled (6 to a list, 6
+to none), gave the exact title for all 7 with a `gold_title`, and put no date
+in a title except ones that are part of the item's name ("2026/27", "Spring
+2027"). That says the prompt reads as intended, not what Haiku will score.
 
 ## Results (2026-10-05, jev-1.13.0 and claude-haiku-4-5, old labels)
 
