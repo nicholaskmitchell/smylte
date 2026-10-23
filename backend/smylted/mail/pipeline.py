@@ -322,6 +322,24 @@ def _with_event_day(ex: Extraction) -> Extraction:
     return ex
 
 
+def _wall(stamp: str | None, tz) -> str:
+    """A stored start as the owner's wall clock, comparable with a start read
+    from prose (which is naive): an aware one converted to their home zone (none
+    set: as stamped) with its zone dropped. A date stays a date; "" for none."""
+    if not stamp or len(stamp) <= 10:
+        return stamp or ""
+    try:
+        moment = datetime.fromisoformat(stamp)
+    except ValueError:
+        return stamp
+    if moment.tzinfo is not None and tz is not None:
+        try:
+            moment = moment.astimezone(tz)
+        except (OverflowError, ValueError):
+            pass  # a start at the edge of the calendar (an invite says what it likes): as stamped
+    return moment.replace(tzinfo=None).isoformat()
+
+
 class Ingestor:
     """One mailbox reader for one service. Thread-safe for `run_once` (a second
     concurrent call returns a "busy" report); `process_message` may also be
@@ -931,6 +949,11 @@ class Ingestor:
             kind, why = "task", why + "; no start time, kept as a task"
         return kind, why
 
+    def _home_tz(self):
+        """The owner's home zone, or None when none is set (or the host has none)."""
+        home_tz = getattr(self._host, "_home_tz", None)
+        return home_tz() if callable(home_tz) else None
+
     # ── dedup ──
 
     def _dedup(self, c: _Msg, ex: Extraction, kind: str) -> Outcome:
@@ -946,7 +969,14 @@ class Ingestor:
         # b. the owner dismissed this already — checked before the thread's
         #    task, or a dismissed update to that task comes back on every reply
         rejected = list(host.mail(store.mail_rejections_for_thread, c.tid))
-        if rejected and any(_same_item(ex, r) for r in rejected):
+        # An event made a task carries its day only in event_start: compared as
+        # its due against a dismissal that has one, as an ordinary task's
+        # deadline is, so a moved day goes on to the duplicate question (which
+        # keeps a dismissed item dismissed) instead of being settled here. Not
+        # against a dismissal without one (an update has no due), or every reply
+        # restating a dismissed update would reach the question again.
+        dated = _with_event_day(ex) if kind == "task" else ex
+        if rejected and any(_same_item(dated if r["due"] else ex, r) for r in rejected):
             return self._settle(c, "dedup", "suppressed", "same as a dismissed suggestion")
 
         # b2. the thread's event is already on the calendar: a reply restating
@@ -955,9 +985,10 @@ class Ingestor:
         #     owner decides on — changes to an added event are not applied.
         if kind == "event":
             start = ex.event_start
+            tz = self._home_tz()
             day = (start.date() if isinstance(start, datetime) else start).isoformat()
             if any(s["kind"] == "event" and s["status"] in ("approved", "approving")
-                   and (s["event_start"] or "")[:10] == day
+                   and _wall(s["event_start"], tz)[:10] == day
                    for s in host.mail(store.mail_suggestions_for_thread, c.tid)):
                 return self._settle(c, "dedup", "duplicate", "already added as an event")
 
@@ -1008,11 +1039,14 @@ class Ingestor:
         if c.list_slug:
             pending = [s for s in pending
                        if not s["suggested_list"] or s["suggested_list"] == c.list_slug]
+        tz = self._home_tz()
         scored = [(_overlap(ex.title, s["title"]), i, s) for i, s in enumerate(pending)]
         scored = sorted((x for x in scored if x[0] > 0), key=lambda x: (-x[0], x[1]))
         for i, (_, _, s) in enumerate(scored[:MAX_CANDIDATE_SUGGESTIONS], 1):
             label = f"S{i}"
-            candidates.append(Candidate(label, s["title"], s["notes"] or "", s["due"]))
+            # an event has no due; its day stands in, as an event-made item's does (_with_event_day)
+            candidates.append(Candidate(label, s["title"], s["notes"] or "",
+                                        s["due"] or _wall(s["event_start"], tz)[:10] or None))
             targets[label] = s
         for i, r in enumerate(list(reversed(rejected))[:MAX_CANDIDATE_REJECTIONS], 1):
             label = f"R{i}"
@@ -1121,7 +1155,8 @@ class Ingestor:
         if not keep_due and kind == "task":
             notes = "\n".join(p for p in (ex.notes, _when_where(ex, ex.due)) if p)[:NOTES_MAX]
         elif (not keep_due and kind == "event" and ex.event_start is not None
-              and ex.event_start.isoformat() != (s["event_start"] or "")):
+              # Day and clock time: an invite's start carries its zone, a reply in prose does not.
+              and ex.event_start.isoformat()[:16] != _wall(s["event_start"], self._home_tz())[:16]):
             notes = "\n".join(p for p in (ex.notes, _when_where(ex, None)) if p)[:NOTES_MAX]
         entry = self._update_entry(c, notes=notes,
                                    due=ex.due.isoformat() if ex.due else None)
