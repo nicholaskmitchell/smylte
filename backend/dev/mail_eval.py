@@ -61,6 +61,15 @@ DATE_IN_TITLE = re.compile(
     r"|\b(?:today|tomorrow|tonight|heute|morgen)\b"
     rf"|\b{_WEEKDAYS}\b|\b(?:by|due|on|bis|am)\s+(?:mon|tue|wed|thu|fri|sat|sun)\b", re.I)
 MODEL = os.environ.get("JEV_MODEL", "jev-latest")
+# A fictional owner's task lists, fixed so runs compare; every email is read as
+# if they were this owner's (the lists the model may file a task under).
+OWNER_LISTS = ("Home", "Work", "Mitchell Web Studio", "HIST 210", "MATH 240", "AP Psychology",
+               "Personal Finance", "Spanish III", "Statistics", "Yearbook", "Student Press",
+               "Family")
+# Opening verbs the owner leaves off an assignment's name.
+BOILERPLATE_VERB = re.compile(
+    r"^(complete|submit|finish|do|turn in|prepare for|study for|fill out)\b", re.I)
+_QUOTES = str.maketrans("", "", "\"\u201c\u201d'\u2018\u2019")
 
 # ── pre-filter questions ─────────────────────────────────────────────────────
 PRE_NOUL = {
@@ -219,6 +228,7 @@ def run_claude(emails: list[dict], dedup: list[dict]) -> dict | None:
         return None
     sys.path.insert(0, str(HERE.parent))
     import anthropic  # noqa: E402
+    from smylted.mail import filing  # noqa: E402
     from smylted.mail.llm import (IGNORED_CATEGORIES, Candidate, EmailForExtraction,  # noqa: E402
                                   Extraction, LlmClient)
     # Haiku only, deliberately not configurable here: this is a cost-bounded
@@ -248,15 +258,26 @@ def run_claude(emails: list[dict], dedup: list[dict]) -> dict | None:
     llm = LlmClient(api_key_provider=lambda: key, model_provider=lambda: model)
     llm.client_factory = factory
     out = {"model": model, "extract": {}, "match": {}, "usage": spent}
+    owner_lists = [(n.lower(), n) for n in OWNER_LISTS]
+    names = dict(owner_lists)
     for c in emails:
         sent = datetime.fromisoformat(c["sent"]) if c.get("sent") else None
         try:
             ex = llm.extract(EmailForExtraction(sender_name=c["from_name"], sender_addr=c["from_addr"],
-                                                subject=c["subject"], sent=sent, body=c["body"][:8000]))
+                                                subject=c["subject"], sent=sent, body=c["body"][:8000],
+                                                lists=OWNER_LISTS))
+            routed, title = "none", ex.title
+            if ex.kind == "task":
+                # As the pipeline does: only a task is filed and retitled.
+                slug, _ = filing.route(ex.group, ex.list_name, owner_lists, {})
+                routed = names[slug] if slug is not None else "none"
+                if ex.category == "coursework":
+                    title = filing.tidy_title(title, [n for n in (ex.group, routed if slug else "") if n])
             out["extract"][c["id"]] = {
                 "actionable": ex.is_actionable and ex.category not in IGNORED_CATEGORIES,
                 "asked": ex.is_actionable, "kind": ex.kind, "category": ex.category,
-                "title": ex.title, "due": ex.due.isoformat() if ex.due else None}
+                "title": title, "due": ex.due.isoformat() if ex.due else None,
+                "group": ex.group, "list": routed, "picked": ex.list_name or "none"}
         except Exception as e:  # noqa: BLE001
             out["extract"][c["id"]] = {"error": str(e)}
     for c in dedup:
@@ -319,6 +340,21 @@ def report(out: dict, emails: list[dict], dedup: list[dict]) -> str:
             dropped = [e["id"] for e in act if noreply_local_part(e["from_addr"])]
             lines.append(f"  gold actionable from no-reply senders "
                          f"(the bulk filter drops them before the model): {dropped}")
+    if cl:
+        def norm(t: str) -> str:
+            return " ".join(t.translate(_QUOTES).casefold().split())
+        got = lambda e, k: cl["extract"][e["id"]].get(k)  # noqa: E731
+        want = [e for e in emails if e.get("gold_list")]
+        wrong = [f"{e['id']}: {got(e, 'list')} → {e['gold_list']}" for e in want
+                 if got(e, "list") != e["gold_list"]]
+        lines.append(f"  lists right: {len(want) - len(wrong)}/{len(want)} (gold_list set) {wrong}")
+        want = [e for e in emails if e.get("gold_title")]
+        wrong = [f"{e['id']}: {got(e, 'title')} → {e['gold_title']}" for e in want
+                 if norm(got(e, "title") or "") != norm(e["gold_title"])]
+        lines.append(f"  titles exact: {len(want) - len(wrong)}/{len(want)} (gold_title set) {wrong}")
+        verbs = [e["id"] for e in emails if got(e, "actionable") and got(e, "category") == "coursework"
+                 and BOILERPLATE_VERB.match(got(e, "title") or "")]
+        lines.append(f"  titles starting with a verb the owner drops: {verbs}")
     act = [e for e in emails if e["clean"] and e["gold"] == "actionable"]
     lines.append(f"KIND (clean actionable: {len(act)})")
     lines.append(f"  Jev alone: {sum(1 for e in act if pre[e['id']]['kind'] == e['gold_kind'])}")

@@ -175,6 +175,50 @@ describe('a task suggestion', () => {
     expect(onApprove).toHaveBeenCalledWith('abc', { list: 'l2' })
   })
 
+  it('starts at the list the pipeline filed it under, offers no default, and does not send it', async () => {
+    const user = userEvent.setup()
+    const { onApprove } = show({ items: [task({ list: 'l2' })] })
+    const pick = screen.getByLabelText('Add to list')
+    expect(pick).toHaveValue('l2')
+    expect(screen.queryByRole('option', { name: 'Default list' })).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Add task' }))
+    expect(onApprove).toHaveBeenCalledWith('abc', {})
+  })
+
+  it('sends the list the owner changes a filed row to', async () => {
+    const user = userEvent.setup()
+    const { onApprove } = show({ items: [task({ list: 'l2' })] })
+    await user.selectOptions(screen.getByLabelText('Add to list'), 'l1')
+    await user.click(screen.getByRole('button', { name: 'Add task' }))
+    expect(onApprove).toHaveBeenCalledWith('abc', { list: 'l1' })
+  })
+
+  it('sends the filed list when the owner changes it and changes it back', async () => {
+    const user = userEvent.setup()
+    const { onApprove } = show({ items: [task({ list: 'l2' })] })
+    await user.selectOptions(screen.getByLabelText('Add to list'), 'l1')
+    await user.selectOptions(screen.getByLabelText('Add to list'), 'l2')
+    await user.click(screen.getByRole('button', { name: 'Add task' }))
+    expect(onApprove).toHaveBeenCalledWith('abc', { list: 'l2' })
+  })
+
+  it('falls back to the default list when the filed list is gone', async () => {
+    const user = userEvent.setup()
+    const { onApprove } = show({ items: [task({ list: 'gone' })] })
+    expect(screen.getByLabelText('Add to list')).toHaveValue('')
+    expect(screen.getByRole('option', { name: 'Default list' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Add task' }))
+    expect(onApprove).toHaveBeenCalledWith('abc', {})
+  })
+
+  it('says the list is only suggested while the lists have not loaded', async () => {
+    const user = userEvent.setup()
+    const { onApprove } = show({ items: [task({ list: 'l2' })], lists: [] })
+    expect(screen.getByRole('option', { name: 'Suggested list' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Add task' }))
+    expect(onApprove).toHaveBeenCalledWith('abc', {})
+  })
+
   it('will not approve a row with no title', async () => {
     const user = userEvent.setup()
     show()

@@ -46,6 +46,7 @@ import icalendar
 
 from ..db import store
 from ..ical.edit import UNSET, EventEdit, TaskEdit
+from . import filing
 from .redact import redact, redact_exc
 from .settings import MailConfig
 
@@ -88,6 +89,8 @@ def suggestion_dto(row, *, target_title: str | None = None) -> dict:
         "notes": row["notes"] or "",
         "due": row["due"],
         "confidence": row["confidence"],
+        "list": row["suggested_list"],
+        "group": row["list_group"],
         "event": {
             "start": row["event_start"],
             "end": row["event_end"],
@@ -250,7 +253,12 @@ def approve(host, suggestion_id: str, *, config: MailConfig, title: str | None =
     chosen_due = row["due"] if due is UNSET_DUE else due
     try:
         if kind == "task":
-            lid = list_id or config.task_list or _first_id(host.list_lists())
+            lid = list_id
+            if not lid and row["suggested_list"]:
+                # Filed by the pipeline; a list deleted since falls back to the default.
+                if host.resolve_list(row["suggested_list"], component="VTODO"):
+                    lid = row["suggested_list"]
+            lid = lid or config.task_list or _first_id(host.list_lists())
             href = host.resolve_list(lid, component="VTODO") if lid else None
             if href is None:
                 raise ReviewError("choose a list for this task", status=422)
@@ -319,6 +327,9 @@ def approve(host, suggestion_id: str, *, config: MailConfig, title: str | None =
     if result is not None:
         fields["target_list"], fields["target_uid"] = result
     tid = row["thread_id"]
+    # The owner chose a list on the card: that is what the filing memory learns,
+    # never a fallback or an auto-accept, which pass no list.
+    learn = kind == "task" and bool(list_id) and bool(row["list_group"])
 
     def finish(conn):
         with store.tx(conn):
@@ -330,9 +341,13 @@ def approve(host, suggestion_id: str, *, config: MailConfig, title: str | None =
             if kind == "task":
                 store.mail_upsert_thread(conn, tid, task_list=result[0], task_uid=result[1],
                                          **unhook)
+                if learn:
+                    store.mail_remember_list(conn, filing.normalize(row["list_group"]),
+                                             _slug(result[0]))
             elif kind == "update":
-                # The thread now feeds that task: a later reply is an update to
-                # it without asking the dedup question again.
+                # The thread now feeds that task: a later reply is checked
+                # against it (a duplicate, or an update), not against every
+                # open task.
                 store.mail_upsert_thread(conn, tid, task_list=row["target_list"],
                                          task_uid=row["target_uid"], **unhook)
             elif unhook:
