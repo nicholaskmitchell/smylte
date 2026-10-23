@@ -16,6 +16,7 @@ from smylted.ical import extract_from_raw
 from helpers import foreign_raw
 
 COL = "/u/tasks/"
+COL2 = "/u/other/"
 
 
 def _claim(db, key="mid:a@x", **kw):
@@ -340,10 +341,10 @@ def test_merge_meta_json_stores_none(db):
 
 # ── candidate search ─────────────────────────────────────────────────────────
 
-def _task(db, uid, summary, *, status="NEEDS-ACTION", extra=()):
+def _task(db, uid, summary, *, status="NEEDS-ACTION", extra=(), col=COL):
     raw = foreign_raw(uid, summary, extra=(f"STATUS:{status}",) if False else extra)
     raw = raw.replace(b"STATUS:NEEDS-ACTION", f"STATUS:{status}".encode())
-    store.upsert_item(db, COL, Item(f"{COL}{uid}.ics", '"1"', raw), extract_from_raw(raw))
+    store.upsert_item(db, col, Item(f"{col}{uid}.ics", '"1"', raw), extract_from_raw(raw))
 
 
 @pytest.fixture
@@ -372,6 +373,23 @@ def test_search_ignores_short_and_junk_terms_without_raising(tasks):
     assert store.search_open_tasks_any(tasks, []) == []
     # junk mixed with a real term still finds the real one
     assert [r["uid"] for r in store.search_open_tasks_any(tasks, ['"*)(', "SCHOOL"])] == ["open@x"]
+
+
+def test_search_keeps_only_the_given_collections(tasks):
+    store.upsert_collection(tasks, CollectionInfo(href=COL2, displayname="Other",
+                                                  components={"VTODO"}))
+    for n in (1, 2, 3):
+        _task(tasks, f"inv{n}@x", f"Invoice invoice invoice {n}", col=COL2)
+
+    def uids(**kw):
+        return [r["uid"] for r in store.search_open_tasks_any(tasks, ["invoice"], **kw)]
+
+    # The three in COL2 match more strongly, so they would use up the limit
+    # if the filter ran after it.
+    assert uids(collections={COL}, limit=1) == ["open@x"]
+    assert sorted(uids(collections={COL2})) == ["inv1@x", "inv2@x", "inv3@x"]
+    assert uids(collections=set()) == []
+    assert sorted(uids(collections=None)) == ["inv1@x", "inv2@x", "inv3@x", "open@x"]
 
 
 def test_search_caps_terms(tasks):
