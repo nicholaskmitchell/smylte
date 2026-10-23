@@ -17,7 +17,7 @@
 // nothing, and four dead mobile rules shipped green precisely because nobody had
 // one.
 
-import { describe, expect, it, beforeEach } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 
 // The harness — `viewport`, `mount`, `box` — is shared with
 // `backlog.aug25.stage4.browser.test.tsx`. It moved out of this file when that
@@ -388,8 +388,8 @@ describe("a Today row's cells sit on the title's first line", () => {
         <button class="check">&#10003;</button>
         <span class="today-kind-mark" data-kind="task"><span class="today-kind-box"></span></span>
         <span class="today-title">${title}</span>
-        <span class="today-est mono">25m</span><span class="today-due mono">Aug 28</span>
-        <button class="today-drop">&#10005;</button></li>
+        <span class="today-meta"><span class="today-est mono">25m</span><span class="today-due mono">Aug 28</span>
+        <button class="today-drop">&#10005;</button></span></li>
     </ul></div></div>
     <div class="shell"><div class="content">
       <div class="task"><div class="pri-bar"></div><button class="check">&#10003;</button>
@@ -486,6 +486,175 @@ describe("a Today row's cells sit on the title's first line", () => {
     expect(Math.round(bot - top + 1),
       'the tick on a wrapped phone row has less than a thumb of height')
       .toBeGreaterThanOrEqual(44)
+  })
+})
+
+// ── the cells under a title they would squeeze ──────────────────────────────
+
+describe("a Today row's cells move under its title instead of squeezing it", () => {
+  // Reported by eye on a 390px phone: with the was-due chip beside it, "Ritter
+  // Chapter Review Poster" had ~28px and broke after every three or four
+  // letters, eleven lines. The cells after the title are fixed width, so the
+  // title is whatever they leave; the phone rules give it a basis to wrap at and
+  // move the cells, as one unit (`.today-meta`), under it when it would be less.
+  const ROWS = `
+    <div class="shell"><div class="content today-pane"><ul class="today-list">
+      <li class="today-row" id="long">
+        <button class="check">&#10003;</button>
+        <span class="today-kind-mark" data-kind="task"><span class="today-kind-box"></span></span>
+        <span class="today-title">Ritter Chapter Review Poster</span>
+        <span class="today-meta">
+          <button class="today-est mono">30m</button>
+          <span class="today-due mono">Oct 22</span>
+          <span class="was-due mono">was due Oct 1 · 21d</span>
+          <button class="today-drop">&#10005;</button>
+        </span></li>
+      <li class="today-row" id="short">
+        <button class="check">&#10003;</button>
+        <span class="today-kind-mark" data-kind="task"><span class="today-kind-box"></span></span>
+        <span class="today-title">Email Jonathan</span>
+        <span class="today-meta">
+          <button class="today-est mono">30m</button>
+          <span class="today-due mono">Oct 22</span>
+          <button class="today-drop">&#10005;</button>
+        </span></li>
+    </ul></div></div>`
+
+  const bits = (host: Element, id: string) => {
+    const row = host.querySelector<HTMLElement>(`#${id}`)!
+    const title = row.querySelector<HTMLElement>('.today-title')!
+    const cs = getComputedStyle(title)
+    return {
+      row, title, line: parseFloat(cs.lineHeight), font: parseFloat(cs.fontSize),
+      t: title.getBoundingClientRect(),
+    }
+  }
+  /** A cell's centre, as an offset down from the top of the title. */
+  const down = (row: Element, sel: string, titleTop: number) => {
+    const r = row.querySelector(sel)!.getBoundingClientRect()
+    return (r.top + r.bottom) / 2 - titleTop
+  }
+
+  it.each([390, 360])('at %ipx the title stays readable and the cells go under it', async (w) => {
+    await viewport(w)
+    const host = await mount(ROWS)
+
+    const long = bits(host, 'long')
+    expect(long.t.height, `at ${w}px the long title runs ${Math.round(long.t.height / long.line)} `
+      + 'lines: the cells squeezed it').toBeLessThanOrEqual(long.line + 0.5)
+    expect(long.t.height).toBeGreaterThanOrEqual(long.line - 0.5)
+    expect(long.t.width, 'the long title is narrower than 7em')
+      .toBeGreaterThanOrEqual(7 * long.font)
+
+    const meta = long.row.querySelector('.today-meta')!.getBoundingClientRect()
+    expect(meta.top, 'the cells did not move under the title')
+      .toBeGreaterThanOrEqual(long.t.bottom - 0.5)
+    const rs = getComputedStyle(long.row)
+    const content = long.row.getBoundingClientRect().right - parseFloat(rs.paddingRight)
+    expect(Math.abs(meta.right - content),
+      'the cells are not pushed to the end of their line').toBeLessThanOrEqual(0.5)
+
+    const short = bits(host, 'short')
+    for (const sel of ['.today-est', '.today-due']) {
+      expect(Math.abs(down(short.row, sel, short.t.top) - short.line / 2),
+        `\`${sel}\` is off the first line of the short row at ${w}px`).toBeLessThanOrEqual(0.5)
+    }
+    expect(short.t.width, 'the short title is narrower than 7em')
+      .toBeGreaterThanOrEqual(7 * short.font)
+  })
+
+  it('at 900px both rows keep their cells beside the title', async () => {
+    await viewport(900)
+    const host = await mount(ROWS)
+    for (const id of ['long', 'short']) {
+      const b = bits(host, id)
+      for (const sel of ['.today-est', '.today-due']) {
+        expect(Math.abs(down(b.row, sel, b.t.top) - b.line / 2),
+          `\`${sel}\` is off the first line of the ${id} row at 900px`).toBeLessThanOrEqual(0.5)
+      }
+    }
+    const long = bits(host, 'long')
+    expect(long.t.height, 'the long title wraps at 900px')
+      .toBeLessThanOrEqual(long.line + 0.5)
+  })
+
+  // Why the group may not simply be fixed width (from review): at German or a
+  // larger `--fs-scale` it never wrapped and ran off the row, the ✕ with it.
+  const GERMAN = `
+    <div class="shell"><div class="content today-pane"><ul class="today-list">
+      <li class="today-row" id="long">
+        <button class="check">&#10003;</button>
+        <span class="today-kind-mark" data-kind="task"><span class="today-kind-box"></span></span>
+        <span class="today-title">Ritter Chapter Review Poster</span>
+        <span class="today-meta">
+          <button class="today-est mono">30m</button>
+          <span class="today-due mono">22. Okt.</span>
+          <span class="was-due mono">war fällig am 1. Okt. · 21 T</span>
+          <button class="today-drop">&#10005;</button>
+        </span></li>
+    </ul></div></div>`
+
+  afterEach(() => { document.documentElement.style.removeProperty('--fs-scale') })
+
+  it.each([320, 360, 390].flatMap((w) => [1, 1.4].map((scale) => [w, scale] as const)))(
+    'it never runs off the row (German, %ipx, --fs-scale %f)', async (w, scale) => {
+      await viewport(w)
+      document.documentElement.style.setProperty('--fs-scale', String(scale))
+      const host = await mount(GERMAN)
+      const b = bits(host, 'long')
+      const rs = getComputedStyle(b.row)
+      const content = b.row.getBoundingClientRect().right - parseFloat(rs.paddingRight)
+
+      const out = [...b.row.querySelectorAll<HTMLElement>('*')]
+        .filter((el) => el.getBoundingClientRect().right > content + 0.5)
+        .map((el) => `${el.className} +${(el.getBoundingClientRect().right - content).toFixed(1)}px`)
+      expect(out, `at ${w}px and --fs-scale ${scale} these run past the row: ${out.join(', ')}`)
+        .toEqual([])
+
+      const meta = b.row.querySelector('.today-meta')!.getBoundingClientRect()
+      expect(meta.left, 'the cells start left of the title, under the tick')
+        .toBeGreaterThanOrEqual(b.t.left - 0.5)
+    })
+
+  it('a look-back row stays on one line at 360px', async () => {
+    // The off-plan row of the look-back: a ✓ where the tick would be, no ✕.
+    await viewport(360)
+    const host = await mount(`
+      <div class="shell"><div class="content today-pane"><ul class="today-list">
+        <li class="today-row" id="look">
+          <span class="today-check-gap today-mark mono" role="img">✓</span>
+          <span class="today-kind-mark" data-kind="task"><span class="today-kind-box"></span></span>
+          <span class="today-title">Email Jonathan</span>
+          <span class="today-meta">
+            <button class="today-est mono">30m</button>
+            <span class="today-worked mono">1h 5m</span>
+            <span class="today-due mono">Oct 22</span>
+          </span></li>
+      </ul></div></div>`)
+    const b = bits(host, 'look')
+    for (const sel of ['.today-est', '.today-due']) {
+      expect(Math.abs(down(b.row, sel, b.t.top) - b.line / 2),
+        `\`${sel}\` left the title's first line: the look-back row wrapped`).toBeLessThanOrEqual(0.5)
+    }
+  })
+
+  it('a suggestion with its cost stays on one line at 360px', async () => {
+    await viewport(360)
+    const host = await mount(`
+      <div class="shell"><div class="content today-pane"><ul class="today-list">
+        <li class="today-row today-sug" id="sug">
+          <button type="button" class="today-plus">+</button>
+          <span class="today-kind-mark" data-kind="task"><span class="today-kind-box"></span></span>
+          <span class="today-title">Book flights</span>
+          <span class="today-meta">
+            <span class="today-due mono">Oct 22</span>
+            <span class="today-sug-over mono">+2h 30m over</span>
+          </span></li>
+      </ul></div></div>`)
+    const b = bits(host, 'sug')
+    expect(Math.abs(down(b.row, '.today-due', b.t.top) - b.line / 2),
+      'the due date left the title\'s first line: the suggestion row wrapped')
+      .toBeLessThanOrEqual(0.5)
   })
 })
 
@@ -591,8 +760,8 @@ describe("a habit's week count never crowds out its own title", () => {
         <span class="today-kind-mark" data-kind="habit">&#8635;</span>
         <span class="today-title">${title}</span>
         ${count ? `<span class="today-habit-count mono">${count}</span>` : ''}
-        <span class="today-est mono">15m</span><span class="today-due mono"></span>
-        <button class="today-drop">&#10005;</button></li>
+        <span class="today-meta"><span class="today-est mono">15m</span><span class="today-due mono"></span>
+        <button class="today-drop">&#10005;</button></span></li>
     </ul></div></div>`
 
   // Every string a shipping locale can put here, longest last. German is not

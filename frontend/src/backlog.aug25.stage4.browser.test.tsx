@@ -218,8 +218,10 @@ const TODAY_ROWS = `
     <li class="today-row">
       <button type="button" class="check" aria-label="Check Water the plants">&#10003;</button>
       <span class="today-title">Water the plants</span>
-      <button type="button" class="today-est mono unset" aria-label="Estimate">est</button>
-      <button type="button" class="today-drop" aria-label="Remove from today">&#10005;</button>
+      <span class="today-meta">
+        <button type="button" class="today-est mono unset" aria-label="Estimate">est</button>
+        <button type="button" class="today-drop" aria-label="Remove from today">&#10005;</button>
+      </span>
     </li>
     <li class="today-row today-sug">
       <button type="button" class="today-plus" aria-label="Add to today">+</button>
@@ -347,6 +349,57 @@ describe('2026-08-25 — the Today row on a phone', () => {
     }
     expect(clashes, 'these tap areas overlap — a thumb aimed at one lands on '
       + `both: ${clashes.join(', ')}`).toEqual([])
+  })
+
+  // The row above has its cells on one line, so the sweep above is x-only. Once
+  // they drop under the title (`.today-meta`, on a phone, when they would leave
+  // the title too narrow) the buttons sit on two lines and a tap area can
+  // overlap another in y as well as x: measured by review, the estimate's 44px
+  // area covered the lower half of the tick's when a long German group started
+  // under the tick. So: no two areas intersect in BOTH axes.
+  it('a row whose cells drop under its title keeps its tap areas apart', async () => {
+    const row = (chip: string) => `
+      <li class="today-row">
+        <button type="button" class="check" aria-label="Check">&#10003;</button>
+        <span class="today-kind-mark" data-kind="task"><span class="today-kind-box"></span></span>
+        <span class="today-title">Ritter Chapter Review Poster</span>
+        <span class="today-meta">
+          <button type="button" class="today-est mono" aria-label="Estimate">30m</button>
+          <span class="today-due mono">Oct 22</span>
+          <span class="was-due mono">${chip}</span>
+          <button type="button" class="today-drop" aria-label="Remove from today">&#10005;</button>
+        </span></li>`
+    const chips = { en: 'was due Oct 1 · 21d', de: 'war fällig am 1. Okt. · 21 T' }
+    try {
+      for (const [lang, chip] of Object.entries(chips)) {
+        for (const w of [320, 360, 390]) {
+          for (const scale of [1, 1.4]) {
+            document.body.innerHTML = ''
+            await viewport(w)
+            document.documentElement.style.setProperty('--fs-scale', String(scale))
+            const host = await mount(
+              `<div class="shell"><div class="content"><ul class="today-list">${row(chip)}</ul></div></div>`)
+            const areas = [...host.querySelectorAll<HTMLElement>('.today-row button')]
+              .map((b) => ({ cls: b.className, ...hit(b) }))
+            expect(areas.length, 'the sweep matched no buttons').toBe(3)
+
+            const clashes: string[] = []
+            for (let i = 0; i < areas.length; i++) {
+              for (let j = i + 1; j < areas.length; j++) {
+                const a = areas[i]; const c = areas[j]
+                if (a.left <= c.right && c.left <= a.right && a.top <= c.bottom && c.top <= a.bottom) {
+                  clashes.push(`${a.cls} / ${c.cls}`)
+                }
+              }
+            }
+            expect(clashes, `${lang} chip at ${w}px, --fs-scale ${scale}: these tap areas `
+              + `overlap, so a thumb aimed at one lands on both: ${clashes.join(', ')}`).toEqual([])
+          }
+        }
+      }
+    } finally {
+      document.documentElement.style.removeProperty('--fs-scale')
+    }
   })
 
   // …and the other half of the same fix: the CONTROLS went back to the size

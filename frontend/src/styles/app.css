@@ -2536,9 +2536,15 @@ button.menu-toggle:active { scale: var(--press-scale); }
    (`backlog.aug25.stage4.browser.test.tsx`) and not this change's to undo.
 
    The two cells that PAINT a box are the exceptions below, and say there why. */
-.today-row > *:not(.today-title) {
+.today-row > *:not(.today-title), .today-meta > * {
   transform: translateY(calc(var(--today-line) / 2 - 50%));
 }
+/* THE CELLS AFTER THE TITLE, as one unit: the estimate, the time worked, the
+   due date, the was-due chip, the over-capacity note and the ✕. Not a box at
+   all on a wide screen (`display: contents`), so the row lays them out exactly
+   as it did before they were wrapped, each on the title's first line by the
+   rule above. The wrapper exists for the phone, below. */
+.today-meta { display: contents; }
 /* The shutdown ritual's row wraps BY CONSTRUCTION — its question takes a line
    and its three answers the next (see `.shut-row`) — so it has no first line
    beside the furniture for the furniture to sit on, and its arms keep the
@@ -3063,6 +3069,41 @@ button.menu-toggle:active { scale: var(--press-scale); }
      distance. */
   .today-row { flex-wrap: wrap; }
   .today-row:not(.shut-row) { row-gap: 3px; }
+  /* THE TITLE KEEPS A READABLE WIDTH, and the cells move under it when they
+     would take it. A row's cells are fixed width and its title is whatever is
+     left, so on a 390px phone the was-due chip (`was due Oct 1 · 21d`, about
+     130px) left a title 28px wide: "Ritter Chapter Review Poster" broke after
+     every three or four letters and the row ran eleven lines. 7em is the basis
+     the row wraps at, not a width: a row whose cells leave the title less than
+     that drops them, as one unit, to a line of their own; every other row stays
+     on one line and its title takes what is left. 7em and not more because a
+     look-back row's cells (estimate, time worked, due) leave its title 112px at
+     360px, and that row should not wrap. In em, so it grows with the text
+     scale. */
+  .today-row:not(.shut-row) .today-title { flex: 1 1 7em; }
+  /* A box here, so its cells wrap together rather than one at a time, and
+     pushed to the END of whichever line it lands on: on its own line the
+     estimate, the date and the ✕ stay in the columns the one-line rows above
+     and below keep them in.
+
+     NEVER LEFT OF THE TITLE'S EDGE, which is what the `max-width` is: the same
+     indent `.today-habit-count` takes below. Without it a line of cells nearly
+     as wide as the row (German, or a larger text scale) started under the tick,
+     and the estimate's 44px tap area covered the lower half of the tick's. A
+     group wider than that wraps INSIDE itself, each of its lines right-aligned
+     and 3px apart like the row's own, rather than running off the screen and
+     taking the ✕ with it.
+
+     `transform: none` because the rule that puts a cell on the title's first
+     line is for its cells, which carry it themselves; the child combinator is
+     what outranks that rule's `:not()`. */
+  .today-row > .today-meta {
+    display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end;
+    align-items: flex-start; gap: 3px var(--today-row-gap);
+    max-width: calc(100% - var(--check-size) - var(--today-mark-w)
+      - 2 * var(--today-row-gap));
+    margin-left: auto; transform: none;
+  }
   .today-habit-count {
     order: 1; flex-basis: 100%;
     padding-left: calc(var(--check-size) + var(--today-mark-w)
