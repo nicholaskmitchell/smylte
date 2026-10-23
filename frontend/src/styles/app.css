@@ -3123,13 +3123,14 @@ button.menu-toggle:active { scale: var(--press-scale); }
      first-line rule, so the `transform: none` this needs never applied and the
      count sat half a line lower than the 3px described above. The margin is
      for a row whose cells took a line of their own before it: they hang 3px x
-     the text scale below that line, and this keeps the count at least 1px clear
-     of them (and adds 1px at the default scale otherwise). */
+     the text scale below that line, and this keeps the count about 2px clear of
+     them, which WebKit's text metrics take a fraction of (and adds 2px at the
+     default scale otherwise). */
   .today-row > .today-habit-count {
     order: 1; flex-basis: 100%;
     padding-left: calc(var(--check-size) + var(--today-mark-w)
       + 2 * var(--today-row-gap));
-    margin-top: calc(4px * var(--fs-scale) - 3px);
+    margin-top: calc(4px * var(--fs-scale) - 2px);
     transform: none;
   }
 }
