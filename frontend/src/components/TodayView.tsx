@@ -3257,52 +3257,54 @@ export function TodayView({
                   <span className="today-title" dir={textDir(t.summary)}>
                     {t.summary || tr('common.untitled')}
                   </span>
-                  {/* ONE ALARM PER ROW, and the chip below gets it whenever
-                      there is one to give. A rescheduled task carries two
-                      dates, and the interesting one is not the date the
-                      reschedule chose — so where `WasDue` paints, this cell
-                      reads as an ordinary deadline and the warn sits on the
-                      promise that was missed. Where it does not, nothing
-                      changes: an overdue task that has never slipped is
-                      warn-coloured here exactly as before. */}
-                  {t.due && (
-                    <span className={`today-due mono ${
-                      g.key === 'overdue' && !slippedFrom(t) ? 'overdue' : ''}`}>
-                      {fmtDue(t.due, t.due_is_date, tf, locale)}
-                    </span>
-                  )}
-                  {/* SHOWN ON EVERY GROUP, not only on triage. A task
-                      rescheduled here reappears under "Due today" on the same
-                      paint, and that is precisely the moment the owner needs to
-                      see that the old date survived the press; a chip that
-                      lived on the triage row alone would vanish at the instant
-                      it was reassuring. `WasDue` carries the rest of the
-                      argument, and now carries it to the four other surfaces
-                      that render a deadline as well. */}
-                  <WasDue task={t} day={day} />
-                  {/* WHAT ADDING IT WOULD COST, on the button that would add it.
-                      Only where both halves are actually known: the task has to
-                      remember an estimate (`sidecar.estimated_minutes`, which is
-                      what the row would be created with) and the day has to have
-                      a capacity to be measured against. Otherwise there is
-                      nothing to say and the row says nothing rather than
-                      guessing — the same rule the add box above follows.
+                  <span className="today-meta">
+                    {/* ONE ALARM PER ROW, and the chip below gets it whenever
+                        there is one to give. A rescheduled task carries two
+                        dates, and the interesting one is not the date the
+                        reschedule chose — so where `WasDue` paints, this cell
+                        reads as an ordinary deadline and the warn sits on the
+                        promise that was missed. Where it does not, nothing
+                        changes: an overdue task that has never slipped is
+                        warn-coloured here exactly as before. */}
+                    {t.due && (
+                      <span className={`today-due mono ${
+                        g.key === 'overdue' && !slippedFrom(t) ? 'overdue' : ''}`}>
+                        {fmtDue(t.due, t.due_is_date, tf, locale)}
+                      </span>
+                    )}
+                    {/* SHOWN ON EVERY GROUP, not only on triage. A task
+                        rescheduled here reappears under "Due today" on the same
+                        paint, and that is precisely the moment the owner needs to
+                        see that the old date survived the press; a chip that
+                        lived on the triage row alone would vanish at the instant
+                        it was reassuring. `WasDue` carries the rest of the
+                        argument, and now carries it to the four other surfaces
+                        that render a deadline as well. */}
+                    <WasDue task={t} day={day} />
+                    {/* WHAT ADDING IT WOULD COST, on the button that would add it.
+                        Only where both halves are actually known: the task has to
+                        remember an estimate (`sidecar.estimated_minutes`, which is
+                        what the row would be created with) and the day has to have
+                        a capacity to be measured against. Otherwise there is
+                        nothing to say and the row says nothing rather than
+                        guessing — the same rule the add box above follows.
 
-                      The consequence is named only when it IS one: an addition
-                      the day still absorbs is not worth a warning, and a strip
-                      that flagged every row would stop meaning anything. */}
-                  {/* Never on a triage row: the comment below says "on the
-                      button that would add it", and a triage row deliberately
-                      has none — what it would cost is not the question being
-                      asked there. */}
-                  {g.key !== 'triage' && capacity != null && t.estimated_minutes != null
-                    && planned + t.estimated_minutes > capacity && (
-                    <span className="today-sug-over mono">
-                      {tr('today.sugWouldBeOver', {
-                        amount: fmtDuration(planned + t.estimated_minutes - capacity),
-                      })}
-                    </span>
-                  )}
+                        The consequence is named only when it IS one: an addition
+                        the day still absorbs is not worth a warning, and a strip
+                        that flagged every row would stop meaning anything. */}
+                    {/* Never on a triage row: the comment below says "on the
+                        button that would add it", and a triage row deliberately
+                        has none — what it would cost is not the question being
+                        asked there. */}
+                    {g.key !== 'triage' && capacity != null && t.estimated_minutes != null
+                      && planned + t.estimated_minutes > capacity && (
+                      <span className="today-sug-over mono">
+                        {tr('today.sugWouldBeOver', {
+                          amount: fmtDuration(planned + t.estimated_minutes - capacity),
+                        })}
+                      </span>
+                    )}
+                  </span>
                   {/* TWO ANSWERS, AND BOTH OF THEM END IT. That is the whole
                       test a control on this row has to pass, and it is why
                       "add it to today" is not among them: putting a task on
@@ -3497,18 +3499,20 @@ function LookBack({ review, offPlan, reflection, renderRow, colorOf, day, live =
                 <span className="today-title" dir={textDir(t.summary)}>
                   {t.summary || tr('common.untitled')}
                 </span>
-                {/* The clock only. The date is the heading of the whole screen,
-                    and `fmtDue` would repeat it on every row. `completed_at` is
-                    non-null for every task in this list by construction — it is
-                    what put them in it. */}
-                <span className="today-due mono">{fmtClock(t.completed_at!, tf, locale)}</span>
-                {/* Here too, and quiet here by construction: every row in this
-                    list is finished, so the chip keeps the words and drops the
-                    warn. "Done, three weeks after it was promised" is a fair
-                    thing for a look-back to say, and a surface that showed the
-                    mark on the planned rows above but not on these would make
-                    the same task read two ways on one screen. */}
-                <WasDue task={t} day={day} done />
+                <span className="today-meta">
+                  {/* The clock only. The date is the heading of the whole screen,
+                      and `fmtDue` would repeat it on every row. `completed_at` is
+                      non-null for every task in this list by construction — it is
+                      what put them in it. */}
+                  <span className="today-due mono">{fmtClock(t.completed_at!, tf, locale)}</span>
+                  {/* Here too, and quiet here by construction: every row in this
+                      list is finished, so the chip keeps the words and drops the
+                      warn. "Done, three weeks after it was promised" is a fair
+                      thing for a look-back to say, and a surface that showed the
+                      mark on the planned rows above but not on these would make
+                      the same task read two ways on one screen. */}
+                  <WasDue task={t} day={day} done />
+                </span>
               </li>
             ))}
           </ul>
@@ -4006,73 +4010,78 @@ function TodayRow({
             : tr('today.weekCountThis', { done: count.done, total: count.total })}
         </span>
       )}
-      {/* Before the due date, because they answer different questions and the
-          nearer one to the title is the one the ritual is about: how long this
-          will take, versus when it is wanted by. */}
-      <EstimateCell minutes={entry.estimate_minutes} readOnly={readOnly}
-        label={title || tr('today.thisEntry')}
-        onChange={(next) => void onEstimate(entry, next)} />
-      {/* Always painted when asked for, empty when nothing was measured — the
-          same lesson as the due cell: a column that appears only sometimes
-          makes every cell before it move. Minutes, like the estimate beside
-          it, and never a ratio of the two. */}
-      {worked && (
-        <span className="today-worked mono"
-          title={entry.worked_seconds
-            ? tr('today.worked', { amount: fmtDuration(Math.round(entry.worked_seconds / 60)) })
-            : undefined}>
-          {entry.worked_seconds ? fmtDuration(Math.round(entry.worked_seconds / 60)) : ''}
+      {/* The cells after the title, as one unit. On a phone they move under
+          the title together when they would leave it too narrow to read
+          (`.today-meta` in app.css); elsewhere the wrapper is not a box. */}
+      <span className="today-meta">
+        {/* Before the due date, because they answer different questions and the
+            nearer one to the title is the one the ritual is about: how long this
+            will take, versus when it is wanted by. */}
+        <EstimateCell minutes={entry.estimate_minutes} readOnly={readOnly}
+          label={title || tr('today.thisEntry')}
+          onChange={(next) => void onEstimate(entry, next)} />
+        {/* Always painted when asked for, empty when nothing was measured — the
+            same lesson as the due cell: a column that appears only sometimes
+            makes every cell before it move. Minutes, like the estimate beside
+            it, and never a ratio of the two. */}
+        {worked && (
+          <span className="today-worked mono"
+            title={entry.worked_seconds
+              ? tr('today.worked', { amount: fmtDuration(Math.round(entry.worked_seconds / 60)) })
+              : undefined}>
+            {entry.worked_seconds ? fmtDuration(Math.round(entry.worked_seconds / 60)) : ''}
+          </span>
+        )}
+        {/* ALWAYS rendered, empty when the row has no due date — the same lesson
+            as the kind column on the left. A cell that appears only sometimes
+            makes every cell BEFORE it move: with this conditional, an estimate on
+            a row with a due date sat fifty pixels left of one without, so the
+            column a person scans during the ritual zigzagged down the list. The
+            empty span costs a fixed strip of space and buys one right edge. */}
+        <span className="today-due mono">
+          {/* WHERE IT WENT, in place of when it was wanted by. A moved row only
+              ever paints in a look-back, and on that screen its destination is the
+              whole reason it is still on the list — the due date it kept is the
+              less interesting of the two facts, and the target day's own row
+              carries it anyway. */}
+          {entry.rolled_to
+            ? tr('today.movedTo', { day: fmtDue(entry.rolled_to, true, tf, locale) })
+            : task?.due ? fmtDue(task.due, task.due_is_date, tf, locale) : ''}
         </span>
-      )}
-      {/* ALWAYS rendered, empty when the row has no due date — the same lesson
-          as the kind column on the left. A cell that appears only sometimes
-          makes every cell BEFORE it move: with this conditional, an estimate on
-          a row with a due date sat fifty pixels left of one without, so the
-          column a person scans during the ritual zigzagged down the list. The
-          empty span costs a fixed strip of space and buys one right edge. */}
-      <span className="today-due mono">
-        {/* WHERE IT WENT, in place of when it was wanted by. A moved row only
-            ever paints in a look-back, and on that screen its destination is the
-            whole reason it is still on the list — the due date it kept is the
-            less interesting of the two facts, and the target day's own row
-            carries it anyway. */}
-        {entry.rolled_to
-          ? tr('today.movedTo', { day: fmtDue(entry.rolled_to, true, tf, locale) })
-          : task?.due ? fmtDue(task.due, task.due_is_date, tf, locale) : ''}
+        {/* THE ONE PLACE THE RECORD USED TO DIE. The chip lived on the suggestion
+            rows above and nowhere else, so the gesture that means "yes, I am
+            doing this" — pressing `+`, which moves the task out of the strip and
+            onto the day — was also the gesture that erased the last visible trace
+            of how late it was. The row it landed on showed a deadline of today
+            and nothing else.
+
+            NOT inside the due cell above: that cell has a `min-width` holding the
+            column steady down a list where only some rows are dated, and a chip
+            that shares it would push that edge around on the few rows that have
+            one. Its own span, painted only where there is something to say.
+
+            A note and a habit occurrence name no task, so `task` is null for them
+            and this paints nothing — `WasDue` takes a nullable task for exactly
+            the rows this renderer has to cover.
+
+            It paints in a LOOK-BACK too, and that is worth keeping rather than
+            gating on `!readOnly`: a task finished three weeks after it was
+            promised is a true thing about the day it was finished on, and the
+            look-back is the one screen whose job is saying how the day went. */}
+        <WasDue task={task} day={entry.day} done={done} />
+        {/* Absent, not disabled, on a finished day. Dropping is the one write the
+            backend DOES still allow on a past day — `update_day_entry` permits it
+            because saying "this did not happen" subtracts from the record rather
+            than manufacturing one — but permitted is not the same as offered: a
+            look-back that lets you quietly tidy last Tuesday until it looks
+            better is a look-back nobody should trust, and the connector is the
+            right place for a deliberate correction. */}
+        {!readOnly && (
+          <button type="button" className="today-drop"
+            aria-label={tr('today.removeFromToday', { entry: title || tr('today.entry') })}
+            onClick={() => void onDrop(entry)}>✕</button>
+        )}
       </span>
-      {/* THE ONE PLACE THE RECORD USED TO DIE. The chip lived on the suggestion
-          rows above and nowhere else, so the gesture that means "yes, I am
-          doing this" — pressing `+`, which moves the task out of the strip and
-          onto the day — was also the gesture that erased the last visible trace
-          of how late it was. The row it landed on showed a deadline of today
-          and nothing else.
-
-          NOT inside the due cell above: that cell has a `min-width` holding the
-          column steady down a list where only some rows are dated, and a chip
-          that shares it would push that edge around on the few rows that have
-          one. Its own span, painted only where there is something to say.
-
-          A note and a habit occurrence name no task, so `task` is null for them
-          and this paints nothing — `WasDue` takes a nullable task for exactly
-          the rows this renderer has to cover.
-
-          It paints in a LOOK-BACK too, and that is worth keeping rather than
-          gating on `!readOnly`: a task finished three weeks after it was
-          promised is a true thing about the day it was finished on, and the
-          look-back is the one screen whose job is saying how the day went. */}
-      <WasDue task={task} day={entry.day} done={done} />
-      {/* Absent, not disabled, on a finished day. Dropping is the one write the
-          backend DOES still allow on a past day — `update_day_entry` permits it
-          because saying "this did not happen" subtracts from the record rather
-          than manufacturing one — but permitted is not the same as offered: a
-          look-back that lets you quietly tidy last Tuesday until it looks
-          better is a look-back nobody should trust, and the connector is the
-          right place for a deliberate correction. */}
-      {!readOnly && (
-        <button type="button" className="today-drop"
-          aria-label={tr('today.removeFromToday', { entry: title || tr('today.entry') })}
-          onClick={() => void onDrop(entry)}>✕</button>
-      )}
     </li>
   )
 }

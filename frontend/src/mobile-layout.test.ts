@@ -403,6 +403,16 @@ describe('the Today header the phone rules aim at', () => {
       + 'longer renders').toMatch(/className="content-sub today-count"/)
   })
 
+  it('wraps the cells after the title in `today-meta`, as the browser fixtures do', () => {
+    const count = (src: string) => src.split('className="today-meta"').length - 1
+    expect(count(read('src/components/TodayView.tsx')), 'TodayView lost (or gained) a '
+      + '`today-meta` wrapper, and the browser fixtures copy that wrapper, so they '
+      + 'would stop matching the app').toBe(3)
+    expect(count(read('src/components/ShutdownRitual.tsx')), 'ShutdownRitual lost (or '
+      + 'gained) its `today-meta` wrapper, and the browser fixtures copy that wrapper, '
+      + 'so they would stop matching the app').toBe(1)
+  })
+
   it('has its phone rules, in a mobile block', () => {
     expect(allMobile, '`.today-head .spacer` is not dropped on a phone, so '
       + '`flex: 1` still claims the trailing space and forces a wrap')

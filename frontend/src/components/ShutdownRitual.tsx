@@ -250,7 +250,9 @@ function DoneStep({ entries, offPlan, planned, done, doneMinutes, unestimated,
                 <span className="today-title" dir={textDir(t.summary)}>
                   {t.summary || tr('common.untitled')}
                 </span>
-                <span className="today-due mono">{fmtClock(t.completed_at!, tf, locale)}</span>
+                <span className="today-meta">
+                  <span className="today-due mono">{fmtClock(t.completed_at!, tf, locale)}</span>
+                </span>
               </li>
             ))}
           </ul>
