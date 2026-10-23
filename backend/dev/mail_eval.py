@@ -272,9 +272,19 @@ def run_claude(emails: list[dict], dedup: list[dict]) -> dict | None:
     names = dict(owner_lists)
     for c in emails:
         sent = datetime.fromisoformat(c["sent"]) if c.get("sent") else None
+        body = body_of(c)
+        if not body.strip():
+            # As the pipeline does: nothing left after the quotes come out is
+            # settled without a model call. That includes a message that never
+            # had a body, such as per6, a note to self written in its subject
+            # line alone, which the pipeline does not read either.
+            out["extract"][c["id"]] = {"actionable": False, "asked": False, "kind": None,
+                                       "category": "", "title": "", "due": None, "group": "",
+                                       "list": "none", "picked": "none"}
+            continue
         try:
             ex = llm.extract(EmailForExtraction(sender_name=c["from_name"], sender_addr=c["from_addr"],
-                                                subject=c["subject"], sent=sent, body=body_of(c),
+                                                subject=c["subject"], sent=sent, body=body,
                                                 lists=OWNER_LISTS))
             routed, title = "none", ex.title
             actionable = ex.is_actionable and ex.category not in IGNORED_CATEGORIES

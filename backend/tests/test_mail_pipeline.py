@@ -1950,3 +1950,227 @@ def test_a_default_list_that_no_longer_exists_is_ignored_by_the_search(svc, secr
     ingestor(svc, secrets, llm).process_message(INBOX, eml("pipe_request"), uid=1)
     [(_, candidates)] = llm.match_calls
     assert [c.title for c in candidates] == ["Unit 1 Exam"]
+
+
+# ── review fixes: zones, pending events, dismissed event-made tasks, subject-only mail ──
+
+def test_a_prose_reply_restating_an_invites_start_adds_no_time(svc, secrets):
+    set_config(svc, kind_decider="model")
+    llm = FakeLlm(extract=extraction("Parent evening", kind="event",
+                                     event_start=datetime(2026, 10, 14, 18, 0)))
+    ing = ingestor(svc, secrets, llm)
+    first = ing.process_message(INBOX, eml("pipe_invite"), uid=1)
+    [s] = pending(svc)
+    assert s["event_start"] == "2026-10-14T18:00:00+02:00"
+    out = ing.process_message(
+        INBOX, reply(2, "See you at 18:00 in the hall.", root="invite-1@school.example"), uid=2)
+    assert (out.stage, out.outcome, out.suggestion_id) == ("dedup", "attached", first.suggestion_id)
+    [s] = pending(svc)
+    [u] = review.suggestion_dto(s)["updates"]
+    assert "18:00" not in u["notes"]
+
+
+def test_an_event_made_task_restating_a_pending_event_is_not_an_update(svc, jev_secrets):
+    set_config(svc, kind_decider="rules", kind_rules=["from:office@school.example -> event"],
+               dedup_decider="jev")
+    llm = FakeLlm(extract=[extraction("Team photo", kind="event",
+                                      event_start=datetime(2026, 10, 9, 15, 0)),
+                           extraction("Team photo", kind="event",
+                                      event_start=datetime(2026, 10, 9, 15, 0))])
+    jev = FakeJev(match=jev_match("S1", 0.93, changed=0.1))
+    ing = ingestor(svc, jev_secrets, llm, jev=jev)
+    first = ing.process_message(INBOX, plain("photo-1@school.example", "Team photo", "Friday."),
+                                uid=1)
+    [s] = pending(svc)
+    assert s["kind"] == "event" and s["due"] is None
+    out = ing.process_message(INBOX, plain("photo-2@club.example", "Team photo", "Friday at 3.",
+                                           sender="coach@club.example"), uid=2)
+    assert (out.stage, out.outcome, out.suggestion_id) == ("dedup", "attached", first.suggestion_id)
+    assert out.detail.startswith("same as a pending suggestion")
+    [(item, candidates)] = jev.match_calls
+    assert candidates[0]["due"] == "2026-10-09"
+    [s] = pending(svc)
+    assert review.suggestion_dto(s)["updates"][0]["notes"] == ""
+
+
+def _dismissed_event_made_task_then_reply(svc, secrets, reply_start):
+    """An event the rules made a task ("Team photo", due the 9th), dismissed; then a
+    reply in its thread that the model reads as the event on `reply_start`."""
+    set_config(svc, kind_decider="rules", kind_rules=['subject:"no such subject" -> event'])
+    llm = FakeLlm(extract=[extraction("Team photo", kind="event",
+                                      event_start=datetime(2026, 10, 9, 15, 0)),
+                           extraction("Team photo", kind="event", event_start=reply_start)])
+    ing = ingestor(svc, secrets, llm)
+    first = ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    [s] = pending(svc)
+    assert s["kind"] == "task" and s["due"] == "2026-10-09"
+    review.reject(svc, first.suggestion_id)
+    return llm, ing.process_message(INBOX, eml("pipe_reply_quoting"), uid=2)
+
+
+def test_a_moved_day_on_a_dismissed_event_made_task_is_asked_about(svc, secrets):
+    llm, out = _dismissed_event_made_task_then_reply(svc, secrets, datetime(2026, 10, 12, 15, 0))
+    assert out.outcome == "staged"
+    assert len(llm.match_calls) == 1
+
+
+def test_a_dismissed_event_made_task_restated_on_its_day_stays_dismissed(svc, secrets):
+    llm, out = _dismissed_event_made_task_then_reply(svc, secrets, datetime(2026, 10, 9, 15, 0))
+    assert (out.stage, out.outcome) == ("dedup", "suppressed")
+    assert llm.match_calls == []
+    assert pending(svc) == []
+
+
+def test_a_dismissed_update_restated_as_an_event_stays_dismissed(svc, secrets):
+    svc.mail(store.mail_upsert_thread, "mid:req-1@club.example", task_list="/c/l/",
+             task_uid="t1")
+    set_config(svc, kind_decider="rules", kind_rules=['subject:"no such subject" -> event'])
+    llm = FakeLlm(extract=extraction("Bring cups", kind="event",
+                                     event_start=datetime(2026, 10, 9, 15, 0)))
+    ing = ingestor(svc, secrets, llm, host=_TaskHost(svc))
+    first = eml("pipe_reply_quoting")
+    again = first.replace(b"<req-2@club.example>", b"<req-3@club.example>")
+    out = ing.process_message(INBOX, first, uid=1)
+    assert (out.stage, out.outcome) == ("dedup", "staged")
+    [s] = pending(svc)
+    assert s["kind"] == "update" and s["due"] is None
+    review.reject(svc, out.suggestion_id)
+    out = ing.process_message(INBOX, again, uid=2)
+    assert (out.stage, out.outcome) == ("dedup", "suppressed")
+    assert pending(svc) == []
+
+
+def test_a_reply_that_is_only_a_quote_is_not_read(svc, secrets):
+    quote = ("On Mon, 5 Oct 2026 at 12:00, Coach Miller <coach@club.example> wrote:\n"
+             "> Hi,\n>\n> Bring the team snack list by 2026-10-09 please.")
+    llm = FakeLlm(extract=extraction("Bring the team snack list"))
+    out = ingestor(svc, secrets, llm).process_message(INBOX, reply(2, quote), uid=1)
+    assert (out.stage, out.outcome) == ("extract", "not_actionable")
+    assert out.detail == "nothing left after removing quoted text"
+    assert llm.extract_calls == []
+
+
+def test_an_events_duplicate_question_has_no_due(svc, secrets):
+    set_config(svc, kind_decider="model")
+    llm = FakeLlm(extract=[extraction("Team photo"),
+                           extraction("Team photo", kind="event",
+                                      event_start=datetime(2026, 10, 9, 15, 0))])
+    ing = ingestor(svc, secrets, llm)
+    ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    assert [s["kind"] for s in pending(svc)] == ["task"]
+    ing.process_message(INBOX, plain("photo-2@school.example", "Team photo", "Friday at 3."),
+                        uid=2)
+    [(item, _)] = llm.match_calls
+    assert item.kind == "event" and item.due is None
+
+
+def test_an_html_reply_with_nothing_of_its_own_is_not_read(svc, secrets):
+    # Outlook's reply with only an attachment: html_to_text has already dropped the
+    # quote, so its text is empty, and it must not reach the model.
+    html = ('<html><body><div><br></div><hr style="display:inline-block;width:98%">'
+            '<div id="divRplyFwdMsg" dir="ltr"><b>From:</b> Me &lt;me@proton.me&gt;<br>'
+            "<b>Sent:</b> Monday<br><b>To:</b> Teacher<br><b>Subject:</b> Form</div>"
+            "<div>Could you please send me the permission form by Friday?</div></body></html>")
+    raw = ("Message-ID: <form-2@school.example>\r\n"
+           "Date: Mon, 05 Oct 2026 10:00:00 +0200\r\n"
+           "From: office@school.example\r\n"
+           "To: me@proton.me\r\n"
+           "Subject: RE: Form\r\n"
+           "MIME-Version: 1.0\r\n"
+           'Content-Type: multipart/mixed; boundary="B"\r\n'
+           "\r\n"
+           "--B\r\n"
+           "Content-Type: text/html; charset=utf-8\r\n"
+           "\r\n"
+           f"{html}\r\n"
+           "--B\r\n"
+           "Content-Type: application/pdf\r\n"
+           'Content-Disposition: attachment; filename="form.pdf"\r\n'
+           "Content-Transfer-Encoding: base64\r\n"
+           "\r\n"
+           "JVBERi0xLjQK\r\n"
+           "--B--\r\n").encode()
+    llm = FakeLlm(extract=extraction("Send the permission form"))
+    out = ingestor(svc, secrets, llm).process_message(INBOX, raw, uid=1)
+    assert (out.stage, out.outcome) == ("extract", "not_actionable")
+    assert llm.extract_calls == []
+
+
+def test_a_mail_from_someone_else_with_no_text_is_not_read(svc, secrets):
+    llm = FakeLlm(extract=extraction("Team photo"))
+    out = ingestor(svc, secrets, llm).process_message(
+        INBOX, plain("empty-1@school.example", "Team photo", ""), uid=1)
+    assert (out.stage, out.outcome) == ("extract", "not_actionable")
+    assert llm.extract_calls == []
+
+
+# ── a stored start is the owner's wall clock ──
+
+def _utc_invite(start=b"20261014T160000Z", end=b"20261014T173000Z") -> bytes:
+    return (eml("pipe_invite")
+            .replace(b"DTSTART;TZID=Europe/Berlin:20261014T180000", b"DTSTART:" + start)
+            .replace(b"DTEND;TZID=Europe/Berlin:20261014T193000", b"DTEND:" + end))
+
+
+def test_a_prose_reply_restating_a_utc_invites_start_adds_no_time(svc, secrets):
+    svc.update_settings({"home_timezone": "Europe/Berlin"})
+    set_config(svc, kind_decider="model")
+    llm = FakeLlm(extract=extraction("Parent evening", kind="event",
+                                     event_start=datetime(2026, 10, 14, 18, 0)))
+    ing = ingestor(svc, secrets, llm)
+    first = ing.process_message(INBOX, _utc_invite(), uid=1)
+    [s] = pending(svc)
+    assert s["event_start"] == "2026-10-14T16:00:00+00:00"
+    out = ing.process_message(
+        INBOX, reply(2, "See you at 18:00 in the hall.", root="invite-1@school.example"), uid=2)
+    assert (out.stage, out.outcome, out.suggestion_id) == ("dedup", "attached", first.suggestion_id)
+    [s] = pending(svc)
+    [u] = review.suggestion_dto(s)["updates"]
+    assert "18:00" not in u["notes"]
+
+
+def test_a_pending_utc_event_is_offered_on_its_local_day(svc, secrets):
+    svc.update_settings({"home_timezone": "Europe/Berlin"})
+    set_config(svc, kind_decider="model")
+    llm = FakeLlm(extract=extraction("Parent evening snacks"), match=Match("new", None))
+    ing = ingestor(svc, secrets, llm)
+    ing.process_message(INBOX, _utc_invite(b"20261014T223000Z", b"20261014T233000Z"), uid=1)
+    [s] = pending(svc)
+    assert s["event_start"] == "2026-10-14T22:30:00+00:00"
+    ing.process_message(INBOX, plain("snacks-1@club.example", "Parent evening snacks",
+                                     "Please bring snacks.", sender="coach@club.example"), uid=2)
+    [(_, candidates)] = llm.match_calls
+    assert [(c.label, c.due) for c in candidates] == [("S1", "2026-10-15")]
+
+
+@pytest.mark.parametrize("stamp, want", [
+    ("2026-10-14T22:30:00+00:00", "2026-10-15T00:30:00"),
+    ("2026-10-14T18:00:00", "2026-10-14T18:00:00"),
+    ("2026-10-14", "2026-10-14"),
+    (None, ""),
+    ("not a date", "not a date"),
+    ("9999-12-31T23:30:00+00:00", "9999-12-31T23:30:00"),
+])
+def test_a_stored_start_reads_as_the_owners_wall_clock(stamp, want):
+    from zoneinfo import ZoneInfo
+    assert pipeline._wall(stamp, ZoneInfo("Europe/Berlin")) == want
+
+
+def test_an_approved_utc_event_restated_on_its_local_day_is_not_staged_again(svc, secrets):
+    svc.update_settings({"home_timezone": "Europe/Berlin"})
+    set_config(svc, kind_decider="model")
+    llm = FakeLlm(extract=extraction("Parent evening", kind="event",
+                                     event_start=datetime(2026, 10, 15, 0, 30)))
+    host = _EventHost(svc)
+    ing = ingestor(svc, secrets, llm, host=host)
+    first = ing.process_message(INBOX, _utc_invite(b"20261014T223000Z", b"20261014T233000Z"),
+                                uid=1)
+    [s] = pending(svc)
+    assert s["event_start"] == "2026-10-14T22:30:00+00:00"
+    review.approve(host, first.suggestion_id, config=ing.config())
+    assert [e["summary"] for e in host.events] == ["Parent evening"]
+    out = ing.process_message(
+        INBOX, reply(2, "See you at half past midnight.", root="invite-1@school.example"), uid=2)
+    assert (out.stage, out.outcome) == ("dedup", "duplicate")
+    assert out.detail.startswith("already added as an event")
+    assert pending(svc) == []
