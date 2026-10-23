@@ -656,6 +656,135 @@ describe("a Today row's cells move under its title instead of squeezing it", () 
       'the due date left the title\'s first line: the suggestion row wrapped')
       .toBeLessThanOrEqual(0.5)
   })
+
+  it('an empty cell group costs the title nothing', async () => {
+    // An undated suggestion still renders the wrapper, with nothing in it; as a
+    // box it would cost the title the row's gap in front of it.
+    await viewport(360)
+    const row = (meta: string) => `
+      <li class="today-row today-sug">
+        <button type="button" class="today-plus">+</button>
+        <span class="today-kind-mark" data-kind="task"><span class="today-kind-box"></span></span>
+        <span class="today-title">Look into the quarterly numbers before the board</span>${meta}</li>`
+    const host = await mount(`
+      <div class="shell"><div class="content today-pane"><ul class="today-list">
+        ${row('<span class="today-meta"></span>').replace('<li ', '<li id="with" ')}
+        ${row('').replace('<li ', '<li id="without" ')}
+      </ul></div></div>`)
+    const withMeta = bits(host, 'with').t
+    const without = bits(host, 'without').t
+    expect(Math.abs(withMeta.width - without.width),
+      `the empty wrapper costs the title ${(without.width - withMeta.width).toFixed(1)}px`)
+      .toBeLessThanOrEqual(0.5)
+  })
+
+  const LABELS = {
+    en: { due: 'Oct 22', was: 'was due Oct 2 · 21d', today: 'Due today', park: 'Park it' },
+    de: { due: '22. Okt.', was: 'war fällig am 2. Okt. · 21 T', today: 'Heute fällig',
+      park: 'Zurückstellen' },
+  }
+  const TRIAGE = (l: (typeof LABELS)['en']) => `
+      <div class="shell"><div class="content today-pane"><ul class="today-list">
+        <li class="today-row today-sug today-triage" id="triage">
+          <span class="today-plus today-plus-empty" aria-hidden="true">!</span>
+          <span class="today-kind-mark" data-kind="task" role="img" aria-label="Task">
+            <span class="today-kind-box"></span></span>
+          <span class="today-title">Ritter Chapter Review Poster</span>
+          <span class="today-meta">
+            <span class="today-due mono">${l.due}</span>
+            <span class="was-due mono">${l.was}</span>
+          </span>
+          <span class="today-triage-actions">
+            <button type="button" class="btn ghost">${l.today}</button>
+            <input type="date" class="input today-triage-date" aria-label="New date" value="">
+            <button type="button" class="btn ghost">${l.park}</button>
+          </span></li>
+      </ul></div></div>`
+
+  // At 390px this row's cells fit beside the title in English, so there is no
+  // line of their own to test; the vacuity guard below says so. German at the
+  // default scale wraps "Heute fällig", which made the answers' box tall
+  // enough for the first-line translate to lift it onto the cells.
+  it.each([[320, 1, 'en'], [360, 1, 'en'], [360, 1.4, 'en'], [320, 1, 'de'], [340, 1, 'de'],
+    [390, 1.2, 'de'], [360, 1.4, 'de']] as const)(
+    'at %ipx (--fs-scale %f, %s) cells on a line of their own do not sit on what follows',
+    async (w, scale, lang) => {
+      // The triage row's real markup: its cells land on a line of their own, with
+      // the three answers on the next one.
+      await viewport(w)
+      document.documentElement.style.setProperty('--fs-scale', String(scale))
+      const host = await mount(TRIAGE(LABELS[lang]))
+      const b = bits(host, 'triage')
+      const meta = b.row.querySelector('.today-meta')!.getBoundingClientRect()
+      expect(meta.top, 'the cells are not on a line of their own: nothing here is being tested')
+        .toBeGreaterThanOrEqual(b.t.bottom - 0.5)
+
+      const actions = b.row.querySelector('.today-triage-actions')!.getBoundingClientRect()
+      for (const cell of b.row.querySelectorAll('.today-meta > *')) {
+        const r = cell.getBoundingClientRect()
+        expect(r.bottom, `\`${cell.className}\` is ${(actions.top - r.bottom).toFixed(1)}px clear of `
+          + `the triage answers at ${w}px, --fs-scale ${scale}, ${lang}: wants 1px`)
+          .toBeLessThanOrEqual(actions.top - 1)
+      }
+    })
+
+  // The habit count takes a line of its own on a phone, after the cells. A
+  // look-back habit with time worked and no estimate puts its cells on a line
+  // of their own in German at a larger scale; the count must not sit on them.
+  it.each([[320, 1.2], [320, 1.4], [340, 1.4]] as const)(
+    'at %ipx (--fs-scale %f) a habit\'s week count clears cells on a line of their own',
+    async (w, scale) => {
+      await viewport(w)
+      document.documentElement.style.setProperty('--fs-scale', String(scale))
+      const host = await mount(`
+        <div class="shell"><div class="content today-pane"><ul class="today-list">
+          <li class="today-row today-habit" id="habit">
+            <span class="today-check-gap today-mark mono" role="img" aria-label="Erledigt">&#10003;</span>
+            <span class="today-kind-mark" data-kind="habit" role="img" aria-label="Gewohnheit">&#8635;</span>
+            <span class="today-title">Zwanzig Minuten lesen</span>
+            <span class="today-habit-count mono">1 von 5 in jener Woche bis dahin</span>
+            <span class="today-meta">
+              <span class="today-worked mono">10 Min.</span>
+              <span class="today-due mono"></span>
+            </span></li>
+        </ul></div></div>`)
+      const b = bits(host, 'habit')
+      const meta = b.row.querySelector('.today-meta')!.getBoundingClientRect()
+      expect(meta.top, 'the cells are not on a line of their own: nothing here is being tested')
+        .toBeGreaterThanOrEqual(b.t.bottom - 0.5)
+      const count = b.row.querySelector('.today-habit-count')!.getBoundingClientRect()
+      for (const cell of b.row.querySelectorAll('.today-meta > *')) {
+        const r = cell.getBoundingClientRect()
+        if (r.height === 0) continue
+        expect(r.bottom, `\`${cell.className}\` is ${(count.top - r.bottom).toFixed(1)}px clear of `
+          + `the week count at ${w}px, --fs-scale ${scale}: wants 1px`)
+          .toBeLessThanOrEqual(count.top - 1)
+      }
+    })
+
+  it('a look-back row whose cells are all empty gains no line', async () => {
+    // A note with no estimate and nothing worked, as the row renders it in a
+    // look-back: no estimate cell at all (read-only, none set), an empty
+    // `.today-worked` and an empty `.today-due`, and no ✕. Their min-widths
+    // wrap the group at a large text scale on a narrow phone; empty, it must
+    // still be no taller than nothing.
+    await viewport(320)
+    document.documentElement.style.setProperty('--fs-scale', '1.4')
+    const host = await mount(`
+      <div class="shell"><div class="content today-pane"><ul class="today-list">
+        <li class="today-row" id="empty">
+          <span class="today-check-gap" aria-hidden="true"></span>
+          <span class="today-kind-mark" data-kind="note"><span class="today-kind-box"></span></span>
+          <span class="today-title">Pick up the dry cleaning</span>
+          <span class="today-meta">
+            <span class="today-worked mono"></span>
+            <span class="today-due mono"></span>
+          </span></li>
+      </ul></div></div>`)
+    const meta = host.querySelector('#empty .today-meta')!.getBoundingClientRect()
+    expect(meta.height, 'the empty cells gave the look-back row a line of their own')
+      .toBeLessThanOrEqual(0.5)
+  })
 })
 
 // ── the habit count and the title it stands beside ──────────────────────────

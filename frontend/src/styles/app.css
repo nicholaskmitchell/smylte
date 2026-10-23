@@ -2748,6 +2748,17 @@ button.menu-toggle:active { scale: var(--press-scale); }
      changes, and a number computed from three moving parts is the thing that
      drifted here in the first place. */
   .today-triage-actions { width: 100%; padding-left: var(--gutter); }
+  /* Clear of the cells above when they take a line of their own (see
+     `.today-meta`): they keep the first-line translate, which on a line of
+     11px cells sits them 3px (times the text scale) below it. Not a min-height
+     on the group, which would also give a look-back row whose cells are all
+     empty a blank line. */
+  .today-triage-actions { margin-top: calc(4px * var(--fs-scale)); }
+  /* …and not lifted by that translate itself: the answers are always a line
+     of their own here, and a label that wraps made the box 40-50px tall, which
+     the first-line rule then raised 8-10px onto the cells. (0,2,0), after that
+     rule, so it wins on source order. */
+  .today-row > .today-triage-actions { transform: none; }
 }
 
 /* ---- arranging the day -------------------------------------------------
@@ -3095,8 +3106,8 @@ button.menu-toggle:active { scale: var(--press-scale); }
      taking the ✕ with it.
 
      `transform: none` because the rule that puts a cell on the title's first
-     line is for its cells, which carry it themselves; the child combinator is
-     what outranks that rule's `:not()`. */
+     line is for its cells, which carry it themselves. It wins on SOURCE ORDER:
+     both selectors are (0,2,0), so this has to stay below that rule. */
   .today-row > .today-meta {
     display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end;
     align-items: flex-start; gap: 3px var(--today-row-gap);
@@ -3104,10 +3115,21 @@ button.menu-toggle:active { scale: var(--press-scale); }
       - 2 * var(--today-row-gap));
     margin-left: auto; transform: none;
   }
-  .today-habit-count {
+  /* A row with nothing after its title (an undated suggestion) still renders
+     the wrapper; as a box it would cost the title the row's gap in front of
+     it. */
+  .today-row > .today-meta:empty { display: none; }
+  /* `.today-row >` because the bare class is (0,1,0) and lost to the
+     first-line rule, so the `transform: none` this needs never applied and the
+     count sat half a line lower than the 3px described above. The margin is
+     for a row whose cells took a line of their own before it: they hang 3px x
+     the text scale below that line, and this keeps the count at least 1px clear
+     of them (and adds 1px at the default scale otherwise). */
+  .today-row > .today-habit-count {
     order: 1; flex-basis: 100%;
     padding-left: calc(var(--check-size) + var(--today-mark-w)
       + 2 * var(--today-row-gap));
+    margin-top: calc(4px * var(--fs-scale) - 3px);
     transform: none;
   }
 }
