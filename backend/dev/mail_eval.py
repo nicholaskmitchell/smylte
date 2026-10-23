@@ -124,9 +124,19 @@ class Jev:
         raise RuntimeError(f"TypeSafe kept failing: {r.status_code}")
 
 
+def body_of(c: dict) -> str:
+    """The body both models are given: quoted replies removed, as the pipeline
+    removes them before either sees a message, then cut. A reply whose only
+    date is in the quote it answers is read without it, as it is at home."""
+    if str(HERE.parent) not in sys.path:
+        sys.path.insert(0, str(HERE.parent))
+    from smylted.mail.message import strip_quotes  # noqa: E402
+    return strip_quotes(c["body"], subject=c["subject"])[:8000]
+
+
 def email_state(c: dict) -> dict:
     return {"email": {"from": f"{c['from_name']} <{c['from_addr']}>", "subject": c["subject"],
-                      "sent": c["sent"], "body": c["body"][:8000]}}
+                      "sent": c["sent"], "body": body_of(c)}}
 
 
 # ── pre-filter ───────────────────────────────────────────────────────────────
@@ -264,18 +274,18 @@ def run_claude(emails: list[dict], dedup: list[dict]) -> dict | None:
         sent = datetime.fromisoformat(c["sent"]) if c.get("sent") else None
         try:
             ex = llm.extract(EmailForExtraction(sender_name=c["from_name"], sender_addr=c["from_addr"],
-                                                subject=c["subject"], sent=sent, body=c["body"][:8000],
+                                                subject=c["subject"], sent=sent, body=body_of(c),
                                                 lists=OWNER_LISTS))
             routed, title = "none", ex.title
-            if ex.kind == "task":
-                # As the pipeline does: only a task is filed and retitled.
+            actionable = ex.is_actionable and ex.category not in IGNORED_CATEGORIES
+            if actionable and ex.kind == "task":
+                # As the pipeline does: only a task that passed the gate is filed and retitled.
                 slug, _ = filing.route(ex.group, ex.list_name, owner_lists, {})
                 routed = names[slug] if slug is not None else "none"
                 if ex.category == "coursework":
                     title = filing.tidy_title(title, [n for n in (ex.group, routed if slug else "") if n])
             out["extract"][c["id"]] = {
-                "actionable": ex.is_actionable and ex.category not in IGNORED_CATEGORIES,
-                "asked": ex.is_actionable, "kind": ex.kind, "category": ex.category,
+                "actionable": actionable, "asked": ex.is_actionable, "kind": ex.kind, "category": ex.category,
                 "title": title, "due": ex.due.isoformat() if ex.due else None,
                 "group": ex.group, "list": routed, "picked": ex.list_name or "none"}
         except Exception as e:  # noqa: BLE001
