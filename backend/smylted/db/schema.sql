@@ -6,8 +6,9 @@
 --     you get byte-identical application state back (invariant #1).
 --   * SIDECAR tables (sidecar, list_settings, completions, attachments,
 --     day_plan, day_plan_opened, day_ritual, habits, focus_session,
---     notification_deliveries, mail_ledger, mail_cursors, mail_suggestions,
---     mail_threads, mail_rejections)
+--     notification_deliveries, booking_links, bookings, displays, shares,
+--     mail_ledger, mail_cursors, mail_suggestions, mail_threads,
+--     mail_rejections)
 --     hold app-only state that
 --     exists NOWHERE on the wire (kanban column, manual sort, pins, per-list
 --     settings, the day's plan, which days were opened at all, what the owner
@@ -719,6 +720,52 @@ CREATE TABLE IF NOT EXISTS displays (
     last_seen_at TEXT,
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+-- ── shares (SIDECAR: read-only views of chosen lists and calendars, for a person) ──
+--
+-- A capability URL for ANOTHER PERSON, shaped after `displays` (token in the URL,
+-- revoked by switching off, re-keying or deleting) with the allowlist rule
+-- INVERTED: empty `lists`/`calendars` mean NOTHING, never "everything". A share
+-- is read by somebody else, so the only safe failure is to show them nothing.
+-- A new row also starts with show_focus=0, so a fresh share shares nothing at all.
+--
+-- `token` is the ONLY credential (secrets.token_urlsafe(32), always 43 chars).
+-- `id` is the owner's handle: owner routes, SSE events and the Settings editor
+-- are keyed by it, so the token never appears in an owner URL or event.
+-- `name` is the owner's label for the person and is NEVER sent to a viewer.
+-- `last_seen_at` is the only thing recorded about a viewer (no IP, no UA),
+-- stamped at most once a minute.
+--
+-- Allowlists hold collection SLUGS (`_slug(href)`), normalised on write to live
+-- collections of the right component, and pruned when a collection is deleted
+-- (store.prune_share_collection, called from mark_collection_deleted). That
+-- narrows the case of a collection that later reappears at the same href to
+-- one discovery interval; it does not close it, because a collection deleted
+-- and recreated between two discovery runs is never seen as deleted.
+--
+-- Sidecar-class: nothing here is on the wire and no resync rebuilds it. Listed in
+-- docs/DEPLOY.md's backups. Restoring an older copy brings back links rotated or
+-- deleted since.
+CREATE TABLE IF NOT EXISTS shares (
+    id           TEXT PRIMARY KEY,                                  -- uuid4().hex; owner handle, not a credential
+    token        TEXT NOT NULL UNIQUE CHECK (length(token) = 43),   -- secrets.token_urlsafe(32)
+    name         TEXT NOT NULL,                                     -- owner-only
+    lists        TEXT NOT NULL DEFAULT '[]',                        -- JSON array of VTODO slugs; [] = NOTHING
+    calendars    TEXT NOT NULL DEFAULT '[]',                        -- JSON array of VEVENT slugs; [] = NOTHING
+    show_focus   INTEGER NOT NULL DEFAULT 0 CHECK (show_focus IN (0, 1)),
+    enabled      INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    -- How many days of events the viewer sees, today included. Validated at the
+    -- service (1, 7, 14 or 28), not here, like displays' modes: a value this
+    -- build does not know is refused on write and never needs a migration.
+    horizon_days INTEGER NOT NULL DEFAULT 7,
+    -- The Authenticator.credential_version in force when the share was created or
+    -- last switched on. A share whose cv no longer matches the live one is OFF:
+    -- changing the password switches every share off. '' is the no-auth posture.
+    cv           TEXT NOT NULL DEFAULT '',
+    last_seen_at TEXT,
+    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
 -- ── email ingestion (SIDECAR: what the mail pipeline has seen and proposed) ──

@@ -487,6 +487,7 @@ Back up both:
 | `focus_session` | The running focus session. Worked time already credited is in `day_plan` |
 | `notification_deliveries` | What has been sent. Without it, a restore re-sends anything inside the catch-up window |
 | `displays` | Paired displays and their tokens. Losing it unpairs every screen |
+| `shares` | Share links, their tokens and what each shows. Restoring an older copy brings back links rotated or deleted since — check Settings → Shares after a restore |
 | `mail_ledger`, `mail_cursors`, `mail_suggestions`, `mail_threads`, `mail_rejections` | What mail was read, scan positions, pending suggestions, thread links and dismissals. Without them the next scan re-proposes the last week of mail |
 
 Email secrets aren't in the database; carry them separately (see
