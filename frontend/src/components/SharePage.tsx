@@ -354,13 +354,27 @@ const eventTitle = (tr: Translate, e: Pick<ShareEvent, 'title' | 'private'>) =>
   e.private || !e.title ? tr('share.busy') : e.title
 
 /** The reader's own "when" for a due date: a word for today and tomorrow, a short
- *  date otherwise, and the time of day when the task has one. */
+ *  date otherwise, and the time of day when the task has one. A standalone word,
+ *  for a chip; a sentence about a due date is `dueLabel`. */
 function whenLabel(tr: Translate, locale: string, today: string, due: string, allDay: boolean): string {
   const day = ymd(parseDate(due))
   const word = day === today ? tr('share.today')
     : day === shiftYmd(today, 1) ? tr('share.tomorrow')
       : parseDate(day).toLocaleDateString(locale, { month: 'short', day: 'numeric' })
   return allDay ? word : `${word} ${fmtTime(due, locale)}`
+}
+
+/** "Due today", "Due tomorrow, 9:00 AM", "Due Nov 5": the whole phrase, because
+ *  "Due Today" with a capital in the middle of it reads as a heading's word put
+ *  in a sentence. Today and tomorrow are written out as phrases of their own, so
+ *  each language places its word and its comma where it wants them. */
+function dueLabel(tr: Translate, locale: string, today: string, due: string, allDay: boolean): string {
+  const day = ymd(parseDate(due))
+  const time = allDay ? '' : fmtTime(due, locale)
+  if (day === today) return allDay ? tr('share.dueToday') : tr('share.dueTodayAt', { time })
+  if (day === shiftYmd(today, 1)) return allDay ? tr('share.dueTomorrow') : tr('share.dueTomorrowAt', { time })
+  const date = parseDate(day).toLocaleDateString(locale, { month: 'short', day: 'numeric' })
+  return tr('share.due', { when: allDay ? date : `${date} ${time}` })
 }
 
 /** What the page draws for a share. Presentational, so the owner's preview in
@@ -438,6 +452,10 @@ function Presence({ view, focus, nowMs, skewMs, tr, locale, justDone }: {
   const done = rows.filter((r) => r.done).length
   const nowName = nowRow ? rowName(nowRow) : ''
   const thenName = state !== 'idle' && nextRows[0] ? rowName(nextRows[0]) : ''
+  // "Then" follows a "Working on" or an "Up next" line. With no row above it to
+  // follow, the next task is the first thing said, and "Then" would dangle.
+  const thenLabel = nowRow ? tr('share.then') : tr('share.upNext')
+  const ongoingBusy = !!ongoing && (ongoing.private || !ongoing.title)
 
   return (
     <section className="share-card share-presence" data-state={state} data-phase={focus.phase ?? undefined}>
@@ -461,13 +479,15 @@ function Presence({ view, focus, nowMs, skewMs, tr, locale, justDone }: {
       )}
       {thenName && (
         <p className="share-then">
-          <span className="share-then__label">{tr('share.then')}</span>{' '}
+          <span className="share-then__label">{thenLabel}</span>{' '}
           <span className="share-then__text" dir={textDir(thenName)}>{thenName}</span>
         </p>
       )}
       {state === 'idle' && (ongoing ? (
         <p className="share-then" dir={textDir(eventTitle(tr, ongoing))}>
-          {tr('share.inEvent', { title: eventTitle(tr, ongoing), time: fmtTime(ongoing.end!, locale) })}
+          {ongoingBusy
+            ? tr('share.busyUntil', { time: fmtTime(ongoing.end!, locale) })
+            : tr('share.inEvent', { title: eventTitle(tr, ongoing), time: fmtTime(ongoing.end!, locale) })}
         </p>
       ) : nextRows.length > 0 && (
         <p className="share-then">
@@ -532,10 +552,10 @@ function Agenda({ view, nowMs, skewMs, tr, locale }: {
   const days = agendaDays(today, view.days)
   const buckets = bucketByDay(view.events.map(toBucket), days.map((d) => parseDate(d)))
   const hasAny = days.some((d) => (buckets.get(d)?.length ?? 0) > 0)
-  // A long horizon would otherwise be four weeks of day headings over nothing.
-  // Today and tomorrow always show, because "nothing today" is information;
-  // beyond that, only days that have something.
-  const shown = days.filter((d, i) => view.days <= 7 || i < 2 || (buckets.get(d)?.length ?? 0) > 0)
+  // Seven days of headings over nothing is as empty as four weeks of them. Today
+  // and tomorrow always show, because "nothing today" is information; beyond
+  // that, only days that have something, whatever the horizon.
+  const shown = days.filter((d, i) => i < 2 || (buckets.get(d)?.length ?? 0) > 0)
   return (
     <section className="share-card share-agenda">
       <div className="share-label">{tr('share.comingUp')}</div>
@@ -615,7 +635,7 @@ function TaskList({ list, single, nowMs, skewMs, tr, locale }: {
                 <span className="share-task__text" dir={textDir(title)}>{title}</span>
                 {t.due && (
                   <span className={`share-task__due${overdue(t) ? ' is-late' : ''}`}>
-                    {tr('share.due', { when: whenLabel(tr, locale, today, t.due, t.all_day) })}
+                    {dueLabel(tr, locale, today, t.due, t.all_day)}
                   </span>
                 )}
               </li>

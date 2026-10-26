@@ -139,7 +139,19 @@ describe('<SharePage> — the presence card', () => {
     expect(screen.getByText('Working on')).toBeInTheDocument()
     expect(document.querySelector('.share-now__title')?.textContent).toBe('Draft the memo')
     expect(document.querySelector('.share-then')?.textContent).toContain('Call printer')
+    expect(document.querySelector('.share-then__label')?.textContent).toBe('Then')
     expect(document.querySelector('.share-row.is-now')?.textContent).toContain('Draft the memo')
+  })
+
+  it('says "up next", not "then", when nothing above the next task is on screen', async () => {
+    // "Then" follows a line; with no "Working on" row above it, it would dangle.
+    viewMock.mockResolvedValue(fresh(focused({ today: { rows: ROWS, now: null, next: ['k2'] } })))
+    render(<SharePage token="tok" />)
+    await settle()
+    const label = document.querySelector('.share-then__label')!
+    expect(label.textContent).toBe('Up next')
+    expect(label.parentElement?.textContent).toContain('Call printer')
+    expect(screen.queryByText('Then')).toBeNull()
   })
 
   it('shows the clock and no title when the session is on something not shared', async () => {
@@ -162,6 +174,20 @@ describe('<SharePage> — the presence card', () => {
     expect(screen.getByText(/In “Standup” until 10:30/)).toBeInTheDocument()
     // The same event is under way in the agenda, marked.
     expect(document.querySelector('.share-ev.is-now')).toBeTruthy()
+  })
+
+  it.each([
+    ['private', { title: '', private: true }],
+    ['untitled', { title: '', private: false }],
+  ])('says only that they are busy until the end of a %s event', async (_kind, over) => {
+    viewMock.mockResolvedValue(fresh(focused(
+      { state: 'idle', phase: null, ends_at: null, today: { rows: ROWS, now: null, next: [] } },
+      { calendars: CAL, events: [ev({ ...over, start: iso(-1800), end: iso(1800) })] },
+    )))
+    render(<SharePage token="tok" />)
+    await settle()
+    expect(screen.getByText('Busy until 10:30 AM')).toBeInTheDocument()
+    expect(screen.queryByText(/In “/)).toBeNull()
   })
 
   it('lists what is up next when idle and nothing is under way', async () => {
@@ -189,7 +215,7 @@ describe('<SharePage> — the presence card', () => {
     viewMock
       .mockResolvedValueOnce(fresh(focused()))
       .mockResolvedValue(fresh(focused({
-        today: { rows: [ROWS[0], ROWS[1], { ...ROWS[1], key: 'k2', done: true }], now: 'k1', next: [] },
+        today: { rows: [ROWS[0], { ...ROWS[1], done: true }], now: 'k1', next: [] },
       }), 'e2'))
     render(<SharePage token="tok" />)
     await settle()
@@ -385,6 +411,21 @@ describe('<SharePage> — what it draws', () => {
     expect(document.documentElement.lang).toBe('de')
   })
 
+  it('words a due date as a phrase in the viewer’s language', async () => {
+    vi.spyOn(navigator, 'languages', 'get').mockReturnValue(['de-DE'])
+    viewMock.mockResolvedValue(fresh({
+      ...BASE,
+      lists: [{ ...LIST, tasks: [
+        { title: 'Morgen', due: '2026-10-27', all_day: true, depth: 0, private: false },
+        { title: 'Heute', due: '2026-10-26', all_day: true, depth: 0, private: false },
+      ] }],
+    }))
+    render(<SharePage token="tok" />)
+    await settle()
+    expect(screen.getByText('Morgen fällig')).toBeInTheDocument()
+    expect(screen.getByText('Heute fällig')).toBeInTheDocument()
+  })
+
   it('puts the countdown in the tab title and never any owner text', async () => {
     viewMock.mockResolvedValue(fresh(focused({}, { lists: [{ ...LIST, name: 'Secret plans' }] })))
     render(<SharePage token="tok" />)
@@ -447,7 +488,7 @@ describe('<SharePage> — private items', () => {
     expect(ev0.querySelector('.share-ev__time')?.textContent).toBe('11:00 AM–11:30 AM')
     const tasks = [...document.querySelectorAll('.share-task')]
     expect(tasks[0].querySelector('.share-task__text')?.textContent).toBe('Busy')
-    expect(tasks[0].querySelector('.share-task__due')?.textContent).toBe('Due Today 12:00 PM')
+    expect(tasks[0].querySelector('.share-task__due')?.textContent).toBe('Due today, 12:00 PM')
     // An untitled task that is not private is a different thing to say.
     expect(tasks[1].querySelector('.share-task__text')?.textContent).toBe('(no title)')
     const rows = [...document.querySelectorAll('.share-row')]
@@ -466,7 +507,7 @@ describe('<SharePage> — private items', () => {
 })
 
 describe('<SharePage> — the agenda', () => {
-  it('draws the week from the viewer’s own today and every day of a short horizon', async () => {
+  it('draws the viewer’s own today and tomorrow, and then only the days that hold something', async () => {
     viewMock.mockResolvedValue(fresh({
       ...BASE, calendars: CAL,
       events: [
@@ -476,12 +517,29 @@ describe('<SharePage> — the agenda', () => {
     }))
     render(<SharePage token="tok" />)
     await settle()
-    expect(document.querySelectorAll('.share-day')).toHaveLength(7)
+    expect(document.querySelectorAll('.share-day')).toHaveLength(3)
     const labels = [...document.querySelectorAll('.share-day__label')].map((h) => h.textContent)
     expect(labels.slice(0, 3)).toEqual(['Today', 'Tomorrow', 'Wednesday, October 28'])
     // A two-day all-day span (exclusive end) is on both of its days, once each.
     expect(screen.getAllByText('Conference')).toHaveLength(2)
     expect(screen.getAllByText('All day')).toHaveLength(2)
+  })
+
+  it('counts the viewer’s today, not the owner’s, when the two are a date apart', async () => {
+    // The owner is in Auckland, where it is already the 27th. The viewer's clock
+    // in New York is on the 26th, and 03:00 UTC on the 27th is 23:00 there.
+    viewMock.mockResolvedValue(fresh({
+      ...BASE, day: '2026-10-27', calendars: CAL,
+      events: [ev({ title: 'Late film', start: '2026-10-27T03:00:00.000Z', end: '2026-10-27T04:00:00.000Z' })],
+    }))
+    render(<SharePage token="tok" />)
+    await settle()
+    const labels = [...document.querySelectorAll('.share-day__label')].map((h) => h.textContent)
+    expect(labels).toEqual(['Today', 'Tomorrow'])
+    const today = document.querySelector('.share-day')!
+    expect(today.querySelector('.share-day__label')?.textContent).toBe('Today')
+    expect(today.textContent).toContain('Late film')
+    expect(screen.getAllByText('Late film')).toHaveLength(1)
   })
 
   it('leaves out the empty days past tomorrow on a long horizon', async () => {
@@ -576,7 +634,7 @@ describe('<SharePage> — the lists', () => {
     expect(due[0].className).toContain('is-late')
     expect(due[0].textContent).toBe('Due Oct 20')
     expect(due[1].className).not.toContain('is-late')
-    expect(due[1].textContent).toBe('Due Tomorrow')
+    expect(due[1].textContent).toBe('Due tomorrow')
     expect(screen.getByText('+2 more')).toBeInTheDocument()
     expect(screen.getByText('Untitled list')).toBeInTheDocument()
     expect(screen.getByText('No open tasks.')).toBeInTheDocument()

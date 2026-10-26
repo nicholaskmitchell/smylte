@@ -20,11 +20,21 @@ import { makeGuard, parseDate } from '../util'
 import { fmtWhen } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { useI18n } from '../i18n'
-import { ShareBody } from './SharePage'
+import { ShareBody, type Translate } from './SharePage'
 
 // What the agenda may reach, in days. The server accepts exactly these four and
 // refuses anything else; this is only what the control offers.
 const HORIZONS = [1, 7, 14, 28] as const
+
+// One `switch` with literal keys, so the catalogue scan sees every one.
+const horizonLabel = (tr: Translate, n: (typeof HORIZONS)[number]): string => {
+  switch (n) {
+    case 1: return tr('shares.horizon.1')
+    case 7: return tr('shares.horizon.7')
+    case 14: return tr('shares.horizon.14')
+    case 28: return tr('shares.horizon.28')
+  }
+}
 
 // How recently a link must have been opened to count as open right now. The
 // page polls every 15 to 30 seconds, and the server stamps `last_seen_at` at
@@ -364,7 +374,7 @@ export function SharesSection(
                           onClick={() => {
                             if (d.horizon_days !== n) void patch(d.id, { horizon_days: n })
                           }}>
-                          {tr(`shares.horizon.${n}`)}
+                          {horizonLabel(tr, n)}
                         </button>
                       ))}
                     </div>
