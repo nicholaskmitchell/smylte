@@ -684,7 +684,9 @@ describe('<HomeView> what was finished this week', () => {
     expect(new Date(`${from}T00:00`).getDay()).toBe(1)
     // Four whole weeks, half-open like every other window in this app: a span
     // that included both end Mondays would count one day in two weeks.
-    expect(new Date(`${to}T00:00`).getTime() - new Date(`${from}T00:00`).getTime())
+    // Measured on UTC midnights: these are calendar dates, and a span across a
+    // clock change is an hour longer or shorter between local midnights.
+    expect(Date.parse(`${to}T00:00Z`) - Date.parse(`${from}T00:00Z`))
       .toBe(28 * 86_400_000)
     expect(to).toBe(weekStart(1))
   })
