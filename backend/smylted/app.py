@@ -2689,17 +2689,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # written to bound (events written) and takes the denial-of-service away.
     public_post_link_limiter = RateLimiter(max_fails=30, window_s=3600, lockout_s=1800)
 
-    def _gate(key: str, limiter: RateLimiter) -> None:
+    def _gate(
+        key: str, limiter: RateLimiter, extra_headers: dict[str, str] | None = None,
+    ) -> None:
         """Refuse if the key is already locked out. Spends nothing."""
         if not limiter.allowed(key):
             raise HTTPException(
                 status.HTTP_429_TOO_MANY_REQUESTS,
                 "too many requests, try later",
-                headers={"Retry-After": str(limiter.retry_after(key))},
+                headers={**(extra_headers or {}),
+                         "Retry-After": str(limiter.retry_after(key))},
             )
 
-    def _throttle(key: str, limiter: RateLimiter) -> None:
-        _gate(key, limiter)
+    def _throttle(
+        key: str, limiter: RateLimiter, extra_headers: dict[str, str] | None = None,
+    ) -> None:
+        _gate(key, limiter, extra_headers)
         limiter.record_failure(key)   # every request counts: request-rate semantics
 
     def _public_throttle(request: Request, limiter: RateLimiter) -> None:
@@ -2798,8 +2803,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         tests/test_loop_blocking.py that keeps it that way)."""
         _throttle(limiter_key(_client_ip(request)), display_limiter)
 
-    def _frame_response(frame: dict, request: Request, *, seconds: int) -> Response:
-        """A frame, with the ETag that lets a panel skip a repaint.
+    def _etag_response(body: dict, request: Request, headers: dict[str, str]) -> Response:
+        """A JSON body, with the ETag that lets a client skip a repaint.
 
         This is the one piece of HTTP that matters to an eink screen. A full
         refresh flashes the whole panel black and takes the better part of a
@@ -2810,23 +2815,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         time while the screen said the same thing — and a matching
         If-None-Match gets a 304 with no body, which the browser page and a
         firmware alike can treat as "nothing to draw".
+
+        `headers` rides on the 200 and the 304 alike, so a caching rule the
+        caller states cannot be lost on the cheap answer.
         """
-        stable = {k: v for k, v in frame.items() if k != "generated_at"}
+        stable = {k: v for k, v in body.items() if k != "generated_at"}
         etag = '"' + hashlib.sha256(
             json.dumps(stable, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()[:32] + '"'
-        headers = {
-            "ETag": etag,
+        headers = {"ETag": etag, **headers}
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+        return JSONResponse(body, headers=headers)
+
+    def _frame_response(frame: dict, request: Request, *, seconds: int) -> Response:
+        """A display frame with its ETag; see `_etag_response`."""
+        return _etag_response(frame, request, {
             # no-store rather than a max-age: this is private data on a URL with
             # no session, so it must not sit in a proxy that a second device
             # could be handed it from. The panel's own polling interval is in
             # the body, which is the schedule that actually governs.
             "Cache-Control": "no-store, private",
             "X-Display-Refresh-Seconds": str(seconds),
-        }
-        if request.headers.get("if-none-match") == etag:
-            return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
-        return JSONResponse(frame, headers=headers)
+        })
 
     # GET and HEAD, and the HEAD is not decoration. `@app.get` builds a FastAPI
     # `APIRoute`, which registers `methods={"GET"}` and nothing else — Starlette's
@@ -3106,12 +3117,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # several treat a 404 as a dead link — so a live booking link got flagged or
     # stripped before any human clicked it, and the owner never heard about it.
     # Starlette drops the body for a HEAD itself; only the route has to exist.
-    @app.api_route("/book/{token}", methods=["GET", "HEAD"], include_in_schema=False)
-    async def booking_spa(token: str):
+    def _index_response(headers: dict[str, str] | None = None) -> FileResponse:
+        """The built SPA shell, for every route that is a page rather than data."""
         index = os.path.join(settings.static_dir, "index.html")
         if not os.path.isfile(index):
             raise HTTPException(status.HTTP_404_NOT_FOUND, "frontend not built")
-        return FileResponse(index)
+        return FileResponse(index, headers=headers)
+
+    @app.api_route("/book/{token}", methods=["GET", "HEAD"], include_in_schema=False)
+    async def booking_spa(token: str):
+        return _index_response()
 
     # Both spellings, for the same reason the well-known routes above register
     # theirs: the SPA mount at "/" returns a FULL match for every path, so
@@ -3136,10 +3151,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # display page and never the authed app.
     @app.api_route("/display/{token}", methods=["GET", "HEAD"], include_in_schema=False)
     async def display_spa(token: str):
-        index = os.path.join(settings.static_dir, "index.html")
-        if not os.path.isfile(index):
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "frontend not built")
-        return FileResponse(index)
+        return _index_response()
 
     # Both spellings, for the reason the booking route registers both: the SPA
     # mount at "/" full-matches every path, so `redirect_slashes` never runs and
@@ -3160,10 +3172,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # bare JSON 404 on a cold load. Both spellings, like the two above.
     @app.api_route("/focus", methods=["GET", "HEAD"], include_in_schema=False)
     async def focus_spa():
-        index = os.path.join(settings.static_dir, "index.html")
-        if not os.path.isfile(index):
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "frontend not built")
-        return FileResponse(index)
+        return _index_response()
 
     app.add_api_route(
         "/focus/", focus_spa, methods=["GET", "HEAD"], include_in_schema=False,

@@ -539,6 +539,14 @@ class SmylteService:
             return [self._list_dto(r, counts) for r in rows
                     if "VTODO" in (r["components"] or "")]
 
+    def _collection_color(self, row) -> str | None:
+        """A collection's colour as `_list_dto` resolves it: the owner's own
+        choice in `list_settings`, else the one the server reports."""
+        settings_row = self._conn.execute(
+            "SELECT color FROM list_settings WHERE collection_href=?", (row["href"],)
+        ).fetchone()
+        return (settings_row["color"] if settings_row else None) or row["color"]
+
     def _list_dto(self, row, counts: dict[str, dict[str, int]] | None = None) -> dict[str, Any]:
         """One list/calendar row for the client.
 
@@ -3920,7 +3928,9 @@ class SmylteService:
                     cursor = (date.fromisoformat(cursor) + timedelta(days=1)).isoformat()
         return sources, out
 
-    def _resolved_day_rows(self, day: str) -> tuple[list[dict[str, Any]], bool]:
+    def _resolved_day_rows(
+        self, day: str, *, preview: bool = True,
+    ) -> tuple[list[dict[str, Any]], bool]:
         """Today's live rows with every task's title and doneness resolved off
         its VTODO, in plan order — and whether they are real or a preview.
 
@@ -3942,10 +3952,18 @@ class SmylteService:
         skipped rather than shown.
 
         Each row is the entry DTO plus `title` (resolved), `done` (resolved)
-        and `href` (the task's collection, or None).
+        and `href` (the task's collection, or None); a task row also carries
+        the VTODO's `due` and `due_is_date`.
+
+        `preview=False` is for a caller that must not guess: an unplanned day
+        then yields no rows at all, where the default builds the suggested plan
+        a wall or a focus session would show. A caller that only wants to know
+        what the owner actually committed to has no use for those suggestions.
         """
         plan = self.open_day(day, create=False)
         planned = bool(plan["planned"])
+        if not planned and not preview:
+            return [], False
         entries = plan["entries"] if planned else self.preview_day(day)
         out = []
         for entry in entries:
@@ -3963,6 +3981,8 @@ class SmylteService:
                 row["title"] = item["summary"]
                 row["done"] = item["status"] in ("COMPLETED", "CANCELLED")
                 row["href"] = href
+                row["due"] = item["due"]
+                row["due_is_date"] = bool(item["due_is_date"])
             out.append(row)
         return out, planned
 
@@ -4098,24 +4118,38 @@ class SmylteService:
                 credited = delta
         return credited
 
-    def _focus_queue(self, day: str, s: dict[str, Any]) -> list[str]:
-        """The open rows this session could work, in the order it would: habit
+    @staticmethod
+    def _focus_queue_rows(rows: list[dict[str, Any]], passed: Iterable[str]) -> list[dict[str, Any]]:
+        """The open rows a session could work, in the order it would: habit
         rows first, then the rest, each in plan order; done and set-aside rows
-        skipped. No second sort — the plan's order is the queue, exactly as
-        `display/frame.py::build_now` has it, so reordering Today reorders the
-        surface."""
-        rows, _planned = self._resolved_day_rows(day)
-        passed = set(s["passed"])
+        skipped. Split from `_focus_queue` so a caller that already holds the
+        day's rows (and wants the rows, not just their ids) does not resolve
+        them a second time."""
+        passed = set(passed)
         live = [r for r in rows if not r["done"] and r["entry_id"] not in passed]
-        habits = [r["entry_id"] for r in live if r["kind"] == "habit"]
-        rest = [r["entry_id"] for r in live if r["kind"] != "habit"]
+        habits = [r for r in live if r["kind"] == "habit"]
+        rest = [r for r in live if r["kind"] != "habit"]
         return habits + rest
 
+    def _focus_queue(self, day: str, s: dict[str, Any]) -> list[str]:
+        """The entry ids of `_focus_queue_rows` for the day. No second sort —
+        the plan's order is the queue, apart from habits coming first. That is
+        NOT the order `display/frame.py::build_now` has, which keeps plain plan
+        order, so a wall's "now" line and a session's cursor can differ when a
+        habit sits below a task."""
+        rows, _planned = self._resolved_day_rows(day)
+        return [r["entry_id"] for r in self._focus_queue_rows(rows, s["passed"])]
+
+    @staticmethod
+    def _cursor_of(queue_ids: list[str], stored: str | None) -> str | None:
+        """The row a session is on: the stored one while it is still in the
+        queue, else the head of the queue, else nothing."""
+        if stored in queue_ids:
+            return stored
+        return queue_ids[0] if queue_ids else None
+
     def _focus_cursor(self, day: str, s: dict[str, Any]) -> str | None:
-        queue = self._focus_queue(day, s)
-        if s["entry_id"] in queue:
-            return s["entry_id"]
-        return queue[0] if queue else None
+        return self._cursor_of(self._focus_queue(day, s), s["entry_id"])
 
     def _focus_next_phase(
         self, s: dict[str, Any], now: datetime, *, skip_break: bool,
