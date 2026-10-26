@@ -1627,7 +1627,8 @@ describe('<TodayView> the week behind the day', () => {
     // the server shares.
     for (const [from, to] of m.completedCounts.mock.calls) {
       expect(new Date(`${from}T00:00`).getDay()).toBe(1)
-      expect(new Date(`${to}T00:00`).getTime() - new Date(`${from}T00:00`).getTime())
+      // UTC midnights, so a week across a clock change is still seven days.
+      expect(Date.parse(`${to}T00:00Z`) - Date.parse(`${from}T00:00Z`))
         .toBe(7 * 86_400_000)
     }
     expect(first).toBe(weekStartOf(today()))
