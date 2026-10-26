@@ -12,7 +12,7 @@ import json
 import logging
 import re
 import sqlite3
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -358,6 +358,12 @@ def mark_collection_deleted(conn: sqlite3.Connection, href: str) -> None:
     conn.execute(
         "UPDATE sync_state SET sync_token=NULL WHERE collection_href=?", (href,)
     )
+    # A share names its collections by slug, and a collection that comes back at
+    # the same href would otherwise be shared with somebody again, silently. This
+    # runs inside the caller's transaction (the sync engine's `_tx`, or
+    # `discover`'s), so the prune lands or rolls back with the soft delete.
+    # service._slug's rule, restated: the store cannot import the service.
+    prune_share_collection(conn, href.rstrip("/").rsplit("/", 1)[-1])
 
 
 # ── sync state ───────────────────────────────────────────────────────────────
@@ -827,6 +833,47 @@ def get_booking_by_event(conn: sqlite3.Connection, event_uid: str) -> sqlite3.Ro
     return conn.execute(
         "SELECT * FROM bookings WHERE event_uid=?", (event_uid,)
     ).fetchone()
+
+
+def booking_titles(conn: sqlite3.Connection, uids: Sequence[str]) -> dict[str, str]:
+    """The booking link's title for each of these event UIDs that a booking
+    created, and `""` where the link has since been deleted.
+
+    Keyed by the event UID ALONE, as `get_booking_by_event` is, and not by
+    calendar as well: `move_event` never updates `bookings.calendar_href`, so a
+    booking moved into another calendar would otherwise be missed and the
+    visitor's name would go out under it. A share shows the link's title in
+    place of the event's summary, which carries that name.
+    """
+    if not uids:
+        return {}
+    return {
+        r["event_uid"]: r["title"]
+        for r in conn.execute(
+            # Only `?` placeholders are interpolated — not attacker input.
+            "SELECT b.event_uid AS event_uid, COALESCE(l.title, '') AS title "  # nosec B608
+            "FROM bookings b LEFT JOIN booking_links l ON l.token = b.link_token "
+            f"WHERE b.event_uid IN ({', '.join('?' * len(uids))})",
+            list(uids),
+        )
+    }
+
+
+def booking_link_titles(conn: sqlite3.Connection) -> list[str]:
+    """Every non-empty booking link title, longest first.
+
+    The fail-closed fallback for an event whose booking row cannot be matched:
+    a booking writes its summary as "<link title> — <visitor>", so a summary
+    that starts with a title and that separator is replaced by the title alone.
+    Longest first so a title that is a prefix of another cannot shadow it.
+    """
+    return [
+        r["title"]
+        for r in conn.execute(
+            "SELECT title FROM booking_links WHERE title IS NOT NULL AND title != '' "
+            "ORDER BY length(title) DESC, title"
+        )
+    ]
 
 
 def list_bookings(
@@ -2259,6 +2306,208 @@ def touch_display(conn: sqlite3.Connection, token: str) -> None:
         )
     except sqlite3.Error:
         log.warning("could not stamp last_seen_at for a display", exc_info=True)
+
+
+# ── shares ──────────────────────────────────────────────────────────────────
+# The display block's shape again, for a link that goes to a PERSON. Two things
+# differ and both are deliberate. The row has a separate `id`, so owner routes,
+# SSE events and the Settings editor never carry the token; and `get_share_by_token`
+# is the ONLY read keyed by it, which makes "what can a token reach" a question
+# with one place to look.
+#
+# `cv` is in the field set although no request body carries it: the service
+# stamps it (the password generation the share was switched on under), and the
+# allowlist exists to refuse a misspelt column, not to separate callers.
+_SHARE_FIELDS = {
+    "name", "lists", "calendars", "show_focus", "enabled", "horizon_days", "cv",
+}
+
+
+def share_id_list(raw: object) -> list[str]:
+    """A share's allowlist column as a list of slugs. FAIL CLOSED: anything
+    unreadable — bad JSON, a non-list, a NULL — is the EMPTY allowlist, which on
+    a share means nothing is shown. Non-string items are dropped and duplicates
+    collapse, order kept."""
+    try:
+        value = json.loads(raw)  # type: ignore[arg-type]
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(value, list):
+        return []
+    return list(dict.fromkeys(v for v in value if isinstance(v, str)))
+
+
+def create_share(
+    conn: sqlite3.Connection, share_id: str, token: str, fields: dict
+) -> sqlite3.Row:
+    bad = set(fields) - _SHARE_FIELDS
+    if bad:
+        raise ValueError(f"unknown share fields: {bad}")
+    cols = ["id", "token", *fields.keys()]
+    conn.execute(
+        # cols are vetted against _SHARE_FIELDS above — not attacker input.
+        f"INSERT INTO shares ({', '.join(cols)}) "  # nosec B608
+        f"VALUES ({', '.join('?' * len(cols))})",
+        (share_id, token, *fields.values()),
+    )
+    return get_share(conn, share_id)
+
+
+def get_share(conn: sqlite3.Connection, share_id: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM shares WHERE id=?", (share_id,)).fetchone()
+
+
+def get_share_by_token(conn: sqlite3.Connection, token: str) -> sqlite3.Row | None:
+    """THE ONLY token-keyed read. Everything a stranger's URL can reach starts
+    here, so the callers are few on purpose and the service validates the
+    token's shape before it gets this far."""
+    return conn.execute("SELECT * FROM shares WHERE token=?", (token,)).fetchone()
+
+
+def list_shares(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return list(conn.execute("SELECT * FROM shares ORDER BY created_at"))
+
+
+def update_share(
+    conn: sqlite3.Connection, share_id: str, fields: dict
+) -> sqlite3.Row | None:
+    bad = set(fields) - _SHARE_FIELDS
+    if bad:
+        raise ValueError(f"unknown share fields: {bad}")
+    if get_share(conn, share_id) is None:
+        return None
+    # One transaction for the whole edit, for the reason `update_booking_link`
+    # spells out: the connection is in autocommit, so a value the schema rejects
+    # half way through would otherwise leave the earlier fields applied.
+    with tx(conn):
+        for k, v in fields.items():
+            conn.execute(
+                # {k} is vetted against _SHARE_FIELDS above — not attacker input.
+                f"UPDATE shares SET {k}=?, "  # nosec B608
+                "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
+                (v, share_id),
+            )
+    return get_share(conn, share_id)
+
+
+def rotate_share_token(
+    conn: sqlite3.Connection, share_id: str, new_token: str
+) -> sqlite3.Row | None:
+    """Re-key one share, keeping everything else it is. `last_seen_at` is cleared
+    with the token for the reason `rotate_display_token` gives: the old stamp
+    belongs to a URL that no longer works."""
+    if get_share(conn, share_id) is None:
+        return None
+    with tx(conn):
+        conn.execute(
+            "UPDATE shares SET token=?, last_seen_at=NULL, "
+            "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
+            (new_token, share_id),
+        )
+    return get_share(conn, share_id)
+
+
+def delete_share(conn: sqlite3.Connection, share_id: str) -> bool:
+    return conn.execute("DELETE FROM shares WHERE id=?", (share_id,)).rowcount > 0
+
+
+def touch_share(
+    conn: sqlite3.Connection, share_id: str, *, now: str, not_before: str
+) -> None:
+    """Stamp that this share was read, at most once a minute. Never fails a view.
+
+    The caller supplies both stamps (`now`, and `not_before` a minute earlier)
+    rather than this reading SQLite's clock, so the throttle moves with the
+    service's own clock seam and can be tested. Both are the
+    '%Y-%m-%dT%H:%M:%fZ' shape, so comparing them as strings is comparing them
+    in time. Swallowed for the reason `touch_display` gives, and for a sharper
+    one: the reader is a stranger, and a locked database must not cost them the
+    page. The warning names no token.
+    """
+    try:
+        conn.execute(
+            "UPDATE shares SET last_seen_at=? WHERE id=? "
+            "AND (last_seen_at IS NULL OR last_seen_at < ?)",
+            (now, share_id, not_before),
+        )
+    except sqlite3.Error:
+        log.warning("could not stamp last_seen_at for a share", exc_info=True)
+
+
+def prune_share_collection(conn: sqlite3.Connection, slug: str) -> int:
+    """Drop one collection slug from every share's allowlists. Returns how many
+    rows changed.
+
+    Does NOT commit: it runs inside the transaction of whatever deleted the
+    collection, so the prune and the soft delete stand or fall together. Only
+    rows that actually name the slug are written.
+    """
+    changed = 0
+    for row in conn.execute("SELECT id, lists, calendars FROM shares").fetchall():
+        lists = share_id_list(row["lists"])
+        calendars = share_id_list(row["calendars"])
+        if slug not in lists and slug not in calendars:
+            continue
+        conn.execute(
+            "UPDATE shares SET lists=?, calendars=?, "
+            "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
+            (
+                json.dumps([s for s in lists if s != slug]),
+                json.dumps([s for s in calendars if s != slug]),
+                row["id"],
+            ),
+        )
+        changed += 1
+    return changed
+
+
+def share_open_tasks(conn: sqlite3.Connection, href: str) -> list[sqlite3.Row]:
+    """A shared list's open, unparked tasks, in the order `list_tasks` gives them,
+    as the five columns a share shows.
+
+    NARROW ON PURPOSE, for the reason `completed_tasks` gives: `list_tasks` reads
+    every item whole (`raw_ics` included) and builds a full DTO per task. A share
+    is read by a stranger on a timer, and what it sends is a title, a due time and
+    a nesting level, so notes and bodies are never loaded at all.
+
+    The open predicate is `_COUNT_COLUMNS`' `open_count`, and the order is
+    `list_tasks`': manual position, then due, then summary.
+    """
+    return list(
+        conn.execute(
+            "SELECT items.uid AS uid, items.summary AS summary, items.due AS due, "
+            "items.due_is_date AS due_is_date, "
+            "items.related_parent AS related_parent "
+            "FROM items LEFT JOIN sidecar "
+            "ON sidecar.collection_href = items.collection_href "
+            "AND sidecar.uid = items.uid "
+            "WHERE items.collection_href = ? AND items.component = 'VTODO' "
+            "AND (items.status IS NULL OR items.status NOT IN ('COMPLETED', 'CANCELLED')) "
+            "AND sidecar.parked_at IS NULL "
+            "ORDER BY sidecar.sort_order IS NULL, sidecar.sort_order, "
+            "items.due IS NULL, items.due, COALESCE(items.summary, '')",
+            (href,),
+        )
+    )
+
+
+def share_class_ics(conn: sqlite3.Connection, href: str) -> dict[str, bytes | str]:
+    """The raw bodies of the resources in one collection that mention CLASS at
+    all, by UID — the candidates for being marked private.
+
+    A cheap prefilter so only those rows travel to Python for `share.is_private`
+    to read properly; `share_open_tasks` stays free of `raw_ics`. The match is a
+    substring test, so it over-selects (a DESCRIPTION saying "class") and never
+    under-selects, which is the safe direction for a privacy check.
+    """
+    return {
+        r["uid"]: r["raw_ics"]
+        for r in conn.execute(
+            "SELECT uid, raw_ics FROM items WHERE collection_href = ? "
+            "AND instr(upper(CAST(raw_ics AS TEXT)), 'CLASS') > 0",
+            (href,),
+        )
+    }
 
 
 # ── email ingestion (SIDECAR: what the mail pipeline has seen and proposed) ──
