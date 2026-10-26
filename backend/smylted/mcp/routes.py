@@ -153,11 +153,14 @@ def _bearer(request: Request) -> str | None:
     return None
 
 
-def register(app, *, settings, authenticator, client_ip, run, login_hashes, hash_budget):
+def register(app, *, settings, authenticator, client_ip, run, login_hashes, hash_budget,
+             credential_version):
     """Mount the MCP endpoint and its authorization server onto `app`.
 
     Called from create_app before the static mount — that mount is a full-match
-    catch-all, so anything registered after it is unreachable.
+    catch-all, so anything registered after it is unreachable. `credential_version`
+    is create_app's, the same one the shares read, so a password change ends a
+    grant and switches a share off by one rule.
     """
     issuer = settings.public_url
     mcp_url = f"{issuer}/mcp"
@@ -170,13 +173,6 @@ def register(app, *, settings, authenticator, client_ip, run, login_hashes, hash
         if authenticator is None:
             return False
         return authenticator.check_credentials(username, password)
-
-    def credential_version() -> str:
-        # Read through the Authenticator rather than captured, so a rotation
-        # takes effect without rebuilding this server. With auth disabled there
-        # are no credentials to bind to and every grant carries "" — which then
-        # matches, because there is no rotation to detect in that posture.
-        return "" if authenticator is None else authenticator.credential_version
 
     oauth = OAuthServer(
         issuer=issuer, mcp_url=mcp_url,

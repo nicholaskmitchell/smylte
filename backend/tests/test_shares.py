@@ -6,13 +6,19 @@ it cannot be read, a token column that cannot hold a short credential, a prune
 that rides on the caller's transaction, and a task reader that answers exactly
 as `list_tasks` would without loading what `list_tasks` loads.
 
-It ends at the service, which is the security boundary: `share_view` is the one
-call a token reaches, and the tests there pin what a stranger can and cannot be
-sent — the exact key set, the canary that nothing private gets out, the day that
-is never opened, and the one answer for every refusal.
+The service is the security boundary: `share_view` is the one call a token
+reaches, and the tests there pin what a stranger can and cannot be sent — the
+exact key set, the canary that nothing private gets out, the day that is never
+opened, and the one answer for every refusal.
+
+It ends at HTTP, where that one answer has to stay one answer: the same 404
+body and headers for every refusal, the privacy headers on everything a stranger
+can be sent, the limiters, a 500 that says nothing, and no connector tool that
+could mint a link.
 
 Nothing here touches Radicale. A share is app-only state over the cache, so the
-store is driven directly and `items` is seeded the way test_day_plan seeds it.
+store is driven directly and `items` is seeded the way test_day_plan seeds it;
+the app is built against a DAV URL on a closed port.
 """
 from __future__ import annotations
 
@@ -24,6 +30,7 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
+from fastapi.testclient import TestClient
 from helpers import foreign_event_raw, foreign_raw
 from test_day_plan import DAY, LIST_A, LIST_B, _seed_task, _settings
 from test_displays import CAL_A, CAL_B, _seed_event
@@ -31,9 +38,13 @@ from test_focus import clock  # noqa: F401
 
 from smylted import service as service_mod
 from smylted import share as share_mod
+from smylted.app import create_app
+from smylted.config import Settings
 from smylted.dav.client import CollectionInfo, Item
 from smylted.db import store
 from smylted.ical import extract_from_raw
+from smylted.mcp.api import McpApi
+from smylted.mcp.tools import build_tools
 from smylted.service import SmylteService
 
 TOKEN = "t" * 43
@@ -1519,3 +1530,355 @@ def test_a_booking_moved_into_a_shared_calendar_still_hides_the_visitor(svc):
     view = _view(svc, _make(svc, calendars=["cal-a"]))
     assert [e["title"] for e in view["events"]] == ["Intro call"]
     assert "Vera" not in json.dumps(view)
+
+
+# ── HTTP: the owner's routes and the stranger's ─────────────────────────────
+
+PASSWORD = "testpass123"
+
+
+def _api_settings(tmp_path, **over) -> Settings:
+    # The DAV URL points at a closed port: no share route may reach the wire.
+    return dataclasses.replace(Settings(
+        radicale_url="http://127.0.0.1:1", radicale_user="u", radicale_password="p",
+        db_path=str(tmp_path / "shares.db"), sync_interval_s=3600,
+        request_timeout_s=1, static_dir="/nonexistent", hook_secret="h",
+        auth_enabled=True, auth_user="admin", auth_password_hash="",
+        auth_password=PASSWORD, session_secret="s" * 40, session_ttl_s=3600,
+        cookie_secure=False, access_required=False, access_team_domain="",
+        access_aud="",
+    ), **over)
+
+
+def _login(c: TestClient, password: str = PASSWORD) -> None:
+    assert c.post("/api/login", json={"username": "admin", "password": password}
+                  ).status_code == 200
+
+
+def _seed_app(c: TestClient) -> None:
+    """The collections and a little data, written straight into the cache the
+    app's own service reads, since there is no Radicale to sync them from."""
+    conn = c.app.state.service._conn
+    store.upsert_collection(
+        conn, CollectionInfo(href=LIST_A, displayname="Work", components={"VTODO"}))
+    store.upsert_collection(
+        conn, CollectionInfo(href=CAL_A, displayname="Personal", components={"VEVENT"}))
+    _seed_task(conn, LIST_A, "ta", "Draft the memo")
+    _event(conn, CAL_A, "ea", "Standup", dtstart=f"{_d(0)}T090000Z",
+           dtend=f"{_d(0)}T093000Z")
+
+
+@pytest.fixture
+def api(tmp_path, monkeypatch):
+    monkeypatch.setattr(SmylteService, "_today", lambda self: DAY)
+    with TestClient(create_app(_api_settings(tmp_path))) as c:
+        _login(c)
+        _seed_app(c)
+        yield c
+
+
+@pytest.fixture
+def built(tmp_path, monkeypatch):
+    """The `api` app with a frontend build in place, so the page shell is a
+    file rather than the "frontend not built" 404."""
+    monkeypatch.setattr(SmylteService, "_today", lambda self: DAY)
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "index.html").write_text(
+        "<!doctype html><html><body><div id=root></div></body></html>", encoding="utf-8")
+    with TestClient(create_app(_api_settings(tmp_path, static_dir=str(static)))) as c:
+        _login(c)
+        yield c
+
+
+def _public(c: TestClient, token: str, **kw):
+    return c.get(f"/api/public/share/{token}", **kw)
+
+
+def _privacy_headers(r) -> None:
+    assert r.headers["cache-control"] == "no-store, private, max-age=0"
+    assert r.headers["x-robots-tag"] == "noindex, nofollow, noarchive"
+    assert r.headers["referrer-policy"] == "no-referrer"
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["x-frame-options"] == "DENY"
+
+
+def test_share_routes_need_a_session_and_the_view_does_not(api):
+    made = api.post("/api/shares", json={"name": "Sam", "lists": ["work"]})
+    assert made.status_code == 201
+    made = made.json()
+    share_id, token = made["id"], made["token"]
+    assert api.get("/api/shares").json() == [made]
+    preview = api.get(f"/api/shares/{share_id}/preview")
+    assert preview.status_code == 200
+    assert preview.headers["cache-control"] == "no-store, private"
+    assert [t["title"] for t in preview.json()["lists"][0]["tasks"]] == ["Draft the memo"]
+
+    api.cookies.clear()
+    # The owner's routes are behind the session like everything else...
+    for method, path in (("GET", "/api/shares"), ("POST", "/api/shares"),
+                         ("GET", f"/api/shares/{share_id}/preview"),
+                         ("PATCH", f"/api/shares/{share_id}"),
+                         ("POST", f"/api/shares/{share_id}/rotate"),
+                         ("DELETE", f"/api/shares/{share_id}")):
+        assert api.request(method, path).status_code == 401, (method, path)
+    # ...and the view is not: the person it is for has no session.
+    view = _public(api, token)
+    assert view.status_code == 200
+    assert [t["title"] for t in view.json()["lists"][0]["tasks"]] == ["Draft the memo"]
+
+
+def test_the_owners_routes_edit_rotate_and_delete_by_id(api):
+    made = api.post("/api/shares", json={"name": "Sam"}).json()
+    share_id = made["id"]
+    edited = api.patch(f"/api/shares/{share_id}",
+                       json={"calendars": ["cal-a"], "horizon_days": 14})
+    assert edited.status_code == 200
+    assert edited.json()["calendars"] == ["cal-a"] and edited.json()["horizon_days"] == 14
+    assert _public(api, made["token"]).json()["days"] == 14
+
+    rotated = api.post(f"/api/shares/{share_id}/rotate").json()
+    assert rotated["id"] == share_id and rotated["token"] != made["token"]
+    assert _public(api, made["token"]).status_code == 404
+    assert _public(api, rotated["token"]).status_code == 200
+
+    assert api.delete(f"/api/shares/{share_id}").status_code == 204
+    assert _public(api, rotated["token"]).status_code == 404
+    for r in (api.delete(f"/api/shares/{share_id}"),
+              api.patch(f"/api/shares/{share_id}", json={"name": "X"}),
+              api.post(f"/api/shares/{share_id}/rotate"),
+              api.get(f"/api/shares/{share_id}/preview")):
+        assert r.status_code == 404 and r.json() == {"detail": f"unknown share {share_id}"}
+
+
+def test_patch_share_refuses_explicit_nulls(api):
+    share_id = api.post("/api/shares", json={"name": "Sam"}).json()["id"]
+    r = api.patch(f"/api/shares/{share_id}", json={"lists": None, "horizon_days": None})
+    assert r.status_code == 422
+    assert r.json()["detail"] == "these fields cannot be null: horizon_days, lists"
+    # Refused whole: nothing that came with the nulls landed.
+    r = api.patch(f"/api/shares/{share_id}", json={"name": "Alex", "enabled": None})
+    assert r.status_code == 422
+    assert api.get("/api/shares").json()[0]["name"] == "Sam"
+
+
+@pytest.mark.parametrize("body", [
+    {"name": ""},
+    {"name": "   "},
+    {"lists": ["work"]},
+    {"name": "Sam", "lists": [f"l{i}" for i in range(65)]},
+    {"name": "Sam", "calendars": [f"c{i}" for i in range(65)]},
+    {"name": "Sam", "lists": "work"},
+    {"name": "Sam", "calendars": {"cal-a": True}},
+    {"name": "Sam", "horizon_days": 3},
+    {"name": "Sam", "horizon_days": True},
+    {"name": "Sam", "horizon_days": "7"},
+    {"name": "x" * 101},
+])
+def test_create_share_validates(api, body):
+    assert api.post("/api/shares", json=body).status_code == 422
+    assert api.get("/api/shares").json() == []
+
+
+def test_every_refusal_is_one_identical_404(api):
+    def make(**fields):
+        return api.post("/api/shares", json={"name": "Sam", **fields}).json()
+
+    off = make(enabled=False)
+    rotated = make()
+    deleted = make()
+    api.post(f"/api/shares/{rotated['id']}/rotate")
+    api.delete(f"/api/shares/{deleted['id']}")
+    api.cookies.clear()
+
+    answers = [_public(api, t) for t in (
+        "u" * 43, off["token"], rotated["token"], deleted["token"],
+        "a" * 42, "a" * 44, "nope")]
+
+    def shape(r):
+        headers = {k: v for k, v in r.headers.items()
+                   if k not in ("date", "content-length")}
+        return r.status_code, r.content, headers
+
+    first = shape(answers[0])
+    assert first[0] == 404 and json.loads(first[1]) == {"detail": "unknown share"}
+    for r in answers[1:]:
+        assert shape(r) == first, r.url
+
+
+def test_public_share_responses_carry_the_privacy_headers(built, monkeypatch):
+    token = built.post("/api/shares", json={"name": "Sam"}).json()["token"]
+    built.cookies.clear()
+
+    ok = _public(built, token)
+    assert ok.status_code == 200
+    unchanged = _public(built, token, headers={"If-None-Match": ok.headers["etag"]})
+    assert unchanged.status_code == 304
+    missing = _public(built, "u" * 43)
+    assert missing.status_code == 404
+    for r in (ok, unchanged, missing):
+        _privacy_headers(r)
+
+    # The page shell, both spellings and both methods, with no token lookup:
+    # an unknown link gets the same page as a live one.
+    for path in (f"/share/{token}", f"/share/{token}/", "/share/" + "u" * 43):
+        for method in ("GET", "HEAD"):
+            r = built.request(method, path)
+            assert r.status_code == 200, (method, path)
+            _privacy_headers(r)
+    assert "<div id=root>" in built.get(f"/share/{token}").text
+
+    def boom(self, row, *, now):
+        raise RuntimeError("nope")
+
+    with monkeypatch.context() as m:
+        m.setattr(SmylteService, "_build_share_view", boom)
+        failed = _public(built, token)
+    assert failed.status_code == 500
+    _privacy_headers(failed)
+
+    for _ in range(40):
+        limited = _public(built, "u" * 43)
+        if limited.status_code == 429:
+            break
+    assert limited.status_code == 429
+    _privacy_headers(limited)
+    assert int(limited.headers["retry-after"]) > 0
+
+
+def test_the_share_view_answers_304_to_a_matching_etag(api, clock):
+    made = api.post("/api/shares", json={"name": "Sam", "lists": ["work"]}).json()
+    first = _public(api, made["token"])
+    etag = first.headers["etag"]
+    clock.tick(10)
+    again = _public(api, made["token"], headers={"If-None-Match": etag})
+    # `generated_at` moved; nothing the person sees did, so nothing is sent.
+    assert again.status_code == 304 and not again.content
+    assert again.headers["etag"] == etag
+
+    _seed_task(api.app.state.service._conn, LIST_A, "tb", "Call the printer")
+    changed = _public(api, made["token"], headers={"If-None-Match": etag})
+    assert changed.status_code == 200 and changed.headers["etag"] != etag
+    # GET only: a HEAD never builds the payload to send none of it.
+    head = api.head(f"/api/public/share/{made['token']}")
+    assert head.status_code != 200 and "etag" not in head.headers
+
+
+def test_the_public_share_route_is_rate_limited(api):
+    token = api.post("/api/shares", json={"name": "Sam"}).json()["token"]
+    api.cookies.clear()
+    for n in range(400):
+        r = _public(api, token)
+        if r.status_code == 429:
+            break
+    assert r.status_code == 429, "the public share route has no rate limit"
+    # A share polls every 15 s, so the ceiling is well above one viewer's need.
+    assert n == 300
+    assert int(r.headers["retry-after"]) > 0
+    assert r.headers["cache-control"] == "no-store, private, max-age=0"
+    # A lockout, not a per-request check that resets.
+    assert _public(api, token).status_code == 429
+
+
+def test_token_misses_lock_out_guessing(api):
+    token = api.post("/api/shares", json={"name": "Sam"}).json()["token"]
+    api.cookies.clear()
+    for i in range(30):
+        assert _public(api, f"{i:043d}").status_code == 404
+    locked = _public(api, token)
+    assert locked.status_code == 429
+    assert int(locked.headers["retry-after"]) > 0
+    _privacy_headers(locked)
+
+
+def test_the_owners_cookie_does_not_change_the_public_view(api):
+    made = api.post("/api/shares", json={"name": "Sam", "lists": ["work"],
+                                         "calendars": ["cal-a"]}).json()
+    as_owner = _public(api, made["token"])
+    api.cookies.clear()
+    as_stranger = _public(api, made["token"])
+    assert as_owner.status_code == as_stranger.status_code == 200
+    assert as_owner.headers["etag"] == as_stranger.headers["etag"]
+    assert {**as_owner.json(), "generated_at": None} == \
+        {**as_stranger.json(), "generated_at": None}
+
+
+def test_internal_errors_are_generic(api, monkeypatch):
+    token = api.post("/api/shares", json={"name": "Sam"}).json()["token"]
+
+    def boom(self, row, *, now):
+        # The app's KeyError handler would answer 404 with this in the body.
+        raise KeyError("/u/secret-href/")
+
+    monkeypatch.setattr(SmylteService, "_build_share_view", boom)
+    r = _public(api, token)
+    assert r.status_code == 500
+    assert r.json() == {"detail": "share unavailable"}
+    assert "secret-href" not in r.text and "secret-href" not in str(r.headers)
+
+
+def test_the_share_route_never_reaches_the_wire(api):
+    """The fixture's DAV URL is a closed port, so a share that went to
+    Radicale for anything would fail here rather than answer."""
+    made = api.post("/api/shares", json={"name": "Sam", "lists": ["work"],
+                                         "calendars": ["cal-a"]}).json()
+    api.cookies.clear()
+    r = _public(api, made["token"])
+    assert r.status_code == 200
+    view = r.json()
+    assert [t["title"] for t in view["lists"][0]["tasks"]] == ["Draft the memo"]
+    assert [e["title"] for e in view["events"]] == ["Standup"]
+
+
+def test_a_new_app_password_switches_every_share_off(tmp_path, monkeypatch):
+    """The documented response to a leaked password is to change it. A share
+    switched on under the old one is somebody else's window onto the account
+    that the owner may never have made, so the change switches it off until
+    the owner switches it back on."""
+    monkeypatch.setattr(SmylteService, "_today", lambda self: DAY)
+    settings = _api_settings(tmp_path)
+    with TestClient(create_app(settings)) as c:
+        _login(c)
+        _seed_app(c)
+        made = c.post("/api/shares", json={"name": "Sam", "lists": ["work"]}).json()
+        assert _public(c, made["token"]).status_code == 200
+
+    # Same database; only the password moved.
+    changed = dataclasses.replace(settings, auth_password="a-brand-new-password")
+    with TestClient(create_app(changed)) as c2:
+        gone = _public(c2, made["token"])
+        assert gone.status_code == 404 and gone.json() == {"detail": "unknown share"}
+        _login(c2, "a-brand-new-password")
+        [dto] = c2.get("/api/shares").json()
+        assert dto["enabled"] is False and dto["switched_off_by_password"] is True
+        # The owner can still see what it would show, and switch it back on.
+        assert c2.get(f"/api/shares/{made['id']}/preview").status_code == 200
+        revived = c2.patch(f"/api/shares/{made['id']}", json={"enabled": True}).json()
+        assert revived["enabled"] is True and revived["switched_off_by_password"] is False
+        assert _public(c2, made["token"]).status_code == 200
+
+
+# ── the connector cannot reach shares ───────────────────────────────────────
+
+class _NoSvc:
+    """`build_tools` only reads names; no handler runs."""
+
+
+def test_no_connector_tool_reaches_shares():
+    """A share is a bearer URL to the account, so a connector that could make
+    one would let a prompt-injected model hand the owner's day to anybody. No
+    tool, adapter or resource reads or writes shares, and this keeps it so."""
+    import pathlib
+
+    import smylted.mcp
+
+    names = list(build_tools(McpApi(_NoSvc())))
+    assert names, "the tool table is empty — this test is measuring nothing"
+    assert not [n for n in names if "share" in n.lower()]
+    root = pathlib.Path(smylted.mcp.__file__).parent
+    sources = sorted(root.glob("*.py"))
+    assert sources
+    for path in sources:
+        text = path.read_text(encoding="utf-8")
+        for needle in ("share_view", "create_share", "rotate_share_token", "/share"):
+            assert needle not in text, f"{path.name} mentions {needle}"

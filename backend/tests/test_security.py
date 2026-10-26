@@ -159,6 +159,10 @@ def test_every_api_route_requires_auth(make_app):
         "/api/public/display/{token}.png",
         "/api/public/display/{token}.bmp",
         "/api/public/display/{token}.bin",
+        # A share. Token-gated for the displays' reason, read by a person who
+        # has no session rather than a screen that cannot have one, and every
+        # refusal is the same 404 for the same reason as theirs. One path.
+        "/api/public/share/{token}",
     }
     app = make_app()
     checked = 0
