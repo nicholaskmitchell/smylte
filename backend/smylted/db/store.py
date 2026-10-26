@@ -2497,14 +2497,20 @@ def share_class_ics(conn: sqlite3.Connection, href: str) -> dict[str, bytes | st
 
     A cheap prefilter so only those rows travel to Python for `share.is_private`
     to read properly; `share_open_tasks` stays free of `raw_ics`. The match is a
-    substring test, so it over-selects (a DESCRIPTION saying "class") and never
-    under-selects, which is the safe direction for a privacy check.
+    substring test, so it over-selects (a DESCRIPTION saying "class"), which is
+    the safe direction for a privacy check. It runs on the UNFOLDED body:
+    RFC 5545 lets a line fold between any two characters, so a fold inside the
+    name (`CL` CRLF space `ASS:PRIVATE`) would hide the item from a test on the
+    raw bytes, and the title would go out. Generators fold at 75 octets and CLASS
+    opens its line, so that is rare, but the prefilter must not be the gap.
     """
     return {
         r["uid"]: r["raw_ics"]
         for r in conn.execute(
             "SELECT uid, raw_ics FROM items WHERE collection_href = ? "
-            "AND instr(upper(CAST(raw_ics AS TEXT)), 'CLASS') > 0",
+            "AND instr(upper(replace(replace(replace(CAST(raw_ics AS TEXT), "
+            "char(13), ''), char(10) || ' ', ''), char(10) || char(9), '')), "
+            "'CLASS') > 0",
             (href,),
         )
     }

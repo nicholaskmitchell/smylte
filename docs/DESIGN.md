@@ -380,8 +380,9 @@ they draw.
 
 **How far ahead** is a per-share setting: today, 1, 2 or 4 weeks. Only those four
 values are accepted. The server expands recurrences on every poll, so a free
-number would let a PATCH ask a public route to expand a year. Past a week, days
-after tomorrow with nothing on them are not drawn.
+number would let a PATCH ask a public route to expand a year. Whatever the
+horizon, today and tomorrow are always drawn, because "nothing today" is worth
+saying; after them, only days with something on them are.
 
 **Revocation, and what the page does.** Switching a share off, making a new link
 and deleting it all take effect on the viewer's next request, because the row is

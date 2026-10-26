@@ -329,6 +329,8 @@ def test_share_class_ics_prefilters_to_resources_that_mention_class(svc):
     _seed_task(c, LIST_A, "private", "Hidden")
     _seed_task(c, LIST_A, "lower", "Lower")
     _seed_task(c, LIST_A, "elsewhere", "Not here")
+    _seed_task(c, LIST_A, "folded", "Folded")
+    _seed_task(c, LIST_A, "tab-folded", "Tab folded")
     _seed_task(c, LIST_B, "other-list", "Other list")
     # `foreign_raw` has no CLASS to offer, so the bodies are rewritten in place.
     def stamp(href: str, uid: str, line: bytes) -> None:
@@ -337,6 +339,9 @@ def test_share_class_ics_prefilters_to_resources_that_mention_class(svc):
                   (raw, href, uid))
     stamp(LIST_A, "private", b"CLASS:PRIVATE")
     stamp(LIST_A, "lower", b"class:confidential")
+    # A fold may fall inside the property name; the prefilter reads unfolded.
+    stamp(LIST_A, "folded", b"CL\r\n ASS:PRIVATE")
+    stamp(LIST_A, "tab-folded", b"CLA\r\n\tSS:PRIVATE")
     stamp(LIST_B, "other-list", b"CLASS:PRIVATE")
     c.execute("UPDATE items SET raw_ics=? WHERE collection_href=? AND uid='elsewhere'",
               (foreign_raw("elsewhere", "x", extra=("DESCRIPTION:a class act",)), LIST_A))
@@ -345,7 +350,7 @@ def test_share_class_ics_prefilters_to_resources_that_mention_class(svc):
 
     # Every candidate comes back, including the one that only SAYS "class": the
     # prefilter may over-select, and share.is_private decides properly.
-    assert set(got) == {"private", "lower", "elsewhere"}
+    assert set(got) == {"private", "lower", "elsewhere", "folded", "tab-folded"}
     assert b"CLASS:PRIVATE" in got["private"]
     assert store.share_class_ics(c, "/u/nope/") == {}
 
@@ -1478,7 +1483,7 @@ def test_events_window_times_and_cancellations(svc):
 def test_an_all_day_duration_event_covers_its_days(svc):
     c = svc._conn
     # An all-day DTSTART with DURATION and no DTEND: the duration is the span.
-    _event(c, CAL_A, "starts-tomorrow", "Starts tomorrow", dtstart=_d(-1), dtend=None,
+    _event(c, CAL_A, "started-yesterday", "Started yesterday", dtstart=_d(-1), dtend=None,
            all_day=True, extra=("DURATION:P3D",))
     _event(c, CAL_A, "under-way", "Under way", dtstart=_d(-3), dtend=None,
            all_day=True, extra=("DURATION:P5D",))
@@ -1489,8 +1494,8 @@ def test_an_all_day_duration_event_covers_its_days(svc):
     by = {e["title"]: e for e in _view(svc, made)["events"]}
 
     # The END is the EXCLUSIVE date, as for an event with a DTEND.
-    assert by["Starts tomorrow"]["start"] == _d(-1, "-")
-    assert by["Starts tomorrow"]["end"] == _d(2, "-")
+    assert by["Started yesterday"]["start"] == _d(-1, "-")
+    assert by["Started yesterday"]["end"] == _d(2, "-")
     # DAY-3 .. DAY+1 is still on the agenda today.
     assert by["Under way"]["start"] == _d(-3, "-")
     assert by["Under way"]["end"] == _d(2, "-")

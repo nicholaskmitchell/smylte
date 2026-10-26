@@ -56,7 +56,7 @@ The reasoning behind most of the design is in [`docs/DESIGN.md`](docs/DESIGN.md)
   focusing. Items marked private in other apps show as Busy. Notes, habits and
   everything else stay out. The viewer needs no account and sees times in their own
   zone. You can switch a link off, replace it or delete it, and changing your
-  password switches every share off.
+  password or session secret switches every share off.
 - **Appearance.** Three built-in designs (Smylte, Classic, Workspace), two
   layouts (Sidebar, Classic), and an editor for colours, radius, type and
   density. Custom themes can be saved, exported and imported.
