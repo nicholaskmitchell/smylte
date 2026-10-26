@@ -440,9 +440,9 @@ and these URLs:
   - `/assets/*`, `/fonts/*`, `/favicon.svg` and `/apple-touch-icon.png`, which
     the page loads.
 
-  `/book/*` needs the same bypass for booking links. Everything else stays
-  behind Access. These paths are protected by their tokens and rate limits, not
-  by a login.
+  Booking links need the same: `/book/*` and `/api/public/booking/*`.
+  Everything else stays behind Access. These paths are protected by their
+  tokens and rate limits, not by a login.
 - **Rate limits** are per client address: 300 requests per 5 minutes, then 429
   for 5 minutes, and 30 unknown links per hour, then 429 for an hour. A page
   stops polling on its first 404, so a real viewer comes nowhere near the second.
@@ -457,6 +457,9 @@ and these URLs:
 - **A password change switches every share off.** Turn each back on in Settings
   → Shares once you have checked it (see
   [If the password leaks](#if-the-password-leaks--signing-out-everywhere)).
+  Shares are bound to the password and to `SMYLTE_SESSION_SECRET`, so the secret
+  must be set: without it the secret is new on every start, and every restart
+  switches every share off.
 - **Last opened** is one timestamp per share, written at most once a minute. No
   address or browser is recorded.
 - **The access log keeps the first four characters** of share, display and

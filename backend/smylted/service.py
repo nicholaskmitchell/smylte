@@ -4078,6 +4078,7 @@ class SmylteService:
             "calendars": store.share_id_list(row["calendars"]),
             "show_focus": bool(row["show_focus"]),
             "enabled": bool(row["enabled"]) and current,
+            # The name is the common case; a changed session secret sets it too.
             "switched_off_by_password": bool(row["enabled"]) and not current,
             "horizon_days": row["horizon_days"],
             "last_seen_at": row["last_seen_at"],
@@ -4382,28 +4383,47 @@ class SmylteService:
                     continue
                 all_day = bool(ev.get("all_day"))
                 end_value = ev.get("end")
-                if not end_value and ev.get("duration") and not all_day:
-                    # Applied the way `scheduling.busy_intervals` applies it, so
-                    # a DURATION across a clock change ends where it really does.
-                    try:
-                        end_value = advance(
-                            _event_stamp(ev["start"], zone), ev["duration"],
-                            vDuration.from_ical(ev["duration"])).isoformat()
-                    except (ValueError, TypeError, OverflowError):
-                        end_value = None
+                end_is_date = bool(ev.get("end_is_date"))
+                if not end_value and ev.get("duration"):
+                    if all_day:
+                        # A whole-day event with DURATION and no DTEND (`P3D`)
+                        # spans that many days from its start; without this it
+                        # would be taken for one day and drop out of the
+                        # agenda once its first day passed.
+                        try:
+                            span = vDuration.from_ical(ev["duration"]).days
+                        except (ValueError, TypeError):
+                            span = 0
+                        if span >= 1:
+                            try:
+                                end_value = (
+                                    date.fromisoformat(ev["start"][:10])
+                                    + timedelta(days=span)).isoformat()
+                                end_is_date = True
+                            except (OverflowError, ValueError):
+                                pass
+                    else:
+                        # Applied the way `scheduling.busy_intervals` applies it, so
+                        # a DURATION across a clock change ends where it really does.
+                        try:
+                            end_value = advance(
+                                _event_stamp(ev["start"], zone), ev["duration"],
+                                vDuration.from_ical(ev["duration"])).isoformat()
+                        except (ValueError, TypeError, OverflowError):
+                            end_value = None
                 start_day = _event_day(
                     ev.get("start"), is_date=bool(ev.get("start_is_date")), zone=zone)
                 if not start_day:
                     continue
                 end_day = _event_last_day(
-                    {"end": end_value, "end_is_date": bool(ev.get("end_is_date"))},
+                    {"end": end_value, "end_is_date": end_is_date},
                     start_day, zone=zone)
                 if end_day < first or start_day > last:
                     continue
                 if all_day:
                     start = ev["start"][:10]
                     # The EXCLUSIVE DTEND date, as on the wire.
-                    end = (ev.get("end") or "")[:10] or None
+                    end = (end_value or "")[:10] or None
                 else:
                     start = share_mod.instant(ev["start"], is_date=False, zone=zone)
                     end = share_mod.instant(end_value, is_date=False, zone=zone)

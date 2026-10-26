@@ -1025,6 +1025,35 @@ def test_view_keys_are_exactly_the_documented_set(svc, clock):
         assert set(ev) == {"title", "start", "end", "all_day", "calendar", "private"}
 
 
+def test_due_values_reach_the_view_in_the_viewers_terms(svc, clock):
+    c = svc._conn
+    store.update_settings(c, {"home_timezone": "Europe/Berlin"})
+    _seed_task(c, LIST_A, "by-date", "By date", due=_d(1, "-"))
+    _seed_task(c, LIST_A, "utc", "UTC", due_utc=f"{_d(0)}T150000Z")
+    _task(c, LIST_A, "floating", "Floating", f"DUE:{_d(0)}T090000")
+    svc.open_day(DAY, create=True)
+    for uid in ("by-date", "utc", "floating"):
+        svc.add_day_entry(DAY, entry_id=f"e-{uid}", kind="task", list_id="work", uid=uid)
+    made = _make(svc, lists=["work"], show_focus=True)
+
+    view = _view(svc, made)
+
+    # A floating time is the owner's wall clock, sent as the instant it names.
+    berlin_nine = (datetime.fromisoformat(f"{DAY}T09:00:00").replace(
+        tzinfo=ZoneInfo("Europe/Berlin")).astimezone(timezone.utc)
+        .strftime("%Y-%m-%dT%H:%M:%S.000Z"))
+    expected = {
+        "By date": (_d(1, "-"), True),
+        "UTC": (f"{DAY}T15:00:00.000Z", False),
+        "Floating": (berlin_nine, False),
+    }
+    listed = {t["title"]: (t["due"], t["all_day"]) for t in view["lists"][0]["tasks"]}
+    planned = {r["title"]: (r["due"], r["all_day"])
+               for r in view["focus"]["today"]["rows"]}
+    assert listed == expected
+    assert planned == expected
+
+
 def test_open_tasks_only_nested_within_their_list(svc):
     c = svc._conn
     _seed_task(c, LIST_A, "parent", "Parent")
@@ -1446,6 +1475,28 @@ def test_events_window_times_and_cancellations(svc):
     assert view["events_more"] == 0
 
 
+def test_an_all_day_duration_event_covers_its_days(svc):
+    c = svc._conn
+    # An all-day DTSTART with DURATION and no DTEND: the duration is the span.
+    _event(c, CAL_A, "starts-tomorrow", "Starts tomorrow", dtstart=_d(-1), dtend=None,
+           all_day=True, extra=("DURATION:P3D",))
+    _event(c, CAL_A, "under-way", "Under way", dtstart=_d(-3), dtend=None,
+           all_day=True, extra=("DURATION:P5D",))
+    _event(c, CAL_A, "zero", "Zero", dtstart=_d(0), dtend=None,
+           all_day=True, extra=("DURATION:PT0S",))
+    made = _make(svc, calendars=["cal-a"])
+
+    by = {e["title"]: e for e in _view(svc, made)["events"]}
+
+    # The END is the EXCLUSIVE date, as for an event with a DTEND.
+    assert by["Starts tomorrow"]["start"] == _d(-1, "-")
+    assert by["Starts tomorrow"]["end"] == _d(2, "-")
+    # DAY-3 .. DAY+1 is still on the agenda today.
+    assert by["Under way"]["start"] == _d(-3, "-")
+    assert by["Under way"]["end"] == _d(2, "-")
+    assert by["Zero"]["all_day"] is True and by["Zero"]["end"] is None
+
+
 def test_the_horizon_is_the_shares_own(svc):
     c = svc._conn
     for offset in (-2, -1, 0, 1, 2, 13, 14, 15, 27, 28, 29):
@@ -1728,6 +1779,16 @@ def test_public_share_responses_carry_the_privacy_headers(built, monkeypatch):
             _privacy_headers(r)
     assert "<div id=root>" in built.get(f"/share/{token}").text
 
+    # No other method on the JSON route answers differently, or without the
+    # headers, for a real token than for an unknown one.
+    for method in ("HEAD", "POST", "OPTIONS"):
+        for t in (token, "u" * 43):
+            r = built.request(method, f"/api/public/share/{t}")
+            assert r.status_code == 404, (method, t)
+            _privacy_headers(r)
+            if method != "HEAD":
+                assert r.content == b'{"detail":"unknown share"}', (method, t)
+
     def boom(self, row, *, now):
         raise RuntimeError("nope")
 
@@ -1744,6 +1805,14 @@ def test_public_share_responses_carry_the_privacy_headers(built, monkeypatch):
     assert limited.status_code == 429
     _privacy_headers(limited)
     assert int(limited.headers["retry-after"]) > 0
+
+
+def test_the_page_shell_carries_the_privacy_headers_with_no_built_index(api):
+    # The `api` fixture points static_dir at nothing, so the shell is a 404, and
+    # that refusal is still a share response.
+    r = api.get("/share/" + "u" * 43)
+    assert r.status_code == 404
+    _privacy_headers(r)
 
 
 def test_the_share_view_answers_304_to_a_matching_etag(api, clock):

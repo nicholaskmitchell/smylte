@@ -1452,7 +1452,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not settings.session_secret:
             log.warning(
                 "auth: SMYLTE_SESSION_SECRET unset — using an ephemeral secret; sessions "
-                "won't survive a restart. Set it in production."
+                "won't survive a restart and every share link switches off on each one. "
+                "Set it in production."
             )
         elif len(settings.session_secret) < 32:
             log.warning(
@@ -3183,6 +3184,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown share", headers=_SHARE_HEADERS)
         return _etag_response(view, request, _SHARE_HEADERS)
 
+    # The GET route's refusal, byte for byte, for every other method. Without
+    # it a HEAD, POST or OPTIONS on a share address would fall through to the
+    # SPA mount or the app's own 405, and so answer without the privacy headers
+    # and differently for a real token than for an unknown one. It touches
+    # neither the service nor a limiter: the answer cannot depend on the token.
+    @app.api_route(
+        "/api/public/share/{token}",
+        methods=["HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    async def public_share_other(token: str):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown share", headers=_SHARE_HEADERS)
+
     # -- internal change hook (localhost only, shared secret; NOT behind Access) --
     @app.post("/internal/changed", status_code=202)
     async def internal_changed(
@@ -3269,7 +3283,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """The built SPA shell, for every route that is a page rather than data."""
         index = os.path.join(settings.static_dir, "index.html")
         if not os.path.isfile(index):
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "frontend not built")
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, "frontend not built", headers=headers)
         return FileResponse(index, headers=headers)
 
     @app.api_route("/book/{token}", methods=["GET", "HEAD"], include_in_schema=False)
