@@ -13,19 +13,24 @@ A tiny pub/sub pushes "changed" events to SSE subscribers after any mutation.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import re
 import secrets
+import sqlite3
 import threading
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from icalendar.prop import vDuration
+
 from . import due as due_rules
 from . import scheduling
+from . import share as share_mod
 from .config import Settings
 from .dav import xml as davxml
 from .dav.client import DavClient
@@ -36,6 +41,7 @@ from .display import render as display_render
 from .ical import (
     PRIORITY, UNSET, EventEdit, TaskEdit, blocks_time, recur, uid_candidates,
 )
+from .ical.read import advance
 from .sync import SyncEngine, SyncStats
 
 log = logging.getLogger("smylted.service")
@@ -395,6 +401,12 @@ class SmylteService:
         # Set under the lock by `close()`, read under the lock by `sync_all`.
         # See `close()` for why a flag is needed and not just an ordering fix.
         self._closed = False
+        # The fingerprint of the owner's credentials, read on every share view.
+        # A share remembers the one it was switched on under, so changing the
+        # password switches every share off. `create_app` replaces this with
+        # the closure the connector's OAuth server reads; "" is the posture with
+        # no authentication, where there is no password to change.
+        self.credential_version: Callable[[], str] = lambda: ""
 
     def close(self) -> None:
         """Release the DAV client and the database.
@@ -4015,6 +4027,492 @@ class SmylteService:
             })
         sources = [{"id": _slug(h), "name": n, "color": None} for h, n in names.items()]
         return sources, out, planned
+
+    # ── shares (read-only views for another person) ───────────────────────────
+    #
+    # A display's sibling with its defining rule turned over. A share is also a
+    # row whose token reaches data without a session, but it is read by a
+    # PERSON, so an empty allowlist means NOTHING rather than everything: in
+    # front of somebody else the only safe failure is to show them nothing. A
+    # new share therefore shows nothing at all until the owner picks something.
+    #
+    # `share_view` is the only method here a token reaches, and everything it
+    # returns is built below, field by field, from named values. No DTO this
+    # service builds for the owner passes through it, and nothing on the path
+    # opens or previews a day: the one write is the share's own `last_seen_at`.
+
+    def list_shares(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [self._share_dto(r) for r in store.list_shares(self._conn)]
+
+    def get_share(self, share_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = store.get_share(self._conn, share_id)
+            return None if row is None else self._share_dto(row)
+
+    def _share_cv_current(self, row) -> bool:
+        """Whether a share was switched on under the credentials in force now.
+
+        Compared in constant time: the stored value is a keyed fingerprint of
+        the password, and this runs on a route anybody can call."""
+        return hmac.compare_digest(
+            str(row["cv"] or "").encode(), self.credential_version().encode())
+
+    def _share_dto(self, row) -> dict[str, Any]:
+        """One share, as the owner's Settings sees it. OWNER-ONLY: it carries the
+        token and the name the owner gave the person, so nothing on the public
+        path calls it.
+
+        `enabled` is what the link actually does. A share switched on under an
+        earlier password is off, and `switched_off_by_password` says why, so
+        Settings can tell the owner rather than show a switch that is on beside
+        a link that answers 404.
+        """
+        current = self._share_cv_current(row)
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "token": row["token"],
+            "url": self._public_page_url(f"/share/{row['token']}"),
+            "lists": store.share_id_list(row["lists"]),
+            "calendars": store.share_id_list(row["calendars"]),
+            "show_focus": bool(row["show_focus"]),
+            "enabled": bool(row["enabled"]) and current,
+            "switched_off_by_password": bool(row["enabled"]) and not current,
+            "horizon_days": row["horizon_days"],
+            "last_seen_at": row["last_seen_at"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def _normalize_share_fields(self, fields: dict[str, Any]) -> dict[str, Any]:
+        """Validate/canonicalise share fields. Raises ValueError (routes → 422).
+        Caller holds the lock.
+
+        The allowlists are resolved on the way IN, unlike a display's: only the
+        slugs of live collections of the right component are kept, so an href,
+        a slug nothing has, or a calendar offered as a list is dropped here. A
+        display can keep a name that does not exist yet because empty means
+        everything there anyway; a share cannot, because a stored name that came
+        to exist later would start sharing something the owner never picked.
+        """
+        out = dict(fields)
+        # The service's to write and nobody else's: `create_share` and
+        # `update_share` stamp it, and no caller's value may stand in for that.
+        out.pop("cv", None)
+        if "name" in out:
+            out["name"] = (out["name"] or "").strip()
+            if not out["name"]:
+                raise ValueError("a share needs a name")
+        live = None
+        for key, component in (("lists", "VTODO"), ("calendars", "VEVENT")):
+            if key not in out:
+                continue
+            ids = out[key]
+            if not isinstance(ids, list) or any(not isinstance(i, str) for i in ids):
+                raise ValueError(f"{key} must be a list of collection ids")
+            if live is None:
+                live = store.get_collections(self._conn)
+            have = {_slug(r["href"]) for r in live
+                    if component in (r["components"] or "").split(",")}
+            out[key] = json.dumps([i for i in dict.fromkeys(ids) if i in have])
+        if "horizon_days" in out:
+            days = out["horizon_days"]
+            # Written out rather than bounded, and a bool refused although it is
+            # an int, for the reason `focus_settings` refuses one: JSON `true`
+            # would otherwise read as a one-day horizon.
+            if (not isinstance(days, int) or isinstance(days, bool)
+                    or days not in share_mod.HORIZONS):
+                raise ValueError("horizon_days must be one of 1, 7, 14 or 28")
+        for key in ("show_focus", "enabled"):
+            if key in out:
+                out[key] = int(bool(out[key]))
+        return out
+
+    def create_share(self, fields: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            share_id = uuid.uuid4().hex
+            out = self._normalize_share_fields(fields)
+            # Stamped with the credentials in force now, so the link works until
+            # the password changes.
+            out["cv"] = self.credential_version()
+            row = store.create_share(
+                self._conn, share_id, secrets.token_urlsafe(32), out)
+            dto = self._share_dto(row)
+        self._publish({"type": "share_created", "share": share_id})
+        return dto
+
+    def update_share(self, share_id: str, fields: dict[str, Any]) -> dict[str, Any] | None:
+        with self._lock:
+            if store.get_share(self._conn, share_id) is None:
+                return None
+            out = self._normalize_share_fields(fields)
+            # Switching a share on is the owner vouching for it under the
+            # credentials in force NOW, so it is re-stamped even when the row
+            # already says enabled: that is how a share a password change
+            # switched off comes back. Any other edit leaves the stamp alone.
+            if out.get("enabled") == 1:
+                out["cv"] = self.credential_version()
+            row = store.update_share(self._conn, share_id, out)
+            if row is None:
+                return None
+            dto = self._share_dto(row)
+        self._publish({"type": "share_updated", "share": share_id})
+        return dto
+
+    def rotate_share_token(self, share_id: str) -> dict[str, Any] | None:
+        """Re-key a share whose URL got out, keeping what it shows.
+
+        The credential stamp is NOT renewed. A new link is not the owner saying
+        the share should be on, so one a password change switched off stays off
+        until they switch it on.
+        """
+        with self._lock:
+            try:
+                row = store.rotate_share_token(
+                    self._conn, share_id, secrets.token_urlsafe(32))
+            except sqlite3.IntegrityError:
+                # Two 256-bit tokens colliding will not happen; one retry is
+                # what makes "will not" an answer rather than a 500.
+                row = store.rotate_share_token(
+                    self._conn, share_id, secrets.token_urlsafe(32))
+            if row is None:
+                return None
+            dto = self._share_dto(row)
+        self._publish({"type": "share_updated", "share": share_id})
+        return dto
+
+    def delete_share(self, share_id: str) -> bool:
+        with self._lock:
+            ok = store.delete_share(self._conn, share_id)
+        if ok:
+            self._publish({"type": "share_deleted", "share": share_id})
+        return ok
+
+    # No event above carries a token: SSE reaches every open tab, and the id is
+    # all a tab needs to refetch the one share that moved.
+
+    def share_view(self, token: str) -> dict[str, Any] | None:
+        """Everything one share shows, right now. THE ONLY CALL A SHARE TOKEN
+        REACHES, and it holds to four things:
+
+          1. An unknown, disabled, rotated, deleted or malformed token, and a
+             share switched on under an earlier password, are all ONE answer:
+             None, which the route turns into one 404. A malformed token is
+             refused before the database is asked.
+          2. Nothing here opens or previews a day. `_resolved_day_rows` is
+             called with `preview=False`, and the only write is
+             `touch_share` on the share's own row.
+          3. It never reaches `_display_calendars`, `_display_day_rows`,
+             `_day_plan_dto`, `preview_day` or `list_tasks`.
+          4. It never returns a DTO it did not build field by field.
+
+        The row and its switch are read on every request, with no memo, so
+        switching off, re-keying and deleting all take effect on the viewer's
+        next poll.
+        """
+        if not isinstance(token, str) or not share_mod.TOKEN_RE.fullmatch(token):
+            return None
+        now = _focus_now()
+        with self._lock:
+            row = store.get_share_by_token(self._conn, token)
+            if row is None or not row["enabled"] or not self._share_cv_current(row):
+                return None
+            view = self._build_share_view(row, now=now)
+            # Last, and inside the lock, as `display_frame` does: a share that
+            # was built is a share that was seen. Never allowed to fail the
+            # read — see `store.touch_share`.
+            store.touch_share(
+                self._conn, row["id"], now=_stamp_at(now),
+                not_before=_stamp_at(now - timedelta(seconds=60)))
+        return view
+
+    def preview_share(self, share_id: str) -> dict[str, Any] | None:
+        """What the person sees, for the owner's "See what they see". The same
+        builder as `share_view`, so the preview is the payload itself; it ignores
+        the switch and the credential stamp, and writes nothing, not even
+        `last_seen_at`, which records the person and not the owner."""
+        with self._lock:
+            row = store.get_share(self._conn, share_id)
+            if row is None:
+                return None
+            return self._build_share_view(row, now=_focus_now())
+
+    def _build_share_view(self, row, *, now: datetime) -> dict[str, Any]:
+        """The payload for one share row. Caller holds the lock."""
+        day, zone = self._today(), self._home_tz()
+        # Validated on write; a row edited by hand to anything else reads as the
+        # default rather than as months of recurrences expanded on every poll.
+        days = (row["horizon_days"] if row["horizon_days"] in share_mod.HORIZONS
+                else share_mod.DEFAULT_HORIZON)
+        archived = frozenset(
+            s for s in (store.get_settings(self._conn).get("archived_calendars") or [])
+            if isinstance(s, str))
+        list_rows = self._share_collections(
+            "VTODO", frozenset(store.share_id_list(row["lists"])))
+        cal_rows = self._share_collections(
+            "VEVENT", frozenset(store.share_id_list(row["calendars"])), exclude=archived)
+        # Once per collection per view, even for one shared both as a list and
+        # as a calendar.
+        private: dict[str, frozenset[str]] = {}
+        for r in (*list_rows, *cal_rows):
+            if r["href"] not in private:
+                private[r["href"]] = self._share_private(r["href"])
+        list_index = {r["href"]: i for i, r in enumerate(list_rows)}
+        lists = self._share_lists(list_rows, zone, private)
+        calendars, events, events_more = self._share_events(
+            cal_rows, day, days, zone, private)
+        focus = (self._share_focus(row["id"], day, list_index, now, zone, private)
+                 if row["show_focus"] else None)
+        live = focus is not None and focus["state"] != "idle"
+        return {
+            "v": 1,
+            "generated_at": share_mod.stamp(now),
+            "poll_seconds": share_mod.POLL_LIVE_S if live else share_mod.POLL_IDLE_S,
+            "day": day,
+            "days": days,
+            "focus": focus,
+            "lists": lists,
+            "calendars": calendars,
+            "events": events,
+            "events_more": events_more,
+        }
+
+    def _share_collections(
+        self, component: str, wanted: frozenset[str], *,
+        exclude: frozenset[str] = frozenset(),
+    ) -> list[sqlite3.Row]:
+        """The live collections an allowlist names, in the owner's order.
+
+        A PURE ALLOWLIST with no path to "everything": an empty `wanted` is no
+        collections. Matched on the slug and on exact membership of the
+        component, never through `resolve_list` (which also takes an href) and
+        never through `_display_calendars` (where empty means all). A slug two
+        live collections share reaches neither of them, because which one the
+        owner meant is not a thing to guess in front of somebody else.
+        """
+        if not wanted:
+            return []
+        live = store.get_collections(self._conn)
+        seen: dict[str, int] = {}
+        for r in live:
+            slug = _slug(r["href"])
+            seen[slug] = seen.get(slug, 0) + 1
+        out = []
+        for r in live:
+            slug = _slug(r["href"])
+            if (component in (r["components"] or "").split(",")
+                    and slug in wanted and seen[slug] == 1 and slug not in exclude):
+                out.append(r)
+        return out
+
+    def _share_private(self, href: str) -> frozenset[str]:
+        """The UIDs in one collection that another app marked private. The store
+        hands over only the bodies that mention CLASS at all, and
+        `share.is_private` reads those properly; how coarse that reading is, and
+        why, is in its docstring."""
+        return frozenset(
+            uid for uid, ics in store.share_class_ics(self._conn, href).items()
+            if share_mod.is_private(ics))
+
+    def _share_lists(
+        self, list_rows: list[sqlite3.Row], zone: ZoneInfo | None,
+        private: dict[str, frozenset[str]],
+    ) -> list[dict[str, Any]]:
+        """Each shared list's open tasks, nested within the list and capped."""
+        out = []
+        for row in list_rows:
+            walked = share_mod.tree(store.share_open_tasks(self._conn, row["href"]))
+            shown = walked[:share_mod.MAX_TASKS_PER_LIST]
+            hidden = private[row["href"]]
+            tasks = []
+            for t, depth in shown:
+                marked = t["uid"] in hidden
+                tasks.append({
+                    "title": "" if marked else share_mod.title(t["summary"]),
+                    "due": share_mod.instant(
+                        t["due"], is_date=bool(t["due_is_date"]), zone=zone),
+                    "all_day": bool(t["due"]) and (
+                        bool(t["due_is_date"]) or "T" not in t["due"]),
+                    "depth": depth,
+                    "private": marked,
+                })
+            out.append({
+                "name": share_mod.title(row["displayname"]),
+                "color": share_mod.color(self._collection_color(row)),
+                "tasks": tasks,
+                "more": len(walked) - len(shown),
+            })
+        return out
+
+    def _share_events(
+        self, cal_rows: list[sqlite3.Row], day: str, days: int, zone: ZoneInfo | None,
+        private: dict[str, frozenset[str]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
+        """The shared calendars, and their events over the share's horizon.
+
+        The horizon is the owner's today and the `days - 1` after it, widened by
+        one day at each end: the viewer lays the agenda out in THEIR zone, and
+        the owner's today is somebody's yesterday or tomorrow. The query window
+        is padded two days further again, for the reason `_display_events`
+        gives, and only events that overlap the widened horizon are kept.
+        """
+        if not cal_rows:
+            return [], [], 0
+        today = date.fromisoformat(day)
+        first = (today - timedelta(days=1)).isoformat()
+        last = (today + timedelta(days=days)).isoformat()
+        window_start = (today - timedelta(days=3)).isoformat()
+        window_end = (today + timedelta(days=days + 3)).isoformat()
+        calendars: list[dict[str, Any]] = []
+        found: list[tuple] = []
+        for i, row in enumerate(cal_rows):
+            calendars.append({
+                "name": share_mod.title(row["displayname"]),
+                "color": share_mod.color(self._collection_color(row)),
+            })
+            hidden = private[row["href"]]
+            for ev in self.events_in_range(row["href"], window_start, window_end):
+                if (ev.get("status") or "").upper() == "CANCELLED":
+                    continue
+                # The master row `events_in_range` falls back to when a series
+                # cannot be expanded. Its times are the first occurrence's, so
+                # on an agenda it would be an appointment on the wrong day.
+                if ev.get("is_recurring") and ev.get("recurrence_id") is None:
+                    continue
+                all_day = bool(ev.get("all_day"))
+                end_value = ev.get("end")
+                if not end_value and ev.get("duration") and not all_day:
+                    # Applied the way `scheduling.busy_intervals` applies it, so
+                    # a DURATION across a clock change ends where it really does.
+                    try:
+                        end_value = advance(
+                            _event_stamp(ev["start"], zone), ev["duration"],
+                            vDuration.from_ical(ev["duration"])).isoformat()
+                    except (ValueError, TypeError, OverflowError):
+                        end_value = None
+                start_day = _event_day(
+                    ev.get("start"), is_date=bool(ev.get("start_is_date")), zone=zone)
+                if not start_day:
+                    continue
+                end_day = _event_last_day(
+                    {"end": end_value, "end_is_date": bool(ev.get("end_is_date"))},
+                    start_day, zone=zone)
+                if end_day < first or start_day > last:
+                    continue
+                if all_day:
+                    start = ev["start"][:10]
+                    # The EXCLUSIVE DTEND date, as on the wire.
+                    end = (ev.get("end") or "")[:10] or None
+                else:
+                    start = share_mod.instant(ev["start"], is_date=False, zone=zone)
+                    end = share_mod.instant(end_value, is_date=False, zone=zone)
+                if start is None:
+                    continue
+                found.append((start_day, all_day, start, end, i, ev, ev["uid"] in hidden))
+        # A booking's summary carries the visitor's name, so a booked event goes
+        # out under its link's title. Asked once for every UID on the agenda.
+        booked = store.booking_titles(
+            self._conn, list(dict.fromkeys(f[5]["uid"] for f in found if not f[6])))
+        prefixes = store.booking_link_titles(self._conn)
+        events = []
+        for start_day, all_day, start, end, i, ev, marked in found:
+            events.append((start_day, {
+                "title": "" if marked else share_mod.title(
+                    self._share_event_title(ev, booked, prefixes)),
+                "start": start,
+                "end": end,
+                "all_day": all_day,
+                "calendar": i,
+                "private": marked,
+            }))
+        events.sort(key=lambda e: (e[0], not e[1]["all_day"], e[1]["start"] or "",
+                                   e[1]["title"]))
+        shown = [rec for _, rec in events[:share_mod.MAX_EVENTS]]
+        return calendars, shown, len(events) - len(shown)
+
+    @staticmethod
+    def _share_event_title(
+        ev: dict[str, Any], booked: dict[str, str], prefixes: list[str],
+    ) -> str | None:
+        """An event's title as a share shows it: a booking's link title in place
+        of the summary, which names the visitor.
+
+        The ledger is asked by UID, which finds a booking wherever it has been
+        moved to. A summary that still reads "<link title> — …" with no ledger
+        row behind it is cut back to the link title as well: when the ledger
+        has lost track of a booking, the summary has not stopped naming the
+        visitor.
+        """
+        uid = ev.get("uid")
+        if uid in booked:
+            return booked[uid]
+        summary = ev.get("summary") or ""
+        for t in prefixes:
+            if summary.startswith(t + " — "):
+                return t
+        return ev.get("summary")
+
+    def _share_focus(
+        self, share_id: str, day: str, list_index: dict[str, int], now: datetime,
+        zone: ZoneInfo | None, private: dict[str, frozenset[str]],
+    ) -> dict[str, Any]:
+        """The presence card: the clock, and today's planned rows from the
+        shared lists.
+
+        Only shared task rows ever leave. The session's queue is worked out over
+        ALL of the day's rows, so `next` is in the owner's true order, but a
+        habit, a note or a task from an unshared list contributes nothing but
+        its place in that order. `now` names the row the session is on only when
+        that row is itself open and shared; the client paints `now` and never
+        elects one, the rule `focus.ts::queueOf` keeps for the owner's own
+        screen.
+        """
+        s = self._focus_load(day)
+        live = s is not None and not s["ended_at"]
+        block = share_mod.focus_block(s if live else None, now)
+        rows, _planned = self._resolved_day_rows(day, preview=False)
+        shared = [
+            r for r in rows
+            if r["kind"] == "task" and r.get("href") in list_index
+            and not self._share_parked(r["href"], r["uid"])
+        ]
+        keys = {r["entry_id"]: share_mod.row_key(share_id, r["entry_id"]) for r in shared}
+        now_key = None
+        if s is not None and block["state"] != "idle":
+            ids = [r["entry_id"] for r in self._focus_queue_rows(rows, s["passed"])]
+            cursor = s["entry_id"] if s["entry_id"] in ids else None
+            now_key = keys.get(cursor) if cursor else None
+            upcoming = [e for e in ids if e in keys and e != cursor]
+        else:
+            upcoming = [r["entry_id"] for r in shared if not r["done"]]
+        out_rows = []
+        for r in shared:
+            marked = r["uid"] in private[r["href"]]
+            out_rows.append({
+                "key": keys[r["entry_id"]],
+                "title": "" if marked else share_mod.title(r["title"]),
+                "done": bool(r["done"]),
+                "list": list_index[r["href"]],
+                "due": share_mod.instant(
+                    r.get("due"), is_date=bool(r.get("due_is_date")), zone=zone),
+                "all_day": bool(r.get("due")) and (
+                    bool(r.get("due_is_date")) or "T" not in r["due"]),
+                "private": marked,
+            })
+        block["today"] = {
+            "rows": out_rows,
+            "now": now_key,
+            "next": [keys[e] for e in upcoming[:2]],
+        }
+        return block
+
+    def _share_parked(self, href: str, uid: str) -> bool:
+        """Whether a task is set aside. A parked task is off the owner's lists
+        until they bring it back, so it is off a share's Today as well — the
+        rule `store.share_open_tasks` applies to the lists."""
+        side = store.get_sidecar(self._conn, href, uid)
+        return side is not None and bool(side["parked_at"])
 
     # ── focus: working the day's queue against a clock ────────────────────────
     #

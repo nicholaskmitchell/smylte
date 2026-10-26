@@ -6,37 +6,56 @@ it cannot be read, a token column that cannot hold a short credential, a prune
 that rides on the caller's transaction, and a task reader that answers exactly
 as `list_tasks` would without loading what `list_tasks` loads.
 
+It ends at the service, which is the security boundary: `share_view` is the one
+call a token reaches, and the tests there pin what a stranger can and cannot be
+sent — the exact key set, the canary that nothing private gets out, the day that
+is never opened, and the one answer for every refusal.
+
 Nothing here touches Radicale. A share is app-only state over the cache, so the
 store is driven directly and `items` is seeded the way test_day_plan seeds it.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
+import re
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
-from helpers import foreign_raw
-from test_day_plan import LIST_A, LIST_B, _seed_task, _settings
-from test_displays import CAL_A, _seed_event
+from helpers import foreign_event_raw, foreign_raw
+from test_day_plan import DAY, LIST_A, LIST_B, _seed_task, _settings
+from test_displays import CAL_A, CAL_B, _seed_event
+from test_focus import clock  # noqa: F401
 
+from smylted import service as service_mod
 from smylted import share as share_mod
-from smylted.dav.client import CollectionInfo
+from smylted.dav.client import CollectionInfo, Item
 from smylted.db import store
+from smylted.ical import extract_from_raw
 from smylted.service import SmylteService
 
 TOKEN = "t" * 43
+# A collection that holds both tasks and events, as some servers' default does.
+MIXED = "/u/mixed/"
 
 
 @pytest.fixture
-def svc():
+def svc(monkeypatch):
     s = SmylteService(_settings())
     for href, name in ((LIST_A, "Work"), (LIST_B, "Home")):
         store.upsert_collection(
             s._conn, CollectionInfo(href=href, displayname=name, components={"VTODO"}))
+    for href, name in ((CAL_A, "Personal"), (CAL_B, "Shared")):
+        store.upsert_collection(
+            s._conn, CollectionInfo(href=href, displayname=name, components={"VEVENT"}))
     store.upsert_collection(
-        s._conn, CollectionInfo(href=CAL_A, displayname="Personal", components={"VEVENT"}))
+        s._conn, CollectionInfo(href=MIXED, displayname="Both",
+                                components={"VTODO", "VEVENT"}))
+    # Pinned for the reason test_day_plan gives: a suite whose expectations
+    # move at midnight is a suite that fails at midnight.
+    monkeypatch.setattr(SmylteService, "_today", lambda self: DAY)
     yield s
     s.close()
 
@@ -638,3 +657,865 @@ def test_is_private_reads_lf_and_crlf_line_ends_alike():
     assert share_mod.is_private("CLASS:PRIVATE\r\n") is True
     assert share_mod.is_private("CLASS:PRIVATE") is True
     assert share_mod.is_private("CLASS:PUBLIC\r\nSUMMARY:x\r\n") is False
+
+
+# ── the service: owning a share ─────────────────────────────────────────────
+
+def _d(offset: int, sep: str = "") -> str:
+    """DAY moved by `offset` days, compact for an ICS value or dashed for a key."""
+    return (date.fromisoformat(DAY) + timedelta(days=offset)).strftime(
+        f"%Y{sep}%m{sep}%d")
+
+
+def _event(conn, href: str, uid: str, summary: str, **kw) -> None:
+    """Cache one VEVENT through the real extractor, as the sync engine would."""
+    raw = foreign_event_raw(uid, summary, **kw)
+    store.upsert_item(conn, href, Item(f"{href}{uid}.ics", '"1"', raw), extract_from_raw(raw))
+
+
+def _task(conn, href: str, uid: str, summary: str, *extra: str) -> None:
+    raw = foreign_raw(uid, summary, extra=extra)
+    store.upsert_item(conn, href, Item(f"{href}{uid}.ics", '"1"', raw), extract_from_raw(raw))
+
+
+def _make(svc_, **fields) -> dict:
+    return svc_.create_share({"name": "Sam", **fields})
+
+
+def _view(svc_, made: dict) -> dict | None:
+    return svc_.share_view(made["token"])
+
+
+def _empty(view: dict) -> dict:
+    """The whole payload of a share that shows nothing, for this view's clock."""
+    return {"v": 1, "generated_at": view["generated_at"], "poll_seconds": 30,
+            "day": DAY, "days": 7, "focus": None, "lists": [], "calendars": [],
+            "events": [], "events_more": 0}
+
+
+@pytest.fixture
+def published(monkeypatch, svc):
+    events: list[dict] = []
+    monkeypatch.setattr(svc, "_publish", events.append)
+    return events
+
+
+def test_share_crud_round_trips_with_a_256_bit_token(svc):
+    made = _make(svc)
+    assert re.fullmatch(r"[A-Za-z0-9_-]{43}", made["token"])
+    assert re.fullmatch(r"[0-9a-f]{32}", made["id"]) and made["id"] != made["token"]
+    assert made["lists"] == [] and made["calendars"] == []
+    assert made["show_focus"] is False and made["enabled"] is True
+    assert made["switched_off_by_password"] is False
+    assert made["horizon_days"] == 7
+    # No configured origin, so no absolute URL rather than one built off a guess.
+    assert made["url"] is None
+    assert svc.get_share(made["id"]) == made
+    assert svc.list_shares() == [made]
+
+    edited = svc.update_share(made["id"], {"name": "  Alex  ", "show_focus": True,
+                                           "horizon_days": 14})
+    assert edited["name"] == "Alex" and edited["show_focus"] is True
+    assert edited["horizon_days"] == 14 and edited["token"] == made["token"]
+    assert svc.update_share("nope", {"name": "x"}) is None
+
+    assert svc.delete_share(made["id"]) is True
+    assert svc.delete_share(made["id"]) is False
+    assert svc.get_share(made["id"]) is None and svc.list_shares() == []
+
+
+def test_share_fields_are_validated(svc):
+    made = _make(svc)
+    for bad in ({"name": "   "}, {"lists": "work"}, {"calendars": [1]},
+                {"horizon_days": 3}, {"horizon_days": True}, {"horizon_days": "7"},
+                {"horizon_days": 7.0}, {"horizon_days": None}):
+        with pytest.raises(ValueError):
+            svc.update_share(made["id"], bad)
+    with pytest.raises(ValueError, match="needs a name"):
+        svc.create_share({"name": ""})
+    for days in share_mod.HORIZONS:
+        assert svc.update_share(made["id"], {"horizon_days": days})["horizon_days"] == days
+    # The credential stamp is the service's own: a caller's value never lands.
+    svc.update_share(made["id"], {"cv": "forged"})
+    assert store.get_share(svc._conn, made["id"])["cv"] == ""
+
+
+def test_a_share_url_is_absolute_when_the_origin_is_configured(svc, monkeypatch):
+    monkeypatch.setattr(
+        svc, "settings", dataclasses.replace(svc.settings, public_url="https://smylte.example"))
+    made = _make(svc)
+    assert made["url"] == f"https://smylte.example/share/{made['token']}"
+
+
+def test_writes_keep_only_live_slugs_of_the_right_component(svc):
+    made = _make(svc, lists=["/u/work/", "nope", "cal-a", "work", "work"],
+                 calendars=["work", "cal-a", "mixed", "cal-a"])
+    assert made["lists"] == ["work"]
+    assert made["calendars"] == ["cal-a", "mixed"]
+    assert svc.update_share(made["id"], {"lists": ["mixed", "home"]})["lists"] == \
+        ["mixed", "home"]
+    store.mark_collection_deleted(svc._conn, LIST_B)
+    assert svc.update_share(made["id"], {"lists": ["home", "work"]})["lists"] == ["work"]
+
+
+def test_share_events_on_the_bus_carry_the_id_never_the_token(svc, published):
+    made = _make(svc)
+    svc.update_share(made["id"], {"name": "Alex"})
+    rotated = svc.rotate_share_token(made["id"])
+    svc.delete_share(made["id"])
+    svc.delete_share(made["id"])                  # a miss publishes nothing
+    assert published == [
+        {"type": "share_created", "share": made["id"]},
+        {"type": "share_updated", "share": made["id"]},
+        {"type": "share_updated", "share": made["id"]},
+        {"type": "share_deleted", "share": made["id"]},
+    ]
+    sent = json.dumps(published)
+    assert made["token"] not in sent and rotated["token"] not in sent
+
+
+# ── the service: what a share shows ─────────────────────────────────────────
+
+def _seed_everything(svc_) -> None:
+    """Something in every collection, a planned day and a running session, so
+    a share that shows nothing is showing nothing for a reason."""
+    c = svc_._conn
+    _seed_task(c, LIST_A, "ta", "Draft the memo")
+    _seed_task(c, LIST_B, "tb", "Fix the shelf")
+    _seed_task(c, MIXED, "tm", "Mixed task")
+    _event(c, CAL_A, "ea", "Standup", dtstart=f"{_d(0)}T090000Z", dtend=f"{_d(0)}T093000Z")
+    _event(c, CAL_B, "eb", "Lunch", dtstart=f"{_d(0)}T120000Z", dtend=f"{_d(0)}T130000Z")
+    _event(c, MIXED, "em", "Mixed event", dtstart=f"{_d(1)}T120000Z",
+           dtend=f"{_d(1)}T130000Z")
+    svc_.open_day(DAY, create=True)
+    svc_.add_day_entry(DAY, entry_id="e-a", kind="task", list_id="work", uid="ta")
+    store.put_focus_session(
+        c, DAY, phase="focus", phase_length_s=1500, phase_elapsed_s=0,
+        running_since=_stamp_now(), intervals_done=0, entry_id="e-a", passed="[]",
+        started_at=_stamp_now(), ended_at=None)
+
+
+def _stamp_now() -> str:
+    return share_mod.stamp(service_mod._focus_now())
+
+
+def test_a_new_share_shows_nothing(svc, clock):
+    _seed_everything(svc)
+    made = _make(svc)
+    view = _view(svc, made)
+    assert view == _empty(view)
+
+
+def test_an_emptied_allowlist_is_nothing_not_everything(svc):
+    _seed_everything(svc)
+    made = _make(svc, lists=["work"], calendars=["cal-a"])
+    assert [t["title"] for t in _view(svc, made)["lists"][0]["tasks"]] == ["Draft the memo"]
+    svc.update_share(made["id"], {"lists": [], "calendars": []})
+    view = _view(svc, made)
+    assert view == _empty(view)
+
+    # The same data on a display: there, an empty allowlist is EVERYTHING. The
+    # two rules side by side are the inversion this feature rests on.
+    shown = svc.create_display({"name": "Hallway", "mode": "calendar"})
+    frame = svc.display_frame(shown["token"])
+    assert {s["id"] for s in frame["sources"]} == {"cal-a", "cal-b", "mixed"}
+
+
+@pytest.mark.parametrize("raw", ["{}", "not json", "[1, null]", '"work"', ""])
+def test_unreadable_allowlist_json_reads_as_nothing(svc, raw):
+    _seed_everything(svc)
+    made = _make(svc, lists=["work"], calendars=["cal-a"])
+    svc._conn.execute("UPDATE shares SET lists=?, calendars=? WHERE id=?",
+                      (raw, raw, made["id"]))
+    view = _view(svc, made)
+    assert view == _empty(view)
+
+
+def test_only_selected_lists_and_calendars_reach_the_view(svc):
+    _seed_everything(svc)
+    made = _make(svc, lists=["work"], calendars=["cal-a"])
+    view = _view(svc, made)
+    assert [lst["name"] for lst in view["lists"]] == ["Work"]
+    assert [cal["name"] for cal in view["calendars"]] == ["Personal"]
+    assert [e["title"] for e in view["events"]] == ["Standup"]
+    sent = json.dumps(view)
+    for absent in ("Fix the shelf", "Lunch", "Home", "Shared", "Mixed", "Both"):
+        assert absent not in sent
+
+
+def test_a_mixed_collection_is_gated_by_component(svc):
+    _seed_everything(svc)
+    as_list = _view(svc, _make(svc, lists=["mixed"]))
+    assert [t["title"] for t in as_list["lists"][0]["tasks"]] == ["Mixed task"]
+    assert as_list["calendars"] == [] and as_list["events"] == []
+    assert "Mixed event" not in json.dumps(as_list)
+
+    as_calendar = _view(svc, _make(svc, calendars=["mixed"]))
+    assert [e["title"] for e in as_calendar["events"]] == ["Mixed event"]
+    assert as_calendar["lists"] == []
+    assert "Mixed task" not in json.dumps(as_calendar)
+
+
+def test_ambiguous_slugs_reach_nothing(svc):
+    _seed_everything(svc)
+    made = _make(svc, lists=["work"], calendars=["cal-a"])
+    # A second live collection whose last segment is also "work", and one that
+    # is also "cal-a": which one the owner picked cannot be told from the slug.
+    store.upsert_collection(
+        svc._conn, CollectionInfo(href="/v/work/", displayname="Other work",
+                                  components={"VTODO"}))
+    store.upsert_collection(
+        svc._conn, CollectionInfo(href="/v/cal-a/", displayname="Other cal",
+                                  components={"VEVENT"}))
+    view = _view(svc, made)
+    assert view == _empty(view)
+
+
+def test_a_deleted_collection_is_pruned_and_not_revived(svc):
+    _seed_everything(svc)
+    made = _make(svc, lists=["work", "home"])
+    store.mark_collection_deleted(svc._conn, LIST_A)
+    assert svc.get_share(made["id"])["lists"] == ["home"]
+    # The same href comes back, as a new collection of the same name would.
+    store.upsert_collection(
+        svc._conn, CollectionInfo(href=LIST_A, displayname="Work", components={"VTODO"}))
+    _seed_task(svc._conn, LIST_A, "tnew", "Brand new")
+    view = _view(svc, made)
+    assert [lst["name"] for lst in view["lists"]] == ["Home"]
+    assert "Brand new" not in json.dumps(view)
+
+
+def test_archived_calendars_are_never_shared_even_when_selected(svc):
+    _seed_everything(svc)
+    made = _make(svc, calendars=["cal-a", "cal-b"])
+    store.update_settings(svc._conn, {"archived_calendars": ["cal-b"]})
+    view = _view(svc, made)
+    assert [cal["name"] for cal in view["calendars"]] == ["Personal"]
+    assert [e["title"] for e in view["events"]] == ["Standup"]
+    # Still selected: un-archiving brings it back without an edit.
+    assert svc.get_share(made["id"])["calendars"] == ["cal-a", "cal-b"]
+
+
+def test_private_fields_never_reach_the_view(svc, clock):
+    """THE CANARY. Every field a share must not send carries a distinct marker,
+    and none of them, nor anything that names the share or a collection, is
+    anywhere in the payload."""
+    c = svc._conn
+    store.update_settings(c, {"home_timezone": "Pacific/Kiritimati"})
+    _task(c, LIST_A, "uid-canary-task", "Shared task",
+          "DESCRIPTION:CANARY-TASK-DESCRIPTION", "CATEGORIES:CANARY-TASK-TAG")
+    _task(c, LIST_B, "t-unshared", "CANARY-UNSHARED-TASK")
+    _event(c, CAL_A, "uid-canary-event", "Shared event",
+           dtstart=f"{_d(0)}T090000Z", dtend=f"{_d(0)}T100000Z",
+           extra=("DESCRIPTION:CANARY-EVENT-DESCRIPTION", "LOCATION:CANARY-LOCATION",
+                  "CATEGORIES:CANARY-EVENT-TAG"))
+    _event(c, CAL_A, "e-kiritimati", "Island call",
+           dtstart=f"TZID=Pacific/Kiritimati:{_d(1)}T090000",
+           dtend=f"TZID=Pacific/Kiritimati:{_d(1)}T100000")
+    _event(c, CAL_B, "e-archived", "CANARY-ARCHIVED-EVENT",
+           dtstart=f"{_d(0)}T110000Z", dtend=f"{_d(0)}T120000Z")
+    _event(c, MIXED, "e-unshared", "CANARY-UNSHARED-EVENT",
+           dtstart=f"{_d(0)}T110000Z", dtend=f"{_d(0)}T120000Z")
+    store.upsert_collection(
+        c, CollectionInfo(href=LIST_B, displayname="CANARY-UNSHARED-LIST",
+                          components={"VTODO"}))
+    store.update_settings(c, {"archived_calendars": ["cal-b"]})
+    store.set_sidecar(c, CAL_A, "uid-canary-event", notify_minutes_before=4321)
+    svc.create_habit(title="CANARY-HABIT")
+    svc.open_day(DAY, create=True)
+    svc.add_day_entry(DAY, entry_id="e-task", kind="task", list_id="work",
+                      uid="uid-canary-task", estimate_minutes=99999)
+    svc.add_day_entry(DAY, entry_id="e-note", kind="note", title="CANARY-NOTE")
+    svc.set_day_ritual(DAY, reflection="CANARY-REFLECTION")
+    store.put_focus_session(
+        c, DAY, phase="focus", phase_length_s=1500, phase_elapsed_s=0,
+        running_since=_stamp_now(), intervals_done=0, entry_id="e-task",
+        passed=json.dumps(["e-note"]), started_at=_stamp_now(), ended_at=None)
+    made = svc.create_share({"name": "CANARY-SHARE-NAME", "lists": ["work"],
+                             "calendars": ["cal-a", "cal-b"], "show_focus": True})
+
+    view = _view(svc, made)
+    sent = json.dumps(view)
+
+    # The view really is populated, so the absences below mean something.
+    assert [t["title"] for t in view["lists"][0]["tasks"]] == ["Shared task"]
+    assert {e["title"] for e in view["events"]} == {"Shared event", "Island call"}
+    assert [r["title"] for r in view["focus"]["today"]["rows"]] == ["Shared task"]
+    for canary in ("CANARY", "4321", "99999", "uid-canary", "e-task", "e-note",
+                   made["token"], made["id"], LIST_A, CAL_A, "/u/", '"work"',
+                   '"cal-a"', '"cal-b"', "Kiritimati", "+14:00"):
+        assert canary not in sent, canary
+    island = next(e for e in view["events"] if e["title"] == "Island call")
+    assert island["start"] == f"{_d(0, '-')}T19:00:00.000Z"
+
+
+def test_private_marked_items_are_sent_without_a_title(svc, clock):
+    """CLASS:PRIVATE in another app reads as Busy here: the time is shared, the
+    words are not, and nothing about the booking ledger can put them back."""
+    c = svc._conn
+    _task(c, LIST_A, "t-private", "CANARY-PRIVATE-TASK", "CLASS:PRIVATE")
+    _task(c, LIST_A, "t-public", "Public task", "CLASS:PUBLIC")
+    _event(c, CAL_A, "e-private", "CANARY-PRIVATE-EVENT",
+           dtstart=f"{_d(0)}T090000Z", dtend=f"{_d(0)}T100000Z",
+           extra=("CLASS:CONFIDENTIAL",))
+    _event(c, CAL_A, "e-series", "CANARY-PRIVATE-SERIES",
+           dtstart=f"{_d(0)}T150000Z", dtend=f"{_d(0)}T160000Z",
+           rrule="FREQ=DAILY;COUNT=3",
+           overrides=(("RECURRENCE-ID:" + f"{_d(1)}T150000Z", f"DTSTART:{_d(1)}T150000Z",
+                       f"DTEND:{_d(1)}T160000Z", "SUMMARY:CANARY-OVERRIDE",
+                       "CLASS:PRIVATE"),))
+    _event(c, CAL_A, "e-booked", "Intro call — CANARY-VISITOR",
+           dtstart=f"{_d(0)}T110000Z", dtend=f"{_d(0)}T113000Z",
+           extra=("CLASS:PRIVATE",))
+    _link(c, "link-one", "Intro call")
+    _book(c, "link-one", "e-booked")
+    svc.open_day(DAY, create=True)
+    svc.add_day_entry(DAY, entry_id="e-p", kind="task", list_id="work", uid="t-private")
+    made = _make(svc, lists=["work"], calendars=["cal-a"], show_focus=True)
+
+    view = _view(svc, made)
+
+    assert "CANARY" not in json.dumps(view)
+    tasks = {t["title"]: t["private"] for t in view["lists"][0]["tasks"]}
+    assert tasks == {"": True, "Public task": False}
+    assert [(e["title"], e["private"]) for e in view["events"]] == [("", True)] * 5
+    [row] = view["focus"]["today"]["rows"]
+    assert row["title"] == "" and row["private"] is True
+
+
+def test_view_keys_are_exactly_the_documented_set(svc, clock):
+    _seed_everything(svc)
+    c = svc._conn
+    _event(c, CAL_A, "trip", "Trip", dtstart=_d(1), dtend=_d(3), all_day=True)
+    _seed_task(c, LIST_A, "dated", "Dated", due=DAY)
+    made = _make(svc, lists=["work"], calendars=["cal-a"], show_focus=True)
+    view = _view(svc, made)
+
+    assert set(view) == {"v", "generated_at", "poll_seconds", "day", "days", "focus",
+                         "lists", "calendars", "events", "events_more"}
+    focus = view["focus"]
+    assert set(focus) == {"state", "phase", "phase_length_s", "ends_at",
+                          "remaining_s", "today"}
+    assert set(focus["today"]) == {"rows", "now", "next"}
+    assert focus["today"]["rows"]
+    for row in focus["today"]["rows"]:
+        assert set(row) == {"key", "title", "done", "list", "due", "all_day", "private"}
+    assert view["lists"]
+    for lst in view["lists"]:
+        assert set(lst) == {"name", "color", "tasks", "more"}
+        assert lst["tasks"]
+        for task in lst["tasks"]:
+            assert set(task) == {"title", "due", "all_day", "depth", "private"}
+    assert view["calendars"]
+    for cal in view["calendars"]:
+        assert set(cal) == {"name", "color"}
+    assert len(view["events"]) == 2
+    for ev in view["events"]:
+        assert set(ev) == {"title", "start", "end", "all_day", "calendar", "private"}
+
+
+def test_open_tasks_only_nested_within_their_list(svc):
+    c = svc._conn
+    _seed_task(c, LIST_A, "parent", "Parent")
+    _seed_task(c, LIST_A, "child", "Child", parent="parent")
+    _seed_task(c, LIST_A, "closed-parent", "Closed parent", status="COMPLETED")
+    _seed_task(c, LIST_A, "orphan", "Open under a closed parent", parent="closed-parent")
+    _seed_task(c, LIST_A, "foreign-child", "Child of a foreign parent", parent="foreign")
+    _seed_task(c, LIST_B, "foreign", "CANARY-FOREIGN-PARENT")
+    _seed_task(c, LIST_A, "cancelled", "CANARY-CANCELLED", status="CANCELLED")
+    _seed_task(c, LIST_A, "parked", "CANARY-PARKED")
+    store.set_sidecar(c, LIST_A, "parked", parked_at="2026-08-20T08:00:00.000Z")
+    _seed_task(c, LIST_A, "loop-a", "Loop A", parent="loop-b")
+    _seed_task(c, LIST_A, "loop-b", "Loop B", parent="loop-a")
+    for i, uid in enumerate(("d0", "d1", "d2", "d3", "d4")):
+        _seed_task(c, LIST_A, uid, f"Depth {i}", parent=f"d{i - 1}" if i else None)
+    made = _make(svc, lists=["work"])
+
+    [work] = _view(svc, made)["lists"]
+    depth = {t["title"]: t["depth"] for t in work["tasks"]}
+    assert "CANARY" not in json.dumps(work) and "Closed parent" not in depth
+    assert depth["Parent"] == 0 and depth["Child"] == 1
+    assert depth["Open under a closed parent"] == 0
+    assert depth["Child of a foreign parent"] == 0
+    assert depth["Loop A"] == 0 and depth["Loop B"] == 0
+    assert [depth[f"Depth {i}"] for i in range(5)] == [0, 1, 2, 3, 3]
+    assert work["more"] == 0
+
+    for i in range(share_mod.MAX_TASKS_PER_LIST):
+        _seed_task(c, LIST_B, f"many-{i:03d}", f"Task {i:03d}")
+    [home] = _view(svc, _make(svc, lists=["home"]))["lists"]
+    assert len(home["tasks"]) == share_mod.MAX_TASKS_PER_LIST
+    assert home["more"] == 1
+
+
+def test_titles_bounded_and_colours_validated(svc):
+    c = svc._conn
+    _seed_task(c, LIST_A, "long", "x")
+    _seed_task(c, LIST_B, "lines", "x")
+    c.execute("UPDATE items SET summary=? WHERE uid='long'", ("y" * 4000,))
+    c.execute("UPDATE items SET summary=? WHERE uid='lines'", ("Line one\nLine two",))
+    store.upsert_collection(
+        c, CollectionInfo(href=LIST_A, displayname="Work", components={"VTODO"},
+                          color="url(x)"))
+    store.upsert_collection(
+        c, CollectionInfo(href=LIST_B, displayname="Home", components={"VTODO"},
+                          color="#112233"))
+    c.execute("INSERT INTO list_settings (collection_href, color) VALUES (?, ?)",
+              (LIST_B, "#AABBCC"))
+    # In the owner's order, which with no manual order is by name.
+    home, work = _view(svc, _make(svc, lists=["work", "home"]))["lists"]
+    assert work["tasks"][0]["title"] == "y" * share_mod.TITLE_CHARS
+    assert home["tasks"][0]["title"] == "Line one Line two"
+    assert work["color"] is None
+    # The owner's own choice wins over the one the server reports.
+    assert home["color"] == "#AABBCC"
+
+
+# ── the service: the presence card ──────────────────────────────────────────
+
+def _plan_today(svc_) -> dict[str, str]:
+    """Today's plan: a habit, a note, a task from an unshared list, then the
+    shared tasks A and B, in that order. Returns the entry ids by role."""
+    c = svc_._conn
+    _seed_task(c, LIST_A, "ta", "Task A")
+    _seed_task(c, LIST_A, "tb", "Task B")
+    _seed_task(c, LIST_B, "tc", "CANARY-UNSHARED-ROW")
+    svc_.create_habit(title="CANARY-HABIT")
+    svc_.open_day(DAY, create=True)
+    svc_.add_day_entry(DAY, entry_id="e-note", kind="note", title="CANARY-NOTE")
+    svc_.add_day_entry(DAY, entry_id="e-c", kind="task", list_id="home", uid="tc")
+    svc_.add_day_entry(DAY, entry_id="e-a", kind="task", list_id="work", uid="ta")
+    svc_.add_day_entry(DAY, entry_id="e-b", kind="task", list_id="work", uid="tb")
+    [habit] = [r["entry_id"] for r in store.get_day_entries(c, DAY) if r["kind"] == "habit"]
+    return {"habit": habit, "note": "e-note", "c": "e-c", "a": "e-a", "b": "e-b"}
+
+
+def _session_on(svc_, entry_id: str | None, *, passed=(), running: bool = True,
+                elapsed: int = 0) -> None:
+    now = _stamp_now()
+    store.put_focus_session(
+        svc_._conn, DAY, phase="focus", phase_length_s=1500, phase_elapsed_s=elapsed,
+        running_since=now if running else None, intervals_done=0, entry_id=entry_id,
+        passed=json.dumps(list(passed)), started_at=now, ended_at=None)
+    # SQLite's clock, which the `_focus_now` seam does not move, so it is set.
+    svc_._conn.execute("UPDATE focus_session SET updated_at=? WHERE day=?", (now, DAY))
+
+
+def _key(made: dict, entry_id: str) -> str:
+    return share_mod.row_key(made["id"], entry_id)
+
+
+def test_today_rows_carry_only_shared_task_rows(svc, clock):
+    ids = _plan_today(svc)
+    _seed_task(svc._conn, LIST_A, "tp", "CANARY-PARKED-ROW")
+    svc.add_day_entry(DAY, entry_id="e-p", kind="task", list_id="work", uid="tp")
+    store.set_sidecar(svc._conn, LIST_A, "tp", parked_at="2026-08-20T08:00:00.000Z")
+    made = _make(svc, lists=["work"], show_focus=True)
+
+    first, second = _view(svc, made), _view(svc, made)
+
+    rows = first["focus"]["today"]["rows"]
+    assert [r["title"] for r in rows] == ["Task A", "Task B"]
+    assert [r["key"] for r in rows] == [_key(made, ids["a"]), _key(made, ids["b"])]
+    assert all(re.fullmatch(r"[0-9a-f]{16}", r["key"]) for r in rows)
+    assert second["focus"]["today"]["rows"] == rows
+    assert {r["list"] for r in rows} == {0} and not any(r["done"] for r in rows)
+    assert "CANARY" not in json.dumps(first)
+
+
+def test_now_and_next_follow_the_owners_queue_within_shared_rows(svc, clock):
+    ids = _plan_today(svc)
+    made = _make(svc, lists=["work"], show_focus=True)
+    a, b = _key(made, ids["a"]), _key(made, ids["b"])
+
+    def today() -> dict:
+        focus = _view(svc, made)["focus"]
+        return {"state": focus["state"], "now": focus["today"]["now"],
+                "next": focus["today"]["next"]}
+
+    # No session: the plan's open shared rows, in plan order.
+    assert today() == {"state": "idle", "now": None, "next": [a, b]}
+    # On an unshared row the clock shows and nothing names the row.
+    _session_on(svc, ids["c"])
+    assert today() == {"state": "focusing", "now": None, "next": [a, b]}
+    _session_on(svc, ids["a"])
+    assert today() == {"state": "focusing", "now": a, "next": [b]}
+    # FocusView's wrap: after B comes A, which is still open.
+    _session_on(svc, ids["b"])
+    assert today() == {"state": "focusing", "now": b, "next": [a]}
+    # Set-aside rows are skipped.
+    _session_on(svc, ids["c"], passed=[ids["a"]])
+    assert today() == {"state": "focusing", "now": None, "next": [b]}
+    # A cursor that names nothing open is not replaced by the head of the
+    # queue: `now` is only ever the row the session stored.
+    _session_on(svc, None, passed=[ids["habit"], ids["note"], ids["c"]])
+    assert today() == {"state": "focusing", "now": None, "next": [a, b]}
+    _session_on(svc, ids["habit"])
+    assert today() == {"state": "focusing", "now": None, "next": [a, b]}
+    # A done row stays on Today, ticked, and leaves the queue.
+    svc._conn.execute("UPDATE items SET status='COMPLETED' WHERE uid='ta'")
+    _session_on(svc, ids["c"])
+    assert today() == {"state": "focusing", "now": None, "next": [b]}
+    assert [r["done"] for r in _view(svc, made)["focus"]["today"]["rows"]] == [True, False]
+
+
+def test_the_view_is_stable_between_polls(svc, clock):
+    ids = _plan_today(svc)
+    made = _make(svc, lists=["work"], show_focus=True)
+    for running in (True, False):
+        _session_on(svc, ids["a"], running=running, elapsed=0 if running else 300)
+        first = _view(svc, made)
+        clock.tick(10)
+        second = _view(svc, made)
+        assert first["generated_at"] != second["generated_at"]
+        assert {**first, "generated_at": None} == {**second, "generated_at": None}
+        assert first["focus"]["state"] == ("focusing" if running else "paused")
+
+
+def test_poll_seconds_follows_focus(svc, clock):
+    ids = _plan_today(svc)
+    made = _make(svc, lists=["work"], show_focus=True)
+    assert _view(svc, made)["poll_seconds"] == share_mod.POLL_IDLE_S
+    _session_on(svc, ids["a"])
+    assert _view(svc, made)["poll_seconds"] == share_mod.POLL_LIVE_S
+    svc.update_share(made["id"], {"show_focus": False})
+    assert _view(svc, made)["poll_seconds"] == share_mod.POLL_IDLE_S
+    svc.update_share(made["id"], {"show_focus": True})
+    svc._conn.execute("UPDATE focus_session SET ended_at=? WHERE day=?", (_stamp_now(), DAY))
+    assert _view(svc, made)["poll_seconds"] == share_mod.POLL_IDLE_S
+
+
+def test_show_focus_off_sends_no_focus_and_no_plan(svc, clock):
+    ids = _plan_today(svc)
+    _session_on(svc, ids["a"])
+    made = _make(svc, lists=["work"])
+    view = _view(svc, made)
+    assert view["focus"] is None
+    assert _key(made, ids["a"]) not in json.dumps(view)
+    # The list itself is still shared.
+    assert [t["title"] for t in view["lists"][0]["tasks"]] == ["Task A", "Task B"]
+
+
+# ── the service: a share READS ──────────────────────────────────────────────
+
+def test_a_share_never_opens_or_previews_a_day(svc, monkeypatch):
+    _seed_task(svc._conn, LIST_A, "due", "Due today", due=DAY)
+    made = _make(svc, lists=["work"], show_focus=True)
+    real_open = svc.open_day
+
+    def open_day(day, *, create):
+        assert not create, "a share opened a day"
+        return real_open(day, create=create)
+
+    def preview_day(*_a, **_k):
+        raise AssertionError("a share previewed a day")
+
+    monkeypatch.setattr(svc, "open_day", open_day)
+    monkeypatch.setattr(svc, "preview_day", preview_day)
+    view = _view(svc, made)
+    # A preview would have put the task on Today; there is no plan, so nothing.
+    assert view["focus"]["today"]["rows"] == []
+    assert [t["title"] for t in view["lists"][0]["tasks"]] == ["Due today"]
+    assert store.day_is_opened(svc._conn, DAY) is False
+    assert store.get_day_entries(svc._conn, DAY) == []
+
+
+def _snapshot(conn) -> dict[str, list[tuple]]:
+    out = {}
+    for table in ("day_plan", "day_plan_opened", "day_ritual", "focus_session",
+                  "habits", "sidecar", "items"):
+        # The table names are literals in this file, never input.
+        out[table] = [tuple(r) for r in conn.execute(f"SELECT * FROM {table}")]  # nosec B608
+    out["shares"] = [tuple(r) for r in conn.execute(
+        "SELECT id, token, name, lists, calendars, show_focus, enabled, horizon_days, "
+        "cv, created_at, updated_at FROM shares")]
+    return out
+
+
+def test_a_share_view_writes_nothing_but_last_seen(svc, clock):
+    ids = _plan_today(svc)
+    _session_on(svc, ids["a"])
+    made = _make(svc, lists=["work", "home"], calendars=["cal-a"], show_focus=True)
+    before = _snapshot(svc._conn)
+    for _ in range(3):
+        _view(svc, made)
+        clock.tick(90)
+    assert _snapshot(svc._conn) == before
+    assert svc.get_share(made["id"])["last_seen_at"] is not None
+
+
+def test_last_seen_is_stamped_at_most_once_a_minute(svc, clock):
+    made = _make(svc)
+
+    def seen() -> str | None:
+        return svc.get_share(made["id"])["last_seen_at"]
+
+    first = _stamp_now()
+    _view(svc, made)
+    assert seen() == first
+    clock.tick(30)
+    _view(svc, made)
+    assert seen() == first
+    clock.tick(31)
+    later = _stamp_now()
+    _view(svc, made)
+    assert seen() == later
+
+
+def test_a_failed_last_seen_stamp_does_not_cost_the_view(svc, monkeypatch):
+    """The one write on the path is bookkeeping: a locked database must not turn
+    a built view into an error for the person reading it."""
+    made = _make(svc, lists=["work"])
+    _seed_task(svc._conn, LIST_A, "ta", "Task A")
+
+    class Locked:
+        """A connection whose every write fails, wrapping a real one."""
+
+        def __init__(self, inner):
+            self._inner = inner
+
+        def execute(self, *a, **k):
+            raise sqlite3.OperationalError("database is locked")
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    real = store.touch_share
+    monkeypatch.setattr(store, "touch_share",
+                        lambda conn, share_id, **kw: real(Locked(conn), share_id, **kw))
+    view = _view(svc, made)
+    assert [t["title"] for t in view["lists"][0]["tasks"]] == ["Task A"]
+    assert svc.get_share(made["id"])["last_seen_at"] is None
+
+
+# ── the service: one answer for every refusal ───────────────────────────────
+
+def test_unknown_disabled_rotated_deleted_and_malformed_tokens_read_as_none(
+        svc, monkeypatch):
+    on = _make(svc)
+    off = _make(svc, enabled=False)
+    rotated = _make(svc)
+    deleted = _make(svc)
+    svc.rotate_share_token(rotated["id"])
+    svc.delete_share(deleted["id"])
+    assert _view(svc, on) is not None
+
+    looked_up: list[str] = []
+    real = store.get_share_by_token
+    monkeypatch.setattr(store, "get_share_by_token",
+                        lambda conn, token: looked_up.append(token) or real(conn, token))
+    for made in (off, rotated, deleted):
+        assert _view(svc, made) is None
+    assert svc.share_view("u" * 43) is None
+    assert len(looked_up) == 4
+
+    looked_up.clear()
+    for bad in ("a" * 42, "a" * 44, "a" * 42 + "/", "../x", "", on["token"] + " ",
+                None, 43):
+        assert svc.share_view(bad) is None
+    # Refused on its shape, before the database was asked.
+    assert looked_up == []
+
+    # Switching off is a 404 on the next read, and switching on brings it back.
+    svc.update_share(on["id"], {"enabled": False})
+    assert _view(svc, on) is None
+    svc.update_share(on["id"], {"enabled": True})
+    assert _view(svc, on) is not None
+
+
+def test_rotation_keeps_the_share_and_clears_last_seen(svc):
+    made = _make(svc, lists=["work"])
+    _view(svc, made)
+    assert svc.get_share(made["id"])["last_seen_at"] is not None
+    rotated = svc.rotate_share_token(made["id"])
+    assert rotated["id"] == made["id"] and rotated["token"] != made["token"]
+    assert rotated["lists"] == ["work"] and rotated["last_seen_at"] is None
+    assert _view(svc, made) is None
+    assert _view(svc, rotated) is not None
+    assert svc.rotate_share_token("nope") is None
+
+
+def test_preview_ignores_enabled_and_writes_nothing(svc):
+    _seed_task(svc._conn, LIST_A, "ta", "Task A")
+    made = _make(svc, lists=["work"], enabled=False)
+    assert _view(svc, made) is None
+    preview = svc.preview_share(made["id"])
+    assert [t["title"] for t in preview["lists"][0]["tasks"]] == ["Task A"]
+    assert svc.get_share(made["id"])["last_seen_at"] is None
+    # The same builder: switched on, the person sees exactly the preview.
+    svc.update_share(made["id"], {"enabled": True})
+    assert {**_view(svc, made), "generated_at": None} == \
+        {**svc.preview_share(made["id"]), "generated_at": None}
+    assert svc.preview_share("nope") is None
+
+
+# ── the service: a password change switches every share off ─────────────────
+
+def test_a_password_change_switches_a_share_off(svc):
+    svc.credential_version = lambda: "gen-1"
+    made = _make(svc, lists=["work"])
+    assert store.get_share(svc._conn, made["id"])["cv"] == "gen-1"
+    assert _view(svc, made) is not None
+
+    svc.credential_version = lambda: "gen-2"
+    assert _view(svc, made) is None
+    dto = svc.get_share(made["id"])
+    assert dto["enabled"] is False and dto["switched_off_by_password"] is True
+    # The owner can still look.
+    assert svc.preview_share(made["id"]) is not None
+
+    # A new link is not the owner switching it on.
+    rotated = svc.rotate_share_token(made["id"])
+    assert rotated["enabled"] is False and rotated["switched_off_by_password"] is True
+    assert _view(svc, rotated) is None
+    # Nor is any other edit.
+    assert svc.update_share(made["id"], {"name": "Alex"})["switched_off_by_password"]
+
+    revived = svc.update_share(made["id"], {"enabled": True})
+    assert revived["enabled"] is True and revived["switched_off_by_password"] is False
+    assert store.get_share(svc._conn, made["id"])["cv"] == "gen-2"
+    assert _view(svc, revived) is not None
+
+
+def test_a_share_switched_off_by_hand_is_not_off_by_password(svc):
+    svc.credential_version = lambda: "gen-1"
+    made = _make(svc)
+    svc.update_share(made["id"], {"enabled": False})
+    svc.credential_version = lambda: "gen-2"
+    dto = svc.get_share(made["id"])
+    assert dto["enabled"] is False and dto["switched_off_by_password"] is False
+    # Switching off does not restamp, and switching on does.
+    assert store.get_share(svc._conn, made["id"])["cv"] == "gen-1"
+    assert svc.update_share(made["id"], {"enabled": True})["enabled"] is True
+
+
+def test_with_authentication_off_a_share_works(svc):
+    # The service's own default: no credentials, so nothing to rotate away from.
+    assert svc.credential_version() == ""
+    made = _make(svc)
+    assert store.get_share(svc._conn, made["id"])["cv"] == ""
+    assert _view(svc, made) is not None
+    assert svc.get_share(made["id"])["enabled"] is True
+
+
+# ── the service: events ─────────────────────────────────────────────────────
+
+def test_events_window_times_and_cancellations(svc):
+    c = svc._conn
+    store.update_settings(c, {"home_timezone": "Europe/Berlin"})
+    # Noon floating on each day: inside the widened horizon, DAY-1 .. DAY+7.
+    for offset in (-2, -1, 0, 6, 7, 8):
+        _event(c, CAL_A, f"d{offset}", f"Day {offset}",
+               dtstart=f"{_d(offset)}T120000", dtend=f"{_d(offset)}T130000")
+    _event(c, CAL_A, "cancelled", "CANARY-CANCELLED", dtstart=f"{_d(0)}T150000",
+           dtend=f"{_d(0)}T160000", extra=("STATUS:CANCELLED",))
+    _event(c, CAL_A, "floating", "Floating", dtstart=f"{_d(1)}T090000",
+           dtend=f"{_d(1)}T100000")
+    _event(c, CAL_A, "offset", "Offset", dtstart=f"TZID=Pacific/Kiritimati:{_d(2)}T090000",
+           dtend=f"TZID=Pacific/Kiritimati:{_d(2)}T100000")
+    _event(c, CAL_A, "span", "Span", dtstart=_d(3), dtend=_d(5), all_day=True)
+    _event(c, CAL_A, "duration", "Duration", dtstart=f"{_d(4)}T080000Z", dtend=None,
+           extra=("DURATION:PT1H30M",))
+    made = _make(svc, calendars=["cal-a"])
+
+    view = _view(svc, made)
+    by = {e["title"]: e for e in view["events"]}
+
+    assert {"Day -1", "Day 0", "Day 6", "Day 7"} <= set(by)
+    assert not {"Day -2", "Day 8", "CANARY-CANCELLED"} & set(by)
+    assert by["Floating"]["start"] == f"{_d(1, '-')}T07:00:00.000Z"
+    assert by["Floating"]["end"] == f"{_d(1, '-')}T08:00:00.000Z"
+    assert by["Offset"]["start"] == f"{_d(1, '-')}T19:00:00.000Z"
+    assert by["Span"] == {"title": "Span", "start": _d(3, "-"), "end": _d(5, "-"),
+                          "all_day": True, "calendar": 0, "private": False}
+    assert by["Duration"]["end"] == f"{_d(4, '-')}T09:30:00.000Z"
+    assert not re.search(r"[+-]\d\d:\d\d", json.dumps(view))
+    # In time order, and the day's all-day events ahead of its timed ones.
+    assert [e["title"] for e in view["events"]][:3] == ["Day -1", "Day 0", "Floating"]
+    assert view["events_more"] == 0
+
+
+def test_the_horizon_is_the_shares_own(svc):
+    c = svc._conn
+    for offset in (-2, -1, 0, 1, 2, 13, 14, 15, 27, 28, 29):
+        _event(c, CAL_A, f"d{offset}", f"Day {offset}",
+               dtstart=f"{_d(offset)}T120000Z", dtend=f"{_d(offset)}T130000Z")
+    made = _make(svc, calendars=["cal-a"])
+    shown = {}
+    for days in share_mod.HORIZONS:
+        svc.update_share(made["id"], {"horizon_days": days})
+        view = _view(svc, made)
+        assert view["days"] == days
+        shown[days] = [e["title"] for e in view["events"]]
+    assert shown[1] == ["Day -1", "Day 0", "Day 1"]
+    assert shown[14][-1] == "Day 14" and "Day 15" not in shown[14]
+    assert shown[28][0] == "Day -1" and shown[28][-1] == "Day 28"
+    # A row edited by hand to a horizon nobody offers reads as the default.
+    c.execute("UPDATE shares SET horizon_days=3650 WHERE id=?", (made["id"],))
+    assert _view(svc, made)["days"] == share_mod.DEFAULT_HORIZON
+
+
+def test_the_event_cap_counts_the_rest(svc):
+    for i in range(share_mod.MAX_EVENTS + 2):
+        _seed_event(svc._conn, CAL_A, f"e{i:04d}", f"Event {i:04d}",
+                    start=f"{DAY}T{9 + i // 600:02d}:{(i // 10) % 60:02d}:{i % 10:02d}")
+    view = _view(svc, _make(svc, calendars=["cal-a"]))
+    assert len(view["events"]) == share_mod.MAX_EVENTS
+    assert view["events_more"] == 2
+
+
+def test_recurrence_overrides_and_unexpandable_series(svc, monkeypatch):
+    c = svc._conn
+    _event(c, CAL_A, "series", "Standup", dtstart=f"{_d(0)}T090000Z",
+           dtend=f"{_d(0)}T093000Z", rrule="FREQ=DAILY;COUNT=3",
+           overrides=((f"RECURRENCE-ID:{_d(1)}T090000Z", f"DTSTART:{_d(1)}T100000Z",
+                       f"DTEND:{_d(1)}T103000Z", "SUMMARY:Standup, moved"),
+                      (f"RECURRENCE-ID:{_d(2)}T090000Z", f"DTSTART:{_d(2)}T090000Z",
+                       f"DTEND:{_d(2)}T093000Z", "STATUS:CANCELLED")))
+    made = _make(svc, calendars=["cal-a"])
+    assert [(e["title"], e["start"]) for e in _view(svc, made)["events"]] == [
+        ("Standup", f"{_d(0, '-')}T09:00:00.000Z"),
+        ("Standup, moved", f"{_d(1, '-')}T10:00:00.000Z"),
+    ]
+
+    def boom(*_a, **_k):
+        raise ValueError("unexpandable")
+
+    monkeypatch.setattr(service_mod.recur, "expand_occurrences", boom)
+    # The calendar tab falls back to the master row; an agenda would put it on
+    # the wrong day, so a share shows nothing for the series instead.
+    assert _view(svc, made)["events"] == []
+
+
+def test_booked_events_show_the_link_title_not_the_visitor(svc):
+    c = svc._conn
+    _link(c, "link-one", "Intro call")
+    _link(c, "link-two", "Office hours")
+    _event(c, CAL_A, "booked", "Intro call — Visitor Vera",
+           dtstart=f"{_d(0)}T100000Z", dtend=f"{_d(0)}T103000Z")
+    _book(c, "link-one", "booked")
+    _event(c, CAL_A, "orphaned", "Old link — Visitor Vera",
+           dtstart=f"{_d(0)}T110000Z", dtend=f"{_d(0)}T113000Z")
+    _book(c, "deleted-link", "orphaned")
+    # No ledger row at all, but the summary is still a booking's.
+    _event(c, CAL_A, "unledgered", "Office hours — Visitor Vera",
+           dtstart=f"{_d(0)}T120000Z", dtend=f"{_d(0)}T123000Z")
+    _event(c, CAL_A, "plain", "Office party",
+           dtstart=f"{_d(0)}T130000Z", dtend=f"{_d(0)}T140000Z")
+    view = _view(svc, _make(svc, calendars=["cal-a"]))
+    assert [e["title"] for e in view["events"]] == \
+        ["Intro call", "", "Office hours", "Office party"]
+    assert "Vera" not in json.dumps(view)
+
+
+def test_a_booking_moved_into_a_shared_calendar_still_hides_the_visitor(svc):
+    c = svc._conn
+    _link(c, "link-one", "Intro call")
+    # Booked into CAL_B, then moved to CAL_A: the ledger still names CAL_B,
+    # because `move_event` never updates it.
+    _book(c, "link-one", "moved", calendar_href=CAL_B)
+    _event(c, CAL_A, "moved", "Consultation — Visitor Vera",
+           dtstart=f"{_d(0)}T100000Z", dtend=f"{_d(0)}T103000Z")
+    view = _view(svc, _make(svc, calendars=["cal-a"]))
+    assert [e["title"] for e in view["events"]] == ["Intro call"]
+    assert "Vera" not in json.dumps(view)
