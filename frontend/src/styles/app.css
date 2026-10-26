@@ -1555,6 +1555,164 @@ button.menu-toggle:active { scale: var(--press-scale); }
   .booking-card { padding: 18px; }
 }
 
+/* ---- the shared view (/share/<token>) ----------------------------------
+   A page for somebody who is not signed in, drawn in the app's own tokens so it
+   follows the theme their device is on. None of the `.display` rules are reused:
+   a display is fixed, takes no pointer and ignores the theme, and this page is
+   read on a phone by a person. Everything that shows text somebody else wrote
+   can break a long token (`overflow-wrap: anywhere`), because a pasted URL is
+   one word and would otherwise scroll the whole page sideways. */
+.share-wrap {
+  min-height: 100dvh; box-sizing: border-box; overflow-y: auto; background: var(--bg); color: var(--fg);
+  padding: 24px 16px calc(32px + env(safe-area-inset-bottom));
+  padding-left: max(16px, env(safe-area-inset-left));
+  padding-right: max(16px, env(safe-area-inset-right));
+}
+main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.share-card {
+  box-sizing: border-box; min-width: 0; border: 1px solid var(--edge); border-radius: var(--r-md);
+  background: var(--bg-elev); padding: 18px; display: flex; flex-direction: column; gap: 10px;
+}
+.share-wrap > .share-card { max-width: 520px; margin: 0 auto; height: fit-content; }
+.share-gone__title { margin: 0; font-family: var(--serif); font-size-adjust: none; font-size: calc(17px * var(--fs-scale)); }
+.share-muted { margin: 0; color: var(--fg-muted); font-size: calc(14px * var(--fs-scale)); }
+.share-label, .share-presence__eyebrow, .share-now__label, .share-then__label, .share-readonly,
+.share-live, .share-stale {
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale));
+  text-transform: var(--label-case); letter-spacing: calc(0.1em * var(--tracking)); color: var(--fg-faint);
+}
+.share-sr {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; white-space: nowrap;
+  clip: rect(0 0 0 0); clip-path: inset(50%);
+}
+
+.share-head { display: flex; flex-direction: column; gap: 4px; padding: 0 2px; }
+.share-head__title {
+  margin: 0; font-family: var(--serif); font-size-adjust: none; font-size: calc(28px * var(--fs-scale));
+  font-weight: 500; letter-spacing: -0.01em;
+}
+.share-head__day { font-family: var(--serif); font-size-adjust: none; font-size: calc(16px * var(--fs-scale)); color: var(--fg-muted); }
+.share-head__meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+.share-live { display: inline-flex; align-items: center; gap: 6px; }
+.share-live__dot {
+  width: 7px; height: 7px; border-radius: var(--r-dot); background: var(--ok);
+  animation: share-pulse 2.4s ease-in-out infinite;
+}
+.share-stale { color: var(--warn); }
+.share-readonly { border: 1px solid var(--rule-faint); border-radius: var(--r-pill); padding: 3px 7px; }
+@keyframes share-pulse { 50% { opacity: 0.35; } }
+
+/* The presence card. The clock is the one number on the page, in the serif's
+   display cut, and it holds still between polls because it counts down to a
+   fixed instant. A break, a pause and the gap between intervals are quieter than
+   a focus interval; the accent is for what is happening now. */
+.share-presence { gap: 12px; }
+.share-presence[data-state="focusing"] .share-presence__eyebrow { color: var(--accent); }
+.share-presence__clock {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500; font-variation-settings: var(--fvs-display);
+  font-variant-numeric: tabular-nums; white-space: nowrap; line-height: 1; letter-spacing: -0.02em;
+  font-size: clamp(calc(48px * var(--fs-scale)), 18vw, calc(112px * var(--fs-scale)));
+}
+.share-presence[data-state="break"] .share-presence__clock,
+.share-presence[data-state="paused"] .share-presence__clock,
+.share-presence[data-state="between"] .share-presence__clock { color: var(--fg-muted); }
+.share-presence__bar { height: 4px; border-radius: var(--r-pill); background: var(--rule-faint); overflow: hidden; }
+.share-presence__bar > span { display: block; height: 100%; background: var(--accent); transition: width 1s linear; }
+.share-presence[data-state="break"] .share-presence__bar > span,
+.share-presence[data-state="paused"] .share-presence__bar > span { background: var(--fg-muted); }
+.share-now { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.share-now__title {
+  margin: 0; font-family: var(--serif); font-size-adjust: none; font-weight: 500; letter-spacing: -0.01em;
+  font-size: clamp(calc(22px * var(--fs-scale)), 5vw, calc(36px * var(--fs-scale)));
+  line-height: 1.15; overflow-wrap: anywhere;
+}
+.share-then { margin: 0; font-size: calc(14px * var(--fs-scale)); color: var(--fg-muted); overflow-wrap: anywhere; }
+.share-then__text { overflow-wrap: anywhere; }
+
+.share-today { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--rule-faint); padding-top: 12px; }
+.share-today__head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.share-today__count { font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); }
+.share-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.share-row {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: baseline; gap: 10px;
+  padding: 7px 0 7px 8px; border-left: 2px solid transparent; border-bottom: 1px solid var(--rule-faint);
+}
+.share-row:last-child { border-bottom: 0; }
+.share-row.is-now { border-left-color: var(--accent); }
+.share-row__mark {
+  width: 13px; height: 13px; border: 1.5px solid var(--rule); border-radius: var(--r-dot);
+  align-self: center; box-sizing: border-box;
+}
+.share-row.is-done .share-row__mark { background: var(--ok); border-color: var(--ok); }
+.share-row.is-done .share-row__text { color: var(--fg-faint); text-decoration: line-through; }
+.share-row__text { overflow-wrap: anywhere; font-size: calc(15px * var(--fs-scale)); }
+.share-row__due { font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); white-space: nowrap; }
+.share-row.just-done { animation: share-flash 1.2s ease-out; }
+@keyframes share-flash { from { background: color-mix(in oklch, var(--ok) 22%, transparent); } }
+
+.share-agenda { gap: 12px; }
+.share-day { display: flex; flex-direction: column; gap: 4px; }
+.share-day__label { margin: 0; font-family: var(--serif); font-size-adjust: none; font-size: calc(16px * var(--fs-scale)); font-weight: 500; }
+.share-evs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.share-ev {
+  display: grid; grid-template-columns: minmax(6.5em, max-content) auto minmax(0, 1fr) auto;
+  column-gap: 8px; align-items: baseline; padding: 4px 0;
+}
+.share-ev__time { font-family: var(--mono); font-size-adjust: none; font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted); }
+.share-ev__dot { width: 8px; height: 8px; border-radius: var(--r-dot); background: var(--fg-faint); align-self: center; }
+.share-ev__title { overflow-wrap: anywhere; font-size: calc(15px * var(--fs-scale)); }
+.share-ev.is-past { opacity: 0.55; }
+.share-ev__now {
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale));
+  text-transform: var(--label-case); letter-spacing: calc(0.1em * var(--tracking)); color: var(--accent);
+}
+.share-ev.is-now .share-ev__time { color: var(--accent); }
+.share-more { margin: 0; font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); }
+
+.share-list { gap: 8px; }
+.share-list__sum {
+  display: flex; align-items: center; gap: 10px; cursor: pointer; list-style: none; min-height: 28px;
+}
+.share-list__sum::-webkit-details-marker { display: none; }
+.share-list__dot { flex: none; width: 9px; height: 9px; border-radius: var(--r-dot); background: var(--fg-faint); }
+.share-list__name {
+  flex: 1; min-width: 0; overflow-wrap: anywhere; font-family: var(--serif); font-size-adjust: none;
+  font-size: calc(17px * var(--fs-scale)); font-weight: 500;
+}
+.share-list__count { flex: none; font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); }
+.share-tasks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.share-task {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  padding: 6px 0; border-bottom: 1px solid var(--rule-faint);
+}
+.share-task:last-child { border-bottom: 0; }
+.share-task[data-depth="1"] { padding-left: 16px; }
+.share-task[data-depth="2"] { padding-left: 32px; }
+.share-task[data-depth="3"] { padding-left: 48px; }
+.share-task__text { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: calc(15px * var(--fs-scale)); }
+.share-task__due { flex: none; font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint); white-space: nowrap; }
+.share-task__due.is-late { color: var(--warn); }
+
+.share-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  padding: 0 2px; font-size: calc(12px * var(--fs-scale)); color: var(--fg-faint);
+}
+/* The owner's "see what they see" in Settings: the same body, inset so it reads
+   as a picture of the page rather than part of the form around it. */
+.share-preview {
+  display: flex; flex-direction: column; gap: 14px; margin-top: 8px; padding: 14px;
+  border: 1px solid var(--edge); border-radius: var(--r-md); background: var(--bg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .share-live__dot { animation: none; }
+  .share-presence__bar > span { transition: none; }
+  .share-row.just-done { animation: none; }
+}
+@media (max-width: 480px) {
+  .share-wrap { padding-top: 16px; }
+  .share-card { padding: 14px; }
+}
+
 /* ---- Home dashboard ---------------------------------------------------
    A 12-column canvas of absolutely-positioned modules. Percentages keep the
    columns proportional at any width; the row height and gap are mirrored from

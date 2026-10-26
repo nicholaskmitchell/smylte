@@ -526,6 +526,17 @@ describe('a foreign-authored title cannot scroll the pane sideways', () => {
       expect(ruleFor(sel), `${sel} has no wrap guard`).toMatch(/overflow-wrap:\s*(anywhere|break-word)/)
     }
   })
+
+  it('including everything the share page prints of somebody else\'s day', () => {
+    // The share page shows titles another person typed, to a stranger on a
+    // phone, and draws them in a column that must not scroll sideways. These
+    // five are every place a title lands; `share.browser.test.tsx` measures a
+    // 200-character unbroken one at 320px, and this pins the declaration.
+    for (const sel of ['.share-now__title', '.share-row__text', '.share-ev__title',
+      '.share-task__text', '.share-list__name']) {
+      expect(ruleFor(sel), `${sel} has no wrap guard`).toMatch(/overflow-wrap:\s*(anywhere|break-word)/)
+    }
+  })
 })
 
 describe('the Home stack keeps its home-indicator inset', () => {
