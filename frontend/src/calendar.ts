@@ -10,6 +10,11 @@ import { addDays, dayKey, hasZone, instantFromLocal, pad, parseDate, toLocalInpu
 /** A calendar-cell entry: `cont` marks days after the first of a multi-day span. */
 export type DayEv = CalEvent & { cont?: boolean }
 
+/** The fields bucketing reads. Narrower than `CalEvent` so a surface whose events
+ * come in another shape (the share page's) reuses this file's tested day math
+ * rather than a second copy of it. */
+export type BucketEvent = Pick<CalEvent, 'start' | 'end' | 'end_is_date' | 'start_is_date' | 'all_day'>
+
 export const shiftYmd = (day: string, n: number) => ymd(addDays(new Date(`${day}T00:00`), n))
 
 /** Whole calendar days from day `a` to day `b`.
@@ -130,7 +135,7 @@ export function endFromDuration(start: string, duration: string | null | undefin
  * sitting exactly on local midnight, which belongs to the previous day.
  * `lastDayOf` backs both off by a day; anything writing a new end has to put it
  * back the same way, or the event lands a day short of where the user put it. */
-export function endIsExclusive(e: Pick<CalEvent, 'end' | 'end_is_date'>): boolean {
+export function endIsExclusive(e: Pick<BucketEvent, 'end' | 'end_is_date'>): boolean {
   if (!e.end) return false
   if (e.end_is_date) return true
   const end = parseDate(e.end)
@@ -141,7 +146,7 @@ export function endIsExclusive(e: Pick<CalEvent, 'end' | 'end_is_date'>): boolea
 // timed event ending exactly at midnight shouldn't spill into the next day.
 // Days come from dayKey/parseDate so events written with a UTC offset (e.g. by
 // another CalDAV client) land on the viewer's local day.
-export function lastDayOf(e: CalEvent): string {
+export function lastDayOf(e: BucketEvent): string {
   const startDay = dayKey(e.start!)
   if (!e.end) return startDay
   const endDay = ymd(parseDate(e.end))
@@ -164,8 +169,9 @@ export function monthGrid(cursor: Date): Date[] {
  * from years ago to years ahead, and stepping a day at a time to reach a far
  * DTEND (trivially written by another CalDAV client) would freeze the tab
  * building entries nothing renders. */
-export function bucketByDay(events: CalEvent[], days: Date[]): Map<string, DayEv[]> {
-  const m = new Map<string, DayEv[]>()
+export function bucketByDay<E extends BucketEvent>(events: E[], days: Date[],
+): Map<string, (E & { cont?: boolean })[]> {
+  const m = new Map<string, (E & { cont?: boolean })[]>()
   if (!days.length) return m
   const first = ymd(days[0])
   const last = ymd(days[days.length - 1])
@@ -201,7 +207,7 @@ export function bucketByDay(events: CalEvent[], days: Date[]): Map<string, DayEv
   return m
 }
 
-const startOrder = (a: DayEv, b: DayEv) => {
+const startOrder = (a: BucketEvent, b: BucketEvent) => {
   const aDay = !!(a.all_day || a.start_is_date)
   const bDay = !!(b.all_day || b.start_is_date)
   if (aDay !== bDay) return aDay ? -1 : 1

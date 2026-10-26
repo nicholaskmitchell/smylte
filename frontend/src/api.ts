@@ -475,6 +475,109 @@ export interface DisplayNowItem {
   estimate_minutes: number | null
 }
 
+/** A read-only link for a person who has no account here. Not a Display: an
+ * empty allowlist means NOTHING, where a display's empty allowlist means
+ * everything, so a new share shows nothing until the owner picks something.
+ *
+ * `token` is the whole credential, returned to the owner for the same reason a
+ * display's is. `id` is the separate handle every owner route is keyed by, so
+ * the secret never appears in a request the owner makes about it. */
+export interface Share {
+  id: string
+  name: string
+  token: string
+  /** The page the other person opens, absolute, when the deployment has said
+   *  what its origin is (SMYLTE_PUBLIC_URL); null otherwise. */
+  url: string | null
+  /** Allowlists of collection ids. EMPTY MEANS NOTHING (the opposite of Display). */
+  lists: string[]
+  calendars: string[]
+  show_focus: boolean
+  /** How many days the agenda reaches, today included: 1, 7, 14 or 28. */
+  horizon_days: number
+  /** Whether the link works right now. False while the password has changed
+   *  since it was last switched on, which `switched_off_by_password` names. */
+  enabled: boolean
+  /** Switched on, but by an earlier password: it stays dead until the owner
+   *  turns it on again. Distinct from `enabled: false` so the owner is told why. */
+  switched_off_by_password: boolean
+  last_seen_at: string | null      // null = never opened
+  created_at: string
+  updated_at: string
+}
+
+export interface ShareInput {
+  name?: string
+  lists?: string[]
+  calendars?: string[]
+  show_focus?: boolean
+  horizon_days?: number
+  enabled?: boolean
+}
+
+export type ShareFocusState = 'focusing' | 'break' | 'paused' | 'between' | 'idle'
+
+/** What a share's viewer is sent. Every object here is built field by field on
+ * the server, and none carries an id, href or slug: lists and calendars are
+ * referred to by index. A `private` item has an empty `title` already, so the
+ * viewer shows "Busy" for it rather than guessing from an empty string whether
+ * the owner left it untitled. See backend smylted/share.py. */
+export interface ShareRow {
+  key: string
+  title: string
+  done: boolean
+  list: number
+  due: string | null
+  all_day: boolean
+  private: boolean
+}
+
+export interface ShareFocus {
+  state: ShareFocusState
+  phase: FocusPhase | null
+  phase_length_s: number | null
+  ends_at: string | null           // set only while running
+  remaining_s: number | null       // set only while paused
+  today: { rows: ShareRow[]; now: string | null; next: string[] }
+}
+
+export interface ShareTask {
+  title: string
+  due: string | null
+  all_day: boolean
+  depth: number
+  private: boolean
+}
+
+export interface ShareList { name: string; color: string | null; tasks: ShareTask[]; more: number }
+export interface ShareCalendar { name: string; color: string | null }
+
+export interface ShareEvent {
+  title: string
+  start: string
+  end: string | null               // an all-day event's end is EXCLUSIVE, as on the wire
+  all_day: boolean
+  calendar: number
+  private: boolean
+}
+
+export interface ShareView {
+  v: number
+  generated_at: string
+  poll_seconds: number
+  day: string                      // the owner's today
+  /** How many days of agenda the owner chose to show. */
+  days: number
+  focus: ShareFocus | null
+  lists: ShareList[]
+  calendars: ShareCalendar[]
+  events: ShareEvent[]
+  events_more: number
+}
+
+/** A conditional GET's two outcomes, so a 304 is not an error and not a body. */
+export type Polled<T> = { status: 'fresh'; body: T; etag: string | null } | { status: 'unchanged' }
+
 export interface BookingLinkInput {
   title: string
   description?: string | null
@@ -1276,6 +1379,24 @@ function detailText(detail: unknown): string {
   return ''
 }
 
+/** Throw the error a non-ok response stands for. Shared by `j` and the
+ * conditional public fetch, so both read a refusal the same way. */
+async function failure(res: Response): Promise<never> {
+  let msg = res.statusText
+  try {
+    const data = await res.json()
+    msg = detailText(data?.detail) || msg
+  } catch {
+    /* ignore */
+  }
+  // The server's own words carry through a 401 too. Throwing a fixed
+  // 'unauthenticated' before reading the body meant the login form rendered
+  // that internal token at the user instead of the endpoint's "invalid
+  // credentials".
+  if (res.status === 401) throw new AuthError(msg)
+  throw new HttpError(res.status, msg)
+}
+
 async function j<T>(method: string, path: string, body?: unknown,
   signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, {
@@ -1285,23 +1406,30 @@ async function j<T>(method: string, path: string, body?: unknown,
     credentials: 'same-origin',
     signal,
   })
-  if (!res.ok) {
-    let msg = res.statusText
-    try {
-      const data = await res.json()
-      msg = detailText(data?.detail) || msg
-    } catch {
-      /* ignore */
-    }
-    // The server's own words carry through a 401 too. Throwing a fixed
-    // 'unauthenticated' before reading the body meant the login form rendered
-    // that internal token at the user instead of the endpoint's "invalid
-    // credentials".
-    if (res.status === 401) throw new AuthError(msg)
-    throw new HttpError(res.status, msg)
-  }
+  if (!res.ok) return failure(res)
   if (res.status === 204) return null as T
   return res.json() as Promise<T>
+}
+
+/** A conditional GET for a page whose URL is its credential.
+ *
+ * Nothing about the visitor goes with it: no cookie (`omit`, where `j` sends the
+ * session), no referrer, and no HTTP cache, since the token sits in the path and
+ * a stored copy of the answer would outlive the link. A hand-set If-None-Match
+ * bypasses the cache anyway, so the server's 304 still reaches script. */
+async function jPublicIfChanged<T>(path: string, etag: string | null,
+  signal?: AbortSignal): Promise<Polled<T>> {
+  const res = await fetch(path, {
+    method: 'GET',
+    credentials: 'omit',
+    cache: 'no-store',
+    referrerPolicy: 'no-referrer',
+    headers: etag ? { 'If-None-Match': etag } : undefined,
+    signal,
+  })
+  if (res.status === 304) return { status: 'unchanged' }
+  if (!res.ok) return failure(res)
+  return { status: 'fresh', body: await res.json() as T, etag: res.headers.get('ETag') }
 }
 
 export const api = {
@@ -1502,6 +1630,20 @@ export const api = {
   deleteDisplay: (token: string) =>
     j<null>('DELETE', `/api/displays/${encodeURIComponent(token)}`),
 
+  // shares (owner side; keyed by id, never by the token)
+  shares: () => j<Share[]>('GET', '/api/shares'),
+  createShare: (body: ShareInput & { name: string }) => j<Share>('POST', '/api/shares', body),
+  patchShare: (id: string, body: ShareInput) =>
+    j<Share>('PATCH', `/api/shares/${encodeURIComponent(id)}`, body),
+  /** Re-key a share whose URL got out, keeping the share itself. */
+  rotateShareToken: (id: string) =>
+    j<Share>('POST', `/api/shares/${encodeURIComponent(id)}/rotate`),
+  deleteShare: (id: string) =>
+    j<null>('DELETE', `/api/shares/${encodeURIComponent(id)}`),
+  /** Exactly what the viewer is sent, built the same way, even while the link is off. */
+  sharePreview: (id: string) =>
+    j<ShareView>('GET', `/api/shares/${encodeURIComponent(id)}/preview`),
+
   // client scheduling (public booking page — no session needed)
   publicBookingInfo: (token: string) =>
     j<PublicBookingInfo>('GET', `/api/public/booking/${encodeURIComponent(token)}`),
@@ -1527,6 +1669,12 @@ export const api = {
   publicDisplayFrame: (token: string, signal?: AbortSignal) =>
     j<DisplayFrame>('GET', `/api/public/display/${encodeURIComponent(token)}`,
       undefined, signal),
+
+  // shares (the viewer's page — token in the URL, no session)
+  /** The page for someone the owner shared with. `etag` is the last one seen, so
+   *  an unchanged page costs a 304 and no body. */
+  publicShareView: (token: string, etag: string | null, signal?: AbortSignal) =>
+    jPublicIfChanged<ShareView>(`/api/public/share/${encodeURIComponent(token)}`, etag, signal),
 
   // settings (account-synced UI preferences)
   getSettings: () => j<Settings>('GET', '/api/settings'),
