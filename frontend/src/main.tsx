@@ -12,6 +12,7 @@ import './styles/display.css'
 import { App } from './App'
 import { BookingPage } from './components/BookingPage'
 import { DisplayView } from './components/DisplayView'
+import { SharePage } from './components/SharePage'
 import { startCaptionSync } from './desktop'
 
 // /book/<token> is the public client-booking page: no session, no login — the
@@ -25,6 +26,11 @@ const booking = location.pathname.match(/^\/book\/([A-Za-z0-9_-]+)\/?$/)
 // login form. The token pattern is `token_urlsafe`'s alphabet, as above.
 const display = location.pathname.match(/^\/display\/([A-Za-z0-9_-]+)\/?$/)
 
+// /share/<token> is a read-only page for a person who has no account here. It
+// branches for the same reason the two above do — its reader has no session and
+// never will — and takes the same `token_urlsafe` alphabet.
+const share = location.pathname.match(/^\/share\/([A-Za-z0-9_-]+)\/?$/)
+
 // Keep the Windows client's caption bar in step with the theme. A no-op in a
 // browser, where /desktop/appearance does not exist — and started here rather
 // than inside App so the booking and display routes get it too: a wall panel
@@ -35,6 +41,7 @@ createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     {booking ? <BookingPage token={booking[1]} />
       : display ? <DisplayView token={display[1]} />
-        : <App />}
+        : share ? <SharePage token={share[1]} />
+          : <App />}
   </React.StrictMode>,
 )
