@@ -9,7 +9,7 @@ for anyone changing it.
 caches them, and a resync can rebuild the cache from scratch. The exception is
 the **sidecar**: app-only state that has nowhere to live on the wire, such as
 manual order, pins, parking, the original due date, the day plan, habits,
-displays and day notes. Backups must include it (`docs/DEPLOY.md`,
+displays, shares and day notes. Backups must include it (`docs/DEPLOY.md`,
 `docs/phase0-findings.md`).
 
 **State that other clients can't represent goes in the sidecar, not in an `X-`
@@ -140,8 +140,8 @@ Home shows the last few weeks so the number has context.
   phone, Thunderbird) moves the cursor, and the focus view follows.
 - **A clock that ran out while nobody was watching waits.** "Roll straight on"
   applies only to a live screen. A session found past its end asks.
-- **It never opens a day.** Like displays and the connector, it points you to
-  Today instead.
+- **It never opens a day.** Like displays, shares and the connector, it points
+  you to Today instead.
 - **It records one number:** worked time per row, shown beside the estimate and
   never as a ratio, streak or colour. The connector exposes it as
   `worked_minutes` beside `planned_minutes`.
@@ -270,6 +270,155 @@ itself. It is 32 bytes, reaches one read-only call, and *New URL* re-keys a
 display in place, keeping its configuration so there's no reason to leave a
 leaked token in use. Settings → Developer previews every mode at real panel
 sizes without creating tokens.
+
+## Shares
+
+**A link for a person, not an account.** A display is a screen you own; a share
+is for somebody else to read. They have no login, no settings and nothing to
+install. They open a URL and see the lists and calendars you picked, and, if you
+turn it on, whether you are focusing. It is read-only and has no way to ask for
+more.
+
+**The URL is the credential**, with a separate id. The token is 32 random bytes
+in the path, and it is the only thing that reaches the public call. Each share
+also has an id, and every owner route, every live event and the Settings editor
+use that, so the token never appears in an owner URL or event. *New link*
+re-keys a share in place and keeps what it shows. The name you give a share is
+your label for the person; it is never sent to them, so the page has no heading
+of its own beyond "Shared with you".
+
+**Empty means nothing**, which is the opposite of a display, where an empty
+selection means everything. A display is a screen in your own home, so showing
+all of it is a fair default. A share is read by someone else, so the only safe
+failure is to show them nothing. That is why shares are their own table rather
+than a display mode: a mode would inherit the display's empty-means-everything
+rule and its habit of keeping a name that does not exist yet. A share keeps only
+the ids of collections that exist, of the right kind, when you save, so a name
+that comes to exist later cannot start sharing something you never picked. A new
+share has no lists, no calendars and Focus off.
+
+**Titles and times only.** The viewer gets, for each shared list, its open
+tasks with title, due date or time and nesting (parked tasks are left out, at
+most 200 per list). For each shared calendar it gets events with title, start
+and end over the horizon (at most 500). It also gets the names and colours of
+those lists and calendars. Every object is built field by field from a short
+list of named values, and no response the app builds for you passes through.
+Estimates and worked time are effort data, not titles and times, so they are
+left out with notes, descriptions, locations, tags, priority, status, alarms,
+habits, day notes, the reflection and any id, href or UID. Unshared, archived and
+deleted collections do not exist as far as the viewer can tell, including their
+names.
+
+**Private items show as Busy.** An item that another app marked with a CLASS
+other than PUBLIC (`PRIVATE`, `CONFIDENTIAL`, or anything else) is sent with its
+time and no title, and the page draws "Busy". The check reads the whole resource
+and is coarse on purpose: one non-public CLASS on a recurring event's master or
+on any one override marks every occurrence, and the same holds for tasks and for
+the rows of today's plan. The alternative is working out which component each
+occurrence came from, which puts a second reading of the recurrence rules in the
+one place where a mistake shows somebody your private appointment. An empty
+value or an unknown one counts as private; only an explicit PUBLIC is shown.
+Smylte has no column for this and does not write it. The marks come from other
+apps.
+
+**Bookings show the link's title.** A booking's event summary is "<link title> —
+<visitor>", so a share sends the title of the booking link and never the
+visitor's name. The ledger is asked by event UID alone, because moving a booked
+event to another calendar does not update the ledger's calendar. A summary that
+still starts with a link title and the dash, with no ledger row behind it, is
+cut back to the title as well. If the link has been deleted, the event shows as
+Busy.
+
+**Presence, not surveillance.** With Focus on, the page shows one card: the
+state (focusing, on a break, paused, interval over, or not focusing), the time
+left, and what you are on and what comes next. A timer left paused for over 30
+minutes, or finished and not continued for over 15, reads as not focusing,
+because "focusing" shown to a stranger for hours is a false statement. The
+current row (*now*) and up to two *next* rows come from your queue, but only
+from rows of **shared task lists**. A habit, a note, a task from an unshared
+list or a parked task contributes nothing except its place in the order. If the
+cursor is on one of those, the viewer sees the state and the clock and no title.
+*Now* is named only when the cursor row is itself open and shared, and the page
+paints it rather than electing its own. Below the card, today's planned rows
+from the shared lists are shown with ticks and a count, done ones included; the
+lists themselves stay open-only. A share does not tell the viewer whether the day
+was planned at all: an unplanned day and a day with nothing shared on it look the
+same.
+
+**It never opens a day.** A share reads today's plan the way a display does, as
+a pure read. An unopened day shows no rows rather than a preview of what opening
+it would derive, and nothing a viewer does writes to your plan. The one write is
+the share's own *last opened* stamp.
+
+**Last opened is one timestamp.** It is written at most once a minute, and no
+address or browser is recorded. Settings shows "Open now" when it is under two
+minutes old and refreshes the list every 30 seconds. "See what they see" shows
+the same payload and writes nothing, since the stamp records the person and not
+you. Re-keying a share clears it, because the old stamp belongs to a link that
+no longer works.
+
+**How live it is.** The page polls every 15 seconds while your focus session is
+running, paused or between intervals, and every 30 when it is idle, including
+when Focus is off. A running phase has
+a fixed end time, so the viewer counts down on its own device and asks again just
+after the phase ends instead of waiting for the next beat. Its own clock is not
+trusted: the page measures how far off the server's clock is and corrects for it,
+so a tablet that is an hour out still shows the right time left. A hidden tab
+does not poll and asks at once when it comes back. Every response answers 304 to
+a matching `If-None-Match`, and the tag leaves out the timestamp, so a quiet
+share transfers almost nothing. There is no public SSE stream. It would be an
+open connection per stranger on a route with no session, and polling bounds the
+cost with a per-address limiter.
+
+**Whose clock.** The viewer's. Times are drawn in the viewer's zone and 12- or
+24-hour convention, and the agenda's days are the viewer's local days, as on the
+booking page for anyone who is not the owner. Floating times have no zone of
+their own, so the server resolves them in your home timezone before sending; the
+zone name itself is never sent. The server widens its window by a day on each
+side so that a viewer on the other side of the date line has events for every day
+they draw.
+
+**How far ahead** is a per-share setting: today, 1, 2 or 4 weeks. Only those four
+values are accepted. The server expands recurrences on every poll, so a free
+number would let a PATCH ask a public route to expand a year. Past a week, days
+after tomorrow with nothing on them are not drawn.
+
+**Revocation, and what the page does.** Switching a share off, making a new link
+and deleting it all take effect on the viewer's next request, because the row is
+read on every request and there is no cache. An unknown, switched-off, rotated,
+deleted or malformed link gets the same 404, so a revoked link teaches its holder
+nothing. The page wipes what it was holding from memory and from the screen,
+says "This page isn't available right now", and stops polling. Only the *Check
+again* button asks again, and a switch back to the tab does not. A rate limit, a
+server error or a dropped connection says nothing about the link, so those keep
+what is on screen and retry with backoff.
+
+**A password change switches every share off.** A share remembers the credential
+version it was switched on under. When the password, the user name or the session
+secret changes, none of them matches, and each link answers 404 until you turn it
+on again in Settings, where it says why it is off. Switching on is you vouching
+for it under the new credentials. Making a new link does not do that, so a link
+that a password change switched off stays off. Displays are not covered: they
+keep working across a password change, so check Settings → Displays as well
+(`docs/DEPLOY.md`). With sign-in disabled there is no credential to change, and
+shares behave as if it never does.
+
+**Deleted and archived collections.** Deleting a collection removes it from every
+share in the same transaction, so a collection recreated at that href is not
+shared again without you picking it. That narrows the case to one discovery
+interval; it does not close it, because a collection deleted and recreated
+between two discovery runs is never seen as deleted. An archived calendar is not
+shown, and a slug two live collections share is shown for neither.
+
+**No connector tools.** Nothing in the connector reads or writes shares, so a
+prompt-injected connector cannot mint a bearer URL to your account.
+
+**Nothing leaks around it.** Every public response, the page shell included,
+carries no-store, noindex, no-referrer, nosniff and `X-Frame-Options: DENY`.
+Titles are drawn as inert text with its own direction. The access log keeps only
+the first four characters of a share, display or booking token. A chat app that
+previews links by running JavaScript can load a share, so re-key one that was
+sent where previews are on.
 
 ## Appearance
 

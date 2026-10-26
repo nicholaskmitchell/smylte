@@ -416,6 +416,57 @@ The renderer needs Pillow and the fonts in `backend/smylted/display/fonts/`.
 Rebuild them with `python -m dev.build_display_fonts` (needs `fonttools` and
 `brotli`) if the frontend's fonts change. Displays need no outbound network.
 
+### Shares
+
+Make a read-only link for another person in **Settings → Shares**: pick task
+lists and calendars, and optionally your focus session. Each share has a token
+and these URLs:
+
+| URL | For |
+| --- | --- |
+| `/share/<token>` | The page the person opens, in any browser |
+| `/api/public/share/<token>` | The JSON the page polls |
+
+- **Set `SMYLTE_PUBLIC_URL`** so Settings copies absolute links. Without it,
+  Settings falls back to the address you are using, which is wrong for a link
+  you send from a local one.
+- **Set a home timezone** in Settings → General. Floating times (no zone) are
+  read in it on the server. Without one they use the server's zone. Everything
+  else is drawn in the viewer's own zone and clock convention.
+- **Cloudflare Access:** the person has no account, so an Access application
+  in front of the hostname must let these paths through without a login, or they
+  see "Couldn’t load this page just now":
+  - `/share/*` and `/api/public/share/*`, the page and its data;
+  - `/assets/*`, `/fonts/*`, `/favicon.svg` and `/apple-touch-icon.png`, which
+    the page loads.
+
+  `/book/*` needs the same bypass for booking links. Everything else stays
+  behind Access. These paths are protected by their tokens and rate limits, not
+  by a login.
+- **Rate limits** are per client address: 300 requests per 5 minutes, then 429
+  for 5 minutes, and 30 unknown links per hour, then 429 for an hour. A page
+  stops polling on its first 404, so a real viewer comes nowhere near the second.
+  This needs `X-Real-IP` set as in step 3, or everyone shares one address.
+- **Every response**, the page shell and every error included, is `no-store`,
+  `noindex`, `no-referrer`, `nosniff` and `X-Frame-Options: DENY`. The page
+  polls every 15 seconds while a focus session is live and every 30 otherwise,
+  and a hidden tab doesn't poll.
+- **Off, a new link and Delete** end a link on the viewer’s next request. They
+  all answer the same 404, which the page shows as "This page isn’t available
+  right now".
+- **A password change switches every share off.** Turn each back on in Settings
+  → Shares once you have checked it (see
+  [If the password leaks](#if-the-password-leaks--signing-out-everywhere)).
+- **Last opened** is one timestamp per share, written at most once a minute. No
+  address or browser is recorded.
+- **The access log keeps the first four characters** of share, display and
+  booking tokens, enough to match a line to a link in Settings. Anything that
+  logs the full request elsewhere, such as the proxy or Cloudflare, still sees
+  whole tokens.
+- A chat app that previews links by running JavaScript can load a share. Make a
+  **New link** after sending one where previews are on.
+- The connector has no tools for shares.
+
 ## Content-Security-Policy
 
 The app sends one on every response (`backend/smylted/csp.py`).
@@ -455,8 +506,16 @@ default until that's set. Logging out ends only the current session.
    `python -c 'import secrets;print(secrets.token_hex(32))'` and restart. Every
    session ends, including yours.
 
-Either one also ends every MCP grant. Reconnect MCP clients afterwards. An
-ordinary restart signs nobody out.
+3. **Check what else holds a token.** Shares switch themselves off, but
+   displays don't: they keep working under the new password, so open
+   **Settings → Displays** and delete or re-key any you don't recognise. Then
+   open **Settings → Shares**, delete any link you didn't make, and turn back
+   on the ones you did.
+
+Either of the first two also ends every MCP grant. Reconnect MCP clients
+afterwards. It switches every share link off as well, and Settings → Shares says
+so beside each one. Displays are not covered. An ordinary restart signs nobody
+out.
 
 ## Rollback
 
