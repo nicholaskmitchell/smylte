@@ -7,8 +7,8 @@ collections with it.
 
 Radicale is the source of truth. The app's SQLite database is mostly a cache,
 except for an app-only **sidecar**: manual order, pins, parking, the day plan,
-habits, displays and day notes. These have no CalDAV equivalent, so a resync
-can't rebuild them and backups must include them (see `docs/DEPLOY.md`).
+habits, displays, shares and day notes. These have no CalDAV equivalent, so a
+resync can't rebuild them and backups must include them (see `docs/DEPLOY.md`).
 
 The backend (`smylted`) is FastAPI and owns the CalDAV, sync and write path.
 The frontend is a React + Vite single-page app that the backend serves.
@@ -50,6 +50,13 @@ The reasoning behind most of the design is in [`docs/DESIGN.md`](docs/DESIGN.md)
   next. They work in a browser or on e-ink panels driven by a microcontroller,
   which fetch a packed 1-bit framebuffer from `/api/public/display/<token>.bin`.
   The display URL works as a password.
+- **Shares.** A private, read-only link for someone else at `/share/<token>`:
+  titles and times from the task lists and calendars you pick, how far ahead
+  they see (today to four weeks), and, if you turn it on, whether you are
+  focusing. Items marked private in other apps show as Busy. Notes, habits and
+  everything else stay out. The viewer needs no account and sees times in their own
+  zone. You can switch a link off, replace it or delete it, and changing your
+  password switches every share off.
 - **Appearance.** Three built-in designs (Smylte, Classic, Workspace), two
   layouts (Sidebar, Classic), and an editor for colours, radius, type and
   density. Custom themes can be saved, exported and imported.
@@ -83,6 +90,8 @@ backend/
     mail/         email suggestions: IMAP, parsing, sender auth, LLM call,
                   pipeline, review, secret store
     display/      display frames (frame.py) and the rasterizer (render.py)
+    share.py      what a share may say: bounded titles, colours, times, private marks
+    logredact.py  keeps capability tokens out of the access log
     due.py, scheduling.py, auth.py, access.py, config.py, csp.py, limits.py
   tests/          pytest
   dev/            probes and build scripts
