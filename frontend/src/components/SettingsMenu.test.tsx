@@ -120,6 +120,19 @@ describe('<SettingsMenu> on a desktop', () => {
     expect(within(panel()).getByRole('button', { name: /log out/i })).toBeInTheDocument()
   })
 
+  it('has a Shares section, and opens its panel', async () => {
+    // Not in SECTIONS above: that list is the ones whose panels need no network,
+    // and this one lists the account's shares on mount.
+    m.shares.mockResolvedValue([])
+    m.lists.mockResolvedValue([])
+    show()
+    await userEvent.click(nav('Shares'))
+    expect(nav('Shares')).toHaveAttribute('aria-selected', 'true')
+    expect(panel()).toHaveAttribute('aria-labelledby', 'set-tab-shares')
+    expect(await within(panel()).findByText('No shares yet.')).toBeInTheDocument()
+    expect(within(panel()).getByText(/read-only link for someone else/i)).toBeInTheDocument()
+  })
+
   it('closes on Escape, since there is no drill-down to unwind', async () => {
     const { onClose } = show()
     await userEvent.keyboard('{Escape}')

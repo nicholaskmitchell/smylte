@@ -1156,6 +1156,13 @@ export function App() {
         setMailRev((r) => r + 1)
         return
       }
+      if (type === 'share_created' || type === 'share_updated' || type === 'share_deleted') {
+        // A share is not task or calendar data: it is a row in Settings → Shares
+        // and nothing else on screen reads it, so a refetch of every list, task
+        // and calendar window would be a cost with no reader. Its section keeps
+        // itself current, and merges `last_seen_at` on its own timer.
+        return
+      }
       clearTimeout(timer)
       timer = setTimeout(() => setRev((r) => r + 1), 250)
     }, onExpire)

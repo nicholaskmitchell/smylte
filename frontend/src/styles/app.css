@@ -1703,6 +1703,11 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
   display: flex; flex-direction: column; gap: 14px; margin-top: 8px; padding: 14px;
   border: 1px solid var(--edge); border-radius: var(--r-md); background: var(--bg);
 }
+/* Settings → Shares. Two states the shared `.disp-*` rules have no look for: a
+   link that currently shows nothing, and a calendar that is selected but
+   archived (dashed, so it reads as "on, but not doing anything"). */
+.disp-meta .chip.warn { color: var(--warn); border-color: var(--warn); }
+.disp-picks .chip.is-archived { border-style: dashed; }
 @media (prefers-reduced-motion: reduce) {
   .share-live__dot { animation: none; }
   .share-presence__bar > span { transition: none; }

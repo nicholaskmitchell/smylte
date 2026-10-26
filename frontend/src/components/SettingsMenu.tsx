@@ -26,6 +26,7 @@ import { layoutKey, type Layout } from '../layout'
 import { ArchivedCalendarsSection } from './ArchivedCalendarsSection'
 import { ConnectionsSection } from './ConnectionsSection'
 import { DisplaysSection } from './DisplaysSection'
+import { SharesSection } from './SharesSection'
 import { DeveloperSection } from './DeveloperSection'
 import { DesktopSection } from './DesktopSection'
 import { TabsSection } from './TabsSection'
@@ -51,6 +52,7 @@ const SECTIONS = [
   { id: 'notifications', label: 'settings.section.notifications' },
   { id: 'mail', label: 'settings.section.mail' },
   { id: 'displays', label: 'settings.section.displays' },
+  { id: 'shares', label: 'settings.section.shares' },
   { id: 'developer', label: 'settings.section.developer' },
   { id: 'account', label: 'settings.section.account' },
   { id: 'about', label: 'settings.section.about' },
@@ -504,6 +506,13 @@ export function SettingsMenu({
           <>
             <div className="hintline">{tr('disp.intro')}</div>
             <DisplaysSection onExpire={onExpire} archived={archivedCals} />
+          </>
+        )}
+
+        {section === 'shares' && (
+          <>
+            <div className="hintline">{tr('shares.intro')}</div>
+            <SharesSection onExpire={onExpire} archived={archivedCals} />
           </>
         )}
 
