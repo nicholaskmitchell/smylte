@@ -283,6 +283,29 @@ def test_habits_come_first_as_today_paints_them(svc, clock):
     assert svc.focus_clock(today, "sync")["entry_id"] == "n1"
 
 
+def test_focus_queue_rows_is_habits_first_and_skips_passed():
+    """The queue rule on its own, over rows built by hand: open habits ahead of
+    everything else, each group in the order it came in, and neither a done row
+    nor a set-aside one in it. The cursor then stays on the stored row while it
+    is queued and falls to the head when it is not."""
+    rows = [
+        {"entry_id": "t1", "kind": "task", "done": False},
+        {"entry_id": "h1", "kind": "habit", "done": False},
+        {"entry_id": "n1", "kind": "note", "done": False},
+        {"entry_id": "h2", "kind": "habit", "done": True},
+        {"entry_id": "h3", "kind": "habit", "done": False},
+        {"entry_id": "t2", "kind": "task", "done": False},
+    ]
+    queue = service_mod.SmylteService._focus_queue_rows(rows, ["t2"])
+    ids = [r["entry_id"] for r in queue]
+    assert ids == ["h1", "h3", "t1", "n1"]
+    assert queue[0] is rows[1]
+    assert service_mod.SmylteService._cursor_of(ids, "t1") == "t1"
+    assert service_mod.SmylteService._cursor_of(ids, "t2") == "h1"
+    assert service_mod.SmylteService._cursor_of(ids, None) == "h1"
+    assert service_mod.SmylteService._cursor_of([], "t1") is None
+
+
 def test_end_settles_and_a_later_start_is_a_fresh_session(svc, clock):
     today = _open_with_notes(svc, "Memo")
     first = svc.start_focus(today)
