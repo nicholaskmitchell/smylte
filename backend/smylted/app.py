@@ -58,6 +58,8 @@ from .limits import BodySizeLimitMiddleware
 from .mail.redact import redact_exc
 from .mail.runtime import build_runtime as build_mail_runtime
 from .scheduling import SlotTaken
+from . import logredact
+from . import share as share_mod
 from .service import (
     SmylteService, day_key, priority_from_label,
     # The weekday vocabulary, imported rather than restated. `service._WEEKDAYS`
@@ -591,6 +593,32 @@ class EditDisplay(BaseModel):
     panel_height: int | None = Field(default=None, ge=0, le=4096)
     rotation: Literal[0, 90, 180, 270] | None = None
     enabled: bool | None = None
+
+
+class CreateShare(BaseModel):
+    """A read-only view for another person. `name` is the owner's label for
+    that person and is never sent to them: no public share response carries it.
+    """
+
+    name: XmlSafeText = Field(min_length=1, max_length=100)
+    # Allowlists of collection ids. EMPTY MEANS NOTHING, the opposite of
+    # displays — see `_normalize_share_fields`.
+    lists: list[Id] = Field(default_factory=list, max_length=64)
+    calendars: list[Id] = Field(default_factory=list, max_length=64)
+    show_focus: bool = False
+    enabled: bool = True
+    # Strict, so JSON `true` is refused here rather than coerced to 1 and read
+    # as a one-day horizon. Which values are allowed is the service's to say.
+    horizon_days: int = Field(default=share_mod.DEFAULT_HORIZON, strict=True)
+
+
+class EditShare(BaseModel):
+    name: XmlSafeText | None = Field(default=None, min_length=1, max_length=100)
+    lists: list[Id] | None = Field(default=None, max_length=64)
+    calendars: list[Id] | None = Field(default=None, max_length=64)
+    show_focus: bool | None = None
+    enabled: bool | None = None
+    horizon_days: int | None = Field(default=None, strict=True)
 
 
 class PublicBook(BaseModel):
@@ -1380,6 +1408,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from .mail.redact import install_log_redaction
 
     install_log_redaction()
+    # And the access log keeps only the head of a capability token. A filter
+    # rather than another record-factory scrub; see smylted/logredact.py.
+    logredact.install()
     settings = settings or Settings.from_env()
     if settings.access_required and not (settings.access_team_domain and settings.access_aud):
         raise RuntimeError(
@@ -1451,6 +1482,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "the entire API is open to anyone who can reach this listener."
         )
 
+    def credential_version() -> str:
+        # Read through the Authenticator rather than captured, so a rotation
+        # takes effect without rebuilding anything. With auth disabled there are
+        # no credentials to bind to and everything carries "" — which then
+        # matches, because there is no rotation to detect in that posture.
+        # Defined once and handed to both readers, the connector's OAuth server
+        # and the shares, so the two cannot disagree about what "the password
+        # changed" means.
+        return "" if authenticator is None else authenticator.credential_version
+
     # The Radicale storage hook (POST /internal/changed) is gated by this secret.
     # Never accept the well-known dev default in a real deployment: fall back to an
     # ephemeral secret (fails CLOSED — the hook simply won't authenticate) rather
@@ -1468,6 +1509,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         svc = SmylteService(settings)
         svc.bind_loop(asyncio.get_running_loop())
+        # A share switched on under one password is off under the next.
+        svc.credential_version = credential_version
         app.state.service = svc
         app.state.sync_trigger = asyncio.Event()
         app.state.notify_trigger = asyncio.Event()
@@ -2435,6 +2478,64 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown display {token}")
         return Response(status_code=204)
 
+    # -- shares: the owner's side of a view for another person --
+    #
+    # Keyed by the share's `id`, never its token, so no owner URL, and no line
+    # of the access log for one, carries the credential. The token is in the
+    # DTO these return, because copying the link is what Settings is for.
+    @api.get("/shares")
+    async def get_shares(request: Request):
+        return await _run(_svc(request).list_shares)
+
+    @api.post("/shares", status_code=201)
+    async def post_share(request: Request, body: CreateShare):
+        try:
+            return await _run(_svc(request).create_share, body.model_dump())
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+
+    @api.get("/shares/{share_id}/preview")
+    async def get_share_preview(request: Request, share_id: str):
+        """What the person sees, for "See what they see". The payload itself,
+        built by the same code as the public route, and written nowhere."""
+        view = await _run(_svc(request).preview_share, share_id)
+        if view is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown share {share_id}")
+        # The owner's data on the owner's session: no shared cache may keep it.
+        return JSONResponse(view, headers={"Cache-Control": "no-store, private"})
+
+    @api.patch("/shares/{share_id}")
+    async def patch_share(request: Request, share_id: str, body: EditShare):
+        # An explicit null is refused rather than ignored, for the reason
+        # `patch_display` gives: None is how the service spells "not sent".
+        nulled = sorted(k for k in body.model_fields_set if getattr(body, k) is None)
+        if nulled:
+            raise HTTPException(
+                422, f"these fields cannot be null: {', '.join(nulled)}")
+        try:
+            dto = await _run(_svc(request).update_share, share_id,
+                             body.model_dump(exclude_unset=True))
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+        if dto is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown share {share_id}")
+        return dto
+
+    @api.post("/shares/{share_id}/rotate")
+    async def post_rotate_share(request: Request, share_id: str):
+        """Re-key a share whose URL got out. A separate route for the reason
+        `post_rotate_display` gives: a client never chooses a bearer token."""
+        dto = await _run(_svc(request).rotate_share_token, share_id)
+        if dto is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown share {share_id}")
+        return dto
+
+    @api.delete("/shares/{share_id}", status_code=204)
+    async def delete_share(request: Request, share_id: str):
+        if not await _run(_svc(request).delete_share, share_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown share {share_id}")
+        return Response(status_code=204)
+
     @api.get("/settings")
     async def get_settings(request: Request):
         return _public_settings(await _run(_svc(request).get_settings))
@@ -3035,6 +3136,53 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown display")
         return _frame_response(frame, request, seconds=frame["display"]["refresh_seconds"])
 
+    # -- shares: what one person was given, as data --
+    #
+    # Token-gated like the displays, and read by a person rather than a screen,
+    # so everything about the answer is shaped for someone who is not the owner:
+    # one 404 for every refusal, with the same body and headers, so a revoked
+    # link teaches its holder nothing; never a 401 or 403; and a 500 that says
+    # nothing, because an internal error message is internals.
+    #
+    # Every public share response (200, 304, 404, 429, 500, and the page shell)
+    # carries these.
+    _SHARE_HEADERS = {
+        # No proxy or bfcache copy of someone's day.
+        "Cache-Control": "no-store, private, max-age=0",
+        "X-Robots-Tag": "noindex, nofollow, noarchive",
+        "Referrer-Policy": "no-referrer",          # the token is in the path
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",                 # holds even with SMYLTE_CSP=off
+    }
+    # 15s polls = 20 per 5 min per tab, plus a phase-end fetch: about 14 tabs
+    # behind one address.
+    share_limiter = RateLimiter(max_fails=300, window_s=300, lockout_s=300)
+    # 404s only: guessing is pointless and an address that keeps missing is
+    # refused for an hour. A real viewer stops polling on its first 404
+    # (SharePage), so this costs it nothing.
+    share_miss_limiter = RateLimiter(max_fails=30, window_s=3600, lockout_s=3600)
+
+    # GET only: a HEAD would build the whole payload to send none of it. No
+    # suffix siblings today; a future `{token}.ext` route has to be registered
+    # ABOVE this one, for the reason `public_display_frame` is last of its three.
+    @app.get("/api/public/share/{token}")
+    async def public_share_view(request: Request, token: str):
+        key = limiter_key(_client_ip(request))
+        _gate(key, share_miss_limiter, _SHARE_HEADERS)
+        _throttle(key, share_limiter, _SHARE_HEADERS)
+        try:
+            view = await _run(_svc(request).share_view, token)
+        except Exception:  # noqa: BLE001
+            # Everything, not only what the app's handlers would turn into a
+            # clean answer: the KeyError one echoes its argument, which can be
+            # an href, and nothing internal may reach a stranger.
+            log.exception("share view failed")
+            raise HTTPException(500, "share unavailable", headers=_SHARE_HEADERS) from None
+        if view is None:
+            share_miss_limiter.record_failure(key)
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown share", headers=_SHARE_HEADERS)
+        return _etag_response(view, request, _SHARE_HEADERS)
+
     # -- internal change hook (localhost only, shared secret; NOT behind Access) --
     @app.post("/internal/changed", status_code=202)
     async def internal_changed(
@@ -3162,6 +3310,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         include_in_schema=False,
     )
 
+    # -- share deep link: the SPA shell once more, with the share's headers --
+    #
+    # No token lookup here: the page asks the JSON route, so an unknown link and
+    # a revoked one are the same shell and differ nowhere a stranger can see.
+    # Both spellings, like the routes above.
+    @app.api_route("/share/{token}", methods=["GET", "HEAD"], include_in_schema=False)
+    async def share_spa(token: str):
+        return _index_response(_SHARE_HEADERS)
+
+    app.add_api_route(
+        "/share/{token}/", share_spa, methods=["GET", "HEAD"],
+        include_in_schema=False,
+    )
+
     # -- the focus surface: the SPA shell again, for the same mechanical reason --
     #
     # `/focus` is the one full-page route that HAS a session: it is the app,
@@ -3211,7 +3373,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # this process's memory rather than either endpoint's throughput.
         _register_mcp(app, settings=settings, authenticator=authenticator,
                       client_ip=_client_ip, run=_run, login_hashes=login_hashes,
-                      hash_budget=hash_budget)
+                      hash_budget=hash_budget, credential_version=credential_version)
         log.info("mcp: remote connector enabled at %s/mcp", settings.public_url)
 
     # -- static SPA (built frontend), mounted last so /api wins --
