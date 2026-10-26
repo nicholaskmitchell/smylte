@@ -182,6 +182,36 @@ describe('the lists and calendars a share reaches', () => {
     // Dad's row is untouched and still listed.
     expect(screen.getByText('Dad')).toBeInTheDocument()
   })
+
+  it('rolls back only its own row when another row is deleted meanwhile', async () => {
+    // Restoring a snapshot of the whole array would bring the deleted share
+    // back, with its live token, on the one screen that can revoke one.
+    m.shares.mockResolvedValue([SHARE, OTHER] as never)
+    let fail: () => void = () => {}
+    m.patchShare.mockImplementation(
+      () => new Promise((_ok, bad) => { fail = () => bad(new HttpError(500, 'nope')) }))
+    m.deleteShare.mockResolvedValue(null as never)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    mount()
+    const mum = await openEditor('Mum')
+    // A write on Mum that will fail...
+    await userEvent.click(within(mum).getByRole('button', { name: 'Inbox' }))
+    await waitFor(() => expect(m.patchShare).toHaveBeenCalled())
+    expect(within(mum).getByRole('button', { name: 'Inbox' })).toHaveAttribute('aria-pressed', 'true')
+    // ...and Dad deleted while it is still in flight.
+    await openEditor('Dad')
+    await userEvent.click(screen.getByRole('button', { name: /^delete$/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Delete share' }))
+    await waitFor(() => expect(m.deleteShare).toHaveBeenCalledWith(OTHER.id))
+    expect(screen.queryByText('Dad')).not.toBeInTheDocument()
+    // Now the write fails. Its rollback touches Mum's row and nothing else.
+    fail()
+    await openEditor('Mum')
+    await waitFor(() =>
+      expect(within(mum).getByRole('button', { name: 'Inbox' })).toHaveAttribute('aria-pressed', 'false'))
+    expect(screen.queryByText('Dad')).not.toBeInTheDocument()
+    expect(screen.getByText('Mum')).toBeInTheDocument()
+  })
 })
 
 describe('the link itself', () => {
@@ -255,7 +285,7 @@ describe('whether the link is on', () => {
     // tells the owner WHY, and the toggle must agree with it.
     m.shares.mockResolvedValue([{ ...SHARE, enabled: false, switched_off_by_password: true }] as never)
     mount()
-    expect(await screen.findByText(/switched off because your password changed/i)).toBeInTheDocument()
+    expect(await screen.findByText(/switched off because your sign-in details changed/i)).toBeInTheDocument()
     await openEditor()
     const toggle = screen.getByRole('button', { name: 'Link' })
     expect(toggle).toHaveTextContent('Off')
@@ -264,7 +294,7 @@ describe('whether the link is on', () => {
     await userEvent.click(toggle)
     expect(m.patchShare).toHaveBeenCalledWith(SHARE.id, { enabled: true })
     await waitFor(() =>
-      expect(screen.queryByText(/switched off because your password changed/i)).not.toBeInTheDocument())
+      expect(screen.queryByText(/switched off because your sign-in details changed/i)).not.toBeInTheDocument())
     expect(screen.getByRole('button', { name: 'Link' })).toHaveTextContent('On')
   })
 
@@ -273,7 +303,7 @@ describe('whether the link is on', () => {
     mount()
     await screen.findByText('Mum')
     expect(screen.getByText('Off')).toBeInTheDocument()
-    expect(screen.queryByText(/password changed/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/sign-in details changed/i)).not.toBeInTheDocument()
   })
 })
 
