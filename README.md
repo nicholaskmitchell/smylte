@@ -31,7 +31,9 @@ The reasoning behind most of the design is in [`docs/DESIGN.md`](docs/DESIGN.md)
   notice and a horizon. The public page at `/book/{token}` writes the booking to
   your calendar. Events marked Free don't block slots.
 - **Home.** A dashboard of modules (today, overdue, upcoming, mini calendar,
-  bookings, quick add, weekly count) that you can arrange on desktop.
+  bookings, quick add, weekly count, email suggestions to approve or dismiss,
+  share links with their last view and an on/off switch) that you can arrange
+  on desktop.
 - **Today.** A day plan that is fixed when you first open the day, holding
   tasks, notes and habits. Overdue work is offered rather than added. Past a
   configurable number of days, it asks for a new date or for you to park it.

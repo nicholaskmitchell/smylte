@@ -205,6 +205,14 @@ password is bound to the server it was entered for. Changing the host, port,
 encryption, certificate or username clears it, so a changed setting can't send
 it elsewhere.
 
+**Home can clear the queue.** The Suggested module on Home approves or dismisses
+a suggestion in one tap, with no edits. That is what approving an untouched row
+in the Tasks pane sends: a task goes to the list the email
+suggested or the default list, an event to the default calendar, and the filing
+memory is only taught by a list you pick. Editing a title, a date or a list
+stays in the pane, which the module links to, so it is a queue to clear and not
+a second editor. It lists the first 20 and counts the rest.
+
 ## Displays
 
 **No input, by design.** A display has no session, no controls and nothing
@@ -420,6 +428,16 @@ Titles are drawn as inert text with its own direction. The access log keeps only
 the first four characters of a share, display or booking token. A chat app that
 previews links by running JavaScript can load a share, so re-key one that was
 sent where previews are on.
+
+**Home shows the state, not the address.** The Shares module on Home lists each
+link's name, whether it is on (a share switched off by a sign-in change says
+so), when it was last opened, and a switch to turn it on or off. The token and
+the URL are never drawn, because the board may be on a screen other people can
+see. Switching a share back on after a sign-in change sends `enabled: true`, so
+the server stamps it again. Everything else stays in Settings → Shares. The
+module re-reads on the `share_*` events (App's `sharesRev`, which still never
+bumps the task and calendar `rev`) and every 30 seconds while the page is
+visible, because opening a link publishes nothing.
 
 ## Appearance
 
