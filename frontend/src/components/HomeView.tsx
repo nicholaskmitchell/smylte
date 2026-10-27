@@ -58,9 +58,11 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
    *  offering it. Only the Overdue module reads it, and only to say how many
    *  of the rows it is already showing are in that state. */
   staleOverdueDays?: number
-  /** Bumped by App on `mail_updated` and the `share_*` events: the Suggested
-   *  and Shares modules re-read on them, as the Tasks pane and Settings do. */
+  /** Bumped by App on `mail_updated`: the Tasks pane and the mail settings
+   *  re-read on it, and so does the Suggested module here. */
   mailRev?: number
+  /** Bumped by App on the `share_*` events. Only the Shares module here reads
+   *  it; Settings → Shares keeps itself current on its own timer. */
   sharesRev?: number
   /** Where a module sends the owner for what it only summarises. */
   onOpenSuggested?: () => void
@@ -450,7 +452,8 @@ function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, taskErrors, fa
    *  offering it. Read here only to COUNT them — this module lists everything
    *  either way. Defaulted so a module rendered without it still draws. */
   staleOverdueDays?: number
-  /** The live-update counter, for the one module that fetches on its own. */
+  /** The live-update counter, for the module that reads its own data on it
+   *  (`WeekDone`). */
   rev: number
   mailRev?: number
   sharesRev?: number
@@ -826,6 +829,11 @@ function SharesModule({ sharesRev, onExpire, onOpenSettings }: {
   // Reads in flight can overlap (an SSE bump, the timer, a switch settling), so
   // only the newest may land, as the scheduling modules keep.
   const token = useRef(0)
+  // How many reads are out. A switch settling bumps `token`, which drops any
+  // read that began while its request was out; this is how it knows there was
+  // one to replace, so the answer such a read carried is not simply lost until
+  // the next tick.
+  const loading = useRef(0)
   // The links whose switch request is out. A re-read must not put the old state
   // back over a row the owner has just flipped, and the card reads this to
   // disable that row's switch: every change to it is followed by a `setRows`.
@@ -838,13 +846,19 @@ function SharesModule({ sharesRev, onExpire, onOpenSettings }: {
     setNow(Date.now())
   }, [])
 
-  useEffect(() => {
+  const load = () => {
     const mine = ++token.current
+    loading.current++
     void guard(() => api.shares()).then((r) => {
+      loading.current--
       if (mine !== token.current) return
       if (Array.isArray(r)) land(r)
       else setFailed(true)
     })
+  }
+
+  useEffect(() => {
+    load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sharesRev])
 
@@ -877,8 +891,10 @@ function SharesModule({ sharesRev, onExpire, onOpenSettings }: {
     const saved = await guard(() => api.patchShare(d.id, { enabled: next }))
     patching.current.delete(d.id)
     // A read that began while the request was out may have seen either side of
-    // it; the server's answer is the one that is known.
+    // it; the server's answer is the one that is known. A read that was out is
+    // dropped by this, so one is begun afresh rather than waiting on the timer.
     token.current++
+    if (loading.current > 0) load()
     // Only this row goes back when the request is refused (`d` is the row as it
     // was drawn), so a second switch flipped meanwhile keeps its new state.
     setRows((cur) => cur && cur.map((x) => x.id === d.id ? (saved ?? d) : x))
@@ -909,10 +925,8 @@ function SharesModule({ sharesRev, onExpire, onOpenSettings }: {
         {rows.map((d) => (
           <li key={d.id} className={`dash-task dash-share-row ${isOn(d) ? '' : 'done'}`}>
             <span className="dash-share-info">
-              <span className="dash-share-line">
-                <span className="dash-task-title" dir={textDir(d.name)}>{d.name}</span>
-                <span className="dash-task-due mono">{seenText(d, now, tr, tf, locale)}</span>
-              </span>
+              <span className="dash-task-title" dir={textDir(d.name)}>{d.name}</span>
+              <span className="dash-share-meta mono">{seenText(d, now, tr, tf, locale)}</span>
               {d.switched_off_by_password && (
                 <span className="dash-share-note">{tr('home.shareOffBySignIn')}</span>
               )}

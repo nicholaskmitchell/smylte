@@ -150,7 +150,35 @@ describe('the app in German', () => {
   it('prints no catalogue key in the Suggested and Shares modules', async () => {
     // Neither is on the stock board, and both hold their strings partly in
     // `MODULE_SPECS` (label, blurb) and partly in states a render has to reach:
-    // email reading off is the state a fresh account sees first.
+    // email reading off is the state a fresh account sees first. Here it is on,
+    // with a row of each kind and a link a sign-in change switched off, so the
+    // strings only a row draws are scanned too.
+    const source = {
+      sender: 'office@school.example', sender_name: 'Frau Schmidt', subject: 'Ausflug',
+      sent_at: '2026-10-05T08:00:00Z', message_id: 'm1', thread_id: 't1', folder: 'INBOX',
+    }
+    const suggestion = {
+      status: 'pending', notes: '', due: null, confidence: 0.8, event: null, target: null,
+      source, updates: [], created_at: '2026-10-05T08:01:00Z', decided_at: null, result: null,
+    }
+    m.mailSuggestions.mockResolvedValue({
+      enabled: true, pending_count: 3,
+      suggestions: [
+        { ...suggestion, id: 'sg1', kind: 'task', title: 'Erlaubnis zurückgeben',
+          due: '2026-10-30' },
+        { ...suggestion, id: 'sg2', kind: 'update', title: 'Neue Uhrzeit',
+          target: { list: 'l1', uid: 'u1', title: 'Zahnarzt' } },
+        { ...suggestion, id: 'sg3', kind: 'event', title: 'Elternabend',
+          event: { start: '2026-11-03T18:00:00', end: '2026-11-03T19:30:00',
+            all_day: false, location: null, rrule: null } },
+      ],
+    } as never)
+    m.shares.mockResolvedValue([{
+      id: 'a'.repeat(32), name: 'Großmutter', token: 'tok', url: null, lists: [], calendars: [],
+      show_focus: false, horizon_days: 7, enabled: false, switched_off_by_password: true,
+      last_seen_at: '2026-10-26T14:32:00Z', created_at: '2026-10-01T09:00:00Z',
+      updated_at: '2026-10-01T09:00:00Z',
+    }] as never)
     m.getSettings.mockResolvedValue({
       language: 'de',
       dashboard: [
@@ -164,7 +192,11 @@ describe('the app in German', () => {
     await userEvent.click(screen.getAllByRole('button', { name: 'Start' })[0])
     await screen.findByText('Vorschläge')
     await screen.findByText('Freigaben')
-    await screen.findByText('E-Mail-Vorschläge sind aus.')
+    await screen.findByRole('button', { name: 'Aufgabe hinzufügen' })
+    await screen.findByRole('button', { name: 'Änderung übernehmen' })
+    await screen.findByRole('button', { name: 'Termin hinzufügen' })
+    await screen.findByText('Großmutter')
+    await screen.findByText('Aus, seit sich deine Anmeldung geändert hat')
     const keys = visibleStrings(container).filter((s) => KEYISH.test(s))
     expect(keys, `unresolved keys in the new modules: ${keys.join(', ')}`).toEqual([])
   })

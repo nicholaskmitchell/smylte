@@ -1821,7 +1821,9 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
 /* A suggestion row is two lines, not one: what it would become and when, then
    where it came from beside the two buttons. The one-line `.dash-task` has no
    room for a pair of buttons, so the row stacks and each line wraps on a narrow
-   module rather than pushing the title off the edge. The title wraps instead of
+   module rather than pushing the title off the edge. The buttons wrap under
+   each other too when the line is too short for both, rather than scrolling
+   the module sideways. The title wraps instead of
    truncating: it is somebody else's subject line, and a decision made on half
    of it is a worse one. */
 .dash-sug-row { flex-direction: column; align-items: stretch; gap: 4px; }
@@ -1837,15 +1839,20 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
 }
 .dash-sug-src { flex: 1 1 6rem; min-width: 0; font-size: calc(11px * var(--fs-scale));
   color: var(--fg-muted); overflow-wrap: anywhere; }
-.dash-sug-actions { display: flex; gap: 8px; flex-wrap: nowrap; flex: none; margin-left: auto; }
+.dash-sug-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px 8px;
+  flex: 1 1 auto; margin-left: auto; }
 .dash-sug-foot { padding: 8px 12px; }
-/* A share row is a name and its last view beside a switch, with an optional
-   second line saying a sign-in change turned it off. Unlike the text-only rows
-   the switch is a control, so the row centres on it, and the text column may
-   shrink so a long name truncates rather than pushing the switch out. */
+/* A share row is a name over its last view, beside a switch, with an optional
+   further line saying a sign-in change turned it off. The name keeps a line to
+   itself: beside the "last opened" text it was squeezed to nothing on a narrow
+   module, and a link nobody can name is one nobody can tell apart. The name
+   truncates as every task title does, while the view text is the longer of the
+   two and wraps. Unlike the text-only rows the switch is a control, so the row
+   centres on it, and the text column may shrink so neither pushes it out. */
 .dash-share-row { align-items: center; }
 .dash-share-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.dash-share-line { display: flex; align-items: baseline; gap: 8px; }
+.dash-share-meta { font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted);
+  overflow-wrap: anywhere; }
 .dash-share-note { font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
 .dash-share-row .menu-toggle { flex: none; }
 .dash-share-foot { padding: 8px 12px; }
