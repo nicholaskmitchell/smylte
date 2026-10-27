@@ -85,7 +85,7 @@ type Progress = { total: number; done: number } | null
 export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   hiddenLists, onHiddenListsChange, groups, onGroupsChange,
   collapsedGroups, onCollapsedGroupsChange,
-  collapsedTasks, onCollapsedTasksChange, showCompleted, mailRev }: {
+  collapsedTasks, onCollapsedTasksChange, showCompleted, mailRev, ask, onAskHandled }: {
   onExpire: () => void
   view: TasksViewMode; onView: (v: TasksViewMode) => void
   sideCollapsed: boolean; onToggleSide: () => void
@@ -97,6 +97,10 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   /** Bumped by App on every `mail_updated` event; the Suggested pane re-reads
    *  on it. */
   mailRev?: number
+  /** A pane Home asks to land on. Acted on once, then `onAskHandled` clears it
+   *  so a later visit to this tab opens where the owner left it. */
+  ask?: 'suggested' | null
+  onAskHandled?: () => void
 }) {
   const { locale, t: tr } = useI18n()
   const guard = makeGuard(onExpire)
@@ -134,6 +138,13 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // is switched off and nothing is waiting, and a pane whose way back has gone
   // would be a dead end, so the pane gives way to the lists instead.
   const suggestedOnly = suggestedWanted && (sug.enabled || sug.items.length > 0)
+  // The same three changes the sidebar's toggle makes, made on Home's behalf.
+  useEffect(() => {
+    if (ask !== 'suggested') return
+    setSuggestedWanted(true); setCompletedOnly(false); setParkedOnly(false)
+    onAskHandled?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ask])
   // One at a time. Both on would leave two headings and two counts describing
   // one list, and the pane below can only be one of them.
   const showCompletedPane = completedOnly && !parkedOnly

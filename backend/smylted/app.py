@@ -746,6 +746,7 @@ class DashboardModule(BaseModel):
     kind: Literal[
         "today", "day_plan", "overdue", "upcoming", "mini_calendar",
         "completed", "week", "booking_links", "bookings", "quick_add",
+        "suggested", "shares",
     ]
     x: int = Field(ge=0, le=11)
     y: int = Field(ge=0, le=200)

@@ -1002,7 +1002,8 @@ def test_settings_dashboard_takes_every_kind_the_client_ships(client):
     # the two part. This is the same claim from the other side.
     kinds = [
         "today", "day_plan", "overdue", "upcoming", "mini_calendar",
-        "completed", "booking_links", "bookings", "quick_add",
+        "completed", "week", "booking_links", "bookings", "quick_add",
+        "suggested", "shares",
     ]
     layout = [
         {"id": f"m{i}", "kind": k, "x": 0, "y": i, "w": 4, "h": 1}

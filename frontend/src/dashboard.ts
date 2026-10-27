@@ -13,7 +13,7 @@ export const GAP = 12          // px between modules
 
 export type ModuleKind =
   | 'today' | 'day_plan' | 'overdue' | 'upcoming' | 'mini_calendar' | 'week'
-  | 'completed' | 'booking_links' | 'bookings' | 'quick_add'
+  | 'completed' | 'booking_links' | 'bookings' | 'quick_add' | 'suggested' | 'shares'
 
 export interface DashboardModule {
   id: string
@@ -57,6 +57,13 @@ export const MODULE_SPECS: Record<ModuleKind, ModuleSpec> = {
   booking_links: { label: 'module.booking_links', blurb: 'module.booking_links.blurb', w: 6, h: 5, minW: 3, minH: 3 },
   bookings: { label: 'module.bookings', blurb: 'module.bookings.blurb', w: 6, h: 5, minW: 3, minH: 3 },
   quick_add: { label: 'module.quick_add', blurb: 'module.quick_add.blurb', w: 4, h: 3, minW: 3, minH: 2 },
+  // A queue to clear, so it is tall enough for a few rows at once. Deciding a
+  // suggestion is one tap here; editing one stays in the Tasks pane, which is
+  // why the module is a way in to it and not a second copy of it.
+  suggested: { label: 'module.suggested', blurb: 'module.suggested.blurb', w: 4, h: 6, minW: 3, minH: 3 },
+  // Who can see what, and a switch to cut someone off without opening
+  // Settings. A handful of short rows is all there is to say, so it is short.
+  shares: { label: 'module.shares', blurb: 'module.shares.blurb', w: 4, h: 4, minW: 3, minH: 2 },
 }
 
 export const MODULE_KINDS = Object.keys(MODULE_SPECS) as ModuleKind[]

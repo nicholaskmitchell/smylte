@@ -14,6 +14,7 @@ import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
 import { bucketByDay, monthGrid, type DayEv } from '../calendar'
 import { DayPopover } from './DayPopover'
+import type { SettingsSection } from './SettingsMenu'
 import { WasDue } from './WasDue'
 import { entryTitle, orderEntries, rowDone, STALE_OVERDUE_DAYS } from './TodayView'
 import { readCachedDayPlan } from '../cache'
@@ -37,7 +38,8 @@ interface DragState {
 }
 
 export function HomeView({ rev, onExpire, layout, onLayoutChange,
-  hiddenCalendars = [], archivedCalendars = [], staleOverdueDays = STALE_OVERDUE_DAYS }: {
+  hiddenCalendars = [], archivedCalendars = [], staleOverdueDays = STALE_OVERDUE_DAYS,
+  mailRev, sharesRev, onOpenSuggested, onOpenSettings }: {
   rev: number
   onExpire: () => void
   /** The owner's arrangement, or NULL when they have never made one. The two
@@ -54,6 +56,13 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
    *  offering it. Only the Overdue module reads it, and only to say how many
    *  of the rows it is already showing are in that state. */
   staleOverdueDays?: number
+  /** Bumped by App on `mail_updated` and the `share_*` events: the Suggested
+   *  and Shares modules re-read on them, as the Tasks pane and Settings do. */
+  mailRev?: number
+  sharesRev?: number
+  /** Where a module sends the owner for what it only summarises. */
+  onOpenSuggested?: () => void
+  onOpenSettings?: (section: SettingsSection) => void
 }) {
   const tr = useT()
   const isMobile = useIsMobile()
@@ -294,7 +303,9 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
       colorOf={colorOf} eventColor={eventColor}
       onExpire={onExpire} loaded={loaded} create={create}
       plan={planForToday} onPlan={setPlan} toggleTask={toggle} tasksLoaded={loaded}
-      staleOverdueDays={staleOverdueDays} rev={rev} />
+      staleOverdueDays={staleOverdueDays} rev={rev} mailRev={mailRev}
+      sharesRev={sharesRev} onOpenSuggested={onOpenSuggested}
+      onOpenSettings={onOpenSettings} />
   )
 
   // ── mobile: a plain stack ────────────────────────────────────────────────
@@ -405,7 +416,8 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
 
 function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, taskErrors, failedLists,
   reloadTasks, links, bookings, schedFailed, colorOf, eventColor, onExpire, loaded, create,
-  plan, onPlan, toggleTask, tasksLoaded, staleOverdueDays = STALE_OVERDUE_DAYS, rev }: {
+  plan, onPlan, toggleTask, tasksLoaded, staleOverdueDays = STALE_OVERDUE_DAYS, rev,
+  mailRev, sharesRev, onOpenSuggested, onOpenSettings }: {
   kind: ModuleKind
   tasks: Task[]
   lists: List[]
@@ -438,6 +450,10 @@ function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, taskErrors, fa
   staleOverdueDays?: number
   /** The live-update counter, for the one module that fetches on its own. */
   rev: number
+  mailRev?: number
+  sharesRev?: number
+  onOpenSuggested?: () => void
+  onOpenSettings?: (section: SettingsSection) => void
 }) {
   const tr = useT()
   const today = ymd(new Date())
@@ -526,6 +542,10 @@ function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, taskErrors, fa
       return <BookingList bookings={bookings} failed={schedFailed} />
     case 'quick_add':
       return <QuickAddModule lists={lists} create={create} />
+    // Filled in by their modules; the registry and the plumbing land first.
+    case 'suggested':
+    case 'shares':
+      return null
     default:
       return null
   }
