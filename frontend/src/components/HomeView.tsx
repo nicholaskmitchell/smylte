@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
-  api, clientId,
+  api, clientId, AuthError,
   type Booking, type BookingLink, type CalEvent, type DayEntry, type DayPlan,
-  type List, type MailSuggestion, type Task,
+  type List, type MailSuggestion, type Share, type Task,
 } from '../api'
 import { useIsMobile, useToday } from '../hooks'
 import { useCalendarData, useTaskData, type TaskData } from '../data'
@@ -13,6 +13,7 @@ import { fmtDue, fmtDuration } from '../time'
 import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
 import { useMailSuggestions } from '../mail'
+import { isOn, seenText } from '../shares'
 import { bucketByDay, monthGrid, type DayEv } from '../calendar'
 import { DayPopover } from './DayPopover'
 import type { SettingsSection } from './SettingsMenu'
@@ -546,9 +547,9 @@ function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, taskErrors, fa
     case 'suggested':
       return <SuggestedModule mailRev={mailRev ?? 0} onExpire={onExpire}
         onOpen={onOpenSuggested} onOpenSettings={onOpenSettings} />
-    // Filled in by its module; the registry and the plumbing landed first.
     case 'shares':
-      return null
+      return <SharesModule sharesRev={sharesRev ?? 0} onExpire={onExpire}
+        onOpenSettings={onOpenSettings} />
     default:
       return null
   }
@@ -789,6 +790,142 @@ function SuggestedModule({ mailRev, onExpire, onOpen, onOpenSettings }: {
           </button>
         </div>
       )}
+    </>
+  )
+}
+
+/**
+ * Each share link's state and last view, with a switch to turn it off.
+ *
+ * It reads for itself, as `WeekDone` does, so a board without it asks the
+ * server nothing. Nothing publishes a share being OPENED (the server stamps
+ * `last_seen_at` quietly), so besides the `share_*` events App counts in
+ * `sharesRev` there is a timer, as Settings → Shares has. The token and the
+ * address stay in the state this holds but are never drawn: this card sits on
+ * a board that may be on a screen other people can see.
+ */
+/** How often it re-reads, and how often "Open now" is judged afresh. */
+const SHARES_REFRESH_MS = 30_000
+
+function SharesModule({ sharesRev, onExpire, onOpenSettings }: {
+  sharesRev: number
+  onExpire: () => void
+  onOpenSettings?: (section: SettingsSection) => void
+}) {
+  const tr = useT()
+  const { locale } = useI18n()
+  const tf = useTimeFormat()
+  const guard = makeGuard(onExpire)
+  const [rows, setRows] = useState<Share[] | null>(null)
+  // `makeGuard` answers `undefined` for every failure, so without this flag a
+  // 502 would print "No share links yet." over links that exist.
+  const [failed, setFailed] = useState(false)
+  // The clock "Open now" is judged against. A render-time `Date.now()` would
+  // only age out when something else happened to re-render the card.
+  const [now, setNow] = useState(() => Date.now())
+  // Reads in flight can overlap (an SSE bump, the timer, a switch settling), so
+  // only the newest may land, as the scheduling modules keep.
+  const token = useRef(0)
+  // The links whose switch request is out. A re-read must not put the old state
+  // back over a row the owner has just flipped, and the card reads this to
+  // disable that row's switch: every change to it is followed by a `setRows`.
+  const patching = useRef(new Set<string>())
+
+  const land = useCallback((fresh: Share[]) => {
+    setRows((cur) => fresh.map((f) =>
+      patching.current.has(f.id) ? (cur?.find((d) => d.id === f.id) ?? f) : f))
+    setFailed(false)
+    setNow(Date.now())
+  }, [])
+
+  useEffect(() => {
+    const mine = ++token.current
+    void guard(() => api.shares()).then((r) => {
+      if (mine !== token.current) return
+      if (Array.isArray(r)) land(r)
+      else setFailed(true)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sharesRev])
+
+  useEffect(() => {
+    const clock = setInterval(() => setNow(Date.now()), SHARES_REFRESH_MS)
+    // Plain `api.shares()`, not `guard`: a toast every half minute while the
+    // server is down would be worse than the stale card. Only a lapsed session
+    // is worth saying anything about. A read that a newer one overtook is
+    // dropped without taking a token of its own, so a failed tick can never
+    // cancel the load it found in flight.
+    const reread = setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      const seen = token.current
+      api.shares().then((fresh) => {
+        if (seen === token.current && Array.isArray(fresh)) land(fresh)
+      }).catch((e) => { if (e instanceof AuthError) onExpire() })
+    }, SHARES_REFRESH_MS)
+    return () => { clearInterval(clock); clearInterval(reread) }
+  }, [land, onExpire])
+
+  // `enabled` is sent as the opposite of what the owner SEES, never of
+  // `!d.enabled`: a link a password change switched off still has `enabled`
+  // true, and switching it back on has to say so for the server to re-stamp it.
+  const toggle = async (d: Share) => {
+    if (patching.current.has(d.id)) return
+    const next = !isOn(d)
+    patching.current.add(d.id)
+    setRows((cur) => cur && cur.map((x) => x.id === d.id
+      ? { ...x, enabled: next, ...(next ? { switched_off_by_password: false } : {}) } : x))
+    const saved = await guard(() => api.patchShare(d.id, { enabled: next }))
+    patching.current.delete(d.id)
+    // A read that began while the request was out may have seen either side of
+    // it; the server's answer is the one that is known.
+    token.current++
+    // Only this row goes back when the request is refused (`d` is the row as it
+    // was drawn), so a second switch flipped meanwhile keeps its new state.
+    setRows((cur) => cur && cur.map((x) => x.id === d.id ? (saved ?? d) : x))
+  }
+
+  if (rows === null && !failed) return null
+  // A failed re-read keeps the rows it already had; the failure only stands in
+  // when there are none to show.
+  if (rows === null) return <p className="dash-empty" role="status">{tr('home.sharesFailed')}</p>
+  const foot = onOpenSettings && (
+    <div className="dash-share-foot">
+      <button type="button" className="btn ghost" onClick={() => onOpenSettings('shares')}>
+        {tr('home.openShares')}
+      </button>
+    </div>
+  )
+  if (rows.length === 0) {
+    return (
+      <>
+        <p className="dash-empty">{tr('home.sharesNone')}</p>
+        {foot}
+      </>
+    )
+  }
+  return (
+    <>
+      <ul className="dash-tasks">
+        {rows.map((d) => (
+          <li key={d.id} className={`dash-task dash-share-row ${isOn(d) ? '' : 'done'}`}>
+            <span className="dash-share-info">
+              <span className="dash-share-line">
+                <span className="dash-task-title" dir={textDir(d.name)}>{d.name}</span>
+                <span className="dash-task-due mono">{seenText(d, now, tr, tf, locale)}</span>
+              </span>
+              {d.switched_off_by_password && (
+                <span className="dash-share-note">{tr('home.shareOffBySignIn')}</span>
+              )}
+            </span>
+            <button type="button" className="menu-toggle" aria-pressed={isOn(d)}
+              aria-label={tr('home.shareToggle', { name: d.name })}
+              disabled={patching.current.has(d.id)} onClick={() => { void toggle(d) }}>
+              {tr(isOn(d) ? 'shares.on' : 'shares.off')}
+            </button>
+          </li>
+        ))}
+      </ul>
+      {foot}
     </>
   )
 }

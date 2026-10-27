@@ -1,10 +1,10 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest'
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { HomeView } from './HomeView'
 import { DataProvider } from '../data'
 import { setCacheUser } from '../cache'
-import { api, type MailSuggestion } from '../api'
+import { api, AuthError, type MailSuggestion, type Share } from '../api'
 import { monthGrid } from '../calendar'
 import { DEFAULT_LAYOUT, type DashboardModule } from '../dashboard'
 import type { SettingsSection } from './SettingsMenu'
@@ -920,6 +920,246 @@ describe('<HomeView> the Suggested module', () => {
     expect(document.querySelectorAll('.dash-sug-row')).toHaveLength(20)
     expect(screen.getByText('+3 more in Tasks')).toBeInTheDocument()
     expect(screen.queryByText('Thing 20')).not.toBeInTheDocument()
+  })
+})
+
+describe('<HomeView> the Shares module', () => {
+  const layout: DashboardModule[] = [{ id: 'h', kind: 'shares', x: 0, y: 0, w: 4, h: 4 }]
+
+  const share = (o: Partial<Share> = {}): Share => ({
+    id: 'a'.repeat(32), name: 'Mum', token: 'tok-secret-mum', url: 'https://x.example/s/tok-secret-mum',
+    lists: [], calendars: [], show_focus: false, horizon_days: 7,
+    enabled: true, switched_off_by_password: false, last_seen_at: null,
+    created_at: '2026-10-01T09:00:00Z', updated_at: '2026-10-01T09:00:00Z', ...o,
+  })
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
+  const rowOf = (name: string) =>
+    screen.getByText(name).closest('.dash-share-row') as HTMLElement
+
+  beforeEach(() => {
+    m.patchShare.mockImplementation(async (id, body) => share({ id, ...body }) as never)
+  })
+
+  it('shows each link\'s state and last view', async () => {
+    m.shares.mockResolvedValue([
+      share({ id: 'a1', name: 'Mum', last_seen_at: ago(30_000) }),
+      share({ id: 'b2', name: 'Dad', last_seen_at: ago(3 * 3_600_000) }),
+      share({ id: 'c3', name: 'Gran' }),
+      share({ id: 'd4', name: 'Uncle', enabled: false, last_seen_at: ago(3_600_000) }),
+      share({ id: 'e5', name: 'Aunt', switched_off_by_password: true }),
+    ] as never)
+    setup(layout)
+
+    await screen.findByText('Mum')
+    expect(within(rowOf('Mum')).getByText('Open now')).toBeInTheDocument()
+    expect(within(rowOf('Dad')).getByText(/^Last opened /)).toBeInTheDocument()
+    expect(within(rowOf('Gran')).getByText('Not opened yet')).toBeInTheDocument()
+    expect(within(rowOf('Mum')).getByRole('button', { name: 'Link for Mum' }))
+      .toHaveAttribute('aria-pressed', 'true')
+    expect(within(rowOf('Mum')).getByRole('button', { name: 'Link for Mum' }))
+      .toHaveTextContent('On')
+    const off = within(rowOf('Uncle')).getByRole('button', { name: 'Link for Uncle' })
+    expect(off).toHaveAttribute('aria-pressed', 'false')
+    expect(off).toHaveTextContent('Off')
+    const signIn = within(rowOf('Aunt')).getByRole('button', { name: 'Link for Aunt' })
+    expect(signIn).toHaveTextContent('Off')
+    expect(within(rowOf('Aunt')).getByText('Off since your sign-in changed')).toBeInTheDocument()
+    expect(screen.getAllByText('Off since your sign-in changed')).toHaveLength(1)
+  })
+
+  it('never puts a token or an address in the page', async () => {
+    m.shares.mockResolvedValue([share()] as never)
+    setup(layout)
+    await screen.findByText('Mum')
+    expect(document.body.innerHTML).not.toContain('tok-secret-mum')
+    expect(document.body.innerHTML).not.toContain('x.example')
+  })
+
+  it('switches an on link off by sending enabled false', async () => {
+    m.shares.mockResolvedValue([share({ id: 'a1' })] as never)
+    setup(layout)
+    await userEvent.click(await screen.findByRole('button', { name: 'Link for Mum' }))
+
+    expect(m.patchShare).toHaveBeenCalledWith('a1', { enabled: false })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Link for Mum' }))
+      .toHaveAttribute('aria-pressed', 'false'))
+  })
+
+  it('switches a link a sign-in change turned off back on by sending enabled true', async () => {
+    // Its `enabled` is still true on the row, so `!d.enabled` would send false
+    // and the server would never re-stamp it.
+    m.shares.mockResolvedValue([
+      share({ id: 'a1', name: 'Aunt', enabled: true, switched_off_by_password: true }),
+    ] as never)
+    m.patchShare.mockResolvedValue(share({ id: 'a1', name: 'Aunt', enabled: true }) as never)
+    setup(layout)
+    await userEvent.click(await screen.findByRole('button', { name: 'Link for Aunt' }))
+
+    expect(m.patchShare).toHaveBeenCalledWith('a1', { enabled: true })
+    await waitFor(() =>
+      expect(screen.queryByText('Off since your sign-in changed')).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Link for Aunt' }))
+      .toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('puts back only the row whose change was refused', async () => {
+    m.shares.mockResolvedValue([
+      share({ id: 'a1', name: 'Mum' }), share({ id: 'b2', name: 'Dad' }),
+    ] as never)
+    let refuse: (e: Error) => void = () => {}
+    m.patchShare.mockImplementation((id, body) => id === 'a1'
+      ? new Promise((_, no) => { refuse = no })
+      : Promise.resolve(share({ id, name: 'Dad', ...body }) as never))
+    setup(layout)
+    await userEvent.click(await screen.findByRole('button', { name: 'Link for Mum' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Link for Dad' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Link for Dad' }))
+      .toHaveAttribute('aria-pressed', 'false'))
+    // Mum's request is still out: her switch is optimistic and cannot be pressed again.
+    expect(screen.getByRole('button', { name: 'Link for Mum' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Link for Mum' }))
+      .toHaveAttribute('aria-pressed', 'false')
+
+    await act(async () => { refuse(new Error('nope')) })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Link for Mum' }))
+      .toHaveAttribute('aria-pressed', 'true'))
+    expect(screen.getByRole('button', { name: 'Link for Mum' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Link for Dad' }))
+      .toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('re-reads when the shares counter moves', async () => {
+    m.shares.mockResolvedValue([share()] as never)
+    const view = (sharesRev: number) => (
+      <DataProvider rev={0} onExpire={vi.fn()}>
+        <HomeView rev={0} onExpire={vi.fn()} layout={layout}
+          onLayoutChange={vi.fn()} sharesRev={sharesRev} />
+      </DataProvider>
+    )
+    const { rerender } = render(view(0))
+    await waitFor(() => expect(m.shares).toHaveBeenCalledTimes(1))
+    m.shares.mockResolvedValue([share({ name: 'Renamed' })] as never)
+    rerender(view(1))
+    await waitFor(() => expect(m.shares).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText('Renamed')).toBeInTheDocument()
+  })
+
+  it('says the load failed rather than that there are no links', async () => {
+    m.shares.mockRejectedValue(new Error('boom'))
+    setup(layout)
+    expect(await screen.findByText('Couldn’t load shares.')).toBeInTheDocument()
+    expect(screen.queryByText('No share links yet.')).not.toBeInTheDocument()
+  })
+
+  it('says nothing until the first read lands', async () => {
+    m.shares.mockImplementation(() => new Promise(() => {}))
+    setup(layout)
+    await screen.findByText('Shares')               // the module's own title
+    expect(screen.queryByText('No share links yet.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Couldn’t load shares.')).not.toBeInTheDocument()
+  })
+
+  it('says there are no links, and offers the way to make one', async () => {
+    m.shares.mockResolvedValue([] as never)
+    const onOpenSettings = vi.fn()
+    setup(layout, { onOpenSettings })
+    expect(await screen.findByText('No share links yet.')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Manage shares' }))
+    expect(onOpenSettings).toHaveBeenCalledWith('shares')
+  })
+
+  it('hands management to Settings → Shares', async () => {
+    m.shares.mockResolvedValue([share()] as never)
+    const onOpenSettings = vi.fn()
+    setup(layout, { onOpenSettings })
+    await userEvent.click(await screen.findByRole('button', { name: 'Manage shares' }))
+    expect(onOpenSettings).toHaveBeenCalledWith('shares')
+  })
+
+  it('costs no request when it is not on the board', async () => {
+    setup([{ id: 'x', kind: 'overdue', x: 0, y: 0, w: 6, h: 5 }])
+    await screen.findByText('Nothing overdue.')
+    expect(m.shares).not.toHaveBeenCalled()
+  })
+
+  describe('on a timer', () => {
+    afterEach(() => { vi.useRealTimers() })
+
+    it('re-reads every 30 seconds while the page is visible', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+      m.shares.mockResolvedValue([share()] as never)
+      setup(layout)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(m.shares).toHaveBeenCalledTimes(1)
+
+      m.shares.mockResolvedValue([share({ last_seen_at: new Date().toISOString() })] as never)
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+      expect(m.shares).toHaveBeenCalledTimes(2)
+      expect(screen.getByText('Open now')).toBeInTheDocument()
+    })
+
+    it('leaves the row it is switching alone when a re-read lands', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+      m.shares.mockResolvedValue([share({ id: 'a1' })] as never)
+      let release: (v: Share) => void = () => {}
+      m.patchShare.mockImplementation(() => new Promise((r) => { release = r as never }))
+      setup(layout)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      await act(async () => { screen.getByRole('button', { name: 'Link for Mum' }).click() })
+
+      // The server has not heard of the change yet: the re-read still says On.
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+      expect(screen.getByRole('button', { name: 'Link for Mum' }))
+        .toHaveAttribute('aria-pressed', 'false')
+
+      await act(async () => { release(share({ id: 'a1', enabled: false })) })
+      expect(screen.getByRole('button', { name: 'Link for Mum' }))
+        .toHaveAttribute('aria-pressed', 'false')
+    })
+
+    it('stops saying "Open now" once two minutes pass, with no fetch to change it', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+      vi.setSystemTime(new Date('2026-10-27T12:00:00Z'))
+      // The page is hidden, so the re-read stays quiet and only the clock moves.
+      const vis = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+      m.shares.mockResolvedValue([
+        share({ last_seen_at: '2026-10-27T11:59:30Z' }),
+      ] as never)
+      setup(layout)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      expect(screen.getByText('Open now')).toBeInTheDocument()
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(120_000) })
+      expect(m.shares).toHaveBeenCalledTimes(1)
+      expect(screen.queryByText('Open now')).not.toBeInTheDocument()
+      expect(screen.getByText(/^Last opened /)).toBeInTheDocument()
+      vis.mockRestore()
+    })
+
+    it('does not read while the page is hidden', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+      const vis = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+      m.shares.mockResolvedValue([share()] as never)
+      setup(layout)
+      await act(async () => { await vi.advanceTimersByTimeAsync(90_000) })
+      expect(m.shares).toHaveBeenCalledTimes(1)
+      vis.mockRestore()
+    })
+
+    it('asks for the sign-in page when a re-read finds the session gone', async () => {
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+      m.shares.mockResolvedValue([share()] as never)
+      const onExpire = vi.fn()
+      render(
+        <DataProvider rev={0} onExpire={vi.fn()}>
+          <HomeView rev={0} onExpire={onExpire} layout={layout} onLayoutChange={vi.fn()} />
+        </DataProvider>,
+      )
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      m.shares.mockRejectedValue(new AuthError())
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+      expect(onExpire).toHaveBeenCalled()
+    })
   })
 })
 
