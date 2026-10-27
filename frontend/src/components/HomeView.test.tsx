@@ -4,9 +4,10 @@ import userEvent from '@testing-library/user-event'
 import { HomeView } from './HomeView'
 import { DataProvider } from '../data'
 import { setCacheUser } from '../cache'
-import { api } from '../api'
+import { api, type MailSuggestion } from '../api'
 import { monthGrid } from '../calendar'
 import { DEFAULT_LAYOUT, type DashboardModule } from '../dashboard'
+import type { SettingsSection } from './SettingsMenu'
 
 vi.mock('../api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../api')>()
@@ -36,7 +37,11 @@ const list = { id: 'l1', href: '/l1/', name: 'Work', is_task_list: true, is_cale
 
 /** Render with a controlled layout so assertions can watch it change. */
 function setup(initial: DashboardModule[] | null = DEFAULT_LAYOUT,
-  props: { hiddenCalendars?: string[]; archivedCalendars?: string[] } = {}) {
+  props: {
+    hiddenCalendars?: string[]; archivedCalendars?: string[]
+    mailRev?: number; sharesRev?: number
+    onOpenSuggested?: () => void; onOpenSettings?: (section: SettingsSection) => void
+  } = {}) {
   const onLayoutChange = vi.fn()
   render(
     <DataProvider rev={0} onExpire={vi.fn()}>
@@ -714,6 +719,207 @@ describe('<HomeView> what was finished this week', () => {
     await screen.findByText('Finished this week')
     await waitFor(() => expect(m.completedCounts).toHaveBeenCalled())
     expect(screen.queryByText('this week')).not.toBeInTheDocument()
+  })
+})
+
+describe('<HomeView> the Suggested module', () => {
+  const layout: DashboardModule[] = [{ id: 's', kind: 'suggested', x: 0, y: 0, w: 4, h: 6 }]
+
+  const sug = (o: Partial<MailSuggestion> = {}): MailSuggestion => ({
+    id: 'a1', kind: 'task', status: 'pending', title: 'Return the permission slip',
+    notes: '', due: '2026-10-09', confidence: 0.8, event: null, target: null,
+    source: {
+      sender: 'office@school.example', sender_name: 'Ms Smith', subject: 'Trip',
+      sent_at: '2026-10-05T08:00:00Z', message_id: 'm1@school.example',
+      thread_id: 'mid:m1@school.example', folder: 'INBOX',
+    },
+    updates: [], created_at: '2026-10-05T08:01:00Z', decided_at: null, result: null,
+    ...o,
+  })
+  const pending = (...suggestions: MailSuggestion[]) => ({
+    enabled: true, suggestions, pending_count: suggestions.length,
+  })
+  const three = () => [
+    sug(),
+    sug({
+      id: 'b2', kind: 'update', title: 'Pay the deposit', due: '2026-10-12',
+      target: { list: 'l1', uid: 'u9', title: 'Book the hall' },
+      source: { ...sug().source, sender: 'hall@venue.example', sender_name: null },
+    }),
+    sug({
+      id: 'c3', kind: 'event', title: 'Parents evening', due: null,
+      event: { start: '2026-10-14T18:30:00', end: null, all_day: false, location: null, rrule: null },
+      source: { ...sug().source, sender: 'head@school.example', sender_name: 'The Head' },
+    }),
+  ]
+
+  beforeEach(() => {
+    m.approveSuggestion.mockResolvedValue({} as never)
+    m.rejectSuggestion.mockResolvedValue({} as never)
+  })
+
+  it('shows each kind with its label, what it adds to, a date and the sender', async () => {
+    m.mailSuggestions.mockResolvedValue(pending(...three()) as never)
+    setup(layout)
+
+    expect(await screen.findByText('Return the permission slip')).toBeInTheDocument()
+    const rows = document.querySelectorAll('.dash-sug-row')
+    expect(rows).toHaveLength(3)
+    const [task, upd, event] = Array.from(rows) as HTMLElement[]
+    expect(within(task).getByText('Task')).toBeInTheDocument()
+    expect(within(task).getByText('Oct 9')).toBeInTheDocument()
+    expect(within(task).getByText('Ms Smith')).toBeInTheDocument()
+    expect(within(upd).getByText('Update')).toBeInTheDocument()
+    expect(within(upd).getByText('Adds to “Book the hall”')).toBeInTheDocument()
+    expect(within(upd).getByText('Oct 12')).toBeInTheDocument()
+    // No display name: the address stands in.
+    expect(within(upd).getByText('hall@venue.example')).toBeInTheDocument()
+    expect(within(event).getByText('Event')).toBeInTheDocument()
+    expect(within(event).getByText('Parents evening')).toBeInTheDocument()
+    expect(within(event).getByText(/^Oct 14/)).toBeInTheDocument()
+    expect(within(event).getByRole('button', { name: 'Add event' })).toBeInTheDocument()
+  })
+
+  it('approves untouched, in one tap, and the row leaves', async () => {
+    // `{}` is what approving an untouched row in the pane sends, so the server
+    // files it under its own choice and the filing memory is not trained.
+    m.mailSuggestions.mockResolvedValue(pending(...three()) as never)
+    setup(layout)
+    await userEvent.click(await screen.findByRole('button', { name: 'Add task' }))
+
+    expect(m.approveSuggestion).toHaveBeenCalledWith('a1', {})
+    await waitFor(() =>
+      expect(screen.queryByText('Return the permission slip')).not.toBeInTheDocument())
+    expect(screen.getByText('Parents evening')).toBeInTheDocument()
+  })
+
+  it('dismisses in one tap, and the row leaves', async () => {
+    m.mailSuggestions.mockResolvedValue(pending(...three()) as never)
+    setup(layout)
+    await screen.findByText('Return the permission slip')
+    const row = document.querySelector('.dash-sug-row[data-kind="task"]') as HTMLElement
+    await userEvent.click(within(row).getByRole('button', { name: 'Dismiss' }))
+
+    expect(m.rejectSuggestion).toHaveBeenCalledWith('a1')
+    await waitFor(() =>
+      expect(screen.queryByText('Return the permission slip')).not.toBeInTheDocument())
+    expect(m.approveSuggestion).not.toHaveBeenCalled()
+  })
+
+  it('puts a refused approval back and says why', async () => {
+    m.mailSuggestions.mockResolvedValue(pending(sug()) as never)
+    m.approveSuggestion.mockRejectedValue(new Error('choose a list for this task'))
+    setup(layout)
+    await userEvent.click(await screen.findByRole('button', { name: 'Add task' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent('choose a list for this task')
+    expect(screen.getByText('Return the permission slip')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add task' })).toBeEnabled()
+  })
+
+  it('keeps a row\'s buttons disabled while its decision is out', async () => {
+    // The hook takes the row away at once, so the only way to see it again
+    // mid-request is a re-read that lands first — the server still has it.
+    m.mailSuggestions.mockResolvedValue(pending(sug()) as never)
+    let release: (v: never) => void = () => {}
+    m.approveSuggestion.mockImplementation(() => new Promise((r) => { release = r }))
+    const onLayoutChange = vi.fn()
+    const view = (mailRev: number) => (
+      <DataProvider rev={0} onExpire={vi.fn()}>
+        <HomeView rev={0} onExpire={vi.fn()} layout={layout}
+          onLayoutChange={onLayoutChange} mailRev={mailRev} />
+      </DataProvider>
+    )
+    const { rerender } = render(view(0))
+    await userEvent.click(await screen.findByRole('button', { name: 'Add task' }))
+    expect(m.approveSuggestion).toHaveBeenCalledTimes(1)
+
+    rerender(view(1))
+    const back = await screen.findByRole('button', { name: 'Add task' })
+    expect(back).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeDisabled()
+
+    await act(async () => { release({} as never) })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add task' })).toBeEnabled())
+  })
+
+  it('does not offer approval for a row with no title', async () => {
+    m.mailSuggestions.mockResolvedValue(pending(sug({ title: '  ' })) as never)
+    setup(layout)
+    expect(await screen.findByRole('button', { name: 'Add task' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeEnabled()
+  })
+
+  it('says email suggestions are off, and links to the email settings', async () => {
+    m.mailSuggestions.mockResolvedValue({ enabled: false, suggestions: [], pending_count: 0 } as never)
+    const onOpenSettings = vi.fn()
+    setup(layout, { onOpenSettings })
+
+    expect(await screen.findByText('Email suggestions are off.')).toBeInTheDocument()
+    expect(screen.queryByText('Nothing waiting.')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Email settings' }))
+    expect(onOpenSettings).toHaveBeenCalledWith('mail')
+  })
+
+  it('says nothing is waiting when reading is on and the queue is empty', async () => {
+    m.mailSuggestions.mockResolvedValue(pending() as never)
+    setup(layout)
+    expect(await screen.findByText('Nothing waiting.')).toBeInTheDocument()
+  })
+
+  it('says the load failed rather than that nothing is waiting', async () => {
+    m.mailSuggestions.mockRejectedValue(new Error('boom'))
+    setup(layout)
+    expect(await screen.findByText('Couldn’t load suggestions.')).toBeInTheDocument()
+    expect(screen.queryByText('Nothing waiting.')).not.toBeInTheDocument()
+  })
+
+  it('says nothing until the first read lands', async () => {
+    m.mailSuggestions.mockImplementation(() => new Promise(() => {}))
+    setup(layout)
+    await screen.findByText('Suggested')            // the module's own title
+    expect(screen.queryByText('Nothing waiting.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Email suggestions are off.')).not.toBeInTheDocument()
+  })
+
+  it('re-reads when the mail counter moves', async () => {
+    m.mailSuggestions.mockResolvedValue(pending() as never)
+    const onLayoutChange = vi.fn()
+    const view = (mailRev: number) => (
+      <DataProvider rev={0} onExpire={vi.fn()}>
+        <HomeView rev={0} onExpire={vi.fn()} layout={layout}
+          onLayoutChange={onLayoutChange} mailRev={mailRev} />
+      </DataProvider>
+    )
+    const { rerender } = render(view(0))
+    await waitFor(() => expect(m.mailSuggestions).toHaveBeenCalledTimes(1))
+    rerender(view(1))
+    await waitFor(() => expect(m.mailSuggestions).toHaveBeenCalledTimes(2))
+  })
+
+  it('hands the review to the Tasks pane', async () => {
+    m.mailSuggestions.mockResolvedValue(pending(sug()) as never)
+    const onOpenSuggested = vi.fn()
+    setup(layout, { onOpenSuggested })
+    await userEvent.click(await screen.findByRole('button', { name: 'Review in Tasks' }))
+    expect(onOpenSuggested).toHaveBeenCalledTimes(1)
+  })
+
+  it('costs no request when it is not on the board', async () => {
+    setup([{ id: 'x', kind: 'overdue', x: 0, y: 0, w: 6, h: 5 }])
+    await screen.findByText('Nothing overdue.')
+    expect(m.mailSuggestions).not.toHaveBeenCalled()
+  })
+
+  it('lists twenty and counts the rest', async () => {
+    const many = Array.from({ length: 23 }, (_, i) =>
+      sug({ id: `s${i}`, title: `Thing ${i}` }))
+    m.mailSuggestions.mockResolvedValue(pending(...many) as never)
+    setup(layout)
+    await screen.findByText('Thing 0')
+    expect(document.querySelectorAll('.dash-sug-row')).toHaveLength(20)
+    expect(screen.getByText('+3 more in Tasks')).toBeInTheDocument()
+    expect(screen.queryByText('Thing 20')).not.toBeInTheDocument()
   })
 })
 
