@@ -218,9 +218,9 @@ export function App() {
   // loaded. See the SSE effect and `store.update_settings`' shallow merge.
   const [settingsRev, setSettingsRev] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  // Where the settings menu opens. Only ever set by a layout switch, which
-  // remounts the menu in the other frame (see SettingsMenu's `initialSection`);
-  // the gear always opens it at the top.
+  // Where the settings menu opens. Set by a layout switch, which remounts the
+  // menu in the other frame (see SettingsMenu's `initialSection`), and by
+  // `openSettingsAt` for Home's modules; the gear always opens it at the top.
   const [settingsAt, setSettingsAt] = useState<SettingsSection | undefined>()
   const toggleSettings = useCallback(() => {
     setSettingsAt(undefined)

@@ -207,11 +207,11 @@ it elsewhere.
 
 **Home can clear the queue.** The Suggested module on Home approves or dismisses
 a suggestion in one tap, with no edits. That is what approving an untouched row
-in the Tasks pane sends: a task goes to the list the email
-suggested or the default list, an event to the default calendar, and the filing
-memory is only taught by a list you pick. Editing a title, a date or a list
-stays in the pane, which the module links to, so it is a queue to clear and not
-a second editor. It lists the first 20 and counts the rest.
+in the Tasks pane sends: a task goes to the list the email suggested or the
+default list, an event to the default calendar, and the filing memory is only
+taught by a list you pick. Editing a title, a date or a list stays in the pane,
+which the module links to, so it is a queue to clear and not a second editor.
+It lists the first 20 and counts the rest.
 
 ## Displays
 

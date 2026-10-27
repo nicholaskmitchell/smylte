@@ -40,8 +40,10 @@ node_modules
 /frontend/dist/
 # Failure screenshots from the browser test project. vitest writes one beside the
 # failing spec, so this lands INSIDE src/ rather than in a build directory —
-# unanchored for the same reason node_modules is above.
+# unanchored for the same reason node_modules is above. vitest 4 also copies
+# each one into `.vitest-attachments/` at the project root.
 __screenshots__/
+.vitest-attachments/
 
 # ── .NET / Windows client build artifacts (built by CI, never committed) ─────
 /desktop/**/bin/

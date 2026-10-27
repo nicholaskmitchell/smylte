@@ -1823,9 +1823,8 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
    room for a pair of buttons, so the row stacks and each line wraps on a narrow
    module rather than pushing the title off the edge. The buttons wrap under
    each other too when the line is too short for both, rather than scrolling
-   the module sideways. The title wraps instead of
-   truncating: it is somebody else's subject line, and a decision made on half
-   of it is a worse one. */
+   the module sideways. The title wraps instead of truncating: it is somebody
+   else's subject line, and a decision made on half of it is a worse one. */
 .dash-sug-row { flex-direction: column; align-items: stretch; gap: 4px; }
 .dash-sug-head { display: flex; align-items: baseline; gap: 8px; }
 .dash-sug-title { flex: 1; min-width: 0; font-size: calc(13px * var(--fs-scale));
