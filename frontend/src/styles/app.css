@@ -1839,6 +1839,16 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
   color: var(--fg-muted); overflow-wrap: anywhere; }
 .dash-sug-actions { display: flex; gap: 8px; flex-wrap: nowrap; flex: none; margin-left: auto; }
 .dash-sug-foot { padding: 8px 12px; }
+/* A share row is a name and its last view beside a switch, with an optional
+   second line saying a sign-in change turned it off. Unlike the text-only rows
+   the switch is a control, so the row centres on it, and the text column may
+   shrink so a long name truncates rather than pushing the switch out. */
+.dash-share-row { align-items: center; }
+.dash-share-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.dash-share-line { display: flex; align-items: baseline; gap: 8px; }
+.dash-share-note { font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
+.dash-share-row .menu-toggle { flex: none; }
+.dash-share-foot { padding: 8px 12px; }
 /* A plan row carries a CHECKBOX and a kind mark, which the other dashboard
    lists do not. `align-items: baseline` is right for a row of text and wrong
    for a row with controls in it — the box would sit on the text's baseline
