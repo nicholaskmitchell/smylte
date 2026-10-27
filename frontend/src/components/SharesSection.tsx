@@ -16,8 +16,8 @@ import { useEffect, useRef, useState } from 'react'
 import {
   api, AuthError, type Share, type ShareInput, type ShareView, type List,
 } from '../api'
-import { makeGuard, parseDate } from '../util'
-import { fmtWhen } from '../time'
+import { makeGuard } from '../util'
+import { isOn, seenText } from '../shares'
 import { useTimeFormat } from '../timeformat'
 import { useI18n } from '../i18n'
 import { ShareBody, type Translate } from './SharePage'
@@ -35,12 +35,6 @@ const horizonLabel = (tr: Translate, n: (typeof HORIZONS)[number]): string => {
     case 28: return tr('shares.horizon.28')
   }
 }
-
-// How recently a link must have been opened to count as open right now. The
-// page polls every 15 to 30 seconds, and the server stamps `last_seen_at` at
-// most once a minute, so two minutes is the shortest window that does not
-// flicker to "last opened" between two stamps of a page that is still on screen.
-const OPEN_NOW_MS = 120_000
 
 // How often the list asks again, to keep "Open now" honest while the section is
 // on screen. It merges `last_seen_at` and nothing else (see `useEffect` below).
@@ -245,14 +239,6 @@ export function SharesSection(
   const toggled = (ids: string[], id: string): string[] =>
     ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]
 
-  const openNow = (d: Share) =>
-    d.last_seen_at !== null && Date.now() - parseDate(d.last_seen_at).getTime() < OPEN_NOW_MS
-
-  // The state the owner should SEE. The DTO already reports `enabled` false for
-  // a link a password change switched off, but the two are combined here as well
-  // so the toggle never reads On beside the sentence that says it is off.
-  const isOn = (d: Share) => d.enabled && !d.switched_off_by_password
-
   if (!loaded) return <div className="empty">{tr('shares.loading')}</div>
   if (failed) return <div className="empty" role="alert">{tr('shares.loadFailed')}</div>
 
@@ -280,13 +266,7 @@ export function SharesSection(
                     {d.show_focus ? <span className="chip">{tr('shares.focusChip')}</span> : null}
                     {nothing ? <span className="chip warn">{tr('shares.nothingChip')}</span> : null}
                     {!isOn(d) ? <span className="chip">{tr('shares.off')}</span> : null}
-                    <span className="mono">
-                      {openNow(d)
-                        ? tr('shares.openNow')
-                        : d.last_seen_at
-                          ? tr('shares.lastSeen', { when: fmtWhen(d.last_seen_at, tf, locale) })
-                          : tr('shares.neverSeen')}
-                    </span>
+                    <span className="mono">{seenText(d, Date.now(), tr, tf, locale)}</span>
                   </div>
                   {d.switched_off_by_password ? (
                     <div className="hintline warn">{tr('shares.offByPassword')}</div>

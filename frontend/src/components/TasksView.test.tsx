@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { TasksView } from './TasksView'
 import { DataProvider } from '../data'
 import { cacheLists, cacheTasks, setCacheUser } from '../cache'
-import { api, AuthError, uidFor, UID_SUFFIX_LEGACY, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
+import { api, AuthError, uidFor, UID_SUFFIX_LEGACY, type List, type MailSuggestion, type Task, type TaskGroup, type TasksViewMode } from '../api'
 
 // Mock the whole API module: every method becomes a vi.fn() so the view never
 // touches the network.
@@ -37,7 +37,8 @@ const list: List = {
   open_count: 0, task_count: 0, event_count: 0, total: 0, color: '#D9480F',
 }
 
-function setup(view: TasksViewMode = 'list', showCompleted = false, collapsedTasks: string[] = []) {
+function setup(view: TasksViewMode = 'list', showCompleted = false, collapsedTasks: string[] = [],
+  extra: Partial<Parameters<typeof TasksView>[0]> = {}) {
   const onExpire = vi.fn()
   const onCollapsedTasksChange = vi.fn()
   // The data lives in the provider now, so the harness mounts one — with the
@@ -56,7 +57,7 @@ function setup(view: TasksViewMode = 'list', showCompleted = false, collapsedTas
           collapsedGroups={[]} onCollapsedGroupsChange={vi.fn()}
           collapsedTasks={collapsed}
           onCollapsedTasksChange={(next) => { onCollapsedTasksChange(next); setCollapsed(next) }}
-          showCompleted={showCompleted} />
+          showCompleted={showCompleted} {...extra} />
       </DataProvider>
     )
   }
@@ -2074,5 +2075,39 @@ describe('<TasksView> the deadline a task was moved off', () => {
     setup()
     await screen.findByText('No date now')
     expect(screen.getByText(/was due .* · 21d/)).toBeInTheDocument()
+  })
+})
+
+describe('<TasksView> asked to show the Suggested pane', () => {
+  const suggestion: MailSuggestion = {
+    id: 'sg1', kind: 'task', status: 'pending', title: 'Return the permission slip',
+    notes: '', due: null, confidence: 0.8, event: null, target: null,
+    source: {
+      sender: 'office@school.example', sender_name: 'Ms Smith',
+      subject: 'Trip on Friday', sent_at: '2026-10-05T08:00:00Z',
+      message_id: 'm1@school.example', thread_id: 'mid:m1@school.example', folder: 'INBOX',
+    },
+    updates: [], created_at: '2026-10-05T08:01:00Z', decided_at: null, result: null,
+  }
+
+  it('opens the pane and says it has acted, once', async () => {
+    // Home's Suggested module is a way in to this pane. The ask is a one-shot:
+    // if it were not handed back, leaving the tab and returning would open the
+    // pane again.
+    m.mailSuggestions.mockResolvedValue({ enabled: true, suggestions: [suggestion], pending_count: 1 })
+    const onAskHandled = vi.fn()
+    setup('list', false, [], { ask: 'suggested', onAskHandled })
+    expect(await screen.findByDisplayValue('Return the permission slip')).toBeInTheDocument()
+    expect(document.querySelector('.mail-sug')).not.toBeNull()
+    expect(onAskHandled).toHaveBeenCalledTimes(1)
+  })
+
+  it('does nothing without an ask', async () => {
+    m.mailSuggestions.mockResolvedValue({ enabled: true, suggestions: [suggestion], pending_count: 1 })
+    const onAskHandled = vi.fn()
+    setup('list', false, [], { ask: null, onAskHandled })
+    await screen.findByPlaceholderText('Add a task…')
+    expect(document.querySelector('.mail-sug')).toBeNull()
+    expect(onAskHandled).not.toHaveBeenCalled()
   })
 })

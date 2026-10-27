@@ -194,6 +194,10 @@ export function App() {
   // suggestions. Same reasoning as `focusRev` — the Suggested pane and the
   // mail settings re-read on this and nothing else.
   const [mailRev, setMailRev] = useState(0)
+  // A FIFTH, for share links: the Home Shares module re-reads on it. It exists
+  // for the same reason as the others — a share is neither task data nor a
+  // preference, and routing its events through `rev` would refetch everything.
+  const [sharesRev, setSharesRev] = useState(0)
   // Whether the focus surface is up. Read off the URL, so /focus is a real
   // address — a second window (the desktop client's floating one, a follow-up)
   // can open it cold — and entered from Today by pushing that address, so the
@@ -222,6 +226,20 @@ export function App() {
     setSettingsAt(undefined)
     setSettingsOpen((o) => !o)
   }, [])
+  // Bumped to remount the menu. `initialSection` is only read when the menu
+  // mounts, so a jump from Home while Settings is already open at another
+  // section would otherwise change a prop nothing looks at again.
+  const [settingsKey, setSettingsKey] = useState(0)
+  // A module on Home sending the owner to the section that holds the rest of
+  // what it shows. Unlike the gear, this lands on a section, not the top.
+  const openSettingsAt = useCallback((section: SettingsSection) => {
+    setSettingsAt(section)
+    setSettingsKey((k) => k + 1)
+    setSettingsOpen(true)
+  }, [])
+  // What Home asks the Tasks pane to show when it opens. Cleared by the pane
+  // once it has acted, so coming back to Tasks later does not reopen it.
+  const [tasksAsk, setTasksAsk] = useState<'suggested' | null>(null)
   // Appearance is the one editor still opened over the app: it is a full token
   // workbench, not a row of settings. Tabs, connected apps and archived
   // calendars are sections inside the settings panel now.
@@ -793,6 +811,13 @@ export function App() {
     saveSettings({ last_tab: next })
   }, [startTab])
 
+  // Home's Suggested module hands the owner to the pane that edits what it can
+  // only approve or dismiss.
+  const openSuggested = useCallback(() => {
+    setTasksAsk('suggested')
+    changeTab('tasks')
+  }, [changeTab])
+
   const changeTabOrder = useCallback((next: Tab[]) => {
     setTabOrder(next)
     saveSettings({ tab_order: next })
@@ -1157,10 +1182,11 @@ export function App() {
         return
       }
       if (type === 'share_created' || type === 'share_updated' || type === 'share_deleted') {
-        // A share is not task or calendar data: it is a row in Settings → Shares
-        // and nothing else on screen reads it, so a refetch of every list, task
-        // and calendar window would be a cost with no reader. Its section keeps
-        // itself current, and merges `last_seen_at` on its own timer.
+        // A share is not task or calendar data, so a refetch of every list, task
+        // and calendar window would be a cost with no reader. The Home Shares
+        // module re-reads on `sharesRev`; Settings → Shares keeps itself
+        // current, and merges `last_seen_at` on its own timer.
+        setSharesRev((r) => r + 1)
         return
       }
       clearTimeout(timer)
@@ -1235,7 +1261,7 @@ export function App() {
     [layout, navSlot, sideCollapsed])
 
   const settingsMenu = settingsOpen && (
-    <SettingsMenu panelRef={settingsRef} initialSection={settingsAt}
+    <SettingsMenu key={settingsKey} panelRef={settingsRef} initialSection={settingsAt}
       layout={layout} onToggleLayout={toggleLayout}
       theme={theme} onToggleTheme={toggleTheme}
       onCustomizeAppearance={() => { setSettingsOpen(false); setAppearanceOpen(true) }}
@@ -1288,7 +1314,8 @@ export function App() {
         groups={taskGroups} onGroupsChange={changeTaskGroups}
         collapsedGroups={collapsedGroups} onCollapsedGroupsChange={changeCollapsedGroups}
         collapsedTasks={collapsedTasks} onCollapsedTasksChange={changeCollapsedTasks}
-        showCompleted={showCompleted} mailRev={mailRev} />
+        showCompleted={showCompleted} mailRev={mailRev}
+        ask={tasksAsk} onAskHandled={() => setTasksAsk(null)} />
     )}
     {!booting && tab === 'calendar' && (
       <CalendarView onExpire={onExpire} cursor={cursor} onCursorChange={setCursor}
@@ -1316,7 +1343,9 @@ export function App() {
     {!booting && tab === 'home' && (
       <HomeView rev={rev} onExpire={onExpire} staleOverdueDays={staleOverdue}
         layout={dashboard} onLayoutChange={changeDashboard}
-        hiddenCalendars={hiddenCals} archivedCalendars={archivedCals} />
+        hiddenCalendars={hiddenCals} archivedCalendars={archivedCals}
+        mailRev={mailRev} sharesRev={sharesRev}
+        onOpenSuggested={openSuggested} onOpenSettings={openSettingsAt} />
     )}
   </>)
 
