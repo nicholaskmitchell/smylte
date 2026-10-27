@@ -1818,6 +1818,27 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-task-due { flex: none; font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted); }
 .dash-task-due.overdue { color: var(--warn); }
+/* A suggestion row is two lines, not one: what it would become and when, then
+   where it came from beside the two buttons. The one-line `.dash-task` has no
+   room for a pair of buttons, so the row stacks and each line wraps on a narrow
+   module rather than pushing the title off the edge. The title wraps instead of
+   truncating: it is somebody else's subject line, and a decision made on half
+   of it is a worse one. */
+.dash-sug-row { flex-direction: column; align-items: stretch; gap: 4px; }
+.dash-sug-head { display: flex; align-items: baseline; gap: 8px; }
+.dash-sug-title { flex: 1; min-width: 0; font-size: calc(13px * var(--fs-scale));
+  font-weight: var(--wght-content); overflow-wrap: anywhere; }
+.dash-sug-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+/* The same small mono label as the pane's kind badge. */
+.dash-sug-kind {
+  font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale));
+  text-transform: var(--label-case); letter-spacing: calc(0.1em * var(--tracking));
+  color: var(--fg-faint); flex: none;
+}
+.dash-sug-src { flex: 1 1 6rem; min-width: 0; font-size: calc(11px * var(--fs-scale));
+  color: var(--fg-muted); overflow-wrap: anywhere; }
+.dash-sug-actions { display: flex; gap: 8px; flex-wrap: nowrap; flex: none; margin-left: auto; }
+.dash-sug-foot { padding: 8px 12px; }
 /* A plan row carries a CHECKBOX and a kind mark, which the other dashboard
    lists do not. `align-items: baseline` is right for a row of text and wrong
    for a row with controls in it — the box would sit on the text's baseline

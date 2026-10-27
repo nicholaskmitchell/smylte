@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import {
   api, clientId,
   type Booking, type BookingLink, type CalEvent, type DayEntry, type DayPlan,
-  type List, type Task,
+  type List, type MailSuggestion, type Task,
 } from '../api'
 import { useIsMobile, useToday } from '../hooks'
 import { useCalendarData, useTaskData, type TaskData } from '../data'
@@ -12,6 +12,7 @@ import {
 import { fmtDue, fmtDuration } from '../time'
 import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
+import { useMailSuggestions } from '../mail'
 import { bucketByDay, monthGrid, type DayEv } from '../calendar'
 import { DayPopover } from './DayPopover'
 import type { SettingsSection } from './SettingsMenu'
@@ -542,8 +543,10 @@ function ModuleBody({ kind, tasks, lists, days, byDay, calErrors, taskErrors, fa
       return <BookingList bookings={bookings} failed={schedFailed} />
     case 'quick_add':
       return <QuickAddModule lists={lists} create={create} />
-    // Filled in by their modules; the registry and the plumbing land first.
     case 'suggested':
+      return <SuggestedModule mailRev={mailRev ?? 0} onExpire={onExpire}
+        onOpen={onOpenSuggested} onOpenSettings={onOpenSettings} />
+    // Filled in by its module; the registry and the plumbing landed first.
     case 'shares':
       return null
     default:
@@ -651,6 +654,142 @@ function WeekDone({ onExpire, rev }: { onExpire: () => void; rev: number }) {
         ))}
       </ul>
     </div>
+  )
+}
+
+/**
+ * The email reader's pending suggestions, to add or dismiss from the board.
+ *
+ * It holds its OWN `useMailSuggestions`, as `WeekDone` holds its own read: the
+ * Tasks pane's instance only exists while that tab is mounted, and a module
+ * nobody has placed should cost no request. The two stay in step through
+ * `mailRev` — approving or dismissing here publishes `mail_updated`, which
+ * re-reads the pane's list as well.
+ *
+ * DECIDING IS ONE TAP AND SENDS NOTHING (`{}`). That is what approving an
+ * untouched row in the pane sends: the server files a task under the list the
+ * email suggested (or the default) and an event in the default calendar, and
+ * the filing memory is only taught by a list the owner PICKS. Editing a title,
+ * a date or a list stays in the pane; a row here is a queue to clear, not a
+ * second editor.
+ */
+/** How many rows the module lists; the rest are a count that points at the pane. */
+const SUGGESTED_SHOWN = 20
+
+function SuggestedModule({ mailRev, onExpire, onOpen, onOpenSettings }: {
+  mailRev: number
+  onExpire: () => void
+  onOpen?: () => void
+  onOpenSettings?: (section: SettingsSection) => void
+}) {
+  const tr = useT()
+  const { locale } = useI18n()
+  const tf = useTimeFormat()
+  const sug = useMailSuggestions(mailRev, onExpire)
+  // The rows a decision is out for. The hook takes the row away at once, but a
+  // re-read that lands while the request is still in flight can bring it back
+  // (the server has not finished with it), and pressing it again would only
+  // earn a 409.
+  const [busy, setBusy] = useState<ReadonlySet<string>>(new Set())
+  const decide = async (id: string, send: () => Promise<boolean>) => {
+    setBusy((b) => new Set(b).add(id))
+    try { await send() } finally {
+      setBusy((b) => { const next = new Set(b); next.delete(id); return next })
+    }
+  }
+
+  const kindLabel = (kind: MailSuggestion['kind']) => {
+    switch (kind) {
+      case 'task': return tr('mail.sug.kind.task')
+      case 'update': return tr('mail.sug.kind.update')
+      case 'event': return tr('mail.sug.kind.event')
+    }
+  }
+  const approveLabel = (kind: MailSuggestion['kind']) => {
+    switch (kind) {
+      case 'task': return tr('mail.sug.approve.task')
+      case 'update': return tr('mail.sug.approve.update')
+      case 'event': return tr('mail.sug.approve.event')
+    }
+  }
+  // The same short date the other dashboard lists give a due. An event's start
+  // carries a clock unless it is an all-day one; a task's day may too.
+  const whenOf = (s: MailSuggestion) => {
+    if (s.kind === 'event') {
+      return s.event?.start ? fmtDue(s.event.start, s.event.all_day, tf, locale) : ''
+    }
+    return s.due ? fmtDue(s.due, !s.due.includes('T'), tf, locale) : ''
+  }
+
+  // Nothing until the first answer lands, as `WeekDone` keeps: "Nothing
+  // waiting." shown over a read in flight is a claim the module cannot yet make.
+  if (!sug.loaded) return null
+  // A failed read is not an empty queue. The hook keeps the rows it already
+  // had, so this only stands in when there are none to show.
+  if (sug.error && sug.items.length === 0) {
+    return <p className="dash-empty" role="status">{tr('home.suggestedFailed')}</p>
+  }
+  if (!sug.enabled && sug.items.length === 0) {
+    return (
+      <>
+        <p className="dash-empty">{tr('home.suggestedOff')}</p>
+        {onOpenSettings && (
+          <div className="dash-sug-foot">
+            <button type="button" className="btn ghost" onClick={() => onOpenSettings('mail')}>
+              {tr('home.openMailSettings')}
+            </button>
+          </div>
+        )}
+      </>
+    )
+  }
+  if (sug.items.length === 0) return <p className="dash-empty">{tr('mail.sug.empty')}</p>
+
+  const shown = sug.items.slice(0, SUGGESTED_SHOWN)
+  const more = sug.items.length - shown.length
+  return (
+    <>
+      {sug.error && <p className="cal-partial" role="status">{sug.error}</p>}
+      <ul className="dash-tasks dash-sug">
+        {shown.map((s) => {
+          const title = s.kind === 'update'
+            ? tr('mail.sug.updates', { title: s.target?.title ?? '?' })
+            : s.title
+          const when = whenOf(s)
+          const working = busy.has(s.id)
+          return (
+            <li key={s.id} className="dash-task dash-sug-row" data-kind={s.kind}>
+              <span className="dash-sug-head">
+                <span className="dash-sug-title" dir={textDir(title)}>{title}</span>
+                {when && <span className="dash-task-due mono">{when}</span>}
+              </span>
+              <span className="dash-sug-meta">
+                <span className="dash-sug-kind">{kindLabel(s.kind)}</span>
+                <span className="dash-sug-src">{s.source.sender_name || s.source.sender}</span>
+                <span className="dash-sug-actions">
+                  <button type="button" className="btn ghost" disabled={working}
+                    onClick={() => { void decide(s.id, () => sug.reject(s.id)) }}>
+                    {tr('mail.sug.reject')}
+                  </button>
+                  <button type="button" className="btn" disabled={working || !s.title.trim()}
+                    onClick={() => { void decide(s.id, () => sug.approve(s.id, {})) }}>
+                    {approveLabel(s.kind)}
+                  </button>
+                </span>
+              </span>
+            </li>
+          )
+        })}
+      </ul>
+      {more > 0 && <p className="dash-note">{tr('home.sugMore', { count: more })}</p>}
+      {onOpen && (
+        <div className="dash-sug-foot">
+          <button type="button" className="btn ghost" onClick={onOpen}>
+            {tr('home.openSuggested')}
+          </button>
+        </div>
+      )}
+    </>
   )
 }
 

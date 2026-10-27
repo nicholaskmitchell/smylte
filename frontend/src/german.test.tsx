@@ -147,6 +147,28 @@ describe('the app in German', () => {
     expect(keys, `unresolved keys on the plan card: ${keys.join(', ')}`).toEqual([])
   })
 
+  it('prints no catalogue key in the Suggested and Shares modules', async () => {
+    // Neither is on the stock board, and both hold their strings partly in
+    // `MODULE_SPECS` (label, blurb) and partly in states a render has to reach:
+    // email reading off is the state a fresh account sees first.
+    m.getSettings.mockResolvedValue({
+      language: 'de',
+      dashboard: [
+        { id: 's', kind: 'suggested', x: 0, y: 0, w: 4, h: 6 },
+        { id: 'h', kind: 'shares', x: 4, y: 0, w: 4, h: 4 },
+      ],
+    })
+    const { container } = render(<App />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Aufgaben' }))
+      .toBeInTheDocument())
+    await userEvent.click(screen.getAllByRole('button', { name: 'Start' })[0])
+    await screen.findByText('Vorschläge')
+    await screen.findByText('Freigaben')
+    await screen.findByText('E-Mail-Vorschläge sind aus.')
+    const keys = visibleStrings(container).filter((s) => KEYISH.test(s))
+    expect(keys, `unresolved keys in the new modules: ${keys.join(', ')}`).toEqual([])
+  })
+
   it('offers each language under its own name', async () => {
     // The endonyms, which are the one pair of strings that must NOT follow the
     // setting: a menu that offered "German" to somebody who cannot read the
