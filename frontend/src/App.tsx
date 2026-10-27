@@ -191,8 +191,8 @@ export function App() {
   // and the day on `rev`.
   const [focusRev, setFocusRev] = useState(0)
   // A FOURTH counter, for the email reader: its status and its pending
-  // suggestions. Same reasoning as `focusRev` — the Suggested pane and the
-  // mail settings re-read on this and nothing else.
+  // suggestions. Same reasoning as `focusRev` — the Suggested pane, the mail
+  // settings and the Home Suggested module re-read on this and nothing else.
   const [mailRev, setMailRev] = useState(0)
   // A FIFTH, for share links: the Home Shares module re-reads on it. It exists
   // for the same reason as the others — a share is neither task data nor a

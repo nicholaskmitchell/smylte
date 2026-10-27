@@ -3,7 +3,7 @@
 // re-read on. HomeView is replaced by a stub that exposes exactly those, so
 // these tests are about App's plumbing and not about any module's rows.
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { App } from './App'
 import { api, subscribe } from './api'
@@ -78,7 +78,10 @@ describe('<App> opening Settings from Home', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'stub open mail settings' }))
     expect(await screen.findByRole('tab', { name: 'Email' })).toHaveAttribute('aria-selected', 'true')
 
-    await userEvent.click(screen.getByRole('button', { name: 'stub open shares settings' }))
+    // No mousedown: a real click on the module sits outside the menu and closes
+    // it, and the second open would then be a plain first one. The menu stays
+    // open here, so only the remount `key={settingsKey}` can move it.
+    fireEvent.click(screen.getByRole('button', { name: 'stub open shares settings' }))
     await waitFor(() =>
       expect(screen.getByRole('tab', { name: 'Shares' })).toHaveAttribute('aria-selected', 'true'))
     expect(screen.getByRole('tab', { name: 'Email' })).toHaveAttribute('aria-selected', 'false')

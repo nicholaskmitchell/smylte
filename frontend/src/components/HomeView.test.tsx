@@ -1044,6 +1044,41 @@ describe('<HomeView> the Shares module', () => {
     expect(await screen.findByText('Renamed')).toBeInTheDocument()
   })
 
+  it('reads again when a switch settles over a read that began while it was out', async () => {
+    // The settling switch drops any read that began meanwhile (it may have seen
+    // either side of the change), so without a fresh one the answer this read
+    // carried would wait on the 30 second timer.
+    let patched = false
+    const list = () => [
+      share({ id: 'a1', name: 'Mum', enabled: !patched }),
+      ...(patched ? [share({ id: 'g7', name: 'Gran' })] : []),
+    ] as never
+    let calls = 0
+    let land: () => void = () => {}
+    m.shares.mockImplementation(() => ++calls === 2
+      ? new Promise((r) => { land = () => r(list()) })
+      : Promise.resolve(list()))
+    let settle: (v: Share) => void = () => {}
+    m.patchShare.mockImplementation(() => new Promise((r) => { settle = r as never }))
+    const view = (sharesRev: number) => (
+      <DataProvider rev={0} onExpire={vi.fn()}>
+        <HomeView rev={0} onExpire={vi.fn()} layout={layout}
+          onLayoutChange={vi.fn()} sharesRev={sharesRev} />
+      </DataProvider>
+    )
+    const { rerender } = render(view(0))
+    await userEvent.click(await screen.findByRole('button', { name: 'Link for Mum' }))
+    rerender(view(1))
+    await waitFor(() => expect(m.shares).toHaveBeenCalledTimes(2))
+
+    patched = true
+    await act(async () => { settle(share({ id: 'a1', enabled: false })) })
+    await act(async () => { land() })
+
+    expect(await screen.findByText('Gran')).toBeInTheDocument()
+    expect(m.shares).toHaveBeenCalledTimes(3)
+  })
+
   it('says the load failed rather than that there are no links', async () => {
     m.shares.mockRejectedValue(new Error('boom'))
     setup(layout)

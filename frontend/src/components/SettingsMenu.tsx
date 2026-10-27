@@ -181,10 +181,12 @@ export function SettingsMenu({
   // Only meaningful on a phone. On a desktop the nav is a permanent column, so
   // there is nothing to be "in" and nothing to go back to.
   const [view, setView] = useState<'index' | 'panel'>(initialSection ? 'panel' : 'index')
-  // Focus follows the switch. `initialSection` is only ever set by pressing
-  // the Layout row, and that press remounts this menu in the other frame — so
-  // the button that had focus is gone, and without this focus falls to
-  // <body>: behind the phone's modal sheet, or out of the menu altogether.
+  // Focus follows the switch. `initialSection` is set by pressing the Layout
+  // row, which remounts this menu in the other frame, and by Home's modules,
+  // which open it at Email or Shares. Only the first leaves the pressed button
+  // gone, which is why focus moves for 'appearance' alone: without it focus
+  // falls to <body>, behind the phone's modal sheet or out of the menu
+  // altogether.
   const layoutRowRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     if (initialSection === 'appearance') layoutRowRef.current?.focus()

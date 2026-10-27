@@ -521,8 +521,12 @@ describe('a foreign-authored title cannot scroll the pane sideways', () => {
     // `.booking-desc` and `.conn-name` are owner-approved text in their own
     // scrollers, the same shape for one declaration each. The browser tier
     // (`backlog.sep03.browser.test.tsx`) measures the width; this pins the
-    // declaration is still there.
-    for (const sel of ['.sched-booking .who', '.sched-booking .notes', '.booking-desc', '.conn-name']) {
+    // declaration is still there. The Home Suggested module adds the subject
+    // and the sender of an email, the one place an outsider's text lands in a
+    // dashboard card, and the Shares card's last-view line, which has no
+    // fixed width to fit and must wrap beside its switch rather than push it.
+    for (const sel of ['.sched-booking .who', '.sched-booking .notes', '.booking-desc', '.conn-name',
+      '.dash-sug-title', '.dash-sug-src', '.dash-share-meta']) {
       expect(ruleFor(sel), `${sel} has no wrap guard`).toMatch(/overflow-wrap:\s*(anywhere|break-word)/)
     }
   })
