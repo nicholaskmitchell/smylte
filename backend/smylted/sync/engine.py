@@ -75,6 +75,19 @@ def _restamp_uid(raw: bytes, uid: str) -> bytes:
     return cal.to_ical()
 
 
+def moved_href(src_item_href: str, dst_href: str) -> str:
+    """Where a move puts a resource: the same filename in the destination
+    collection. Deterministic on purpose, so a retry lands on the copy an
+    earlier attempt wrote and `_adopt_moved_copy` can recognise it."""
+    return f"{dst_href}{src_item_href.rstrip('/').rsplit('/', 1)[-1]}"
+
+
+def task_move_key(dst_href: str, uid: str) -> str:
+    """The `meta` key recording a task copy that a move wrote and has not yet
+    finished. Its value is the list the copy came from (see `_move`)."""
+    return f"task_move:{dst_href}|{uid}"
+
+
 class ConflictError(DavError):
     """A 412 that survived the refetch-and-retry merge — surface to the user."""
 
@@ -534,10 +547,18 @@ class SyncEngine:
         row = store.get_item(self.conn, src_href, uid)
         if row is None:
             raise KeyError(f"unknown {kind} {uid} in {src_href}")
-        basename = row["href"].rstrip("/").rsplit("/", 1)[-1]
-        new_href = f"{dst_href}{basename}"
+        new_href = moved_href(row["href"], dst_href)
         current = self.dav.get(row["href"])      # NotFound => already gone; surfaces as 404
         data = transform(current.data) if transform else current.data
+        # A TASK COPY IS ADOPTED ONLY WHEN THIS ENGINE WROTE IT. Tasks really do
+        # share UIDs across lists (a client copying one keeps its UID, and
+        # Smylte names a task's file after its UID), so a same-UID resource at
+        # `new_href` may be another task, and adopting it would overwrite that
+        # task with this one. The journal says which: it is written the moment
+        # the copy lands and cleared once the move is finished or undone.
+        # Events keep the older rule below.
+        journal = task_move_key(dst_href, uid) if kind == "task" else None
+        ours = journal is None or store.get_meta(self.conn, journal) == src_href
         try:
             self.dav.put(new_href, data, if_none_match="*")
         except (PreconditionFailed, Conflict) as e:
@@ -559,7 +580,12 @@ class SyncEngine:
             # again shortly" over MCP) something close to the opposite. This is
             # `_put_new`'s replay tolerance, applied to the same problem: read
             # the occupant, and only a resource that is NOT ours is a conflict.
+            if not ours:
+                raise ConflictError(
+                    f"{kind} {uid} already exists in the target {where}") from e
             self._adopt_moved_copy(new_href, uid, data, e, kind=kind)
+        if journal:
+            store.set_meta(self.conn, journal, src_href)
         try:
             self.dav.delete(row["href"], if_match=current.etag)
         except PreconditionFailed as e:
@@ -567,6 +593,8 @@ class SyncEngine:
             # the caller retry rather than silently discarding that revision.
             try:
                 self.dav.delete(new_href, if_match=None)
+                if journal:
+                    store.set_meta(self.conn, journal, None)
             except DavError:
                 log.warning("move_%s: could not roll back the copy at %s", kind, new_href)
             raise ConflictError(f"{kind} {uid} changed during the move; retry") from e
@@ -587,6 +615,8 @@ class SyncEngine:
         with _tx(self.conn):
             store.delete_item_by_href(self.conn, src_href, row["href"])
             store.orphan_sidecar(self.conn, src_href, uid)
+            if journal:
+                store.set_meta(self.conn, journal, None)
         return self._refresh_from_wire(dst_href, new_href)
 
     def _adopt_moved_copy(self, new_href: str, uid: str, data: bytes, cause: DavError,

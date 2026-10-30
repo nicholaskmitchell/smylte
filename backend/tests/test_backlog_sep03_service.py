@@ -40,7 +40,7 @@ from smylted import ical
 from smylted import due
 from smylted.config import Settings
 from smylted.dav.client import CollectionInfo, Item
-from smylted.dav.errors import NotFound, PreconditionFailed
+from smylted.dav.errors import DavError, NotFound, PreconditionFailed
 from smylted.db import store
 from smylted.ical import extract_from_raw
 from smylted.ical.edit import EventEdit
@@ -49,7 +49,7 @@ from smylted.mcp.server import INVALID_PARAMS, McpServer
 from smylted.mcp.tools import SCOPE_READ
 from smylted.notify import rules as R
 from smylted.service import SmylteService
-from smylted.sync import SyncEngine
+from smylted.sync import ConflictError, SyncEngine
 
 pytestmark = [pytest.mark.backlog, pytest.mark.stage3]
 
@@ -540,6 +540,136 @@ def test_a_moved_event_keeps_its_reminder(svc):
     assert moved["notify_minutes_before"] == 30
     assert svc.get_event(CAL_B, "mv")["notify_minutes_before"] == 30
     assert svc.get_event(CAL_A, "mv") is None
+
+
+# ── moving a task to another list: what a failure part-way leaves ────────────
+# The move is one resource at a time, copy then delete, so each of these is a
+# real state the owner can be left in. In every one, a retry has to finish the
+# job, and what already moved has to be announced and carry its refs.
+
+LIST_B = "/dav/me/home/"
+
+
+class _FlakyDav(_FakeDav):
+    """The double, with one failure armed at a time: the source DELETE after
+    the copy landed, the re-read of the copy, or the PUT of one href."""
+
+    def __init__(self, initial):
+        super().__init__(initial)
+        self.fail_delete = False
+        self.fail_get = None
+        self.fail_put = None
+
+    def get(self, href):
+        if href == self.fail_get:
+            self.fail_get = None
+            raise DavError(f"GET {href}: connection reset")
+        return super().get(href)
+
+    def put(self, href, data, **kw):
+        if href == self.fail_put:
+            self.fail_put = None
+            raise DavError(f"PUT {href}: connection reset")
+        return super().put(href, data, **kw)
+
+    def delete(self, href, *, if_match=None):
+        if self.fail_delete:
+            self.fail_delete = False
+            raise DavError(f"DELETE {href}: connection reset")
+        super().delete(href, if_match=if_match)
+
+
+def _two_lists(svc, initial):
+    store.upsert_collection(
+        svc._conn, CollectionInfo(href=LIST_B, displayname="Home", components={"VTODO"}))
+    dav = _FlakyDav(initial)
+    svc._engine = SyncEngine(dav, svc._conn)
+    for href, raw in initial.items():
+        _cache(svc._conn, href.rsplit("/", 1)[0] + "/", extract_from_raw(raw).uid, raw)
+    published = []
+    svc._publish = published.append
+    return dav, published
+
+
+def test_a_task_move_whose_source_delete_failed_can_be_retried(svc):
+    """The copy landed, the DELETE's reply was lost, and the next sync cached
+    the copy in the destination. The retry must recognise that copy as its own
+    and finish, or the task stays in both lists for good."""
+    dav, _ = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
+    store.set_sidecar(svc._conn, LIST_A, "t1", pinned=1)
+    dav.fail_delete = True
+    with pytest.raises(DavError):
+        svc.move_task(LIST_A, LIST_B, "t1")
+    _cache(svc._conn, LIST_B, "t1", dav.get(f"{LIST_B}t1.ics").data)   # the sync tick
+
+    moved = svc.move_task(LIST_A, LIST_B, "t1")
+
+    assert moved["pinned"] is True
+    assert sorted(dav.store) == [f"{LIST_B}t1.ics"]
+    assert svc.get_task(LIST_A, "t1") is None
+    # Finished, so nothing is left claiming the copy as a move in progress.
+    assert store.get_meta(svc._conn, f"task_move:{LIST_B}|t1") is None
+
+
+def test_a_task_already_in_the_destination_under_another_name_is_a_clash(svc):
+    """Not our copy: the precheck refuses before anything is written."""
+    dav, _ = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
+    elsewhere = foreign_raw("t1", "Pack, elsewhere")
+    dav.store[f"{LIST_B}other.ics"] = ('"1"', elsewhere)
+    store.upsert_item(svc._conn, LIST_B, Item(f"{LIST_B}other.ics", '"1"', elsewhere),
+                      extract_from_raw(elsewhere))
+    with pytest.raises(ConflictError):
+        svc.move_task(LIST_A, LIST_B, "t1")
+    assert sorted(dav.store) == sorted([f"{LIST_A}t1.ics", f"{LIST_B}other.ics"])
+
+
+def test_a_same_uid_task_at_the_same_filename_is_never_overwritten(svc):
+    """Smylte names a task's file after its UID, so a different task with the
+    same UID in the destination sits exactly where the move would write. Not
+    cached yet, it gets past the precheck; the engine must still refuse it,
+    because nothing says this move wrote it."""
+    dav, _ = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
+    twin = foreign_raw("t1", "Someone else's task")
+    dav.store[f"{LIST_B}t1.ics"] = ('"1"', twin)
+    with pytest.raises(ConflictError):
+        svc.move_task(LIST_A, LIST_B, "t1")
+    assert dav.store[f"{LIST_B}t1.ics"][1] == twin
+    assert f"{LIST_A}t1.ics" in dav.store
+
+
+def test_a_task_move_that_fails_part_way_announces_what_moved(svc):
+    """The subtask moves first and the parent's copy then fails. The subtask
+    really is in the new list, so it is announced (nothing else would tell a
+    client), and a retry brings the parent across to rejoin it."""
+    dav, published = _two_lists(svc, {
+        f"{LIST_A}p.ics": foreign_raw("p", "Trip"),
+        f"{LIST_A}c.ics": foreign_raw("c", "Charger", extra=("RELATED-TO;RELTYPE=PARENT:p",)),
+    })
+    dav.fail_put = f"{LIST_B}p.ics"
+    with pytest.raises(DavError):
+        svc.move_task(LIST_A, LIST_B, "p")
+    assert {(e["type"], e["uid"]) for e in published} == {
+        ("task_deleted", "c"), ("task_created", "c")}
+    assert svc.get_task(LIST_B, "c") is not None and svc.get_task(LIST_A, "p") is not None
+
+    svc.move_task(LIST_A, LIST_B, "p")
+    assert svc.get_task(LIST_B, "p")["children"] == ["c"]
+    assert sorted(dav.store) == [f"{LIST_B}c.ics", f"{LIST_B}p.ics"]
+
+
+def test_a_task_move_whose_reread_fails_still_moves_what_smylte_keeps(svc):
+    """Copy and delete both landed and only the re-read of the copy failed.
+    The task has moved, so its sidecar moves too, rather than sitting orphaned
+    in the old list until GC deletes it; the next sync caches the copy."""
+    dav, published = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
+    store.set_sidecar(svc._conn, LIST_A, "t1", pinned=1, estimated_minutes=20)
+    dav.fail_get = f"{LIST_B}t1.ics"
+    with pytest.raises(DavError):
+        svc.move_task(LIST_A, LIST_B, "t1")
+    side = store.get_sidecar(svc._conn, LIST_B, "t1")
+    assert (side["pinned"], side["estimated_minutes"], side["orphaned_at"]) == (1, 20, None)
+    assert store.get_sidecar(svc._conn, LIST_A, "t1") is None
+    assert ("task_created", "t1") in {(e["type"], e["uid"]) for e in published}
 
 
 # ── #9  add_day_entry: a stated estimate never taught the task ───────────────
