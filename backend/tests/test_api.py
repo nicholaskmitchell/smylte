@@ -1448,8 +1448,11 @@ def test_a_subtask_moved_alone_can_be_retried_against_real_radicale(client, prop
     has to recognise the copy the first attempt left. The copy is the source's
     own bytes minus that one line, so it stays in the server's form: rewritten
     through the icalendar library instead, a zero reminder offset came back
-    `P0D` where Radicale keeps `PT0S` (and GEO, PERCENT-COMPLETE likewise), the
-    copy never matched, and the task was stuck in both lists."""
+    `P0D` where Radicale keeps `PT0S`, the copy never matched, and the task
+    was stuck in both lists. GEO and PERCENT-COMPLETE, which Radicale writes
+    in its own form, test the service's precheck after a sync: it has to
+    compare against exactly what the engine writes, not the source with every
+    RELATED-TO ignored."""
     from smylted.dav.errors import DavError
     from smylted.ical import UID_SUFFIX
     svc = client.app.state.service

@@ -18,6 +18,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -258,7 +259,11 @@ def drop_parent_relation(raw: bytes | str) -> bytes:
     from .canonical import split_line
 
     text = raw.decode("utf-8", "surrogateescape") if isinstance(raw, bytes) else raw
-    phys = text.splitlines(keepends=True)
+    # Lines end at CR, LF or CRLF and nowhere else, as `canonical.unfold`
+    # reads them. `str.splitlines` also breaks at U+2028, U+0085 and the like,
+    # which are ordinary characters inside a value: a DESCRIPTION holding
+    # "line\u2028End: Friday" read as an END line and the parent link survived.
+    phys = re.findall(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+$", text)
     out: list[str] = []
     stack: list[str] = []
     i = 0

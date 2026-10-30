@@ -769,40 +769,44 @@ def _sync_tick(svc, dav, *hrefs):
         _sync_copy(svc, dav, href)
 
 
-def test_a_retry_after_a_sync_still_finishes_what_a_lost_move_left(svc):
-    """Every answer was lost and a sync then ran, so the task is in the new
-    list and its Smylte data is orphaned in the old one. The retry finds it
-    there and re-points the refs, touching nothing on the server."""
+def test_a_move_that_lost_every_answer_is_not_finished_after_a_sync(svc):
+    """The one case left unrecovered, on purpose. Every answer was lost and a
+    sync then ran, so the task is in the new list and its Smylte data is
+    orphaned in the old one. Nothing proves the task in the new list is this
+    one (a UID does not), so the retry is a 404 and changes nothing."""
     dav, _ = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
-    store.set_sidecar(svc._conn, LIST_A, "t1", pinned=1, estimated_minutes=15)
+    store.set_sidecar(svc._conn, LIST_A, "t1", pinned=1)
     _lose_delete_answer_and_probe(dav)
     with pytest.raises(DavError):
         svc.move_task(LIST_A, LIST_B, "t1")
     _sync_tick(svc, dav, f"{LIST_B}t1.ics")
 
-    moved = svc.move_task(LIST_A, LIST_B, "t1")
+    with pytest.raises(KeyError):
+        svc.move_task(LIST_A, LIST_B, "t1")
+    assert svc.get_task(LIST_B, "t1") is not None
 
-    assert (moved["pinned"], moved["estimated_minutes"]) == (True, 15)
-    assert store.get_sidecar(svc._conn, LIST_A, "t1") is None
 
+def test_a_stale_move_of_a_deleted_task_never_touches_another_with_its_uid(svc):
+    """The reason for the case above. A task deleted from the old list leaves
+    its Smylte data orphaned there, and a different task with the same UID can
+    live in the new list. A move request that arrives late, from a stale tab
+    or an agent working from an old listing, must not pour the deleted task's
+    data onto that other task, or take that task's own."""
+    dav, _ = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack"),
+                              f"{LIST_B}t1.ics": foreign_raw("t1", "Groceries")})
+    store.set_sidecar(svc._conn, LIST_A, "t1", pinned=1, estimated_minutes=15)
+    store.set_sidecar(svc._conn, LIST_B, "t1", notify_minutes_before=5, kanban_column="mine")
+    svc._conn.execute("INSERT INTO day_plan (day, entry_id, kind, collection_href, uid, source) "
+                      "VALUES ('2026-10-30', 'e1', 'task', ?, 't1', 'user')", (LIST_A,))
+    svc.delete_task(LIST_A, "t1")
 
-def test_a_step_a_lost_move_left_follows_when_its_parent_moves(svc):
-    """The step went first and lost every answer; a sync took it out of the
-    old list. The retry moves its parent, and the step's refs follow too."""
-    dav, _ = _two_lists(svc, {
-        f"{LIST_A}p.ics": foreign_raw("p", "Trip"),
-        f"{LIST_A}c.ics": foreign_raw("c", "Charger", extra=("RELATED-TO;RELTYPE=PARENT:p",)),
-    })
-    store.set_sidecar(svc._conn, LIST_A, "c", pinned=1)
-    _lose_delete_answer_and_probe(dav)
-    with pytest.raises(DavError):
-        svc.move_task(LIST_A, LIST_B, "p")
-    _sync_tick(svc, dav, f"{LIST_B}c.ics")
-
-    svc.move_task(LIST_A, LIST_B, "p")
-
-    assert svc.get_task(LIST_B, "c")["pinned"] is True
-    assert store.get_sidecar(svc._conn, LIST_A, "c") is None
+    with pytest.raises(KeyError):
+        svc.move_task(LIST_A, LIST_B, "t1")
+    theirs = svc.get_task(LIST_B, "t1")
+    assert (theirs["summary"], theirs["notify_minutes_before"], theirs["pinned"]) == (
+        "Groceries", 5, False)
+    assert svc._conn.execute("SELECT collection_href FROM day_plan WHERE entry_id='e1'"
+                             ).fetchone()[0] == LIST_A
 
 
 def test_what_was_set_on_the_copy_in_the_meantime_is_kept(svc):

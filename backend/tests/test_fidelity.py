@@ -502,6 +502,16 @@ def test_dropping_the_parent_link_leaves_every_other_byte_alone():
     # A bare RELATED-TO is the parent relation too (RFC 5545's default).
     bare = raw.replace(b"RELATED-TO;RELTYPE=PARENT:", b"RELATED-TO:")
     assert b"RELATED-TO:" not in drop_parent_relation(bare)
+    # Lines end at CR or LF only. U+2028 and U+0085 inside a value are text: a
+    # DESCRIPTION of "line\u2028End: Friday" must not read as an END line.
+    for sep in ("\u2028", "\x85"):
+        text = (f"BEGIN:VCALENDAR\r\nBEGIN:VTODO\r\nUID:c\r\nDESCRIPTION:line{sep}End: Friday\r\n"
+                "RELATED-TO;RELTYPE=PARENT:p\r\nEND:VTODO\r\nEND:VCALENDAR\r\n").encode()
+        out = drop_parent_relation(text)
+        assert out == text.replace(b"RELATED-TO;RELTYPE=PARENT:p\r\n", b""), sep
+    # The last line may have no ending at all.
+    assert drop_parent_relation(b"BEGIN:VTODO\r\nRELATED-TO:p\r\nEND:VTODO") == (
+        b"BEGIN:VTODO\r\nEND:VTODO")
 
 
 def test_a_comparison_too_deep_to_make_says_different_rather_than_failing():

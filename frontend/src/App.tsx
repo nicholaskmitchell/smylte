@@ -128,6 +128,11 @@ export function App() {
   const [taskGroups, setTaskGroups] = useState<TaskGroup[]>([])
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>([])
   const [collapsedTasks, setCollapsedTasks] = useState<string[]>([])
+  // Whether this session's folds have come from the account. `FoldFollower`
+  // waits for it: before, `collapsedTasks` is the empty default or the last
+  // session's, and re-keying either would write it over the account.
+  const [foldsLoaded, setFoldsLoaded] = useState(false)
+  useEffect(() => { if (auth !== 'in') setFoldsLoaded(false) }, [auth])
   const [showCompleted, setShowCompleted] = useState(false)
   // Default true, matching the server's own default for an absent key: a
   // parent with nothing left in it is finished.
@@ -422,6 +427,7 @@ export function App() {
     const writesBefore = writeLog.current.length
     api.getSettings()
       .then((s) => {
+        setFoldsLoaded(true)
         // The generalisation of `tabTouched`. The read applied its whole
         // payload unconditionally, and the gear is clickable the instant
         // `/api/me` returns — the same commit that ISSUES this request — so the
@@ -1368,7 +1374,11 @@ export function App() {
   // that has not yet said who we are.
   return (
     <DataProvider rev={rev} onExpire={onExpire} taskGroups={taskGroups} enabled={auth === 'in'}>
-      <FoldFollower collapsed={collapsedTasks} onChange={changeCollapsedTasks} />
+      {/* Per session, and only once its folds are the account's: see
+          `foldsLoaded`. The key starts each session's follower fresh. */}
+      {auth === 'in' && foldsLoaded && (
+        <FoldFollower key={user} collapsed={collapsedTasks} onChange={changeCollapsedTasks} />
+      )}
       {/* Signed out there is no account to ask, so the browser's preference is
           the best answer available — see `deviceLanguage`. It is used ONLY in
           that state: once a session resolves the account's setting wins, back to
