@@ -385,6 +385,22 @@ def test_a_date_an_update_brings_is_the_deadline_moving(svc, tmp_path):
     assert e["deadline_moved"] is True
 
 
+def test_a_date_the_owner_adds_to_an_update_is_their_own(svc, tmp_path):
+    """The email brought no date; the owner typed one while approving. That is
+    the owner rescheduling, not the email moving a deadline, so it is not
+    marked as moved and a passed deadline it leaves still reads as late."""
+    llm = FakeLlm(extract=extraction("Bring the team snack list"),
+                  match=Match("update", "T1"))
+    host = UpdateHost(svc)
+    ing = Ingestor(host, make_store(tmp_path), llm=llm, jev=FakeJev(),
+                   clock=lambda: at(2026, 10, 6))
+    out = ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    review.approve(host, out.suggestion_id, config=MailConfig(), due="2026-10-20")
+    [e] = host.edits
+    assert e["edit"].due == date(2026, 10, 20)
+    assert e["deadline_moved"] is False
+
+
 def test_an_update_names_merged_senders_by_name(svc, tmp_path):
     llm = FakeLlm(extract=[extraction("Bring the team snack list", notes="Snacks."),
                            extraction("Bring cups", notes="Also please bring cups.")],

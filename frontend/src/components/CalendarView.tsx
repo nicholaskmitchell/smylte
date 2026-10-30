@@ -953,8 +953,10 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
           // A new list is a move after the edit, as in the Tasks pane.
           onSave={(patch, moveTo) => {
             void (async () => {
-              if (!moveTo || Object.keys(patch).length > 0) await saveDetail(taskDetail, patch)
-              if (moveTo) await moveTask(taskDetail, moveTo)
+              if (!moveTo || Object.keys(patch).length > 0) {
+                if (!(await saveDetail(taskDetail, patch)) || !moveTo) return
+              }
+              await moveTask(taskDetail, moveTo!)
             })()
             setTaskDetail(null)
           }}

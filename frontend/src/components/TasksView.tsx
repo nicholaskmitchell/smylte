@@ -840,10 +840,18 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           // has to land on the list the task is in, and the move takes the
           // edited task across. An edit that changes nothing else sends no
           // PATCH, which would only PUT the task back unchanged.
+          //
+          // A failed PATCH stops the move, so one Save is never half-applied,
+          // and a folded task stays folded under its new key.
           onSave={(patch, moveTo) => {
+            const folded = isCollapsed(detail)
             void (async () => {
-              if (!moveTo || Object.keys(patch).length > 0) await saveDetail(detail, patch)
-              if (moveTo) await moveTask(detail, moveTo)
+              if (!moveTo || Object.keys(patch).length > 0) {
+                if (!(await saveDetail(detail, patch)) || !moveTo) return
+              }
+              if ((await moveTask(detail, moveTo!)) && folded) {
+                setCollapsed({ ...detail, list: moveTo! }, true)
+              }
             })()
             setDetail(null)
           }}
