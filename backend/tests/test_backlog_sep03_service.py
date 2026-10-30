@@ -585,14 +585,18 @@ LIST_B = "/dav/me/home/"
 
 
 class _FlakyDav(_FakeDav):
-    """The double, with one failure armed at a time: the source DELETE after
-    the copy landed, the re-read of the copy, or the PUT of one href."""
+    """The double, with one failure armed at a time: a request that never
+    lands (`fail_*`), one that lands and loses its answer (`lose_*`), or a
+    source DELETE refused because the source changed (`delete_412`)."""
 
     def __init__(self, initial):
         super().__init__(initial)
         self.fail_delete = False
         self.fail_get = None
         self.fail_put = None
+        self.lose_put_reply = None
+        self.lose_delete_reply = False
+        self.delete_412 = False
 
     def get(self, href):
         if href == self.fail_get:
@@ -604,13 +608,31 @@ class _FlakyDav(_FakeDav):
         if href == self.fail_put:
             self.fail_put = None
             raise DavError(f"PUT {href}: connection reset")
-        return super().put(href, data, **kw)
+        etag = super().put(href, data, **kw)
+        if href == self.lose_put_reply:
+            self.lose_put_reply = None
+            raise DavError(f"PUT {href}: read timeout")
+        return etag
 
     def delete(self, href, *, if_match=None):
         if self.fail_delete:
             self.fail_delete = False
             raise DavError(f"DELETE {href}: connection reset")
+        if self.delete_412:
+            self.delete_412 = False
+            raise PreconditionFailed(f"DELETE {href} -> 412")
+        if if_match is not None and href in self.store and self.store[href][0] != if_match:
+            raise PreconditionFailed(f"DELETE {href} -> 412")
         super().delete(href, if_match=if_match)
+        if self.lose_delete_reply:
+            self.lose_delete_reply = False
+            raise DavError(f"DELETE {href}: read timeout")
+
+
+def _sync_copy(svc, dav, href):
+    """What the 30 s sync does with a resource that appeared on the wire."""
+    item = dav.get(href)
+    store.upsert_item(svc._conn, href.rsplit("/", 1)[0] + "/", item, extract_from_raw(item.data))
 
 
 def _two_lists(svc, initial):
@@ -634,7 +656,7 @@ def test_a_task_move_whose_source_delete_failed_can_be_retried(svc):
     dav.fail_delete = True
     with pytest.raises(DavError):
         svc.move_task(LIST_A, LIST_B, "t1")
-    _cache(svc._conn, LIST_B, "t1", dav.get(f"{LIST_B}t1.ics").data)   # the sync tick
+    _sync_copy(svc, dav, f"{LIST_B}t1.ics")
 
     moved = svc.move_task(LIST_A, LIST_B, "t1")
 
@@ -643,6 +665,106 @@ def test_a_task_move_whose_source_delete_failed_can_be_retried(svc):
     assert svc.get_task(LIST_A, "t1") is None
     # Finished, so nothing is left claiming the copy as a move in progress.
     assert store.get_meta(svc._conn, f"task_move:{LIST_B}|t1") is None
+
+
+@pytest.mark.parametrize("synced", [False, True])
+def test_a_task_move_whose_copy_reply_was_lost_can_be_retried(svc, synced):
+    """The PUT of the copy landed and its answer did not. The journal was
+    written as an intent before the PUT, so the retry knows the copy is its
+    own, whether or not a sync has cached it meanwhile."""
+    dav, _ = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
+    dav.lose_put_reply = f"{LIST_B}t1.ics"
+    with pytest.raises(DavError):
+        svc.move_task(LIST_A, LIST_B, "t1")
+    if synced:
+        _sync_copy(svc, dav, f"{LIST_B}t1.ics")
+
+    svc.move_task(LIST_A, LIST_B, "t1")
+
+    assert sorted(dav.store) == [f"{LIST_B}t1.ics"]
+    assert store.get_meta(svc._conn, f"task_move:{LIST_B}|t1") is None
+
+
+def test_a_task_move_whose_delete_reply_was_lost_finishes_at_once(svc):
+    """The source DELETE landed and its answer did not. The engine asks the
+    server, finds the source gone, and finishes: the refs follow, and nothing
+    is left in the journal to adopt anything later."""
+    dav, published = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
+    store.set_sidecar(svc._conn, LIST_A, "t1", pinned=1)
+    dav.lose_delete_reply = True
+
+    moved = svc.move_task(LIST_A, LIST_B, "t1")
+
+    assert moved["pinned"] is True
+    assert sorted(dav.store) == [f"{LIST_B}t1.ics"]
+    assert store.get_meta(svc._conn, f"task_move:{LIST_B}|t1") is None
+    assert ("task_created", "t1") in {(e["type"], e["uid"]) for e in published}
+
+
+def test_a_move_finished_on_the_wire_is_finished_by_the_retry(svc):
+    """The DELETE's answer was lost and so was the question asked after it,
+    so the move raised with the task really moved. A sync then cached that.
+    The retry finds no source but a journal naming this move and its copy in
+    place, and does Smylte's half: the refs follow."""
+    dav, _ = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
+    store.set_sidecar(svc._conn, LIST_A, "t1", pinned=1)
+    dav.lose_delete_reply = True
+    dav.fail_get = f"{LIST_A}t1.ics"          # the probe after the lost answer
+    real_get = dav.get
+    calls = {"n": 0}
+
+    def get(href):                            # the move's own GET of the source goes through
+        if href == f"{LIST_A}t1.ics" and calls["n"] == 0:
+            calls["n"] += 1
+            return _FakeDav.get(dav, href)
+        return real_get(href)
+    dav.get = get
+    with pytest.raises(DavError):
+        svc.move_task(LIST_A, LIST_B, "t1")
+    store.delete_item_by_href(svc._conn, LIST_A, f"{LIST_A}t1.ics")   # the sync tick
+    _sync_copy(svc, dav, f"{LIST_B}t1.ics")
+
+    moved = svc.move_task(LIST_A, LIST_B, "t1")
+
+    assert moved["pinned"] is True
+    assert store.get_meta(svc._conn, f"task_move:{LIST_B}|t1") is None
+
+
+def test_a_copy_edited_since_the_failed_move_is_not_overwritten(svc):
+    """The source DELETE failed, so the task showed in both lists, and the
+    owner edited the copy. Repeating the move must not put the old bytes over
+    that edit: the journal's etag no longer matches, so it is refused."""
+    dav, _ = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
+    dav.fail_delete = True
+    with pytest.raises(DavError):
+        svc.move_task(LIST_A, LIST_B, "t1")
+    edited = foreign_raw("t1", "Pack the charger too")
+    dav.put(f"{LIST_B}t1.ics", edited)
+    _sync_copy(svc, dav, f"{LIST_B}t1.ics")
+
+    with pytest.raises(ConflictError):
+        svc.move_task(LIST_A, LIST_B, "t1")
+    assert dav.store[f"{LIST_B}t1.ics"][1] == edited
+
+
+def test_a_rolled_back_copy_leaves_nothing_to_clash_with(svc):
+    """The source changed during the move, so the copy is undone. The copy's
+    cached row and the journal go with it, so the retry the error asks for
+    goes straight through instead of reading the undone copy as a clash."""
+    dav, _ = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
+    dav.fail_delete = True
+    with pytest.raises(DavError):
+        svc.move_task(LIST_A, LIST_B, "t1")
+    _sync_copy(svc, dav, f"{LIST_B}t1.ics")
+    dav.delete_412 = True
+    with pytest.raises(ConflictError, match="changed during the move"):
+        svc.move_task(LIST_A, LIST_B, "t1")
+    assert f"{LIST_B}t1.ics" not in dav.store
+    assert svc.get_task(LIST_B, "t1") is None
+    assert store.get_meta(svc._conn, f"task_move:{LIST_B}|t1") is None
+
+    svc.move_task(LIST_A, LIST_B, "t1")
+    assert sorted(dav.store) == [f"{LIST_B}t1.ics"]
 
 
 def test_a_task_already_in_the_destination_under_another_name_is_a_clash(svc):

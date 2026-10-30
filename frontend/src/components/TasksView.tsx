@@ -435,6 +435,29 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
       x !== key && x !== t.uid && (kidsByParent.has(x) || legacyParents.has(x)))
     onCollapsedTasksChange(next ? [...kept, key] : kept)
   }, [collapsedSet, collapsedTasks, kidsByParent, legacyParents, onCollapsedTasksChange])
+  // A FOLD FOLLOWS ITS TASK TO ANOTHER LIST. The key names the list, so a task
+  // moved from either editor, over MCP or by another client came back unfolded
+  // under its new one. A keyed entry whose (list, uid) is gone is re-keyed to
+  // the one task that now has that uid: never when the uid is in more than one
+  // list, which is two tasks rather than one moved, and never while a list is
+  // missing from the fan-out, where an absent task may only be unloaded. A
+  // failed move puts the row back, and this puts the fold back with it.
+  useEffect(() => {
+    if (!loaded || taskListErrors.length > 0) return
+    const live = new Set(tasks.map(taskKey))
+    const homes = new Map<string, Task[]>()
+    for (const t of tasks) homes.set(t.uid, [...(homes.get(t.uid) ?? []), t])
+    let changed = false
+    const next = collapsedTasks.map((k) => {
+      const at = k.indexOf('\u0000')
+      if (at < 0 || live.has(k)) return k
+      const found = homes.get(k.slice(at + 1)) ?? []
+      if (found.length !== 1) return k
+      changed = true
+      return taskKey(found[0])
+    })
+    if (changed) onCollapsedTasksChange([...new Set(next)])
+  }, [loaded, taskListErrors, tasks, collapsedTasks, onCollapsedTasksChange])
   // Sorted, not just filtered. These render straight into the list view, which
   // used to show them in raw array order — so a new task appeared at the bottom
   // and then jumped when the refetch replaced the array. `compareTasks` is a
@@ -841,17 +864,13 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           // edited task across. An edit that changes nothing else sends no
           // PATCH, which would only PUT the task back unchanged.
           //
-          // A failed PATCH stops the move, so one Save is never half-applied,
-          // and a folded task stays folded under its new key.
+          // A failed PATCH stops the move, so one Save is never half-applied.
           onSave={(patch, moveTo) => {
-            const folded = isCollapsed(detail)
             void (async () => {
               if (!moveTo || Object.keys(patch).length > 0) {
                 if (!(await saveDetail(detail, patch)) || !moveTo) return
               }
-              if ((await moveTask(detail, moveTo!)) && folded) {
-                setCollapsed({ ...detail, list: moveTo! }, true)
-              }
+              await moveTask(detail, moveTo!)
             })()
             setDetail(null)
           }}

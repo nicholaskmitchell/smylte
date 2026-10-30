@@ -20,8 +20,9 @@ The reasoning behind most of the design is in [`docs/DESIGN.md`](docs/DESIGN.md)
 - **Tasks.** Lists, groups, subtasks, due dates, priority, tags and notes.
   List, 3-Day and Week views, quick add, and drag to reschedule or reorder.
   A task can be moved to another list, with its subtasks, without deleting it.
-  When a passed deadline changes, you say whether you were late or the
-  deadline moved, and the two read differently afterwards.
+  When you change a passed deadline in the task editor, you say whether you
+  were late or the deadline moved, and the two read differently afterwards.
+  The Today strip and dragging across the day columns record it as late.
   You can **park** a task to set it aside without completing it. Parking, the
   manual order and a task's original due date stay in Smylte and don't sync to
   other clients. Ticking a task's last subtask can complete the task itself

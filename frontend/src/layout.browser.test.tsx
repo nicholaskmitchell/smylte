@@ -1305,3 +1305,47 @@ describe('the floating window fits its face', () => {
     }
   })
 })
+
+// ── the task editor's "late, or did the deadline move?" row ─────────────────
+
+describe('the late / deadline-moved pair sits beside the sentence it answers', () => {
+  // `.original-due` was written for two items, the sentence and Clear, spread
+  // apart by `space-between`. The pair made it three, and on a desktop the
+  // middle one floated mid-dialog: measured 223px from "Originally due …" with
+  // Clear present and about 480px without it (the pair pushed to the far edge).
+  const row = (clear: boolean) => `
+    <div class="overlay"><div class="modal task-modal" role="dialog">
+      <div class="field original-due">
+        <span class="hintline">Originally due Mar 11</span>
+        <div class="view-tabs due-why" role="group" style="--n:2;--i:0">
+          <button type="button" class="view-tab active">Running late</button>
+          <button type="button" class="view-tab">Deadline moved</button>
+        </div>
+        ${clear ? '<button class="linklike">Clear</button>' : ''}
+      </div>
+    </div></div>`
+
+  it.each([true, false])('at 1280px (Clear shown: %s)', async (clear) => {
+    await viewport(1280)
+    const host = await mount(row(clear))
+    const r = box(host.querySelector('.original-due')!)
+    const sentence = box(host.querySelector('.original-due .hintline')!)
+    const pair = box(host.querySelector('.due-why')!)
+    expect(pair.top, 'the pair wrapped at a desktop width').toBeLessThan(sentence.bottom)
+    expect(pair.left - sentence.right, 'the pair drifted away from its sentence').toBeLessThanOrEqual(12)
+    if (clear) {
+      const link = box(host.querySelector('.original-due .linklike')!)
+      expect(r.right - link.right, 'Clear left the end of the row').toBeLessThanOrEqual(1)
+    }
+  })
+
+  it('wraps under the sentence on a phone, from the row\'s start', async () => {
+    await viewport(390)
+    const host = await mount(row(true))
+    const r = box(host.querySelector('.original-due')!)
+    const pair = box(host.querySelector('.due-why')!)
+    const link = box(host.querySelector('.original-due .linklike')!)
+    expect(pair.right, 'the pair overflowed the row').toBeLessThanOrEqual(r.right + 0.5)
+    expect(link.right, 'Clear overflowed the row').toBeLessThanOrEqual(r.right + 0.5)
+  })
+})

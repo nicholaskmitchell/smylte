@@ -57,8 +57,9 @@ and another starting. Subtasks go with their parent, because a parent is only
 looked for in its own list. A subtask moved on its own leaves its parent, which
 stays where it is. The subtasks are moved first and the task itself last, so a
 move that fails part-way can simply be retried. A copy the move wrote is
-recorded until the move finishes, and only that record lets a retry take over
-a copy already in the new list. Smylte names a task's file after its UID, so a
+recorded, from just before it is written until the move finishes, and only
+that record lets a retry take over a copy already in the new list, and only
+while nobody has edited the copy since. Smylte names a task's file after its UID, so a
 different task with the same UID can sit exactly where the move would write,
 and it is refused, never overwritten. Everything Smylte keeps beside
 the task follows it: order, pin, parking, estimate, reminder, the remembered
