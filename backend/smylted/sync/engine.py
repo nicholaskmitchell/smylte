@@ -79,7 +79,7 @@ def _restamp_uid(raw: bytes, uid: str) -> bytes:
 def moved_href(src_item_href: str, dst_href: str) -> str:
     """Where a move puts a resource: the same filename in the destination
     collection. Deterministic on purpose, so a retry lands on the copy an
-    earlier attempt wrote and `_adopt_moved_copy` can recognise it."""
+    earlier attempt wrote and can recognise it there (`_move`)."""
     return f"{dst_href}{src_item_href.rstrip('/').rsplit('/', 1)[-1]}"
 
 
@@ -96,8 +96,14 @@ def same_task(a: bytes | str, b: bytes | str, *, ignore: frozenset[str] = frozen
     bytes it was written from compare equal."""
     text = lambda x: x.decode("utf-8", "replace") if isinstance(x, bytes) else x  # noqa: E731
     drop = _RESTAMPED | ignore
-    return (canonical.signature(canonical.parse(text(a)), drop=drop)
-            == canonical.signature(canonical.parse(text(b)), drop=drop))
+    # The signature recurses once per nesting level, and another client's
+    # resource can nest deeper than Python's stack. Too deep to compare is
+    # "not shown to be the same", which refuses the move rather than failing it.
+    try:
+        return (canonical.signature(canonical.parse(text(a)), drop=drop)
+                == canonical.signature(canonical.parse(text(b)), drop=drop))
+    except RecursionError:
+        return False
 
 
 class ConflictError(DavError):
@@ -536,17 +542,14 @@ class SyncEngine:
         task's subtasks are separate resources, and `SmylteService.move_task`
         moves them too.
 
-        `unparent` drops the task's RELATED-TO parent on the way, applied to the
-        bytes read off the wire. A parent is looked up within the task's own
-        collection (`SmylteService._children_map`), so a subtask moved without
-        its parent would arrive pointing at a task its new list doesn't have."""
-        def transform(raw: bytes) -> bytes:
-            try:
-                return ical.apply_changes(raw, ical.TaskEdit(related_parent=None))
-            except ical.NotEditable as e:
-                raise ConflictError(f"task {uid} can no longer be edited: {e}") from e
+        `unparent` drops the task's parent link on the way, from the bytes read
+        off the wire and as one line (`ical.drop_parent_relation`), so the copy
+        stays in the server's own form and a retry can recognise it. A parent is
+        looked up within the task's own collection (`SmylteService._children_map`),
+        so a subtask moved without its parent would arrive pointing at a task
+        its new list doesn't have."""
         return self._move(src_href, dst_href, uid, kind="task",
-                          transform=transform if unparent else None)
+                          transform=ical.drop_parent_relation if unparent else None)
 
     def _move(self, src_href: str, dst_href: str, uid: str, *, kind: str,
               transform=None) -> str:
@@ -618,7 +621,7 @@ class SyncEngine:
                 copy_etag = self._own_copy(new_href, uid, data, e)
                 wrote = False
             else:
-                self._adopt_moved_copy(new_href, uid, data, e, kind=kind)
+                self._adopt_moved_copy(new_href, uid, data, e)
                 copy_etag = None
         try:
             self.dav.delete(row["href"], if_match=current.etag)
@@ -702,8 +705,7 @@ class SyncEngine:
             raise ConflictError(f"task {uid} already exists in the target list") from cause
         return stored.etag
 
-    def _adopt_moved_copy(self, new_href: str, uid: str, data: bytes, cause: DavError,
-                          *, kind: str = "event") -> None:
+    def _adopt_moved_copy(self, new_href: str, uid: str, data: bytes, cause: DavError) -> None:
         """The destination href is occupied. Treat it as the move's own earlier
         copy when it carries `uid`; raise `ConflictError` when it is a stranger's.
         Events only: a task's occupant is never overwritten (see `_move`).
@@ -727,15 +729,14 @@ class SyncEngine:
             fields = ical.extract_from_raw(stored.data)
         except NotFound:
             fields = None
-        where = "calendar" if kind == "event" else "list"
         if fields is None or fields.uid != uid:
-            log.warning("move_%s: %s is occupied by another resource", kind, new_href)
+            log.warning("move_event: %s is occupied by another resource", new_href)
             raise ConflictError(
-                f"{kind} {uid} already exists in the target {where}") from cause
+                f"event {uid} already exists in the target calendar") from cause
         try:
             self.dav.put(new_href, data, if_match=stored.etag)
         except PreconditionFailed as e:
-            raise ConflictError(f"{kind} {uid} changed during the move; retry") from e
+            raise ConflictError(f"event {uid} changed during the move; retry") from e
 
     def shift_event(
         self, collection_href: str, uid: str, recurrence_id: str, edit: ical.EventEdit

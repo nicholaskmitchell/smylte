@@ -240,6 +240,47 @@ def _set_related_parent(todo: Todo, uid: str | None) -> None:
         todo.add("RELATED-TO", uid, parameters={"RELTYPE": "PARENT"})
 
 
+def drop_parent_relation(raw: bytes | str) -> bytes:
+    """`raw` without its parent link, and otherwise byte for byte as it was.
+
+    The move of a subtask on its own writes its copy with this rather than
+    through `apply_changes`. A copy is later recognised by comparing what the
+    server stored with what the move would write (`sync.engine.same_task`),
+    and re-serialising through the icalendar library writes some values
+    differently from the server's own form (a zero duration as `P0D` where
+    Radicale keeps `PT0S`), so a retry never matched its own copy. Dropping
+    one logical line keeps both sides in the server's form.
+
+    The parent link is what `_set_related_parent` rewrites: a RELATED-TO on a
+    VTODO whose RELTYPE is PARENT or absent (RFC 5545's default). Other
+    relations, and anything in a subcomponent, are left alone. Folded lines
+    are dropped whole, and bytes that are not UTF-8 survive unchanged."""
+    from .canonical import split_line
+
+    text = raw.decode("utf-8", "surrogateescape") if isinstance(raw, bytes) else raw
+    phys = text.splitlines(keepends=True)
+    out: list[str] = []
+    stack: list[str] = []
+    i = 0
+    while i < len(phys):
+        j = i + 1
+        while j < len(phys) and phys[j][:1] in (" ", "\t"):
+            j += 1
+        group = phys[i:j]
+        logical = group[0].rstrip("\r\n") + "".join(g.rstrip("\r\n")[1:] for g in group[1:])
+        name, params, value = split_line(logical)
+        if name == "BEGIN":
+            stack.append(value.upper())
+        parent = (name == "RELATED-TO" and stack[-1:] == ["VTODO"]
+                  and dict(params).get("RELTYPE", "PARENT").upper() == "PARENT")
+        if not parent:
+            out.extend(group)
+        if name == "END" and stack:
+            stack.pop()
+        i = j
+    return "".join(out).encode("utf-8", "surrogateescape")
+
+
 def _set_categories(todo: Todo, cats: list[str] | None) -> None:
     _replace(todo, "CATEGORIES")
     if cats:

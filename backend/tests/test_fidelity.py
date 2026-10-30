@@ -477,3 +477,40 @@ def test_splitting_a_series_carries_foreign_data_into_both_halves(path: Path):
         assert any(k[0] == "VALARM" for k in got), f"{path.name}: the {label} lost its VALARM"
         assert any(k[0] == "VTIMEZONE" for k in got), (
             f"{path.name}: the {label} lost its VTIMEZONE, so its TZID no longer resolves")
+
+
+# ── a move's two text rules ─────────────────────────────────────────────────
+
+def test_dropping_the_parent_link_leaves_every_other_byte_alone():
+    """A subtask moved on its own loses its parent as one line, so its copy
+    stays in the server's own form (re-serialising wrote a zero duration as
+    `P0D` where Radicale keeps `PT0S`, and the copy never matched). Folded
+    lines go whole; other relations, alarms and non-UTF-8 bytes stay."""
+    from smylted.ical import drop_parent_relation, extract_from_raw
+    raw = (b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//x//EN\r\nBEGIN:VTODO\r\n"
+           b"UID:c\r\nSUMMARY:Caf\xe9 \xff\r\n"
+           b"RELATED-TO;RELTYPE=PARENT:a-very-long-parent-uid-that-the-client-has-fold\r\n"
+           b" ed-across-two-lines\r\n"
+           b"RELATED-TO;RELTYPE=SIBLING:s\r\n"
+           b"BEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER;RELATED=END:PT0S\r\nEND:VALARM\r\n"
+           b"END:VTODO\r\nEND:VCALENDAR\r\n")
+    out = drop_parent_relation(raw)
+    assert out == raw.replace(
+        b"RELATED-TO;RELTYPE=PARENT:a-very-long-parent-uid-that-the-client-has-fold\r\n"
+        b" ed-across-two-lines\r\n", b"")
+    assert extract_from_raw(out).related_parent is None
+    # A bare RELATED-TO is the parent relation too (RFC 5545's default).
+    bare = raw.replace(b"RELATED-TO;RELTYPE=PARENT:", b"RELATED-TO:")
+    assert b"RELATED-TO:" not in drop_parent_relation(bare)
+
+
+def test_a_comparison_too_deep_to_make_says_different_rather_than_failing():
+    """`same_task` recurses once per nesting level, and another client's
+    resource can nest past Python's stack. That has to refuse the move (a 409)
+    rather than fail it (a 500)."""
+    from smylted.sync.engine import same_task
+    deep = ("BEGIN:VCALENDAR\r\nBEGIN:VTODO\r\nUID:d\r\n" + "BEGIN:X-N\r\n" * 3000
+            + "END:X-N\r\n" * 3000 + "END:VTODO\r\nEND:VCALENDAR\r\n")
+    assert same_task(deep, deep) is False
+    assert same_task("BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n",
+                     "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n") is True

@@ -744,6 +744,89 @@ def test_a_retry_after_a_lost_delete_answer_finishes_the_move(svc):
     assert svc.get_task(LIST_A, "t1") is None
 
 
+def _lose_delete_answer_and_probe(dav):
+    """The source DELETE lands, its answer is lost, and so is the question
+    asked after it, so the move raises with the task really moved."""
+    dav.lose_delete_reply = True
+    real_get, calls = dav.get, {}
+
+    def get(href):
+        if href.startswith(LIST_A):
+            calls[href] = calls.get(href, 0) + 1
+            if calls[href] == 2:
+                raise DavError(f"GET {href}: connection reset")
+        return real_get(href)
+    dav.get = get
+
+
+def _sync_tick(svc, dav, *hrefs):
+    """What the 30 s sync does once the sources left the old list: drop each
+    row and orphan its sidecar, and cache the copies in the new list."""
+    for href in hrefs:
+        uid = href.rsplit("/", 1)[-1].removesuffix(".ics")
+        store.delete_item_by_href(svc._conn, LIST_A, f"{LIST_A}{uid}.ics")
+        store.orphan_sidecar(svc._conn, LIST_A, uid)
+        _sync_copy(svc, dav, href)
+
+
+def test_a_retry_after_a_sync_still_finishes_what_a_lost_move_left(svc):
+    """Every answer was lost and a sync then ran, so the task is in the new
+    list and its Smylte data is orphaned in the old one. The retry finds it
+    there and re-points the refs, touching nothing on the server."""
+    dav, _ = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
+    store.set_sidecar(svc._conn, LIST_A, "t1", pinned=1, estimated_minutes=15)
+    _lose_delete_answer_and_probe(dav)
+    with pytest.raises(DavError):
+        svc.move_task(LIST_A, LIST_B, "t1")
+    _sync_tick(svc, dav, f"{LIST_B}t1.ics")
+
+    moved = svc.move_task(LIST_A, LIST_B, "t1")
+
+    assert (moved["pinned"], moved["estimated_minutes"]) == (True, 15)
+    assert store.get_sidecar(svc._conn, LIST_A, "t1") is None
+
+
+def test_a_step_a_lost_move_left_follows_when_its_parent_moves(svc):
+    """The step went first and lost every answer; a sync took it out of the
+    old list. The retry moves its parent, and the step's refs follow too."""
+    dav, _ = _two_lists(svc, {
+        f"{LIST_A}p.ics": foreign_raw("p", "Trip"),
+        f"{LIST_A}c.ics": foreign_raw("c", "Charger", extra=("RELATED-TO;RELTYPE=PARENT:p",)),
+    })
+    store.set_sidecar(svc._conn, LIST_A, "c", pinned=1)
+    _lose_delete_answer_and_probe(dav)
+    with pytest.raises(DavError):
+        svc.move_task(LIST_A, LIST_B, "p")
+    _sync_tick(svc, dav, f"{LIST_B}c.ics")
+
+    svc.move_task(LIST_A, LIST_B, "p")
+
+    assert svc.get_task(LIST_B, "c")["pinned"] is True
+    assert store.get_sidecar(svc._conn, LIST_A, "c") is None
+
+
+def test_what_was_set_on_the_copy_in_the_meantime_is_kept(svc):
+    """The first attempt left the copy, so the task showed in both lists, and
+    the owner set a reminder on the copy and parked it there. The retry
+    accepts the copy, and the copy's own Smylte data survives, merged with
+    the source's (its pin and estimate)."""
+    dav, _ = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
+    store.set_sidecar(svc._conn, LIST_A, "t1", pinned=1, estimated_minutes=15,
+                      notify_minutes_before=60)
+    dav.fail_delete = True
+    with pytest.raises(DavError):
+        svc.move_task(LIST_A, LIST_B, "t1")
+    _sync_copy(svc, dav, f"{LIST_B}t1.ics")
+    svc.set_sidecar(LIST_B, "t1", notify_minutes_before=30)
+    svc.park_task(LIST_B, "t1", parked=True)
+
+    moved = svc.move_task(LIST_A, LIST_B, "t1")
+
+    assert moved["notify_minutes_before"] == 30, "the copy's own reminder"
+    assert moved["parked"] is True
+    assert (moved["pinned"], moved["estimated_minutes"]) == (True, 15)
+
+
 @pytest.mark.parametrize("synced", [False, True])
 @pytest.mark.parametrize("first", ["delete_failed", "put_reply_lost"])
 def test_a_copy_edited_since_the_failed_move_is_not_overwritten(svc, first, synced):

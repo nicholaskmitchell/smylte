@@ -615,7 +615,8 @@ def known_etags(conn: sqlite3.Connection, collection_href: str) -> dict[str, str
 
 # ── sidecar + orphan GC ──────────────────────────────────────────────────────
 
-def move_task_refs(conn: sqlite3.Connection, src_href: str, dst_href: str, uid: str) -> None:
+def move_task_refs(conn: sqlite3.Connection, src_href: str, dst_href: str, uid: str, *,
+                   keep_dst: bool = False) -> None:
     """Re-point everything Smylte keeps about task `uid` from list `src_href` to
     `dst_href`, after the task itself has moved there on the wire. Call it
     inside the caller's transaction.
@@ -626,7 +627,14 @@ def move_task_refs(conn: sqlite3.Connection, src_href: str, dst_href: str, uid: 
     * The SIDECAR ROW itself moves, rather than being copied field by field.
       The engine orphans the source row, and a copy would leave it to rejoin
       with stale values if the task came back within GC's week. A row already
-      at the destination is stale for the same reason and goes first.
+      at the destination is stale for the same reason and goes first, unless
+      the caller says it was LIVE BEFORE THE MOVE (`keep_dst`): then it is the
+      destination's own, a copy an earlier attempt left that the owner may
+      have set a reminder on or parked while it showed in both lists, or an
+      identical twin with settings of its own, and the two are merged, the
+      destination's values winning wherever it has one and the remembered
+      deadline kept as the one pair it is. Only the caller can tell: caching
+      the copy (`upsert_item`) clears `orphaned_at` on a stale row too.
     * DAY-PLAN ENTRIES follow, so a row on today's plan still ticks the task
       it names. Past days follow too: they planned the same task.
     * MAIL THREADS and SUGGESTIONS that point at the task follow, so a later
@@ -636,13 +644,36 @@ def move_task_refs(conn: sqlite3.Connection, src_href: str, dst_href: str, uid: 
       `OR IGNORE` for a key that is already there, which only a move away and
       back produces, and which then already says the reminder went out.
     """
-    conn.execute("DELETE FROM sidecar WHERE collection_href=? AND uid=?", (dst_href, uid))
-    conn.execute(
-        "UPDATE sidecar SET collection_href=?, orphaned_at=NULL, "
-        "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
-        "WHERE collection_href=? AND uid=?",
-        (dst_href, src_href, uid),
-    )
+    if keep_dst:
+        conn.execute(
+            "UPDATE sidecar SET "
+            "kanban_column = COALESCE(sidecar.kanban_column, s.kanban_column), "
+            "sort_order = COALESCE(sidecar.sort_order, s.sort_order), "
+            "pinned = MAX(sidecar.pinned, s.pinned), "
+            "estimated_minutes = COALESCE(sidecar.estimated_minutes, s.estimated_minutes), "
+            "repeat_from_completion = MAX(sidecar.repeat_from_completion, s.repeat_from_completion), "
+            "notify_minutes_before = COALESCE(sidecar.notify_minutes_before, s.notify_minutes_before), "
+            "parked_at = COALESCE(sidecar.parked_at, s.parked_at), "
+            "original_due_is_date = CASE WHEN sidecar.original_due IS NOT NULL "
+            "  THEN sidecar.original_due_is_date ELSE s.original_due_is_date END, "
+            "original_due_moved = CASE WHEN sidecar.original_due IS NOT NULL "
+            "  THEN sidecar.original_due_moved ELSE s.original_due_moved END, "
+            "original_due = COALESCE(sidecar.original_due, s.original_due), "
+            "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+            "FROM sidecar AS s "
+            "WHERE sidecar.collection_href=? AND sidecar.uid=? "
+            "AND s.collection_href=? AND s.uid=?",
+            (dst_href, uid, src_href, uid),
+        )
+        conn.execute("DELETE FROM sidecar WHERE collection_href=? AND uid=?", (src_href, uid))
+    else:
+        conn.execute("DELETE FROM sidecar WHERE collection_href=? AND uid=?", (dst_href, uid))
+        conn.execute(
+            "UPDATE sidecar SET collection_href=?, orphaned_at=NULL, "
+            "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+            "WHERE collection_href=? AND uid=?",
+            (dst_href, src_href, uid),
+        )
     conn.execute(
         "UPDATE day_plan SET collection_href=? WHERE collection_href=? AND uid=?",
         (dst_href, src_href, uid),

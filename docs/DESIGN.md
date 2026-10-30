@@ -63,7 +63,11 @@ what it finds there. Smylte names a task's file after its UID, so a different
 task with the same UID can sit exactly where the move would write. That task,
 or a copy someone edited since, is refused, and the task stays in both lists
 for the owner to settle. A twin identical to the task can't be told apart from
-the move's own copy, and the two become one, which loses nothing. Nothing about earlier attempts is recorded, so no
+the move's own copy, and the two become one. What Smylte kept for each is
+merged, so a reminder set on the copy while it showed in both lists survives.
+A move whose every answer was lost can still be finished after a sync: the
+retry finds the task in the new list and its Smylte data orphaned in the old
+one, and re-points it. Nothing about earlier attempts is recorded, so no
 lost answer can leave a wrong record behind. Everything Smylte keeps beside
 the task follows it: order, pin, parking, estimate, reminder, the remembered
 deadline, its rows on the day plan, and the email thread it came from. In the

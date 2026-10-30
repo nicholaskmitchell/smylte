@@ -347,3 +347,22 @@ def test_moving_a_task_repoints_everything_kept_beside_it(seeded):
     assert store.mail_get_thread(db, "th1")["task_list"] == COL_B
     keys = {r[0] for r in db.execute("SELECT dedupe_key FROM notification_deliveries")}
     assert keys == {f"{COL_B}|a1@x|2026-10-30T09:00:00+00:00", other}
+
+
+def test_a_live_destination_row_is_merged_not_replaced(seeded):
+    """When the caller says the destination's row was live before the move
+    (a copy left by an earlier attempt, or an identical twin), its values win
+    wherever it has one, the source's fill the rest, and the remembered
+    deadline travels as one pair."""
+    db = seeded
+    _seed(db, COL_B, "a1@x", "confidential thing")
+    store.set_sidecar(db, COL_A, "a1@x", estimated_minutes=20, original_due="2020-03-11",
+                      original_due_is_date=1, original_due_moved=0)
+    store.set_sidecar(db, COL_B, "a1@x", kanban_column="later", notify_minutes_before=30)
+    with store.tx(db):
+        store.move_task_refs(db, COL_A, COL_B, "a1@x", keep_dst=True)
+    side = store.get_sidecar(db, COL_B, "a1@x")
+    assert side["kanban_column"] == "later" and side["notify_minutes_before"] == 30
+    assert side["pinned"] == 1 and side["estimated_minutes"] == 20
+    assert (side["original_due"], side["original_due_is_date"]) == ("2020-03-11", 1)
+    assert store.get_sidecar(db, COL_A, "a1@x") is None
