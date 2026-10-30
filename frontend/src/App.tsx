@@ -132,7 +132,10 @@ export function App() {
   // waits for it: before, `collapsedTasks` is the empty default or the last
   // session's, and re-keying either would write it over the account.
   const [foldsLoaded, setFoldsLoaded] = useState(false)
-  useEffect(() => { if (auth !== 'in') setFoldsLoaded(false) }, [auth])
+  // Which session a settings read belongs to, bumped when one ends. A read
+  // still in flight at sign-out answers into the next session otherwise, and
+  // would apply the previous account's settings there (and its folds).
+  const settingsSession = useRef(0)
   const [showCompleted, setShowCompleted] = useState(false)
   // Default true, matching the server's own default for an absent key: a
   // parent with nothing left in it is finished.
@@ -408,6 +411,11 @@ export function App() {
     if (auth !== 'in') {
       tabRestored.current = false
       layoutApplied.current = false
+      // The session's folds go with it, so an account that has none starts
+      // with none rather than the previous one's (see `foldsLoaded`).
+      settingsSession.current += 1
+      setFoldsLoaded(false)
+      setCollapsedTasks([])
       // OFFLINE is a read that was never issued, and it has to arm the same
       // guard a read that failed does. The shell renders in full here — the
       // gear, every view, the Home board — over shipped defaults, and the
@@ -425,8 +433,10 @@ export function App() {
     // flight, and applying the payload's value for it would revert their
     // gesture. See `keep` below.
     const writesBefore = writeLog.current.length
+    const session = settingsSession.current
     api.getSettings()
       .then((s) => {
+        if (session !== settingsSession.current) return
         setFoldsLoaded(true)
         // The generalisation of `tabTouched`. The read applied its whole
         // payload unconditionally, and the gear is clickable the instant
@@ -624,6 +634,7 @@ export function App() {
         if (keep('dashboard') && Array.isArray(s.dashboard)) setDashboard(sanitizeLayout(s.dashboard))
       })
       .catch((e) => {
+        if (session !== settingsSession.current) return
         // The old handler was a bare `.catch(() => {})` with a comment saying it
         // keeps the locally-cached theme and appearance. True of those two — they
         // have a localStorage mirror — and of nothing else. The other eleven
