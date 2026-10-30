@@ -724,6 +724,73 @@ describe('<TasksView> moving a task to another list', () => {
       .toBeLessThan(m.moveTask.mock.invocationCallOrder[0])
   })
 
+  it('moves only once the edit saved with it has landed', async () => {
+    // Issued first is not enough: the move deletes the task from the list the
+    // PATCH is addressed to, so the PATCH has to have answered.
+    const t = task({ uid: 'u1', summary: 'Ship it' })
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [t] : []))
+    let land: (v: Task) => void = () => {}
+    m.patchTask.mockImplementation(() => new Promise<Task>((r) => { land = r }))
+    m.moveTask.mockResolvedValue({ ...t, summary: 'Ship it today', list: 'l2' })
+    const { user } = setup()
+    await user.click(await screen.findByText('Ship it'))
+    await user.clear(screen.getByLabelText('Title'))
+    await user.type(screen.getByLabelText('Title'), 'Ship it today')
+    await user.selectOptions(screen.getByLabelText('List'), 'l2')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
+    await new Promise((r) => setTimeout(r, 20))
+    expect(m.moveTask).not.toHaveBeenCalled()
+    land({ ...t, summary: 'Ship it today' })
+    await waitFor(() => expect(m.moveTask).toHaveBeenCalledWith('l1', 'u1', 'l2'))
+  })
+
+  it('keeps an edit that landed when the move after it fails', async () => {
+    // The rollback restores the list and the parent only. Restoring the whole
+    // row as it was before Save would paint the old title back over a rename
+    // the server took.
+    const t = task({ uid: 'u1', summary: 'Ship it' })
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [t] : []))
+    m.patchTask.mockResolvedValue({ ...t, summary: 'Ship it today' })
+    m.moveTask.mockResolvedValue(undefined as unknown as Task)
+    const { user } = setup()
+    await user.click(await screen.findByText('Ship it'))
+    await user.clear(screen.getByLabelText('Title'))
+    await user.type(screen.getByLabelText('Title'), 'Ship it today')
+    await user.selectOptions(screen.getByLabelText('List'), 'l2')
+    m.tasks.mockImplementation(async () => new Promise<Task[]>(() => {}))   // the refetch never answers
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(m.moveTask).toHaveBeenCalled())
+
+    await user.click(await screen.findByText('Ship it today'))
+    expect(screen.getByLabelText('List')).toHaveValue('l1')
+  })
+
+  it('takes the subtasks across with it on screen, and back if it fails', async () => {
+    const parent = task({ uid: 'p1', summary: 'Trip planning', children: ['c1'], child_count: 1 })
+    const child = task({ uid: 'c1', summary: 'Book flight', parent: 'p1' })
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [parent, child] : []))
+    let answer: (v: Task | undefined) => void = () => {}
+    m.moveTask.mockImplementation(() => new Promise((r) => { answer = r as typeof answer }))
+    const { user } = setup()
+    await user.click(await screen.findByText('Trip planning'))
+    await user.selectOptions(screen.getByLabelText('List'), 'l2')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(m.moveTask).toHaveBeenCalled())
+
+    await user.click(await screen.findByText('Book flight'))
+    expect(screen.getByLabelText('List')).toHaveValue('l2')
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+
+    m.tasks.mockImplementation(async () => new Promise<Task[]>(() => {}))   // the refetch never answers
+    answer(undefined)
+    await waitFor(async () => {
+      await user.click(await screen.findByText('Book flight'))
+      expect(screen.getByLabelText('List')).toHaveValue('l1')
+    })
+  })
+
   it('says what goes with it before Save', async () => {
     const parent = task({ uid: 'p1', summary: 'Trip planning', children: ['c1'], child_count: 1 })
     const child = task({ uid: 'c1', summary: 'Book flight', parent: 'p1' })
@@ -2159,6 +2226,28 @@ describe('<TasksView> parked work', () => {
     expect(screen.queryByRole('group', { name: 'Why the date changed' })).toBeNull()
   })
 
+  it('asks again when a moved deadline is itself left behind', async () => {
+    // A moved deadline was never a miss, so it gives way: leaving the date it
+    // moved to, once that has passed, is the question again, about that date.
+    m.tasks.mockResolvedValue([task({
+      uid: 'grant', summary: 'Grant report', due: '2020-06-01', due_is_date: true,
+      original_due: '2020-03-11', original_due_is_date: true, original_due_moved: true,
+    })])
+    m.patchTask.mockResolvedValue(task({ uid: 'grant' }))
+    const { user } = setup()
+    await user.click(await screen.findByText('Grant report'))
+    fireEvent.change(screen.getByLabelText('Due date'), { target: { value: '2099-01-04' } })
+    const why = screen.getByRole('group', { name: 'Why the date changed' })
+    expect(within(why).getByRole('button', { name: 'Running late' }))
+      .toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText(/Originally due Jun 1/)).toBeInTheDocument()
+    await user.click(within(why).getByRole('button', { name: 'Deadline moved' }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
+    expect(m.patchTask.mock.calls[0][2]).toEqual({ due: '2099-01-04', deadline_moved: true })
+  })
+
   it('lets a remembered deadline be marked as moved afterwards', async () => {
     // Immediate, like Clear beside it, and the dialog stays open for the same
     // reason: it changes a line on this form, not the row behind it.
@@ -2169,12 +2258,22 @@ describe('<TasksView> parked work', () => {
     const { user } = setup()
     await user.click(await screen.findByText('Renew the passport'))
 
+    m.setDeadlineMoved.mockResolvedValue(task({
+      uid: 'passport', summary: 'Renew the passport', due: '2099-10-02',
+      original_due: '2020-03-11', original_due_is_date: true, original_due_moved: true,
+    }))
     const why = screen.getByRole('group', { name: 'Why the date changed' })
     await user.click(within(why).getByRole('button', { name: 'Deadline moved' }))
     expect(m.setDeadlineMoved).toHaveBeenCalledWith('l1', 'passport', true)
     expect(screen.getByRole('dialog', { name: 'Task' })).toBeInTheDocument()
     await waitFor(() => expect(within(why).getByRole('button', { name: 'Deadline moved' }))
       .toHaveAttribute('aria-pressed', 'true'))
+
+    // And the row behind it, which is what the owner sees afterwards.
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    const chip = screen.getByText('Renew the passport').closest('.task')!.querySelector('.was-due')!
+    await waitFor(() => expect(chip).toHaveTextContent(/^moved from /))
+    expect(chip).toHaveClass('moved')
   })
 
   it('counts a parked step in the total, and never as done', async () => {

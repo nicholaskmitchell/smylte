@@ -460,6 +460,40 @@ def test_an_older_database_gains_the_cache_and_token_columns(tmp_path):
     conn.close()
 
 
+def test_a_database_that_remembers_deadlines_gains_why_they_were_left(tmp_path):
+    """Every deployed database already has the `original_due` pair, so the
+    ALTER adding `original_due_moved` must not sit behind the pair's own guard:
+    those databases would never gain it, and every read of a task with a
+    remembered deadline would 500 (`_task_dto` reads the missing key off a
+    sqlite3.Row). The test above starts before the pair existed and so cannot
+    tell. Built as the previous release left it: today's schema minus the new
+    column, holding a remembered deadline."""
+    conn = store.connect(str(tmp_path / "prev.db"))
+    store.init_db(conn)
+    conn.execute("ALTER TABLE sidecar DROP COLUMN original_due_moved")
+    store.upsert_collection(
+        conn, CollectionInfo(href="/u/w/", displayname="W", components={"VTODO"}))
+    _task(conn, "/u/w/", "late", "Late one", due_date="2099-03-11")
+    conn.execute("INSERT INTO sidecar (collection_href, uid, original_due, original_due_is_date)"
+                 " VALUES ('/u/w/', 'late', '2020-03-11', 1)")
+    cols = lambda: {r["name"] for r in conn.execute("PRAGMA table_info(sidecar)")}  # noqa: E731
+    assert "original_due_moved" not in cols()
+
+    store.init_db(conn)
+
+    assert "original_due_moved" in cols()
+    svc = SmylteService(_settings(db_path=str(tmp_path / "unused.db")))
+    try:
+        task = svc._task_dto(store.get_item(conn, "/u/w/", "late"),
+                             store.get_all_categories(conn, "/u/w/"),
+                             store.get_all_sidecar(conn, "/u/w/"), {})
+        # Late, which is what the app recorded it as when it was written.
+        assert (task["original_due"], task["original_due_moved"]) == ("2020-03-11", False)
+    finally:
+        svc.close()
+    conn.close()
+
+
 # ── #6  sync_all: an outage after boot recorded no error ─────────────────────
 
 def test_a_full_outage_after_boot_is_recorded_where_the_notifier_looks(svc):

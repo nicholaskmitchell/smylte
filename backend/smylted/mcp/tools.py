@@ -105,6 +105,18 @@ _PRIORITY = {
     "type": "string", "enum": ["none", "low", "medium", "high"],
     "description": "Priority band. Maps to iCalendar PRIORITY (high=1, medium=5, low=9).",
 }
+# The two remembered-deadline fields, explained on every tool that returns
+# tasks. A model that reads them off a list without this reports a deadline
+# that moved as a missed one, which is the confusion the fields exist to end.
+_ORIGINAL_DUE_NOTE = (
+    "`original_due` is NOT the deadline. It is a deadline the task ALREADY "
+    "MISSED and was rescheduled off, kept because writing a new DUE would "
+    "otherwise erase the fact that it was ever late. `due` is the date the "
+    "task is working to now, and is the only one to report as its deadline. "
+    "When `original_due_moved` is true, the deadline itself moved away from "
+    "`original_due` and the task was NOT late. Report that as a moved "
+    "deadline, never as a missed one."
+)
 _DUE = {
     "type": "string",
     "description": (
@@ -266,7 +278,7 @@ def build_tools(api) -> dict[str, Tool]:
         "PARKED tasks are left out unless asked for. Parked means the owner set "
         "it aside — not finished, not abandoned, just not now — so it is not on "
         "their plate and must not be reported as though it were. It is also not "
-        "done: never describe a parked task as completed.",
+        "done: never describe a parked task as completed.\n\n" + _ORIGINAL_DUE_NOTE,
         _obj({
             "list_id": {**_LIST_ID,
                         "description": _LIST_ID["description"] + " Omit to span every list."},
@@ -297,13 +309,7 @@ def build_tools(api) -> dict[str, Tool]:
     @tool(
         "smylte_get_task", "Get one task",
         "One task in full, including its subtasks, tags and notes.\n\n"
-        "`original_due` is NOT the deadline. It is a deadline the task ALREADY "
-        "MISSED and was rescheduled off, kept because writing a new DUE would "
-        "otherwise erase the fact that it was ever late. `due` is the date the "
-        "task is working to now, and is the only one to report as its deadline. "
-        "When `original_due_moved` is true, the deadline itself moved away from "
-        "`original_due` and the task was NOT late. Report that as a moved "
-        "deadline, never as a missed one.",
+        + _ORIGINAL_DUE_NOTE,
         _obj({"list_id": _LIST_ID, "uid": {"type": "string"}}, ["list_id", "uid"]),
     )
     def _get_task(list_id, uid):
@@ -312,7 +318,8 @@ def build_tools(api) -> dict[str, Tool]:
     @tool(
         "smylte_search_tasks", "Search tasks",
         "Full-text search over task titles, notes and tags, across every list. "
-        "Searches tasks only — use smylte_list_events for calendar entries.",
+        "Searches tasks only — use smylte_list_events for calendar entries.\n\n"
+        + _ORIGINAL_DUE_NOTE,
         # `maxLength` is load-bearing, not tidiness. POST /mcp accepts a 1 MB
         # body and `store.search` turns every whitespace token into an FTS5
         # prefix phrase whose MATCH cost is quadratic in the term count — on an

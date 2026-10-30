@@ -1340,6 +1340,9 @@ def test_a_task_moves_to_another_list_whole(client):
     }).json()
     sub = client.post(f"/api/lists/{a}/tasks",
                       json={"summary": "Charger", "parent": t["uid"]}).json()
+    # A step of a step, so the whole subtree is walked and not just one level.
+    leaf = client.post(f"/api/lists/{a}/tasks",
+                       json={"summary": "Cable", "parent": sub["uid"]}).json()
     client.patch(f"/api/lists/{a}/tasks/{t['uid']}", json={"due": "2099-05-01"})
     client.put(f"/api/lists/{a}/tasks/{t['uid']}/sidecar", json={"pinned": True})
     day = date.today().isoformat()
@@ -1358,15 +1361,18 @@ def test_a_task_moves_to_another_list_whole(client):
 
     assert client.get(f"/api/lists/{a}/tasks").json() == []
     there = {x["uid"]: x for x in client.get(f"/api/lists/{b}/tasks").json()}
-    assert set(there) == {t["uid"], sub["uid"]}
+    assert set(there) == {t["uid"], sub["uid"], leaf["uid"]}
     assert there[sub["uid"]]["parent"] == t["uid"], "the subtask came with it"
+    assert there[leaf["uid"]]["parent"] == sub["uid"], "and its own subtask"
     rows = client.get(f"/api/day/{day}").json()["entries"]
     [row] = [e for e in rows if e["entry_id"] == entry["entry_id"]]
     assert (row["list"], row["uid"]) == (b, t["uid"])
 
-    # A subtask moved on its own leaves its parent, which stays where it is.
+    # A subtask moved on its own leaves its parent, which stays where it is,
+    # and takes its own subtask with it.
     back = client.post(f"/api/lists/{b}/tasks/{sub['uid']}/move", json={"list": a}).json()
     assert back["list"] == a and back["parent"] is None
+    assert back["children"] == [leaf["uid"]]
     parent = client.get(f"/api/lists/{b}/tasks/{t['uid']}").json()
     assert parent["children"] == []
 
