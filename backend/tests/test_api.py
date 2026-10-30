@@ -854,7 +854,7 @@ def test_edit_conflict_is_409(client, monkeypatch):
     lid = _list(client)["id"]
     t = client.post(f"/api/lists/{lid}/tasks", json={"summary": "contested"}).json()
 
-    def boom(self, href, uid, edit):
+    def boom(self, href, uid, edit, *, deadline_moved=False):
         raise ConflictError(f"edit conflict on {uid}: retry the change")
 
     monkeypatch.setattr(SmylteService, "edit_task", boom)
