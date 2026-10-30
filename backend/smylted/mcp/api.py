@@ -620,12 +620,36 @@ class McpApi:
         # the reminder must not reach the wire at all — an empty TaskEdit would
         # PUT the resource back unchanged, moving its etag and making every
         # other CalDAV client re-fetch it for nothing.
+        #
+        # `deadline_moved` is split off the same way, though it isn't a field
+        # at all. With `due` it says why the date is changing and goes to
+        # `edit_task`. Without `due` it reclassifies the deadline the task
+        # already remembers, which is a sidecar write like the reminder.
         lead = self._reminder(fields.get("notify_minutes_before"))
-        wire = {k: v for k, v in fields.items() if k != "notify_minutes_before"}
-        if lead is not None and not wire:
+        moved = fields.get("deadline_moved")
+        side: dict = {}
+        if lead is not None:
+            side["notify_minutes_before"] = lead
+        if moved is not None and "due" not in fields:
+            current = self._svc.get_task(href, uid)
+            if current is None:
+                raise ToolError(f"No task {uid!r} in list {list_id!r}.")
+            if not current.get("original_due"):
+                raise ToolError(
+                    "This task remembers no passed deadline, so there is nothing "
+                    "for deadline_moved to reclassify. Pass it together with "
+                    "`due` to say why a passed deadline is changing."
+                )
+            side["original_due_moved"] = int(bool(moved))
+        wire = {k: v for k, v in fields.items()
+                if k not in ("notify_minutes_before", "deadline_moved")}
+        if side and not wire:
             if not self._svc.has_task(href, uid):
                 raise ToolError(f"No task {uid!r} in list {list_id!r}.")
-            return self._svc.set_sidecar(href, uid, notify_minutes_before=lead)
+            return self._svc.set_sidecar(href, uid, **side)
+        if not wire:
+            # `deadline_moved: null` alone, which the schema can't refuse.
+            raise ToolError("Nothing to change — pass at least one field to update.")
         fields = wire
         kw = {}
         if "summary" in fields:
@@ -657,11 +681,12 @@ class McpApi:
                     raise ToolError(f"No task {parent!r} in this list to be the parent.")
             kw["related_parent"] = parent or None
         with _not_found(f"No task {uid!r} in list {list_id!r}."):
-            task = self._svc.edit_task(href, uid, TaskEdit(**kw))
+            task = self._svc.edit_task(href, uid, TaskEdit(**kw),
+                                       deadline_moved=bool(moved) and "due" in fields)
         if task is None:
             raise ToolError(f"No task {uid!r} in list {list_id!r}.")
-        if lead is not None:
-            return self._svc.set_sidecar(href, uid, notify_minutes_before=lead) or task
+        if side:
+            return self._svc.set_sidecar(href, uid, **side) or task
         return task
 
     def complete_task(self, list_id, uid, *, done=True):

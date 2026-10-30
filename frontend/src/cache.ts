@@ -233,6 +233,10 @@ export function sanitizeTask(v: unknown): Task | null {
     // recoverable from what is left on the row.
     original_due: orNull(o.original_due),
     original_due_is_date: bool(o.original_due_is_date),
+    // Absent from anything cached before the owner could say a deadline had
+    // moved, which `bool` renders as false: "late", what the app recorded
+    // every one of them as at the time.
+    original_due_moved: bool(o.original_due_moved),
     start: orNull(o.start),
     start_is_date: bool(o.start_is_date),
     tags: strs(o.tags),

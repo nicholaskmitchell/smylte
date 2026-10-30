@@ -426,7 +426,7 @@ def test_an_older_database_gains_the_cache_and_token_columns(tmp_path):
     # leave the flag missing on a database that has the date, and every
     # remembered deadline would render as midnight.
     assert {"notify_minutes_before", "parked_at",
-            "original_due", "original_due_is_date"} <= cols("sidecar")
+            "original_due", "original_due_is_date", "original_due_moved"} <= cols("sidecar")
     assert "cv" in cols("oauth_tokens")
 
     # The real readers, over the legacy rows — which is the whole point.
@@ -444,6 +444,7 @@ def test_an_older_database_gains_the_cache_and_token_columns(tmp_path):
         # recoverable from anything left on the row.
         assert task["original_due"] is None
         assert task["original_due_is_date"] is False
+        assert task["original_due_moved"] is False
     finally:
         svc.close()
     assert store.get_oauth_token(conn, "h1")["cv"] == ""

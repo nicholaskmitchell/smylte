@@ -7,10 +7,12 @@
 // looks like on the wire, and TasksView imports it back for the day-column
 // drag, which reschedules through the same rule.
 
-import { useRef, useState, type KeyboardEvent } from 'react'
-import { useEscape } from '../hooks'
+import { useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
+import { useEscape, useSegmentThumb } from '../hooks'
 import type { CreateTaskBody, List, Task } from '../api'
-import { dayKey, hasZone, instantFromLocal, sameValue, toLocalInput } from '../util'
+import {
+  dayKey, hasZone, instantFromLocal, sameValue, toLocalInput, wouldRemember,
+} from '../util'
 import { fmtDue, inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { blankValues, bodyFrom, FIELDS, type RowValues } from './AddMultipleModal'
@@ -42,7 +44,7 @@ export const dateOut = (date: string, time: string, original: string | null | un
  * it lands) and the footer offers the route to the bulk composer instead of
  * Delete.
  */
-export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, onSave, onDelete, onMultiple, onReminderChange, onPark, onForgetOriginalDue }: {
+export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, onSave, onDelete, onMultiple, onReminderChange, onPark, onForgetOriginalDue, onDeadlineMoved }: {
   task: Task | null
   lists: List[]
   defaultList: string
@@ -79,6 +81,13 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
    *  it does have to be forgettable, or one badly corrected date annotates the
    *  task for good. */
   onForgetOriginalDue?: () => void
+  /** Say why the REMEMBERED deadline was left: the deadline itself moved, or
+   *  the owner was late. Immediate and app-only, like `onForgetOriginalDue`
+   *  beside it, and optional for the same reason. A deadline this form is
+   *  about to leave needs no callback: that answer rides in the PATCH as
+   *  `deadline_moved`, because the record it classifies doesn't exist until
+   *  the save lands. */
+  onDeadlineMoved?: (moved: boolean) => void
   onDelete: () => void
   onMultiple: (listId: string, summary: string) => void
 }) {
@@ -120,6 +129,34 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
     keys.some((k) => !sameValue(vals[k], start[k]))
   const patch = (p: Partial<RowValues>) => setVals((v) => ({ ...v, ...p }))
 
+  // LATE, OR DID THE DEADLINE MOVE? Asked when the date field leaves a
+  // deadline that has passed, because that is when the server will remember
+  // the date being left (`wouldRemember`), and the two answers record it
+  // differently. Late is the default: it is the reading the app makes when
+  // nobody says otherwise (the triage strip, a drag across the day columns),
+  // and the one that can't quietly erase a miss.
+  const leaving = !creating && wouldRemember(task) && changed('dueDate', 'dueTime')
+  const [movedNow, setMovedNow] = useState(false)
+  // What the block under the date field is about: the deadline this form is
+  // leaving, or else the one the task already remembers. A leave wins, since
+  // the server will replace a moved record with whatever this save records.
+  // A remembered date equal to `due` is a deadline moved and moved back, and
+  // says nothing.
+  const why = creating ? null
+    : leaving
+      ? { iso: task.due!, isDate: task.due_is_date, moved: movedNow, saved: false }
+      : task.original_due && task.original_due !== task.due
+        ? { iso: task.original_due, isDate: task.original_due_is_date,
+            moved: task.original_due_moved, saved: true }
+        : null
+  const choose = (moved: boolean) => {
+    if (!why) return
+    if (why.saved) onDeadlineMoved?.(moved)
+    else setMovedNow(moved)
+  }
+  const whyRef = useRef<HTMLDivElement>(null)
+  useSegmentThumb(whyRef, why?.moved ? 1 : 0, !!why)
+
   // The list picker only makes sense while creating: moving an existing task
   // between lists means moving it between CalDAV collections, which PATCH
   // doesn't do. Notes keeps its full-width textarea either way — the composer's
@@ -153,6 +190,9 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
       body.start = dateOut(vals.startDate, vals.startTime, task?.start)
     }
     if (changed('tags')) body.tags = vals.tags
+    // Only with the date it explains, and only when it says something: false
+    // is what the server assumes.
+    if (leaving && movedNow) body.deadline_moved = true
     // -1 rather than null: 0 is a real lead ("tell me at the moment itself"),
     // so the clear cannot borrow falsiness. Only sent when it actually changed,
     // so an unrelated rename does not write the sidecar.
@@ -222,18 +262,41 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
 
             Never while creating — a task that does not exist yet has missed
             nothing — and suppressed when it matches what is in the date field,
-            which is what a deadline moved and moved back looks like. */}
-        {!creating && task.original_due && task.original_due !== task.due && (
+            which is what a deadline moved and moved back looks like.
+
+            WHY IT WAS LEFT is the one thing the owner can say about it, and
+            only the owner can: a missed deadline and a deadline that moved both
+            leave DUE on a new date. The pair also appears while the date field
+            is leaving a passed deadline, before anything is remembered, since
+            that is when the question is real (see `why` above). Answering a
+            saved record is immediate, like Clear. Answering a leave goes with
+            Save. */}
+        {why && (
           <div className="field original-due">
             <span className="hintline">
               {tr('taskModal.originalDue', {
-                date: fmtDue(task.original_due, task.original_due_is_date, tf, locale),
+                date: fmtDue(why.iso, why.isDate, tf, locale),
               })}
             </span>
+            {(!why.saved || onDeadlineMoved) && (
+              <div className="view-tabs due-why" ref={whyRef} role="group"
+                aria-label={tr('taskModal.dueWhy')}
+                style={{ '--n': 2, '--i': why.moved ? 1 : 0 } as CSSProperties}>
+                <button type="button" className={`view-tab ${why.moved ? '' : 'active'}`}
+                  aria-pressed={!why.moved} onClick={() => choose(false)}>
+                  {tr('taskModal.dueLate')}
+                </button>
+                <button type="button" className={`view-tab ${why.moved ? 'active' : ''}`}
+                  aria-pressed={why.moved} onClick={() => choose(true)}>
+                  {tr('taskModal.dueMovedChoice')}
+                </button>
+              </div>
+            )}
             {/* A link rather than a button, the call `.linklike` exists for:
                 it finishes a line of prose and a button there would read as
-                this form's main action, which is Save. */}
-            {onForgetOriginalDue && (
+                this form's main action, which is Save. Only on a saved
+                record: there is nothing to forget until the save lands. */}
+            {why.saved && onForgetOriginalDue && (
               <button className="linklike" onClick={onForgetOriginalDue}>
                 {tr('taskModal.forgetOriginalDue')}
               </button>

@@ -288,7 +288,12 @@ def approve(host, suggestion_id: str, *, config: MailConfig, title: str | None =
                 description = (current.rstrip() + "\n\n" + "\n".join(missing)).lstrip()
             edit = TaskEdit(description=description,
                             due=d if d is not None else UNSET)
-            created = host.edit_task(row["target_list"], row["target_uid"], edit)
+            # A date that arrives by email is the deadline moving: someone
+            # wrote to say when it is due now. If the old one had passed, the
+            # task was not late by it, and recording it as late would
+            # misstate what the email said.
+            created = host.edit_task(row["target_list"], row["target_uid"], edit,
+                                     deadline_moved=d is not None)
             result = None
         elif kind == "event":
             cid = calendar_id or config.event_calendar or _first_id(host.list_calendars())

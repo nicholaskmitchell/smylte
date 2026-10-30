@@ -251,6 +251,12 @@ class EditTask(BaseModel):
     tags: list[XmlSafeText] | None = None
     status: str | None = None         # NEEDS-ACTION|IN-PROCESS|COMPLETED|CANCELLED
     parent: Id | None = None          # parent task UID; explicit null unparents
+    # Why `due` is changing, when it is leaving a deadline that has passed:
+    # true when the deadline itself moved, so the task isn't late. Not a
+    # property of the task and never on the wire. It decides how
+    # `service.edit_task` records the date being left, and does nothing on an
+    # edit that leaves no passed deadline.
+    deadline_moved: bool | None = None
 
 
 class Sidecar(BaseModel):
@@ -286,6 +292,11 @@ class Sidecar(BaseModel):
     # ratchet: correct a date badly once and the task carries "originally due"
     # for the rest of its life with no way to take it back.
     forget_original_due: bool | None = None
+    # Say WHY the remembered deadline was left: true when the deadline itself
+    # moved, false when the owner was late. Reclassifies the record and cannot
+    # create one. The date stays the server's, and on a task with nothing
+    # remembered this does nothing, so it can't invent a deadline either way.
+    original_due_moved: bool | None = None
 
 
 class EventReminder(BaseModel):
@@ -1802,7 +1813,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def patch_task(request: Request, list_id: str, uid: str, body: EditTask):
         href = await _href(request, list_id, component="VTODO")
         await _check_parent(request, href, body.parent, uid=uid)
-        dto = await _run(_svc(request).edit_task, href, uid, _edit_from_patch(body))
+        dto = await _run(_svc(request).edit_task, href, uid, _edit_from_patch(body),
+                         deadline_moved=bool(body.deadline_moved))
         if dto is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown task {uid}")
         return dto
@@ -1897,9 +1909,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # A false is not a request to remember something (there is nothing this
         # route could remember), so only a true does anything — the same reading
         # `if v is not None` above gives every other field.
+        #
+        # The why goes with the date: forgetting one forgets both, and a
+        # forget sent with a reclassification wins, since there is then
+        # nothing left to classify.
         if fields.pop("forget_original_due", False):
             fields["original_due"] = None
             fields["original_due_is_date"] = 0
+            fields["original_due_moved"] = 0
+        elif "original_due_moved" in fields:
+            # Only a record that exists can be reclassified. Dropped rather
+            # than refused: the DTO reads the flag through `original_due`
+            # anyway, so a stray one would say nothing, and a client that
+            # raced a forget gets the task back as it is.
+            task = await _run(_svc(request).get_task, href, uid)
+            if task and task["original_due"]:
+                fields["original_due_moved"] = int(fields["original_due_moved"])
+            else:
+                del fields["original_due_moved"]
         return await _run(_svc(request).set_sidecar, href, uid, **fields)
 
     @api.put("/calendars/{cal_id}/events/{uid}/reminder")

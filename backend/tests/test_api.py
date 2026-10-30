@@ -1248,6 +1248,84 @@ def test_a_remembered_deadline_can_be_forgotten(client):
     assert kept["original_due"] == "2020-01-01"
 
 
+def test_a_deadline_that_moved_is_remembered_as_moved_not_missed(client):
+    """Late, or did the deadline move? Both leave DUE on a new date, and only
+    the owner (or the email that said so) knows which. `deadline_moved` on the
+    PATCH is that answer, and it is recorded beside the date being left.
+
+    A MOVED DEADLINE WAS NEVER A MISS, so it doesn't hold the record the way a
+    miss does: when the date it moved to is missed in turn, that miss replaces
+    it. A MISS IS STILL NEVER REWRITTEN, even by a later move."""
+    lid = _list(client)["id"]
+    t = client.post(f"/api/lists/{lid}/tasks", json={
+        "summary": "Submit the grant report", "due": "2020-03-11",
+    }).json()
+    moved = client.patch(f"/api/lists/{lid}/tasks/{t['uid']}",
+                         json={"due": "2099-01-04", "deadline_moved": True}).json()
+    assert moved["due"] == "2099-01-04"
+    assert moved["original_due"] == "2020-03-11"
+    assert moved["original_due_moved"] is True
+
+    # Moving a future deadline is planning, with or without the flag, and
+    # leaves the record alone.
+    planned = client.patch(f"/api/lists/{lid}/tasks/{t['uid']}",
+                           json={"due": "2020-06-01", "deadline_moved": True}).json()
+    assert (planned["original_due"], planned["original_due_moved"]) == ("2020-03-11", True)
+
+    # 2020-06-01 has passed, and leaving it without saying it moved is a miss:
+    # the first one, since the earlier date stopped being a promise when it moved.
+    missed = client.patch(f"/api/lists/{lid}/tasks/{t['uid']}",
+                          json={"due": "2099-02-02"}).json()
+    assert (missed["original_due"], missed["original_due_moved"]) == ("2020-06-01", False)
+
+    # And a miss stays, whatever the next move says about itself.
+    client.patch(f"/api/lists/{lid}/tasks/{t['uid']}", json={"due": "2020-07-01"})
+    kept = client.patch(f"/api/lists/{lid}/tasks/{t['uid']}",
+                        json={"due": "2099-03-03", "deadline_moved": True}).json()
+    assert (kept["original_due"], kept["original_due_moved"]) == ("2020-06-01", False)
+
+    # Without the flag nothing changes from before: a passed deadline left is late.
+    u = client.post(f"/api/lists/{lid}/tasks", json={
+        "summary": "Chase the invoice", "due": "2019-11-02",
+    }).json()
+    late = client.patch(f"/api/lists/{lid}/tasks/{u['uid']}",
+                        json={"due": "2099-01-01"}).json()
+    assert (late["original_due"], late["original_due_moved"]) == ("2019-11-02", False)
+
+
+def test_why_a_remembered_deadline_was_left_can_be_answered_later(client):
+    """The owner may only find out afterwards that the deadline had moved, so
+    the record can be reclassified either way. It can't be created: on a task
+    that remembers nothing the flag does nothing, which keeps the route from
+    inventing a deadline. Forgetting the date forgets the reason with it."""
+    lid = _list(client)["id"]
+    t = client.post(f"/api/lists/{lid}/tasks", json={
+        "summary": "Reply to Ana", "due": "2020-08-12",
+    }).json()
+    client.patch(f"/api/lists/{lid}/tasks/{t['uid']}", json={"due": "2099-02-02"})
+    side = f"/api/lists/{lid}/tasks/{t['uid']}/sidecar"
+
+    moved = client.put(side, json={"original_due_moved": True}).json()
+    assert (moved["original_due"], moved["original_due_moved"]) == ("2020-08-12", True)
+    assert moved["due"] == "2099-02-02", "the deadline it works to is untouched"
+    late = client.put(side, json={"original_due_moved": False}).json()
+    assert (late["original_due"], late["original_due_moved"]) == ("2020-08-12", False)
+
+    client.put(side, json={"original_due_moved": True})
+    forgotten = client.put(side, json={"forget_original_due": True}).json()
+    assert forgotten["original_due"] is None and forgotten["original_due_moved"] is False
+    # Nothing is left behind for the next record to inherit: a fresh miss is late.
+    client.patch(f"/api/lists/{lid}/tasks/{t['uid']}", json={"due": "2020-01-01"})
+    again = client.patch(f"/api/lists/{lid}/tasks/{t['uid']}",
+                         json={"due": "2099-03-03"}).json()
+    assert (again["original_due"], again["original_due_moved"]) == ("2020-01-01", False)
+
+    plain = client.post(f"/api/lists/{lid}/tasks", json={"summary": "Never late"}).json()
+    nothing = client.put(f"/api/lists/{lid}/tasks/{plain['uid']}/sidecar",
+                         json={"original_due_moved": True}).json()
+    assert nothing["original_due"] is None and nothing["original_due_moved"] is False
+
+
 def test_parking_an_unknown_task_is_a_404_and_writes_nothing(client):
     """The guard `put_sidecar` carries, for the reason it carries it: this route
     writes the sidecar too, and `store.set_sidecar` refuses a uid `items` does

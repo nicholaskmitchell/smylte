@@ -395,6 +395,12 @@ export const en = {
   // still names the date it was actually promised for.
   'taskModal.originalDue': 'Originally due {date}',
   'taskModal.forgetOriginalDue': 'Clear',
+  // Why that date was left, asked when a passed deadline is changed and
+  // answerable afterwards. The two leave DUE in the same place; only the owner
+  // knows which happened. "Late" is the default and keeps the miss counted.
+  'taskModal.dueWhy': 'Why the date changed',
+  'taskModal.dueLate': 'Running late',
+  'taskModal.dueMovedChoice': 'Deadline moved',
   'common.delete': 'Delete',
   'common.add': 'Add',
   'common.save': 'Save',
@@ -1114,6 +1120,9 @@ export const en = {
   // countable — `today.wasDue` stays for the deadline missed earlier the same
   // day, where the honest count is no count rather than zero.
   'today.wasDueDays': 'was due {date} · {days}d',
+  // The same place on the row when the owner said the deadline itself moved:
+  // nothing was missed, so no count, and it isn't warn-coloured.
+  'today.dueMoved': 'moved from {date}',
   'settings.staleOverdue': 'Days overdue before asking',
   'settings.staleOverdue.hint': 'After this, an overdue task asks for a new date or to be parked instead of being offered for today. 0 turns this off.',
   'settings.staleOverdue.off': 'Off. Overdue tasks are offered for today however late they are.',

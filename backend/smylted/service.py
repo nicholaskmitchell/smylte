@@ -776,6 +776,11 @@ class SmylteService:
             # as midnight would be a second answer about the same date.
             "original_due": s["original_due"] if s else None,
             "original_due_is_date": bool(s["original_due_is_date"]) if s else False,
+            # Whether that date was left because THE DEADLINE MOVED rather than
+            # because the owner was late. Read through `original_due`, so a
+            # flag left behind with no remembered date can't make it into the
+            # DTO as a claim about nothing.
+            "original_due_moved": bool(s and s["original_due"] and s["original_due_moved"]),
             "has_rrule": bool(it["has_rrule"]),
             "href": it["href"],
             "etag": it["etag"],
@@ -897,7 +902,15 @@ class SmylteService:
         self._publish({"type": "task_created", "list": _slug(href), "uid": uid})
         return self.get_task(href, uid)
 
-    def edit_task(self, href: str, uid: str, edit: TaskEdit) -> dict[str, Any] | None:
+    def edit_task(self, href: str, uid: str, edit: TaskEdit, *,
+                  deadline_moved: bool = False) -> dict[str, Any] | None:
+        """Write `edit` to the task.
+
+        `deadline_moved` says why a passed deadline is being changed, when this
+        edit changes one: the deadline itself moved, so the task is not late.
+        It decides only how `_deadline_being_missed`'s answer is recorded, and
+        does nothing on an edit that answers None — a future date being moved
+        is planning either way, and a remembered miss is never rewritten."""
         with self._lock:
             # READ BEFORE THE WRITE, WRITE AFTER IT. The deadline this edit is
             # about to overwrite only exists until `_engine.edit_task` runs, so
@@ -909,7 +922,8 @@ class SmylteService:
             if missed is not None:
                 store.set_sidecar(self._conn, href, uid,
                                   original_due=missed[0],
-                                  original_due_is_date=int(missed[1]))
+                                  original_due_is_date=int(missed[1]),
+                                  original_due_moved=int(deadline_moved))
             # ONLY WHEN THIS EDIT SETTLED THE CHILD. The feature is "ticking the
             # last step finishes the thing it is a step of", and without this
             # test it was "any edit to any child does", which is a different and
@@ -975,6 +989,13 @@ class SmylteService:
         question nobody asks while losing the one they do. Only an explicit
         "forget it" (the sidecar route's `forget_original_due`) clears it.
 
+        A MOVED DEADLINE IS THE EXCEPTION, because it was never a miss. When
+        the owner said the deadline itself moved (`original_due_moved`), the
+        date it moved to is the real promise, and missing THAT is the first
+        miss. So a moved record doesn't block the stamp, and the stamp replaces
+        it. A deadline that moves twice keeps the latest move. Nothing else is
+        lost: the earlier date stopped being a promise when it moved.
+
         ONLY THIS PATH, never the sync engine — the same rule
         `_close_finished_parents` states, for the same reason. Tasks.org moving
         a deadline is a projection of the wire, not a reschedule the owner made
@@ -996,7 +1017,7 @@ class SmylteService:
         if it is None or not it["due"]:
             return None
         side = store.get_sidecar(self._conn, href, uid)
-        if side is not None and side["original_due"]:
+        if side is not None and side["original_due"] and not side["original_due_moved"]:
             return None
         parts = due_rules.due_parts(it["due"], self._home_tz())
         if parts is None or datetime.now(timezone.utc).timestamp() < parts[1]:

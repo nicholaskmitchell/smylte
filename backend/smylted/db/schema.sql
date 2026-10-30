@@ -216,7 +216,17 @@ CREATE TABLE IF NOT EXISTS sidecar (
     -- the alternative — inferring it from the absence of a "T" — is exactly the
     -- inference `items` declines to make one table over.
     original_due_is_date   INTEGER NOT NULL DEFAULT 0,
-    orphaned_at            TEXT,             -- set when UID leaves the wire; GC after 7 days
+    -- WHY THE DATE CHANGED: 0 when the owner was late (the default, and the
+    -- only reading the app can make on its own), 1 when the deadline itself
+    -- moved — an extension, a postponed meeting, an email naming a new date.
+    -- Both leave DUE in the same place, and only the owner or the email can say
+    -- which it was. A moved deadline is not a missed one, so a 1 here is never
+    -- counted as lateness and never blocks the stamp above: if the new deadline
+    -- is missed in turn, that miss replaces it. A 0 is the permanent record the
+    -- comment on `original_due` describes. Meaningless while `original_due` is
+    -- NULL, and the DTO reads it that way.
+    original_due_moved     INTEGER NOT NULL DEFAULT 0,
+    orphaned_at           TEXT,             -- set when UID leaves the wire; GC after 7 days
     updated_at             TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     PRIMARY KEY (collection_href, uid)
     -- deliberately NO foreign key to items: sidecar must outlive a
