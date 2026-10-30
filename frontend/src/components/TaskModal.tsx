@@ -264,11 +264,14 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
             after: a task's subtasks go with it, and a subtask leaves its
             parent behind (`service.move_task`). Nothing to say for a task
             that is neither. */}
-        {moveTo && !creating && task.children.length > 0 && (
-          <p className="hintline">{tr('taskModal.moveTakesSubtasks')}</p>
-        )}
-        {moveTo && !creating && task.parent && (
-          <p className="hintline">{tr('taskModal.moveLeavesParent')}</p>
+        {/* One block, not a paragraph each: a `<p>` keeps its default margins
+            inside the dialog's flex column, which spaced two sentences about
+            one move 36px apart. */}
+        {moveTo && !creating && (task.children.length > 0 || task.parent) && (
+          <div className="hintline">
+            {[task.children.length > 0 && tr('taskModal.moveTakesSubtasks'),
+              task.parent && tr('taskModal.moveLeavesParent')].filter(Boolean).join(' ')}
+          </div>
         )}
         {/* WHAT IT WAS PROMISED FOR, under the date field that replaced it.
             `original_due` is the deadline this task was moved off after that

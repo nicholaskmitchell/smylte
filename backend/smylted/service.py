@@ -1230,6 +1230,15 @@ class SmylteService:
         try:
             with self._lock:
                 root = store.get_item(self._conn, src_href, uid)
+                if root is None and self._finished_on_the_wire(src_href, dst_href, uid):
+                    # An earlier attempt moved it and lost the answer, and a
+                    # sync has since cached the result. Only Smylte's own half
+                    # is left to do.
+                    with store.tx(self._conn):
+                        store.move_task_refs(self._conn, src_href, dst_href, uid)
+                        store.set_meta(self._conn, task_move_key(dst_href, uid), None)
+                    moved.append(uid)
+                    return self.get_task(dst_href, uid)
                 if root is None or root["component"] != "VTODO":
                     raise KeyError(f"unknown task {uid} in {src_href}")
                 tasks = [i for i in store.get_items(self._conn, src_href)
@@ -1252,10 +1261,13 @@ class SmylteService:
 
                 for u in order:
                     there = store.get_item(self._conn, dst_href, u)
-                    ours = (store.get_meta(self._conn, task_move_key(dst_href, u)) == src_href
-                            and there is not None
-                            and there["href"] == moved_href(rows[u]["href"], dst_href))
-                    if there is not None and not ours:
+                    if there is None:
+                        continue
+                    j = store.get_meta_json(self._conn, task_move_key(dst_href, u))
+                    ours = (j.get("src") == src_href
+                            and there["href"] == moved_href(rows[u]["href"], dst_href)
+                            and j.get("etag") in (None, there["etag"]))
+                    if not ours:
                         raise ConflictError(f"task {u} already exists in the target list")
                 for u in order:
                     try:
@@ -1277,6 +1289,15 @@ class SmylteService:
                 self._publish({"type": "task_deleted", "list": _slug(src_href), "uid": u})
                 self._publish({"type": "task_created", "list": _slug(dst_href), "uid": u})
         return self.get_task(dst_href, uid)
+
+    def _finished_on_the_wire(self, src_href: str, dst_href: str, uid: str) -> bool:
+        """Whether a move of `uid` from `src_href` already happened on the wire
+        but not in Smylte's own records: the engine's journal names this move,
+        and the destination holds the copy it wrote. Called under the lock."""
+        j = store.get_meta_json(self._conn, task_move_key(dst_href, uid))
+        there = store.get_item(self._conn, dst_href, uid)
+        return (j.get("src") == src_href and there is not None
+                and j.get("etag") in (None, there["etag"]))
 
     def reorder_tasks(self, placed: list[tuple[str, str]]) -> None:
         """Persist a manual task order — (collection_href, uid) pairs, in order.

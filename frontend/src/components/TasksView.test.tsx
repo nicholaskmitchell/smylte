@@ -906,6 +906,22 @@ describe('<TasksView> moving a task to another list', () => {
     expect(calls[calls.length - 1][0]).toContain('l2\u0000p1')
   })
 
+  it('keeps a fold on a task moved somewhere other than this editor', async () => {
+    // From the calendar's editor, over MCP, or by another client: the pane
+    // only sees the task turn up in another list on the next fetch.
+    const parent = task({ uid: 'p1', summary: 'Trip planning', children: ['c1'], child_count: 1 })
+    const child = task({ uid: 'c1', summary: 'Book flight', parent: 'p1' })
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [parent, child] : []))
+    const { onCollapsedTasksChange, bumpRev } = setup('list', false, ['l1\u0000p1'])
+    await screen.findByText('Trip planning')
+    expect(onCollapsedTasksChange).not.toHaveBeenCalled()
+
+    m.tasks.mockImplementation(async (id: string) => (id === 'l2'
+      ? [{ ...parent, list: 'l2' }, { ...child, list: 'l2' }] : []))
+    bumpRev(1)
+    await waitFor(() => expect(onCollapsedTasksChange).toHaveBeenCalledWith(['l2\u0000p1']))
+  })
+
   it('says both things about a subtask that has subtasks of its own', async () => {
     const parent = task({ uid: 'p1', summary: 'Trip planning', children: ['c1'], child_count: 1 })
     const mid = task({ uid: 'c1', summary: 'Packing', parent: 'p1', children: ['g1'],
@@ -915,8 +931,8 @@ describe('<TasksView> moving a task to another list', () => {
     const { user } = setup()
     await user.click(await screen.findByText('Packing'))
     await user.selectOptions(screen.getByLabelText('List'), 'l2')
-    expect(screen.getByText('Its subtasks move with it.')).toBeInTheDocument()
-    expect(screen.getByText(/moves out from under its parent task/)).toBeInTheDocument()
+    expect(screen.getByText(/^Its subtasks move with it\. It moves out from under its parent task/))
+      .toBeInTheDocument()
   })
 })
 

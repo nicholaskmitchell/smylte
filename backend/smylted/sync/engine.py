@@ -540,7 +540,25 @@ class SyncEngine:
               transform=None) -> str:
         """The copy-then-delete behind `move_event` and `move_task`; its
         reasoning is in `move_event`'s docstring. `transform`, when given, is
-        applied to the wire bytes before they are written to the destination."""
+        applied to the wire bytes before they are written to the destination.
+
+        TASKS KEEP A JOURNAL (`task_move_key`), because a task's copy can only
+        be adopted when this engine provably wrote it. Tasks really do share
+        UIDs across lists (a client copying one keeps its UID, and Smylte names
+        a task's file after its UID), so a same-UID resource at the copy's href
+        may be another task, and adopting it would overwrite that task with
+        this one. The entry is `{"src", "etag"}`:
+
+        * written as an INTENT before the PUT, with no etag, since a PUT whose
+          reply is lost may still have landed and the retry must know it;
+        * given the copy's etag once the PUT (or an adoption) answers, so a
+          retry adopts the copy only while nobody has edited it since;
+        * cleared when the move finishes or is undone, and restored to what it
+          was when the PUT is refused for a resource that is not ours.
+
+        A source DELETE whose reply is lost is checked against the server, and
+        a retry that finds the source already gone finishes a move whose copy
+        is ours. Events keep the older rule: any same-UID occupant is adopted."""
         where = "calendar" if kind == "event" else "list"
         if not store.has_collection(self.conn, dst_href):
             raise ValueError(f"collection {dst_href} is unknown; run discover() first")
@@ -548,19 +566,23 @@ class SyncEngine:
         if row is None:
             raise KeyError(f"unknown {kind} {uid} in {src_href}")
         new_href = moved_href(row["href"], dst_href)
-        current = self.dav.get(row["href"])      # NotFound => already gone; surfaces as 404
-        data = transform(current.data) if transform else current.data
-        # A TASK COPY IS ADOPTED ONLY WHEN THIS ENGINE WROTE IT. Tasks really do
-        # share UIDs across lists (a client copying one keeps its UID, and
-        # Smylte names a task's file after its UID), so a same-UID resource at
-        # `new_href` may be another task, and adopting it would overwrite that
-        # task with this one. The journal says which: it is written the moment
-        # the copy lands and cleared once the move is finished or undone.
-        # Events keep the older rule below.
         journal = task_move_key(dst_href, uid) if kind == "task" else None
-        ours = journal is None or store.get_meta(self.conn, journal) == src_href
+        prior = store.get_meta_json(self.conn, journal) if journal else {}
+        ours = journal is None or prior.get("src") == src_href
         try:
-            self.dav.put(new_href, data, if_none_match="*")
+            current = self.dav.get(row["href"])  # NotFound => already gone; surfaces as 404
+        except NotFound:
+            # Gone, and the journal says the copy is ours: the source DELETE
+            # landed and its answer did not. The move is done on the wire.
+            if journal and ours and self._copy_is_ours(new_href, uid, prior.get("etag")):
+                return self._finish_move(src_href, dst_href, row["href"], uid, new_href, journal)
+            raise
+        data = transform(current.data) if transform else current.data
+        if journal:
+            store.set_meta_json(self.conn, journal,
+                                {"src": src_href, "etag": prior.get("etag") if ours else None})
+        try:
+            etag = self.dav.put(new_href, data, if_none_match="*")
         except (PreconditionFailed, Conflict) as e:
             # PreconditionFailed covers an occupied HREF. Radicale also enforces
             # UID uniqueness per collection and answers 409 `no-uid-conflict` when
@@ -581,24 +603,40 @@ class SyncEngine:
             # `_put_new`'s replay tolerance, applied to the same problem: read
             # the occupant, and only a resource that is NOT ours is a conflict.
             if not ours:
+                # Nothing of ours was written, so the journal goes back to what
+                # it said before this attempt.
+                if prior:
+                    store.set_meta_json(self.conn, journal, prior)
+                else:
+                    store.set_meta(self.conn, journal, None)
                 raise ConflictError(
                     f"{kind} {uid} already exists in the target {where}") from e
-            self._adopt_moved_copy(new_href, uid, data, e, kind=kind)
+            etag = self._adopt_moved_copy(
+                new_href, uid, data, e, kind=kind,
+                expect_etag=prior.get("etag") if journal else None)
         if journal:
-            store.set_meta(self.conn, journal, src_href)
+            store.set_meta_json(self.conn, journal, {"src": src_href, "etag": etag})
         try:
             self.dav.delete(row["href"], if_match=current.etag)
         except PreconditionFailed as e:
             # Edited again between our GET and the DELETE. Undo the copy and make
             # the caller retry rather than silently discarding that revision.
+            # A task's copy is undone only as written (`if_match`), and its
+            # cached row goes with it, or the retry would read it as a clash.
             try:
-                self.dav.delete(new_href, if_match=None)
+                self.dav.delete(new_href, if_match=etag if journal else None)
                 if journal:
-                    store.set_meta(self.conn, journal, None)
+                    with _tx(self.conn):
+                        store.delete_item_by_href(self.conn, dst_href, new_href)
+                        store.set_meta(self.conn, journal, None)
             except DavError:
                 log.warning("move_%s: could not roll back the copy at %s", kind, new_href)
             raise ConflictError(f"{kind} {uid} changed during the move; retry") from e
         except DavError:
+            # A task asks the server whether the delete happened after all: a
+            # lost reply to a DELETE that landed is the move finished.
+            if journal and self._gone(row["href"]):
+                return self._finish_move(src_href, dst_href, row["href"], uid, new_href, journal)
             # A lost reply, a 403, a 423. The copy is NOT rolled back: unlike the
             # 412 above, this is precisely the case where the delete cannot be
             # proved not to have happened, and undoing it would risk destroying
@@ -612,17 +650,50 @@ class SyncEngine:
                 "the %s is in BOTH %ss until the move is retried",
                 kind, uid, new_href, row["href"], kind, where, exc_info=True)
             raise
+        return self._finish_move(src_href, dst_href, row["href"], uid, new_href, journal)
+
+    def _finish_move(self, src_href: str, dst_href: str, src_item_href: str, uid: str,
+                     new_href: str, journal: str | None) -> str:
+        """The cache's half of a move whose wire half is done: the source row
+        leaves, its sidecar is orphaned for the service to re-point, and the
+        journal entry is cleared, in one transaction. Then the copy is cached."""
         with _tx(self.conn):
-            store.delete_item_by_href(self.conn, src_href, row["href"])
+            store.delete_item_by_href(self.conn, src_href, src_item_href)
             store.orphan_sidecar(self.conn, src_href, uid)
             if journal:
                 store.set_meta(self.conn, journal, None)
         return self._refresh_from_wire(dst_href, new_href)
 
+    def _gone(self, href: str) -> bool:
+        """Whether `href` is provably absent. An error that is not a 404 proves
+        nothing, so it answers False."""
+        try:
+            self.dav.get(href)
+        except NotFound:
+            return True
+        except DavError:
+            return False
+        return False
+
+    def _copy_is_ours(self, new_href: str, uid: str, etag: str | None) -> bool:
+        """Whether the resource at `new_href` is the copy the journal records:
+        our UID, and, when the journal knows the copy's etag, unedited since."""
+        try:
+            stored = self.dav.get(new_href)
+            fields = ical.extract_from_raw(stored.data)
+        except DavError:
+            return False
+        return fields is not None and fields.uid == uid and etag in (None, stored.etag)
+
     def _adopt_moved_copy(self, new_href: str, uid: str, data: bytes, cause: DavError,
-                          *, kind: str = "event") -> None:
+                          *, kind: str = "event", expect_etag: str | None = None) -> str:
         """The destination href is occupied. Treat it as the move's own earlier
         copy when it carries `uid`; raise `ConflictError` when it is a stranger's.
+        Returns the copy's etag after the refresh.
+
+        `expect_etag` is the etag the journal recorded for a task's copy. A copy
+        edited since (any other etag) is refused rather than overwritten: the
+        edit may be the only record of something the owner did there.
 
         The occupant is REFRESHED from `data` (the source's current bytes, as
         the move writes them) rather than merely accepted. The
@@ -648,8 +719,12 @@ class SyncEngine:
             log.warning("move_%s: %s is occupied by another resource", kind, new_href)
             raise ConflictError(
                 f"{kind} {uid} already exists in the target {where}") from cause
+        if expect_etag is not None and stored.etag != expect_etag:
+            raise ConflictError(
+                f"{kind} {uid} was changed in the target {where} since an earlier "
+                f"attempt to move it; it is in both {where}s, so resolve it there") from cause
         try:
-            self.dav.put(new_href, data, if_match=stored.etag)
+            return self.dav.put(new_href, data, if_match=stored.etag)
         except PreconditionFailed as e:
             raise ConflictError(f"{kind} {uid} changed during the move; retry") from e
 

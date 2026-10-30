@@ -2228,6 +2228,10 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
   flex-direction: row; flex-wrap: wrap; align-items: baseline;
   justify-content: space-between; gap: 4px 10px;
 }
+/* "Running late | Deadline moved" answers the sentence it follows, so it sits
+   beside it, and Clear keeps the end of the row. With space-between alone the
+   pair floated mid-dialog on a desktop, 220px from the sentence. */
+.original-due .due-why { margin-inline-end: auto; }
 /* Inline "Remove it" inside a hintline: a link, not a button, because it sits
    mid-sentence and a button there would read as the section's main action. */
 .linklike {
