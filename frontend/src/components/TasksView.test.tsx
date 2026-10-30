@@ -754,6 +754,73 @@ describe('<TasksView> moving a task to another list', () => {
     await user.click(await screen.findByText('Ship it'))
     expect(screen.getByLabelText('List')).toHaveValue('l1')
   })
+
+  it('asks the server again after a failed move', async () => {
+    // A move can fail part-way with some subtasks already across, and the
+    // server announces only those, so the rollback alone can be wrong.
+    const t = task({ uid: 'u1', summary: 'Ship it' })
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [t] : []))
+    m.moveTask.mockResolvedValue(undefined as unknown as Task)
+    const { user } = setup()
+    await user.click(await screen.findByText('Ship it'))
+    const before = m.tasks.mock.calls.length
+    await user.selectOptions(screen.getByLabelText('List'), 'l2')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(m.tasks.mock.calls.length).toBeGreaterThan(before))
+  })
+
+  it('leaves both rows alone when the destination already has the uid', async () => {
+    // The server's 409. Painting the move first would put two rows on one
+    // key, and the rollback would then drag the other list's task across.
+    const here = task({ uid: 'twin', summary: 'Twin here' })
+    const there = task({ uid: 'twin', list: 'l2', summary: 'Twin there' })
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [here] : [there]))
+    m.moveTask.mockResolvedValue(undefined as unknown as Task)
+    const { user } = setup()
+    await user.click(await screen.findByText('Twin here'))
+    await user.selectOptions(screen.getByLabelText('List'), 'l2')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(m.moveTask).toHaveBeenCalled())
+
+    await user.click(await screen.findByText('Twin there'))
+    expect(screen.getByLabelText('List')).toHaveValue('l2')
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    await user.click(await screen.findByText('Twin here'))
+    expect(screen.getByLabelText('List')).toHaveValue('l1')
+  })
+
+  it('moves only after a reminder saved with it has landed', async () => {
+    // The reminder is a sidecar write to the old list. Sent alongside the
+    // move, it could land after the task had gone and be lost.
+    const t = task({ uid: 'u1', summary: 'Ship it' })
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [t] : []))
+    let land: (v: Task) => void = () => {}
+    m.setTaskReminder.mockImplementation(() => new Promise<Task>((r) => { land = r }))
+    m.moveTask.mockResolvedValue({ ...t, list: 'l2' })
+    const { user } = setup()
+    await user.click(await screen.findByText('Ship it'))
+    await user.selectOptions(screen.getByLabelText('How long before this to send a reminder'), '30')
+    await user.selectOptions(screen.getByLabelText('List'), 'l2')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(m.setTaskReminder).toHaveBeenCalledWith('l1', 'u1', 30))
+    expect(m.moveTask).not.toHaveBeenCalled()
+    land({ ...t, notify_minutes_before: 30 })
+    await waitFor(() => expect(m.moveTask).toHaveBeenCalledWith('l1', 'u1', 'l2'))
+  })
+
+  it('says both things about a subtask that has subtasks of its own', async () => {
+    const parent = task({ uid: 'p1', summary: 'Trip planning', children: ['c1'], child_count: 1 })
+    const mid = task({ uid: 'c1', summary: 'Packing', parent: 'p1', children: ['g1'],
+                       child_count: 1 })
+    const leaf = task({ uid: 'g1', summary: 'Charger', parent: 'c1' })
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [parent, mid, leaf] : []))
+    const { user } = setup()
+    await user.click(await screen.findByText('Packing'))
+    await user.selectOptions(screen.getByLabelText('List'), 'l2')
+    expect(screen.getByText('Its subtasks move with it.')).toBeInTheDocument()
+    expect(screen.getByText(/moves out from under its parent task/)).toBeInTheDocument()
+  })
 })
 
 // ── the list pickers follow the sidebar, not the fetch order ───────────────
@@ -2043,6 +2110,22 @@ describe('<TasksView> parked work', () => {
     const { user } = setup()
     await user.click(await screen.findByText('Book the flights'))
     fireEvent.change(screen.getByLabelText('Due date'), { target: { value: '2099-05-01' } })
+    expect(screen.queryByRole('group', { name: 'Why the date changed' })).toBeNull()
+  })
+
+  it('answers a remembered deadline only while the date field is untouched', async () => {
+    // Reclassifying the record while the field is leaving the current date
+    // can turn that edit into a leave, and the line would switch dates under
+    // the click. The record is still shown; it is answered after the save.
+    m.tasks.mockResolvedValue([task({
+      uid: 'passport', summary: 'Renew the passport', due: '2020-09-02', due_is_date: true,
+      original_due: '2020-03-11', original_due_is_date: true,
+    })])
+    const { user } = setup()
+    await user.click(await screen.findByText('Renew the passport'))
+    expect(screen.getByRole('group', { name: 'Why the date changed' })).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Due date'), { target: { value: '2099-01-04' } })
+    expect(screen.getByText(/Originally due/)).toBeInTheDocument()
     expect(screen.queryByRole('group', { name: 'Why the date changed' })).toBeNull()
   })
 

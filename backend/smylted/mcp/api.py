@@ -27,6 +27,7 @@ from .. import due
 from ..ical import EventEdit, TaskEdit, rrule_from_spec
 from ..ical.read import normalize_offset, split_duration
 from ..service import day_key as _day_key, priority_from_label
+from ..sync import ConflictError
 from .tools import ToolError
 
 # A free/busy sweep loads every event in the window across every calendar, so
@@ -692,8 +693,14 @@ class McpApi:
     def move_task(self, list_id, uid, to_list_id):
         src = self._href(list_id)
         dst = self._href(to_list_id)
-        with _not_found(f"No task {uid!r} in list {list_id!r}."):
-            task = self._svc.move_task(src, dst, uid)
+        # A clash is an answer the caller can act on, so it goes back in the
+        # service's own words. The server's catch-all would call it an outage
+        # and invite a retry that can never succeed.
+        try:
+            with _not_found(f"No task {uid!r} in list {list_id!r}."):
+                task = self._svc.move_task(src, dst, uid)
+        except ConflictError as e:
+            raise ToolError(str(e)) from e
         if task is None:
             raise ToolError(f"No task {uid!r} in list {list_id!r}.")
         return task

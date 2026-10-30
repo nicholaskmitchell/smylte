@@ -285,11 +285,24 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     failedWrite.current = false
     reloadTasks()
   }
+  // The writes still on their way for each task, by `taskKey`. Only a move
+  // waits on them: it re-keys the task, and a write landing on the old list
+  // after the move finds no task there (`set_sidecar` writes nothing, the rest
+  // 404), so a reminder saved together with a new list was lost.
+  const inFlight = useRef(new Map<string, Promise<unknown>>())
   /** `guard`, counted. Every optimistic write below goes through this so the
-   *  bookkeeping above cannot be forgotten by one of them. */
-  const write = async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
+   *  bookkeeping above cannot be forgotten by one of them. `t` names the task
+   *  the write is about, for `inFlight`. */
+  const write = async <T,>(fn: () => Promise<T>, t?: Task): Promise<T | undefined> => {
     writesInFlight.current += 1
-    const out = await guard(fn)
+    const run = guard(fn)
+    if (t) {
+      const k = taskKey(t)
+      const all = Promise.all([inFlight.current.get(k), run])
+      inFlight.current.set(k, all)
+      void all.then(() => { if (inFlight.current.get(k) === all) inFlight.current.delete(k) })
+    }
+    const out = await run
     writesInFlight.current -= 1
     if (out === undefined) failedWrite.current = true
     reissueIfOrphaned()
@@ -653,7 +666,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     patchLocal(t, {
       completed: done, cancelled: false, status: done ? 'COMPLETED' : 'NEEDS-ACTION',
     })
-    settle(await write(() => api.complete(t.list, t.uid, done)), t)
+    settle(await write(() => api.complete(t.list, t.uid, done), t), t)
   }
 
   const remove = async (t: Task) => {
@@ -716,7 +729,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     }
     invalidateFetches()
     patchLocal(t, opt)
-    settle(await write(() => api.patchTask(t.list, t.uid, patch)), t)
+    settle(await write(() => api.patchTask(t.list, t.uid, patch), t), t)
   }
 
   const park = async (t: Task, parked: boolean) => {
@@ -726,7 +739,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     // settle. Only the flag decides anything.
     patchLocal(t, { parked, parked_at: parked ? new Date().toISOString() : null })
     invalidateFetches()
-    settle(await write(() => api.park(t.list, t.uid, parked)), t)
+    settle(await write(() => api.park(t.list, t.uid, parked), t), t)
   }
 
   const moveTask = async (t: Task, to: string) => {
@@ -746,24 +759,38 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     walk(t.uid)
     const parentOf = new Map(tasks.filter((x) => x.list === from && moving.has(x.uid))
       .map((x) => [x.uid, x.parent]))
+    // NOT PAINTED when the destination already holds one of these uids. That
+    // is the server's 409 (`service.move_task`), and a painted move would put
+    // two rows on one key that the rollback could not then tell apart.
+    const clash = tasks.some((x) => x.list === to && moving.has(x.uid))
     const key = loadKey
     invalidateFetches()
-    setTasks((ts) => ts.map((x) => (x.list === from && moving.has(x.uid)
-      ? { ...x, list: to, parent: x.uid === t.uid ? null : x.parent }
-      : x)))
+    if (!clash) {
+      setTasks((ts) => ts.map((x) => (x.list === from && moving.has(x.uid)
+        ? { ...x, list: to, parent: x.uid === t.uid ? null : x.parent }
+        : x)))
+    }
+    // Every write still on its way to the old list lands first (`inFlight`).
+    await Promise.all([...moving].map((u) =>
+      inFlight.current.get(taskKey({ ...t, list: from, uid: u }))))
     const dto = await write(() => api.moveTask(from, t.uid, to))
     if (dto) {
       setTasks((ts) => ts.map((x) => (x.list === to && x.uid === t.uid ? dto : x)))
-    } else if (key === keyRef.current) {
+      if (clash) reloadTasks()
+      return
+    }
+    if (!clash && key === keyRef.current) {
       // Every row back where it was: its list and its parent, and nothing
       // else, because an edit saved just before the move (the editor sends
-      // the PATCH first) did land. The server moves deepest first, so a
-      // failure part-way may have moved some steps already; the next refetch
-      // shows what really happened.
+      // the PATCH first) did land.
       setTasks((ts) => ts.map((x) => (x.list === to && moving.has(x.uid)
         ? { ...x, list: from, parent: parentOf.get(x.uid) ?? null }
         : x)))
     }
+    // The server moves deepest first, so a failure part-way may have moved
+    // some steps already, and those are the only ones it announces. Asking
+    // again shows what really happened, where the rollback can only guess.
+    reloadTasks()
   }
 
   const forgetOriginalDue = async (t: Task) => {
@@ -772,14 +799,14 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     // leave `original_due_is_date` describing a date that is no longer there.
     patchLocal(t, { original_due: null, original_due_is_date: false, original_due_moved: false })
     invalidateFetches()
-    settle(await write(() => api.forgetOriginalDue(t.list, t.uid)), t)
+    settle(await write(() => api.forgetOriginalDue(t.list, t.uid), t), t)
   }
 
   const setDeadlineMoved = async (t: Task, moved: boolean) => {
     // Painted immediately and reconciled, like every write here.
     patchLocal(t, { original_due_moved: moved })
     invalidateFetches()
-    settle(await write(() => api.setDeadlineMoved(t.list, t.uid, moved)), t)
+    settle(await write(() => api.setDeadlineMoved(t.list, t.uid, moved), t), t)
   }
 
   const setReminder = async (t: Task, minutes: number) => {
@@ -787,7 +814,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     // the clear sentinel on the wire and `null` is what the DTO carries for it.
     patchLocal(t, { notify_minutes_before: minutes < 0 ? null : minutes })
     invalidateFetches()
-    settle(await write(() => api.setTaskReminder(t.list, t.uid, minutes)), t)
+    settle(await write(() => api.setTaskReminder(t.list, t.uid, minutes), t), t)
   }
 
   // Repair, once per row, the subtasks written before `uidFor` existed: their

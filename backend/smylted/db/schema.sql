@@ -226,7 +226,7 @@ CREATE TABLE IF NOT EXISTS sidecar (
     -- comment on `original_due` describes. Meaningless while `original_due` is
     -- NULL, and the DTO reads it that way.
     original_due_moved     INTEGER NOT NULL DEFAULT 0,
-    orphaned_at           TEXT,             -- set when UID leaves the wire; GC after 7 days
+    orphaned_at            TEXT,             -- set when UID leaves the wire; GC after 7 days
     updated_at             TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     PRIMARY KEY (collection_href, uid)
     -- deliberately NO foreign key to items: sidecar must outlive a

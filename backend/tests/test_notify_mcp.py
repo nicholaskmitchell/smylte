@@ -190,3 +190,17 @@ def test_alone_on_a_task_that_remembers_nothing_it_says_so(api):
         api.update_task("l", "t1", {"deadline_moved": True})
     assert "nothing" in str(caught.value)
     assert api._svc.edits == [] and api._svc.sidecar_writes == []
+
+
+def test_a_move_clash_is_a_sentence_not_an_outage(api):
+    # The server's catch-all would report a ConflictError as "the calendar
+    # server may be unreachable; try again shortly", inviting a retry that
+    # can never succeed.
+    from smylted.sync import ConflictError
+
+    def clash(src, dst, uid):
+        raise ConflictError(f"task {uid} already exists in the target list")
+    api._svc.move_task = clash
+    with pytest.raises(ToolError) as caught:
+        api.move_task("l", "t1", "l")
+    assert "already exists in the target list" in str(caught.value)

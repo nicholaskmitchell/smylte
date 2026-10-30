@@ -43,6 +43,7 @@ from .ical import (
 )
 from .ical.read import advance
 from .sync import ConflictError, SyncEngine, SyncStats
+from .sync.engine import moved_href, task_move_key
 
 log = logging.getLogger("smylted.service")
 
@@ -1208,6 +1209,16 @@ class SmylteService:
         steps already moved rejoin it once it arrives. Clashes are checked
         before anything is written, since Radicale refuses a UID a list already
         holds and a conflict found half-way would leave exactly that split.
+        The one exception is the move's own earlier copy: an attempt whose
+        source delete failed leaves it in the destination, and refusing it
+        would leave the task in both lists for good. It is recognised by the
+        engine's journal (`task_move_key`), never by its UID or filename
+        alone, because a different task can share both.
+
+        WHAT MOVED IS ANNOUNCED EVEN WHEN THE REST FAILS, since otherwise
+        nothing would tell a client that some steps already moved. Each task's
+        refs follow it once its source is gone from the cache, which happens
+        when the source delete lands, even if re-reading the copy then fails.
 
         Everything else Smylte keeps about each one follows it
         (`store.move_task_refs`): order, pins, parking, the estimate, the
@@ -1215,38 +1226,56 @@ class SmylteService:
         email thread it came from."""
         if src_href == dst_href:
             return self.get_task(src_href, uid)
-        with self._lock:
-            root = store.get_item(self._conn, src_href, uid)
-            if root is None or root["component"] != "VTODO":
-                raise KeyError(f"unknown task {uid} in {src_href}")
-            children = self._children_map(
-                [i for i in store.get_items(self._conn, src_href) if i["component"] == "VTODO"])
-            order: list[str] = []
-            seen: set[str] = set()
+        moved: list[str] = []
+        try:
+            with self._lock:
+                root = store.get_item(self._conn, src_href, uid)
+                if root is None or root["component"] != "VTODO":
+                    raise KeyError(f"unknown task {uid} in {src_href}")
+                tasks = [i for i in store.get_items(self._conn, src_href)
+                         if i["component"] == "VTODO"]
+                rows = {i["uid"]: i for i in tasks}
+                children = self._children_map(tasks)
+                order: list[str] = []
+                seen: set[str] = set()
 
-            # Post-order, so each step comes before the task it belongs to.
-            # `seen` because RELATED-TO is written by other clients too, and a
-            # cycle in it would otherwise never end.
-            def walk(u: str) -> None:
-                seen.add(u)
-                for kid in children.get(u, []):
-                    if kid["uid"] not in seen:
-                        walk(kid["uid"])
-                order.append(u)
-            walk(uid)
+                # Post-order, so each step comes before the task it belongs to.
+                # `seen` because RELATED-TO is written by other clients too, and
+                # a cycle in it would otherwise never end.
+                def walk(u: str) -> None:
+                    seen.add(u)
+                    for kid in children.get(u, []):
+                        if kid["uid"] not in seen:
+                            walk(kid["uid"])
+                    order.append(u)
+                walk(uid)
 
-            for u in order:
-                if store.get_item(self._conn, dst_href, u) is not None:
-                    raise ConflictError(f"task {u} already exists in the target list")
-            for u in order:
-                self._engine.move_task(src_href, dst_href, u,
-                                       unparent=u == uid and bool(root["related_parent"]))
-                with store.tx(self._conn):
-                    store.move_task_refs(self._conn, src_href, dst_href, u)
-        # Both lists changed, for every task that moved.
-        for u in order:
-            self._publish({"type": "task_deleted", "list": _slug(src_href), "uid": u})
-            self._publish({"type": "task_created", "list": _slug(dst_href), "uid": u})
+                for u in order:
+                    there = store.get_item(self._conn, dst_href, u)
+                    ours = (store.get_meta(self._conn, task_move_key(dst_href, u)) == src_href
+                            and there is not None
+                            and there["href"] == moved_href(rows[u]["href"], dst_href))
+                    if there is not None and not ours:
+                        raise ConflictError(f"task {u} already exists in the target list")
+                for u in order:
+                    try:
+                        self._engine.move_task(
+                            src_href, dst_href, u,
+                            unparent=u == uid and bool(root["related_parent"]))
+                    except Exception:
+                        if store.get_item(self._conn, src_href, u) is None:
+                            with store.tx(self._conn):
+                                store.move_task_refs(self._conn, src_href, dst_href, u)
+                            moved.append(u)
+                        raise
+                    with store.tx(self._conn):
+                        store.move_task_refs(self._conn, src_href, dst_href, u)
+                    moved.append(u)
+        finally:
+            # Both lists changed, for every task that moved.
+            for u in moved:
+                self._publish({"type": "task_deleted", "list": _slug(src_href), "uid": u})
+                self._publish({"type": "task_created", "list": _slug(dst_href), "uid": u})
         return self.get_task(dst_href, uid)
 
     def reorder_tasks(self, placed: list[tuple[str, str]]) -> None:

@@ -157,8 +157,14 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
     if (why.saved) onDeadlineMoved?.(moved)
     else setMovedNow(moved)
   }
+  // A saved record is answered only while the date field is untouched.
+  // Reclassifying it can make the edit in the field a leave (a moved record
+  // gives way to the next miss), and the block would then switch to another
+  // date under the click. With the date changed, the record is still shown,
+  // and the field's own question, if there is one, is the one asked.
+  const canAnswer = !!why && (!why.saved || (!!onDeadlineMoved && !changed('dueDate', 'dueTime')))
   const whyRef = useRef<HTMLDivElement>(null)
-  useSegmentThumb(whyRef, why?.moved ? 1 : 0, !!why)
+  useSegmentThumb(whyRef, why?.moved ? 1 : 0, canAnswer)
 
   // The list picker in both modes. Editing, it MOVES the task: a list is a
   // CalDAV collection and PATCH doesn't change one, so a changed list is
@@ -258,10 +264,11 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
             after: a task's subtasks go with it, and a subtask leaves its
             parent behind (`service.move_task`). Nothing to say for a task
             that is neither. */}
-        {moveTo && !creating && (task.children.length > 0 || task.parent) && (
-          <p className="hintline">
-            {tr(task.children.length > 0 ? 'taskModal.moveTakesSubtasks' : 'taskModal.moveLeavesParent')}
-          </p>
+        {moveTo && !creating && task.children.length > 0 && (
+          <p className="hintline">{tr('taskModal.moveTakesSubtasks')}</p>
+        )}
+        {moveTo && !creating && task.parent && (
+          <p className="hintline">{tr('taskModal.moveLeavesParent')}</p>
         )}
         {/* WHAT IT WAS PROMISED FOR, under the date field that replaced it.
             `original_due` is the deadline this task was moved off after that
@@ -292,7 +299,7 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
                 date: fmtDue(why.iso, why.isDate, tf, locale),
               })}
             </span>
-            {(!why.saved || onDeadlineMoved) && (
+            {canAnswer && (
               <div className="view-tabs due-why" ref={whyRef} role="group"
                 aria-label={tr('taskModal.dueWhy')}
                 style={{ '--n': 2, '--i': why.moved ? 1 : 0 } as CSSProperties}>
