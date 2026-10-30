@@ -42,7 +42,7 @@ from .ical import (
     PRIORITY, UNSET, EventEdit, TaskEdit, blocks_time, recur, uid_candidates,
 )
 from .ical.read import advance
-from .sync import SyncEngine, SyncStats
+from .sync import ConflictError, SyncEngine, SyncStats
 
 log = logging.getLogger("smylted.service")
 
@@ -1190,6 +1190,64 @@ class SmylteService:
         with self._lock:
             self._engine.delete_task(href, uid)
         self._publish({"type": "task_deleted", "list": _slug(href), "uid": uid})
+
+    def move_task(self, src_href: str, dst_href: str, uid: str) -> dict[str, Any] | None:
+        """Move a task to another list without deleting it: the same VTODO, UID
+        and all, so other clients see it change lists rather than end and begin.
+        Returns the task as it now is in `dst_href`.
+
+        ITS SUBTASKS GO WITH IT. A parent is found only within its own list
+        (`_children_map`), so a subtask left behind would point at a task its
+        list no longer has. A SUBTASK MOVED ON ITS OWN leaves its parent, which
+        stays where it is, for the same reason in reverse: its RELATED-TO is
+        dropped (`engine.move_task(unparent=True)`).
+
+        DEEPEST FIRST, the task itself last. A move is one resource at a time,
+        so a failure part-way leaves some moved and some not, and in this order
+        a retry finishes the job: the task is still in its old list, and the
+        steps already moved rejoin it once it arrives. Clashes are checked
+        before anything is written, since Radicale refuses a UID a list already
+        holds and a conflict found half-way would leave exactly that split.
+
+        Everything else Smylte keeps about each one follows it
+        (`store.move_task_refs`): order, pins, parking, the estimate, the
+        reminder, the remembered deadline, its rows on the day plan and the
+        email thread it came from."""
+        if src_href == dst_href:
+            return self.get_task(src_href, uid)
+        with self._lock:
+            root = store.get_item(self._conn, src_href, uid)
+            if root is None or root["component"] != "VTODO":
+                raise KeyError(f"unknown task {uid} in {src_href}")
+            children = self._children_map(
+                [i for i in store.get_items(self._conn, src_href) if i["component"] == "VTODO"])
+            order: list[str] = []
+            seen: set[str] = set()
+
+            # Post-order, so each step comes before the task it belongs to.
+            # `seen` because RELATED-TO is written by other clients too, and a
+            # cycle in it would otherwise never end.
+            def walk(u: str) -> None:
+                seen.add(u)
+                for kid in children.get(u, []):
+                    if kid["uid"] not in seen:
+                        walk(kid["uid"])
+                order.append(u)
+            walk(uid)
+
+            for u in order:
+                if store.get_item(self._conn, dst_href, u) is not None:
+                    raise ConflictError(f"task {u} already exists in the target list")
+            for u in order:
+                self._engine.move_task(src_href, dst_href, u,
+                                       unparent=u == uid and bool(root["related_parent"]))
+                with store.tx(self._conn):
+                    store.move_task_refs(self._conn, src_href, dst_href, u)
+        # Both lists changed, for every task that moved.
+        for u in order:
+            self._publish({"type": "task_deleted", "list": _slug(src_href), "uid": u})
+            self._publish({"type": "task_created", "list": _slug(dst_href), "uid": u})
+        return self.get_task(dst_href, uid)
 
     def reorder_tasks(self, placed: list[tuple[str, str]]) -> None:
         """Persist a manual task order — (collection_href, uid) pairs, in order.

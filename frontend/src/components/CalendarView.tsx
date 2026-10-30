@@ -202,7 +202,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   // Tasks need no fetch of their own: the provider above this already holds
   // every task of every list, and HomeView reads both datasets the same way.
   const { lists: taskLists, tasks, listsLoaded, saveDetail, setReminder,
-          setDeadlineMoved, remove: removeTask } = useTaskData()
+          setDeadlineMoved, moveTask, remove: removeTask } = useTaskData()
   const setCursor = onCursorChange
   // Every calendar is visible by default; this holds the ids the user hid, so a
   // brand-new calendar shows up without any extra write.
@@ -950,7 +950,14 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
         <TaskModal task={taskDetail} lists={taskLists} defaultList={taskDetail.list}
           onClose={() => setTaskDetail(null)}
           onCreate={() => {}} onMultiple={() => {}}
-          onSave={(patch) => { void saveDetail(taskDetail, patch); setTaskDetail(null) }}
+          // A new list is a move after the edit, as in the Tasks pane.
+          onSave={(patch, moveTo) => {
+            void (async () => {
+              if (!moveTo || Object.keys(patch).length > 0) await saveDetail(taskDetail, patch)
+              if (moveTo) await moveTask(taskDetail, moveTo)
+            })()
+            setTaskDetail(null)
+          }}
           onReminderChange={(m) => { void setReminder(taskDetail, m) }}
           // Stays open and patches its snapshot, as the Tasks pane's does.
           onDeadlineMoved={(moved) => {

@@ -387,6 +387,20 @@ def build_tools(api) -> dict[str, Tool]:
         return api.update_task(list_id, uid, fields)
 
     @tool(
+        "smylte_move_task", "Move a task to another list",
+        "Move a task to another list without deleting it. It keeps its uid, "
+        "notes, dates, order and reminder. Its subtasks move with it. A subtask "
+        "moved on its own leaves its parent, which stays where it is, and "
+        "becomes a top-level task in the new list.",
+        _obj({"list_id": _LIST_ID, "uid": {"type": "string"},
+              "to_list_id": {**_LIST_ID, "description": "Destination list id."}},
+             ["list_id", "uid", "to_list_id"]),
+        scope=SCOPE_WRITE, read_only=False, idempotent=True,
+    )
+    def _move_task(list_id, uid, to_list_id):
+        return api.move_task(list_id, uid, to_list_id)
+
+    @tool(
         "smylte_complete_task", "Complete or reopen a task",
         "Tick a task off, or reopen it with done=false. Completing also stamps "
         "the completion time and sets progress to 100%.",

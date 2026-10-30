@@ -113,7 +113,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   const {
     lists, serverOrderedLists, tasks, listsLoaded, listsOk, loaded, setLists,
     create, createMany, addSub, toggle, remove, saveDetail, setReminder, park,
-    forgetOriginalDue, setDeadlineMoved, reorder,
+    forgetOriginalDue, setDeadlineMoved, moveTask, reorder,
     taskListErrors, reloadTasks,
   } = useTaskData()
   const [detail, setDetail] = useState<Task | null>(null)
@@ -836,7 +836,17 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
         <TaskModal task={detail} lists={visibleLists} defaultList={detail.list}
           onClose={() => setDetail(null)}
           onCreate={() => {}}
-          onSave={(patch) => { saveDetail(detail, patch); setDetail(null) }}
+          // A new list is a move after the edit, never inside it: the PATCH
+          // has to land on the list the task is in, and the move takes the
+          // edited task across. An edit that changes nothing else sends no
+          // PATCH, which would only PUT the task back unchanged.
+          onSave={(patch, moveTo) => {
+            void (async () => {
+              if (!moveTo || Object.keys(patch).length > 0) await saveDetail(detail, patch)
+              if (moveTo) await moveTask(detail, moveTo)
+            })()
+            setDetail(null)
+          }}
           onReminderChange={(m) => { void setReminder(detail, m) }}
           // Closes after either. Both answers take the row out of the pane
           // behind the modal, so leaving it open would show the editor for

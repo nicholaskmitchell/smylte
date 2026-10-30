@@ -413,6 +413,10 @@ export const de: Catalogue = {
   'taskModal.forgetOriginalDue': 'Entfernen',
   // Warum das Datum verlassen wurde: gefragt, wenn eine verstrichene Frist
   // geändert wird, und danach umstellbar. „Verspätet“ ist die Vorgabe.
+  // Wenn beim Bearbeiten die Liste geändert wurde: Speichern verschiebt die
+  // Aufgabe. Ein Schritt kann nur in der Liste seiner Aufgabe stehen.
+  'taskModal.moveTakesSubtasks': 'Die Unteraufgaben ziehen mit um.',
+  'taskModal.moveLeavesParent': 'Die Aufgabe wird aus ihrer übergeordneten Aufgabe gelöst, die bleibt, wo sie ist.',
   'taskModal.dueWhy': 'Warum sich das Datum ändert',
   'taskModal.dueLate': 'Verspätet',
   'taskModal.dueMovedChoice': 'Frist verschoben',

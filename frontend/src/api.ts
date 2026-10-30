@@ -1509,6 +1509,14 @@ export const api = {
       { original_due_moved: moved }),
   deleteTask: (listId: string, uid: string) =>
     j<null>('DELETE', `/api/lists/${listId}/tasks/${encodeURIComponent(uid)}`),
+  /** Move a task to another list without deleting it, subtasks and all; the
+   *  answer is the task as it now is in `toListId`. Its own call rather than a
+   *  field on patchTask, because a list is a CalDAV collection and PATCH edits
+   *  a resource in place. The server copies it across and deletes the
+   *  original, and moves what Smylte keeps about it (`service.move_task`). */
+  moveTask: (listId: string, uid: string, toListId: string) =>
+    j<Task>('POST', `/api/lists/${listId}/tasks/${encodeURIComponent(uid)}/move`,
+      { list: toListId }),
 
   // the day plan (the Today tab)
   //
