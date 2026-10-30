@@ -529,6 +529,21 @@ describe('<CalendarView> tasks', () => {
     expect(m.patchTask.mock.calls[0][2]).toEqual({ summary: 'Renew passport!' })
   })
 
+  it('moves a task to another list from the calendar\'s editor too', async () => {
+    m.lists.mockResolvedValue([taskList, { ...taskList, id: 'tl2', href: '/tl2/', name: 'Work tasks' }])
+    m.tasks.mockImplementation(async (id: string) => (id === 'tl1' ? [tsk()] : []))
+    m.moveTask.mockResolvedValue(tsk({ list: 'tl2' }))
+    const user = setup([], { taskLists: ['tl1'] })
+    await waitFor(() => expect(chips()).toHaveLength(1))
+
+    await user.click(document.querySelector('.cal-task') as HTMLElement)
+    const modal = await screen.findByRole('dialog', { name: 'Task' })
+    await user.selectOptions(within(modal).getByLabelText('List'), 'tl2')
+    await user.click(within(modal).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(m.moveTask).toHaveBeenCalledWith('tl1', 't1', 'tl2'))
+    expect(m.patchTask).not.toHaveBeenCalled()
+  })
+
   it('counts tasks and events together in "+N more"', async () => {
     // The cap is over both kinds, so the remainder it reports is the real one.
     const evs = Array.from({ length: 3 }, (_, i) =>

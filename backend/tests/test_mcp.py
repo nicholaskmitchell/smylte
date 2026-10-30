@@ -1215,6 +1215,37 @@ def test_moving_an_event_takes_its_whole_series(calendar):
         _call(client, token, "smylte_delete_calendar", {"calendar_id": other["id"]})
 
 
+def test_moving_a_task_takes_its_subtasks_and_says_when_it_cannot(mcp):
+    token = _connect(mcp)["access_token"]
+    a = _call(mcp, token, "smylte_create_list",
+              {"name": f"MCP from {uuid.uuid4().hex[:6]}"})["structuredContent"]["id"]
+    b = _call(mcp, token, "smylte_create_list",
+              {"name": f"MCP to {uuid.uuid4().hex[:6]}"})["structuredContent"]["id"]
+    try:
+        parent = _call(mcp, token, "smylte_create_task",
+                       {"list_id": a, "summary": "Trip"})["structuredContent"]
+        _call(mcp, token, "smylte_create_task",
+              {"list_id": a, "summary": "Charger", "parent": parent["uid"]})
+
+        moved = _call(mcp, token, "smylte_move_task",
+                      {"list_id": a, "uid": parent["uid"], "to_list_id": b})
+        assert moved["isError"] is False
+        assert moved["structuredContent"]["list"] == b
+        assert _call(mcp, token, "smylte_list_tasks",
+                     {"list_id": a})["structuredContent"]["total"] == 0
+        assert _call(mcp, token, "smylte_list_tasks",
+                     {"list_id": b})["structuredContent"]["total"] == 2
+
+        # Moving it again from where it no longer is: a sentence, not an outage.
+        again = _call(mcp, token, "smylte_move_task",
+                      {"list_id": a, "uid": parent["uid"], "to_list_id": b})
+        assert again["isError"] is True
+        assert "unreachable" not in again["content"][0]["text"]
+    finally:
+        _call(mcp, token, "smylte_delete_list", {"list_id": a})
+        _call(mcp, token, "smylte_delete_list", {"list_id": b})
+
+
 def test_the_event_write_tools_need_write_scope(mcp):
     # Every one of them is declared SCOPE_WRITE; a read-only connection must not
     # reach any of them.
@@ -1228,6 +1259,7 @@ def test_the_event_write_tools_need_write_scope(mcp):
         ("smylte_update_event", {"calendar_id": "c", "uid": "u", "summary": "x"}),
         ("smylte_delete_event", {"calendar_id": "c", "uid": "u"}),
         ("smylte_move_event", {"calendar_id": "c", "uid": "u", "to_calendar_id": "d"}),
+        ("smylte_move_task", {"list_id": "l", "uid": "u", "to_list_id": "m"}),
     ]:
         err = _rpc(mcp, token, "tools/call",
                    {"name": name, "arguments": args}).json()["error"]
