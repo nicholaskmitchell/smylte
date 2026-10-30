@@ -1437,6 +1437,55 @@ def test_a_copy_left_by_an_earlier_move_is_recognised_by_what_it_says(client):
             assert client.get(f"/api/lists/{a['id']}/tasks/{t['uid']}").status_code == 200
 
 
+@pytest.mark.parametrize("synced", [False, True])
+@pytest.mark.parametrize("prop", [
+    "BEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER;RELATED=END:PT0S\r\nEND:VALARM",
+    "GEO:48.2000;16.3700",
+    "PERCENT-COMPLETE:040",
+])
+def test_a_subtask_moved_alone_can_be_retried_against_real_radicale(client, prop, synced):
+    """A subtask moved alone loses its parent link on the way, and its retry
+    has to recognise the copy the first attempt left. The copy is the source's
+    own bytes minus that one line, so it stays in the server's form: rewritten
+    through the icalendar library instead, a zero reminder offset came back
+    `P0D` where Radicale keeps `PT0S` (and GEO, PERCENT-COMPLETE likewise), the
+    copy never matched, and the task was stuck in both lists."""
+    from smylted.dav.errors import DavError
+    from smylted.ical import UID_SUFFIX
+    svc = client.app.state.service
+    a, b = _list(client), _list(client)
+    parent = client.post(f"/api/lists/{a['id']}/tasks", json={"summary": "Trip"}).json()
+    slug = uuid.uuid4().hex
+    uid = f"{slug}{UID_SUFFIX}"
+    raw = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//foreign//EN\r\nBEGIN:VTODO\r\n"
+           f"UID:{uid}\r\nDTSTAMP:20260101T000000Z\r\nSUMMARY:Charger\r\n"
+           f"RELATED-TO;RELTYPE=PARENT:{parent['uid']}\r\n{prop}\r\n"
+           "END:VTODO\r\nEND:VCALENDAR\r\n").encode()
+    svc._dav.put(f"{a['href']}{slug}.ics", raw, if_none_match="*")
+    svc.sync_all()
+
+    real_delete, failed = svc._dav.delete, []
+
+    def delete(href, **kw):
+        if href.startswith(a["href"]) and not failed:
+            failed.append(href)
+            raise DavError(f"DELETE {href}: connection reset")
+        return real_delete(href, **kw)
+    svc._dav.delete = delete
+    try:
+        r = client.post(f"/api/lists/{a['id']}/tasks/{uid}/move", json={"list": b["id"]})
+        assert r.status_code == 502, r.text
+    finally:
+        svc._dav.delete = real_delete
+    if synced:
+        svc.sync_all()
+
+    r = client.post(f"/api/lists/{a['id']}/tasks/{uid}/move", json={"list": b["id"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["parent"] is None
+    assert [t["uid"] for t in client.get(f"/api/lists/{a['id']}/tasks").json()] == [parent["uid"]]
+
+
 def test_parking_an_unknown_task_is_a_404_and_writes_nothing(client):
     """The guard `put_sidecar` carries, for the reason it carries it: this route
     writes the sidecar too, and `store.set_sidecar` refuses a uid `items` does

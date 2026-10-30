@@ -105,6 +105,12 @@ export interface TaskData {
    *  it. Painted immediately, like every write here; the task leaves its own
    *  parent if it had one, which stays where it is. */
   moveTask: (t: Task, to: string) => Promise<boolean>
+  /** Be told each time a move this app made has landed: the list it left,
+   *  the list it went to, and every uid that went (the task and its subtasks).
+   *  Returns the unsubscribe. `FoldFollower` keeps folds on their tasks with it,
+   *  which the data alone cannot always show: a retry that finds the task in
+   *  both lists paints nothing and only removes the old row. */
+  onTasksMoved: (fn: (from: string, to: string, uids: string[]) => void) => () => void
   /** Move the task `from` to where `target` currently sits WITHIN `run`. Same
    *  gesture as the sidebar's list drag: dropping on a row below lands after
    *  it, above lands before it. Positions are assigned across every task on the
@@ -746,6 +752,12 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     settle(await write(() => api.park(t.list, t.uid, parked), t), t)
   }
 
+  const movedListeners = useRef(new Set<(from: string, to: string, uids: string[]) => void>())
+  const onTasksMoved = useCallback((fn: (from: string, to: string, uids: string[]) => void) => {
+    movedListeners.current.add(fn)
+    return () => { movedListeners.current.delete(fn) }
+  }, [])
+
   const moveTask = async (t: Task, to: string): Promise<boolean> => {
     if (to === t.list) return true
     // THE TASK AND EVERY STEP UNDER IT, which is what the server moves
@@ -763,9 +775,10 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     walk(t.uid)
     const parentOf = new Map(tasks.filter((x) => x.list === from && moving.has(x.uid))
       .map((x) => [x.uid, x.parent]))
-    // NOT PAINTED when the destination already holds one of these uids. That
-    // is the server's 409 (`service.move_task`), and a painted move would put
-    // two rows on one key that the rollback could not then tell apart.
+    // NOT PAINTED when the destination already holds one of these uids. The
+    // server refuses that unless the two say the same thing (`same_task`),
+    // and a painted move would put two rows on one key that the rollback
+    // could not then tell apart.
     const clash = tasks.some((x) => x.list === to && moving.has(x.uid))
     const key = loadKey
     invalidateFetches()
@@ -781,6 +794,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     if (dto) {
       setTasks((ts) => ts.map((x) => (x.list === to && x.uid === t.uid ? dto : x)))
       if (clash) reloadTasks()
+      for (const fn of movedListeners.current) fn(from, to, [...moving])
       return true
     }
     if (!clash && key === keyRef.current) {
@@ -937,7 +951,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   const value: TaskData = {
     lists: ordered, serverOrderedLists: lists, tasks, listsLoaded, listsOk, loaded, setLists,
     create, createMany, addSub, toggle, remove, saveDetail, setReminder, park,
-    forgetOriginalDue, setDeadlineMoved, moveTask, reorder,
+    forgetOriginalDue, setDeadlineMoved, moveTask, onTasksMoved, reorder,
     taskListErrors: listErrorNames, taskListsFailed: listErrorIds, reloadTasks,
   }
   return <TaskCtx.Provider value={value}>{children}</TaskCtx.Provider>

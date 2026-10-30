@@ -3,6 +3,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TasksView } from './TasksView'
+import { FoldFollower } from './FoldFollower'
 import { DataProvider } from '../data'
 import { cacheLists, cacheTasks, setCacheUser } from '../cache'
 import { api, AuthError, uidFor, UID_SUFFIX_LEGACY, type List, type MailSuggestion, type Task, type TaskGroup, type TasksViewMode } from '../api'
@@ -50,6 +51,9 @@ function setup(view: TasksViewMode = 'list', showCompleted = false, collapsedTas
     const [collapsed, setCollapsed] = useState(collapsedTasks)
     return (
       <DataProvider rev={rev} onExpire={onExpire}>
+        {/* As App mounts it, beside whatever tab is open. */}
+        <FoldFollower collapsed={collapsed}
+          onChange={(next) => { onCollapsedTasksChange(next); setCollapsed(next) }} />
         <TasksView onExpire={onExpire} view={view} onView={vi.fn()}
           sideCollapsed={false} onToggleSide={vi.fn()}
           hiddenLists={[]} onHiddenListsChange={vi.fn()}

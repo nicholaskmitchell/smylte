@@ -5,6 +5,7 @@ import {
 } from './api'
 import { setErrorNotifier } from './util'
 import { DataProvider } from './data'
+import { FoldFollower } from './components/FoldFollower'
 import { clearCache, setCacheUser, sweepOldVersions } from './cache'
 import {
   applyTokens, cacheAppearance, ensureFonts, presetSlug, readCachedAppearance,
@@ -1367,6 +1368,7 @@ export function App() {
   // that has not yet said who we are.
   return (
     <DataProvider rev={rev} onExpire={onExpire} taskGroups={taskGroups} enabled={auth === 'in'}>
+      <FoldFollower collapsed={collapsedTasks} onChange={changeCollapsedTasks} />
       {/* Signed out there is no account to ask, so the browser's preference is
           the best answer available — see `deviceLanguage`. It is used ONLY in
           that state: once a session resolves the account's setting wins, back to
