@@ -310,3 +310,40 @@ def test_tx_reports_the_real_failure_when_sqlite_has_already_rolled_back(tmp_pat
     rows = [r[0] for r in conn.execute("SELECT v FROM t WHERE v IN (?, ?)",
                                        (b"kept", b"dropped"))]
     assert rows == [b"kept"]
+
+
+# ── a task moved to another list takes what Smylte keeps about it ────────────
+# Everything below is keyed by (collection, uid) and nothing on the wire
+# carries it, so `move_task_refs` re-points it once the VTODO has moved.
+
+def test_moving_a_task_repoints_everything_kept_beside_it(seeded):
+    db = seeded
+    _seed(db, COL_B, "a1@x", "confidential thing")      # the copy, as the engine leaves it
+    store.orphan_sidecar(db, COL_A, "a1@x")             # …and the source row, orphaned
+    # A stale row at the destination, from an earlier stay there.
+    store.set_sidecar(db, COL_B, "a1@x", kanban_column="stale")
+    db.execute("INSERT INTO day_plan (day, entry_id, kind, collection_href, uid, source) "
+               "VALUES ('2026-10-30', 'e1', 'task', ?, 'a1@x', 'user')", (COL_A,))
+    db.execute("INSERT INTO mail_suggestions (id, kind, title, sender, message_key, thread_id,"
+               " target_list, target_uid) VALUES ('s1', 'update', 't', 'x', 'k', 'th1', ?,"
+               " 'a1@x')", (COL_A,))
+    store.mail_upsert_thread(db, "th1", task_list=COL_A, task_uid="a1@x")
+    sent = f"{COL_A}|a1@x|2026-10-30T09:00:00+00:00"
+    assert store.claim_notification(db, "item_reminder", sent)
+    # Another task's reminder in the same list is not this one's.
+    other = f"{COL_A}|a1@xy|2026-10-30T09:00:00+00:00"
+    assert store.claim_notification(db, "item_reminder", other)
+
+    with store.tx(db):
+        store.move_task_refs(db, COL_A, COL_B, "a1@x")
+
+    side = store.get_sidecar(db, COL_B, "a1@x")
+    assert (side["kanban_column"], side["pinned"], side["orphaned_at"]) == ("doing", 1, None)
+    assert store.get_sidecar(db, COL_A, "a1@x") is None
+    assert db.execute("SELECT collection_href FROM day_plan WHERE entry_id='e1'"
+                      ).fetchone()[0] == COL_B
+    assert db.execute("SELECT target_list FROM mail_suggestions WHERE id='s1'"
+                      ).fetchone()[0] == COL_B
+    assert store.mail_get_thread(db, "th1")["task_list"] == COL_B
+    keys = {r[0] for r in db.execute("SELECT dedupe_key FROM notification_deliveries")}
+    assert keys == {f"{COL_B}|a1@x|2026-10-30T09:00:00+00:00", other}

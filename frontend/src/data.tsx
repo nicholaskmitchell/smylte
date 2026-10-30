@@ -99,6 +99,10 @@ export interface TaskData {
    *  `forgetOriginalDue` has one, and like it, it reclassifies a record and
    *  never makes one. */
   setDeadlineMoved: (t: Task, moved: boolean) => Promise<void>
+  /** Move the task, and every subtask under it, to list `to` without deleting
+   *  it. Painted immediately, like every write here; the task leaves its own
+   *  parent if it had one, which stays where it is. */
+  moveTask: (t: Task, to: string) => Promise<void>
   /** Move the task `from` to where `target` currently sits WITHIN `run`. Same
    *  gesture as the sidebar's list drag: dropping on a row below lands after
    *  it, above lands before it. Positions are assigned across every task on the
@@ -725,6 +729,42 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     settle(await write(() => api.park(t.list, t.uid, parked)), t)
   }
 
+  const moveTask = async (t: Task, to: string) => {
+    if (to === t.list) return
+    // THE TASK AND EVERY STEP UNDER IT, which is what the server moves
+    // (`service.move_task`): a parent is found only within its own list, so
+    // steps left behind would lose it. The task itself leaves its own parent,
+    // if it has one, for the same reason. Matched by (list, uid), see
+    // `patchLocal`, since a uid copied into another list is another task.
+    const from = t.list
+    const moving = new Set<string>()
+    const walk = (uid: string) => {
+      if (moving.has(uid)) return
+      moving.add(uid)
+      for (const x of tasks) if (x.list === from && x.parent === uid) walk(x.uid)
+    }
+    walk(t.uid)
+    const was = new Map(tasks.filter((x) => x.list === from && moving.has(x.uid))
+      .map((x) => [x.uid, x]))
+    const key = loadKey
+    invalidateFetches()
+    setTasks((ts) => ts.map((x) => (x.list === from && moving.has(x.uid)
+      ? { ...x, list: to, parent: x.uid === t.uid ? null : x.parent }
+      : x)))
+    const dto = await write(() => api.moveTask(from, t.uid, to))
+    if (dto) {
+      setTasks((ts) => ts.map((x) => (x.list === to && x.uid === t.uid ? dto : x)))
+    } else if (key === keyRef.current) {
+      // Every row back where it was. The server moves deepest first, so a
+      // failure part-way may have moved some steps already; the refetch the
+      // failed write triggers (`reissueIfOrphaned`) shows what really
+      // happened.
+      setTasks((ts) => ts.map((x) => (x.list === to && moving.has(x.uid)
+        ? was.get(x.uid) ?? x
+        : x)))
+    }
+  }
+
   const forgetOriginalDue = async (t: Task) => {
     // Painted immediately and reconciled, like every write here. Both halves of
     // the pair are cleared on the optimistic row too: the flag alone would
@@ -864,7 +904,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   const value: TaskData = {
     lists: ordered, serverOrderedLists: lists, tasks, listsLoaded, listsOk, loaded, setLists,
     create, createMany, addSub, toggle, remove, saveDetail, setReminder, park,
-    forgetOriginalDue, setDeadlineMoved, reorder,
+    forgetOriginalDue, setDeadlineMoved, moveTask, reorder,
     taskListErrors: listErrorNames, taskListsFailed: listErrorIds, reloadTasks,
   }
   return <TaskCtx.Provider value={value}>{children}</TaskCtx.Provider>

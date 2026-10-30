@@ -49,6 +49,18 @@ failed close never rolls back the tick that caused it. It is the one preference
 that writes to the server on the user's behalf, so it is a setting (on by
 default) rather than a fixed rule.
 
+**Moving a task to another list keeps it.** A list is a CalDAV collection, so
+the move is a copy into the new list and a delete from the old one. It is the
+same copy-then-delete that moves events between calendars, and the UID
+survives, so other clients see the task change lists instead of one task ending
+and another starting. Subtasks go with their parent, because a parent is only
+looked for in its own list. A subtask moved on its own leaves its parent, which
+stays where it is. The subtasks are moved first and the task itself last, so a
+move that fails part-way can simply be retried. Everything Smylte keeps beside
+the task follows it: order, pin, parking, estimate, reminder, the remembered
+deadline, its rows on the day plan, and the email thread it came from. In the
+editor it is the List field, which used to appear only when creating a task.
+
 ## Calendar
 
 Archive hides a calendar in Smylte only. The task-list overlay on the grid is an

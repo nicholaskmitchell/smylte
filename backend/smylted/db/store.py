@@ -615,6 +615,55 @@ def known_etags(conn: sqlite3.Connection, collection_href: str) -> dict[str, str
 
 # ── sidecar + orphan GC ──────────────────────────────────────────────────────
 
+def move_task_refs(conn: sqlite3.Connection, src_href: str, dst_href: str, uid: str) -> None:
+    """Re-point everything Smylte keeps about task `uid` from list `src_href` to
+    `dst_href`, after the task itself has moved there on the wire. Call it
+    inside the caller's transaction.
+
+    These rows are keyed by (collection, uid) and nothing on the wire carries
+    them, so after a move they would otherwise sit under the old list:
+
+    * The SIDECAR ROW itself moves, rather than being copied field by field.
+      The engine orphans the source row, and a copy would leave it to rejoin
+      with stale values if the task came back within GC's week. A row already
+      at the destination is stale for the same reason and goes first.
+    * DAY-PLAN ENTRIES follow, so a row on today's plan still ticks the task
+      it names. Past days follow too: they planned the same task.
+    * MAIL THREADS and SUGGESTIONS that point at the task follow, so a later
+      reply updates it instead of failing with "no longer exists".
+    * REMINDER LEDGER keys start `"{list href}|{uid}|"` (notify/rules.py), so
+      a reminder already sent would otherwise read as unsent and go out again.
+      `OR IGNORE` for a key that is already there, which only a move away and
+      back produces, and which then already says the reminder went out.
+    """
+    conn.execute("DELETE FROM sidecar WHERE collection_href=? AND uid=?", (dst_href, uid))
+    conn.execute(
+        "UPDATE sidecar SET collection_href=?, orphaned_at=NULL, "
+        "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+        "WHERE collection_href=? AND uid=?",
+        (dst_href, src_href, uid),
+    )
+    conn.execute(
+        "UPDATE day_plan SET collection_href=? WHERE collection_href=? AND uid=?",
+        (dst_href, src_href, uid),
+    )
+    conn.execute(
+        "UPDATE mail_threads SET task_list=? WHERE task_list=? AND task_uid=?",
+        (dst_href, src_href, uid),
+    )
+    conn.execute(
+        "UPDATE mail_suggestions SET target_list=? WHERE target_list=? AND target_uid=?",
+        (dst_href, src_href, uid),
+    )
+    old, new = f"{src_href}|{uid}|", f"{dst_href}|{uid}|"
+    conn.execute(
+        "UPDATE OR IGNORE notification_deliveries "
+        "SET dedupe_key = ? || substr(dedupe_key, ? + 1) "
+        "WHERE substr(dedupe_key, 1, ?) = ?",
+        (new, len(old), len(old), old),
+    )
+
+
 def orphan_sidecar(conn: sqlite3.Connection, collection_href: str, uid: str) -> None:
     """Mark a UID's sidecar orphaned (its item left the wire). Only rows that
     exist are touched — a UID with no sidecar has nothing to keep."""

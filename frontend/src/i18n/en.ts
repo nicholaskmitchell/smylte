@@ -398,6 +398,10 @@ export const en = {
   // Why that date was left, asked when a passed deadline is changed and
   // answerable afterwards. The two leave DUE in the same place; only the owner
   // knows which happened. "Late" is the default and keeps the miss counted.
+  // Shown when the List field has been changed on an existing task, which
+  // moves it on Save. A step can only live in its parent's list.
+  'taskModal.moveTakesSubtasks': 'Its subtasks move with it.',
+  'taskModal.moveLeavesParent': 'It moves out from under its parent task, which stays where it is.',
   'taskModal.dueWhy': 'Why the date changed',
   'taskModal.dueLate': 'Running late',
   'taskModal.dueMovedChoice': 'Deadline moved',

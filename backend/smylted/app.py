@@ -369,6 +369,10 @@ class MoveEvent(BaseModel):
     calendar: Id                      # destination calendar id
 
 
+class MoveTask(BaseModel):
+    list: Id                          # destination task list id
+
+
 class CreateDayEntry(BaseModel):
     """One thing the owner is putting on a day by hand.
 
@@ -1850,6 +1854,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         href = await _href(request, list_id, component="VTODO")
         await _run(_svc(request).delete_task, href, uid)
         return Response(status_code=204)
+
+    @api.post("/lists/{list_id}/tasks/{uid}/move")
+    async def move_task(request: Request, list_id: str, uid: str, body: MoveTask):
+        """Move a task, and its subtasks, to another list without deleting it.
+        PATCH can't: a list is a CalDAV collection, so this is a copy and a
+        delete on the wire (see `service.move_task`)."""
+        src = await _href(request, list_id, component="VTODO")
+        dst = await _href(request, body.list, component="VTODO")
+        dto = await _run(_svc(request).move_task, src, dst, uid)
+        if dto is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown task {uid}")
+        return dto
 
     @api.post("/tasks/reorder")
     async def reorder_tasks(request: Request, body: ReorderTasks):

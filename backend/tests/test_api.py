@@ -2,6 +2,7 @@
 FastAPI app with username/password auth ON."""
 from __future__ import annotations
 
+from datetime import date
 import time
 import uuid
 from unittest import mock
@@ -1324,6 +1325,75 @@ def test_why_a_remembered_deadline_was_left_can_be_answered_later(client):
     nothing = client.put(f"/api/lists/{lid}/tasks/{plain['uid']}/sidecar",
                          json={"original_due_moved": True}).json()
     assert nothing["original_due"] is None and nothing["original_due_moved"] is False
+
+
+def test_a_task_moves_to_another_list_whole(client):
+    """Changing a task's list without deleting it. A list is a CalDAV
+    collection, so this is a copy and a delete on the wire. What has to hold is
+    that the owner gets the SAME task in the new list: same uid, same fields,
+    its subtasks with it, and everything Smylte keeps beside it (pins, the
+    reminder, the remembered deadline, its rows on the day plan)."""
+    a, b = _list(client)["id"], _list(client)["id"]
+    t = client.post(f"/api/lists/{a}/tasks", json={
+        "summary": "Pack for the trip", "notes": "passport!", "due": "2020-03-11",
+        "tags": ["travel"], "notify_minutes_before": 30,
+    }).json()
+    sub = client.post(f"/api/lists/{a}/tasks",
+                      json={"summary": "Charger", "parent": t["uid"]}).json()
+    client.patch(f"/api/lists/{a}/tasks/{t['uid']}", json={"due": "2099-05-01"})
+    client.put(f"/api/lists/{a}/tasks/{t['uid']}/sidecar", json={"pinned": True})
+    day = date.today().isoformat()
+    entry = client.post(f"/api/day/{day}/entries", json={
+        "entry_id": uuid.uuid4().hex, "kind": "task", "list": a, "uid": t["uid"],
+    }).json()
+
+    r = client.post(f"/api/lists/{a}/tasks/{t['uid']}/move", json={"list": b})
+    assert r.status_code == 200, r.text
+    moved = r.json()
+    assert (moved["uid"], moved["list"], moved["summary"]) == (t["uid"], b, "Pack for the trip")
+    assert moved["notes"] == "passport!" and moved["tags"] == ["travel"]
+    assert moved["due"] == "2099-05-01" and moved["original_due"] == "2020-03-11"
+    assert moved["pinned"] is True and moved["notify_minutes_before"] == 30
+    assert moved["children"] == [sub["uid"]]
+
+    assert client.get(f"/api/lists/{a}/tasks").json() == []
+    there = {x["uid"]: x for x in client.get(f"/api/lists/{b}/tasks").json()}
+    assert set(there) == {t["uid"], sub["uid"]}
+    assert there[sub["uid"]]["parent"] == t["uid"], "the subtask came with it"
+    rows = client.get(f"/api/day/{day}").json()["entries"]
+    [row] = [e for e in rows if e["entry_id"] == entry["entry_id"]]
+    assert (row["list"], row["uid"]) == (b, t["uid"])
+
+    # A subtask moved on its own leaves its parent, which stays where it is.
+    back = client.post(f"/api/lists/{b}/tasks/{sub['uid']}/move", json={"list": a}).json()
+    assert back["list"] == a and back["parent"] is None
+    parent = client.get(f"/api/lists/{b}/tasks/{t['uid']}").json()
+    assert parent["children"] == []
+
+    # Moving to the list it is already in changes nothing.
+    same = client.post(f"/api/lists/{b}/tasks/{t['uid']}/move", json={"list": b})
+    assert same.status_code == 200 and same.json()["list"] == b
+
+
+def test_moving_a_task_refuses_what_it_cannot_do_cleanly(client):
+    """Unknown tasks and lists are 404s, a calendar is not a list, and a UID
+    the destination already holds is a 409 before anything is written, since
+    Radicale refuses the copy and half a move is worse than none."""
+    a, b = _list(client)["id"], _list(client)["id"]
+    cal = _cal(client)["id"]
+    assert client.post(f"/api/lists/{a}/tasks/nope/move", json={"list": b}).status_code == 404
+    t = client.post(f"/api/lists/{a}/tasks", json={"summary": "Stay put"}).json()
+    assert client.post(f"/api/lists/{a}/tasks/{t['uid']}/move",
+                       json={"list": "nope"}).status_code == 404
+    assert client.post(f"/api/lists/{a}/tasks/{t['uid']}/move",
+                       json={"list": cal}).status_code == 404
+
+    cid = uuid.uuid4().hex
+    here = client.post(f"/api/lists/{a}/tasks", json={"summary": "Twin", "client_id": cid}).json()
+    client.post(f"/api/lists/{b}/tasks", json={"summary": "Twin", "client_id": cid})
+    r = client.post(f"/api/lists/{a}/tasks/{here['uid']}/move", json={"list": b})
+    assert r.status_code == 409, r.text
+    assert client.get(f"/api/lists/{a}/tasks/{here['uid']}").json()["summary"] == "Twin"
 
 
 def test_parking_an_unknown_task_is_a_404_and_writes_nothing(client):

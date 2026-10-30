@@ -689,6 +689,15 @@ class McpApi:
             return self._svc.set_sidecar(href, uid, **side) or task
         return task
 
+    def move_task(self, list_id, uid, to_list_id):
+        src = self._href(list_id)
+        dst = self._href(to_list_id)
+        with _not_found(f"No task {uid!r} in list {list_id!r}."):
+            task = self._svc.move_task(src, dst, uid)
+        if task is None:
+            raise ToolError(f"No task {uid!r} in list {list_id!r}.")
+        return task
+
     def complete_task(self, list_id, uid, *, done=True):
         with _not_found(f"No task {uid!r} in list {list_id!r}."):
             task = self._svc.complete_task(self._href(list_id), uid, done=done)

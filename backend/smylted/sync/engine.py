@@ -502,16 +502,44 @@ class SyncEngine:
         copy of the newer revision. Measured before this change: a foreign
         LOCATION + time change vanished and the move still returned 200.
         """
+        return self._move(src_href, dst_href, uid, kind="event")
+
+    def move_task(self, src_href: str, dst_href: str, uid: str, *,
+                  unparent: bool = False) -> str:
+        """Move one task resource to another list, by the same copy-then-delete
+        as `move_event` and with the same guarantees. One resource only: a
+        task's subtasks are separate resources, and `SmylteService.move_task`
+        moves them too.
+
+        `unparent` drops the task's RELATED-TO parent on the way, applied to the
+        bytes read off the wire. A parent is looked up within the task's own
+        collection (`SmylteService._children_map`), so a subtask moved without
+        its parent would arrive pointing at a task its new list doesn't have."""
+        def transform(raw: bytes) -> bytes:
+            try:
+                return ical.apply_changes(raw, ical.TaskEdit(related_parent=None))
+            except ical.NotEditable as e:
+                raise ConflictError(f"task {uid} can no longer be edited: {e}") from e
+        return self._move(src_href, dst_href, uid, kind="task",
+                          transform=transform if unparent else None)
+
+    def _move(self, src_href: str, dst_href: str, uid: str, *, kind: str,
+              transform=None) -> str:
+        """The copy-then-delete behind `move_event` and `move_task`; its
+        reasoning is in `move_event`'s docstring. `transform`, when given, is
+        applied to the wire bytes before they are written to the destination."""
+        where = "calendar" if kind == "event" else "list"
         if not store.has_collection(self.conn, dst_href):
             raise ValueError(f"collection {dst_href} is unknown; run discover() first")
         row = store.get_item(self.conn, src_href, uid)
         if row is None:
-            raise KeyError(f"unknown event {uid} in {src_href}")
+            raise KeyError(f"unknown {kind} {uid} in {src_href}")
         basename = row["href"].rstrip("/").rsplit("/", 1)[-1]
         new_href = f"{dst_href}{basename}"
         current = self.dav.get(row["href"])      # NotFound => already gone; surfaces as 404
+        data = transform(current.data) if transform else current.data
         try:
-            self.dav.put(new_href, current.data, if_none_match="*")
+            self.dav.put(new_href, data, if_none_match="*")
         except (PreconditionFailed, Conflict) as e:
             # PreconditionFailed covers an occupied HREF. Radicale also enforces
             # UID uniqueness per collection and answers 409 `no-uid-conflict` when
@@ -531,7 +559,7 @@ class SyncEngine:
             # again shortly" over MCP) something close to the opposite. This is
             # `_put_new`'s replay tolerance, applied to the same problem: read
             # the occupant, and only a resource that is NOT ours is a conflict.
-            self._adopt_moved_copy(new_href, uid, current, e)
+            self._adopt_moved_copy(new_href, uid, data, e, kind=kind)
         try:
             self.dav.delete(row["href"], if_match=current.etag)
         except PreconditionFailed as e:
@@ -540,8 +568,8 @@ class SyncEngine:
             try:
                 self.dav.delete(new_href, if_match=None)
             except DavError:
-                log.warning("move_event: could not roll back the copy at %s", new_href)
-            raise ConflictError(f"event {uid} changed during the move; retry") from e
+                log.warning("move_%s: could not roll back the copy at %s", kind, new_href)
+            raise ConflictError(f"{kind} {uid} changed during the move; retry") from e
         except DavError:
             # A lost reply, a 403, a 423. The copy is NOT rolled back: unlike the
             # 412 above, this is precisely the case where the delete cannot be
@@ -552,20 +580,22 @@ class SyncEngine:
             # silent second copy reach the calendar, the busy set and the
             # booking-conflict check.
             log.error(
-                "move_event: %s was copied to %s but the source delete at %s failed; "
-                "the event is in BOTH calendars until the move is retried",
-                uid, new_href, row["href"], exc_info=True)
+                "move_%s: %s was copied to %s but the source delete at %s failed; "
+                "the %s is in BOTH %ss until the move is retried",
+                kind, uid, new_href, row["href"], kind, where, exc_info=True)
             raise
         with _tx(self.conn):
             store.delete_item_by_href(self.conn, src_href, row["href"])
             store.orphan_sidecar(self.conn, src_href, uid)
         return self._refresh_from_wire(dst_href, new_href)
 
-    def _adopt_moved_copy(self, new_href: str, uid: str, current, cause: DavError) -> None:
+    def _adopt_moved_copy(self, new_href: str, uid: str, data: bytes, cause: DavError,
+                          *, kind: str = "event") -> None:
         """The destination href is occupied. Treat it as the move's own earlier
         copy when it carries `uid`; raise `ConflictError` when it is a stranger's.
 
-        The occupant is REFRESHED from `current` rather than merely accepted. The
+        The occupant is REFRESHED from `data` (the source's current bytes, as
+        the move writes them) rather than merely accepted. The
         source can be edited by another client between the attempt that landed
         the copy and the retry that finds it, and the source is about to be
         deleted — so adopting the older bytes unchanged would discard that
@@ -583,14 +613,15 @@ class SyncEngine:
             fields = ical.extract_from_raw(stored.data)
         except NotFound:
             fields = None
+        where = "calendar" if kind == "event" else "list"
         if fields is None or fields.uid != uid:
-            log.warning("move_event: %s is occupied by another resource", new_href)
+            log.warning("move_%s: %s is occupied by another resource", kind, new_href)
             raise ConflictError(
-                f"event {uid} already exists in the target calendar") from cause
+                f"{kind} {uid} already exists in the target {where}") from cause
         try:
-            self.dav.put(new_href, current.data, if_match=stored.etag)
+            self.dav.put(new_href, data, if_match=stored.etag)
         except PreconditionFailed as e:
-            raise ConflictError(f"event {uid} changed during the move; retry") from e
+            raise ConflictError(f"{kind} {uid} changed during the move; retry") from e
 
     def shift_event(
         self, collection_href: str, uid: str, recurrence_id: str, edit: ical.EventEdit

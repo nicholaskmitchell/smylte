@@ -51,7 +51,10 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
   initialTitle?: string
   onClose: () => void
   onCreate: (listId: string, body: CreateTaskBody) => void
-  onSave: (patch: Record<string, unknown>) => void
+  /** `moveTo` is the list the owner picked, when it is not the one the task
+   *  is in. It is not part of the PATCH: a list is a CalDAV collection, so the
+   *  caller moves the task (`moveTask` in data.tsx) once the edit has landed. */
+  onSave: (patch: Record<string, unknown>, moveTo?: string) => void
   /** "Notify me N minutes before", in minutes, or -1 to clear it. Its own
    *  callback because it is not a wire property and does not belong in the
    *  PATCH body. Optional: a caller that has nowhere to put it simply does
@@ -157,12 +160,14 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
   const whyRef = useRef<HTMLDivElement>(null)
   useSegmentThumb(whyRef, why?.moved ? 1 : 0, !!why)
 
-  // The list picker only makes sense while creating: moving an existing task
-  // between lists means moving it between CalDAV collections, which PATCH
-  // doesn't do. Notes keeps its full-width textarea either way — the composer's
-  // one-line notes input is a density concession a single-task form needn't make.
-  const props = FIELDS.filter((f) => f.key !== 'notes' && (creating || f.key !== 'list'))
+  // The list picker in both modes. Editing, it MOVES the task: a list is a
+  // CalDAV collection and PATCH doesn't change one, so a changed list is
+  // handed to the caller beside the patch rather than inside it. Notes keeps
+  // its full-width textarea either way — the composer's one-line notes input
+  // is a density concession a single-task form needn't make.
+  const props = FIELDS.filter((f) => f.key !== 'notes')
   const listId = vals.listId || defaultList
+  const moveTo = !creating && vals.listId && vals.listId !== task.list ? vals.listId : undefined
 
   // Creating omits empty fields (bodyFrom's rule — the backend treats a missing
   // key as "leave unset"); editing sends explicit nulls, which is how a value
@@ -199,7 +204,7 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
     if (reminder !== (task?.notify_minutes_before ?? null)) {
       onReminderChange?.(reminder === null ? NO_REMINDER : reminder)
     }
-    onSave(body)
+    onSave(body, moveTo)
   }
 
   // Whether the press that started this click landed on the scrim itself.
@@ -249,6 +254,15 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
             </div>
           ))}
         </div>
+        {/* What a move takes with it, said before Save rather than found out
+            after: a task's subtasks go with it, and a subtask leaves its
+            parent behind (`service.move_task`). Nothing to say for a task
+            that is neither. */}
+        {moveTo && !creating && (task.children.length > 0 || task.parent) && (
+          <p className="hintline">
+            {tr(task.children.length > 0 ? 'taskModal.moveTakesSubtasks' : 'taskModal.moveLeavesParent')}
+          </p>
+        )}
         {/* WHAT IT WAS PROMISED FOR, under the date field that replaced it.
             `original_due` is the deadline this task was moved off after that
             deadline had already passed — the fact rescheduling used to destroy,

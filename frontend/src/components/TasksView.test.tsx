@@ -253,19 +253,18 @@ describe('<TasksView> creating', () => {
 
   it('shares its property controls with the task editor', async () => {
     // Both forms render from one FIELDS table, so the editor must offer the
-    // same properties (bar the list, which PATCH can't move) under the same
-    // accessible names the composer uses.
+    // same properties under the same accessible names the composer uses. The
+    // list too: editing, it moves the task (see the move tests below).
     m.tasks.mockResolvedValue([task({ summary: 'Ship it', priority_label: 'high' })])
     const { user } = setup()
     await user.click(await screen.findByText('Ship it'))
     const dialog = await screen.findByRole('dialog', { name: 'Task' })
-    for (const name of ['Due date', 'Due time', 'Start date', 'Priority', 'Tags']) {
+    for (const name of ['List', 'Due date', 'Due time', 'Start date', 'Priority', 'Tags']) {
       expect(within(dialog).getByLabelText(name)).toBeInTheDocument()
     }
     expect(within(dialog).getByLabelText('Title')).toHaveValue('Ship it')
     expect(within(dialog).getByLabelText('Priority')).toHaveValue('high')
-    // The list picker belongs to the composer alone.
-    expect(within(dialog).queryByLabelText('List')).not.toBeInTheDocument()
+    expect(within(dialog).getByLabelText('List')).toHaveValue('l1')
   })
 
   it('saves a start date, which nothing exposed before', async () => {
@@ -677,6 +676,83 @@ describe('<TasksView> subtask progress', () => {
     // …and it stands on its own rather than being hidden under a parent that
     // is not really its parent.
     expect(screen.getByText('Book flight').closest('.task')).not.toHaveClass('sub')
+  })
+})
+
+// ── moving a task to another list ───────────────────────────────────────────
+// A list is a CalDAV collection, so a move is its own call (`api.moveTask`),
+// never a field on the PATCH, and it takes the task's subtasks with it.
+
+describe('<TasksView> moving a task to another list', () => {
+  const personal: List = { ...list, id: 'l2', href: '/l2/', name: 'Personal' }
+
+  beforeEach(() => {
+    m.lists.mockResolvedValue([list, personal])
+  })
+
+  it('moves it, without deleting it, when the editor\'s list changes', async () => {
+    const t = task({ uid: 'u1', summary: 'Ship it' })
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [t] : []))
+    m.moveTask.mockResolvedValue({ ...t, list: 'l2' })
+    const { user } = setup()
+    await user.click(await screen.findByText('Ship it'))
+    await user.selectOptions(screen.getByLabelText('List'), 'l2')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(m.moveTask).toHaveBeenCalledWith('l1', 'u1', 'l2'))
+    // Nothing else changed, so no PATCH: it would only PUT the task back.
+    expect(m.patchTask).not.toHaveBeenCalled()
+    expect(m.deleteTask).not.toHaveBeenCalled()
+    expect(screen.getByText('Ship it')).toBeInTheDocument()
+  })
+
+  it('saves the edit on the old list first, then moves it', async () => {
+    const t = task({ uid: 'u1', summary: 'Ship it' })
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [t] : []))
+    m.patchTask.mockResolvedValue({ ...t, summary: 'Ship it today' })
+    m.moveTask.mockResolvedValue({ ...t, summary: 'Ship it today', list: 'l2' })
+    const { user } = setup()
+    await user.click(await screen.findByText('Ship it'))
+    await user.clear(screen.getByLabelText('Title'))
+    await user.type(screen.getByLabelText('Title'), 'Ship it today')
+    await user.selectOptions(screen.getByLabelText('List'), 'l2')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(m.moveTask).toHaveBeenCalledWith('l1', 'u1', 'l2'))
+    expect(m.patchTask).toHaveBeenCalledWith('l1', 'u1', { summary: 'Ship it today' })
+    expect(m.patchTask.mock.invocationCallOrder[0])
+      .toBeLessThan(m.moveTask.mock.invocationCallOrder[0])
+  })
+
+  it('says what goes with it before Save', async () => {
+    const parent = task({ uid: 'p1', summary: 'Trip planning', children: ['c1'], child_count: 1 })
+    const child = task({ uid: 'c1', summary: 'Book flight', parent: 'p1' })
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [parent, child] : []))
+    const { user } = setup()
+    await user.click(await screen.findByText('Trip planning'))
+    expect(screen.queryByText('Its subtasks move with it.')).toBeNull()
+    await user.selectOptions(screen.getByLabelText('List'), 'l2')
+    expect(screen.getByText('Its subtasks move with it.')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+
+    await user.click(await screen.findByText('Book flight'))
+    await user.selectOptions(screen.getByLabelText('List'), 'l2')
+    expect(screen.getByText(/moves out from under its parent task/)).toBeInTheDocument()
+  })
+
+  it('puts the task back where it was when the move fails', async () => {
+    const t = task({ uid: 'u1', summary: 'Ship it' })
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [t] : []))
+    m.moveTask.mockResolvedValue(undefined as unknown as Task)
+    const { user } = setup()
+    await user.click(await screen.findByText('Ship it'))
+    await user.selectOptions(screen.getByLabelText('List'), 'l2')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(m.moveTask).toHaveBeenCalled())
+
+    // Opened again, it is in the list it started in.
+    await user.click(await screen.findByText('Ship it'))
+    expect(screen.getByLabelText('List')).toHaveValue('l1')
   })
 })
 
