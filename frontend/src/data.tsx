@@ -744,8 +744,8 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
       for (const x of tasks) if (x.list === from && x.parent === uid) walk(x.uid)
     }
     walk(t.uid)
-    const was = new Map(tasks.filter((x) => x.list === from && moving.has(x.uid))
-      .map((x) => [x.uid, x]))
+    const parentOf = new Map(tasks.filter((x) => x.list === from && moving.has(x.uid))
+      .map((x) => [x.uid, x.parent]))
     const key = loadKey
     invalidateFetches()
     setTasks((ts) => ts.map((x) => (x.list === from && moving.has(x.uid)
@@ -755,12 +755,13 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     if (dto) {
       setTasks((ts) => ts.map((x) => (x.list === to && x.uid === t.uid ? dto : x)))
     } else if (key === keyRef.current) {
-      // Every row back where it was. The server moves deepest first, so a
-      // failure part-way may have moved some steps already; the refetch the
-      // failed write triggers (`reissueIfOrphaned`) shows what really
-      // happened.
+      // Every row back where it was: its list and its parent, and nothing
+      // else, because an edit saved just before the move (the editor sends
+      // the PATCH first) did land. The server moves deepest first, so a
+      // failure part-way may have moved some steps already; the next refetch
+      // shows what really happened.
       setTasks((ts) => ts.map((x) => (x.list === to && moving.has(x.uid)
-        ? was.get(x.uid) ?? x
+        ? { ...x, list: from, parent: parentOf.get(x.uid) ?? null }
         : x)))
     }
   }
