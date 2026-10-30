@@ -65,9 +65,12 @@ or a copy someone edited since, is refused, and the task stays in both lists
 for the owner to settle. A twin identical to the task can't be told apart from
 the move's own copy, and the two become one. What Smylte kept for each is
 merged, so a reminder set on the copy while it showed in both lists survives.
-A move whose every answer was lost can still be finished after a sync: the
-retry finds the task in the new list and its Smylte data orphaned in the old
-one, and re-points it. Nothing about earlier attempts is recorded, so no
+One failure is left unrecovered on purpose. If the source's delete landed but
+its answer and the check after it were both lost, and a sync ran before the
+retry, the task is in the new list while its Smylte data stays orphaned in the
+old one, and is collected a week later. Recovering it would need proof that
+the task in the new list is this one, and a shared UID isn't proof: moving one
+task's data onto a different task is worse than losing a pin. Nothing about earlier attempts is recorded, so no
 lost answer can leave a wrong record behind. Everything Smylte keeps beside
 the task follows it: order, pin, parking, estimate, reminder, the remembered
 deadline, its rows on the day plan, and the email thread it came from. In the

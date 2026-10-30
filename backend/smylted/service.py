@@ -1220,11 +1220,18 @@ class SmylteService:
         nothing would tell a client that some steps already moved. Each task's
         refs follow it once its source is gone from the cache, which happens
         when the source delete lands, even if re-reading the copy then fails.
-        A move that lost every answer and was then synced is finished by the
-        retry (`_left_for`): the task, or a step of it, is already in the new
-        list with its refs orphaned in the old one, and only those move. A
-        copy that already had Smylte data of its own keeps it, merged with
+        A copy that already had Smylte data of its own keeps it, merged with
         the source's (`store.move_task_refs(keep_dst=...)`).
+
+        ONE CASE IS NOT RECOVERED, deliberately. If the source DELETE landed
+        and both its answer and the question asked after it were lost, and a
+        sync ran before the retry, the task is in the new list but its refs
+        are orphaned in the old one; the retry answers 404 and GC collects
+        them after a week. Finishing it would need evidence that the task in
+        the new list is this one, and a UID is not that: a different task can
+        share it, and moving one task's data onto another is worse than
+        losing a pin. Before a sync, the cached source is that evidence, and
+        the engine finishes the move (`_holds`).
 
         Everything else Smylte keeps about each one follows it
         (`store.move_task_refs`): order, pins, parking, the estimate, the
@@ -1236,15 +1243,6 @@ class SmylteService:
         try:
             with self._lock:
                 root = store.get_item(self._conn, src_href, uid)
-                if root is None and self._left_for(src_href, dst_href, uid):
-                    # It is in the new list already: an earlier attempt moved
-                    # it and lost every answer, and a sync has since cached
-                    # that. Only Smylte's half is left, and nothing on the
-                    # server is touched to do it.
-                    with store.tx(self._conn):
-                        store.move_task_refs(self._conn, src_href, dst_href, uid)
-                    moved.append(uid)
-                    return self.get_task(dst_href, uid)
                 if root is None or root["component"] != "VTODO":
                     raise KeyError(f"unknown task {uid} in {src_href}")
                 tasks = [i for i in store.get_items(self._conn, src_href)
@@ -1301,40 +1299,12 @@ class SmylteService:
                         store.move_task_refs(self._conn, src_href, dst_href, u,
                                              keep_dst=keep[u])
                     moved.append(u)
-                # Steps an earlier attempt moved without an answer, which a
-                # sync has since taken out of the old list: their refs follow
-                # now, as the task's own would have.
-                # Until nothing more is found, so a step of a step is reached
-                # whatever order the list holds them in.
-                found = True
-                while found:
-                    found = False
-                    for kid in store.get_items(self._conn, dst_href):
-                        k = kid["uid"]
-                        if (kid["component"] == "VTODO" and kid["related_parent"] in moved
-                                and k not in moved and self._left_for(src_href, dst_href, k)):
-                            with store.tx(self._conn):
-                                store.move_task_refs(self._conn, src_href, dst_href, k)
-                            moved.append(k)
-                            found = True
         finally:
             # Both lists changed, for every task that moved.
             for u in moved:
                 self._publish({"type": "task_deleted", "list": _slug(src_href), "uid": u})
                 self._publish({"type": "task_created", "list": _slug(dst_href), "uid": u})
         return self.get_task(dst_href, uid)
-
-    def _left_for(self, src_href: str, dst_href: str, uid: str) -> bool:
-        """Whether `uid` has already left `src_href` for `dst_href` with its
-        refs left behind: gone from the old list's cache, its Smylte data there
-        orphaned and not yet collected, and the task now in the new list.
-        Called under the lock."""
-        if store.get_item(self._conn, src_href, uid) is not None:
-            return False
-        side = store.get_sidecar(self._conn, src_href, uid)
-        there = store.get_item(self._conn, dst_href, uid)
-        return (side is not None and side["orphaned_at"] is not None
-                and there is not None and there["component"] == "VTODO")
 
     def reorder_tasks(self, placed: list[tuple[str, str]]) -> None:
         """Persist a manual task order — (collection_href, uid) pairs, in order.

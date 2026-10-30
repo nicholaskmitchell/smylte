@@ -88,6 +88,36 @@ describe('<FoldFollower>', () => {
     await waitFor(() => expect(onChange).toHaveBeenCalledWith(['l2\u0000p1']))
   })
 
+  it('applies a move made before it mounted, once the folds have loaded', async () => {
+    // App mounts the follower only after the account's folds have arrived, and
+    // the owner can move a task from cached rows before that. The data layer
+    // keeps the session's moves and tells a new follower about them.
+    const parent = task({})
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [parent] : []))
+    m.moveTask.mockResolvedValue({ ...parent, list: 'l2' })
+    const onChange = vi.fn()
+    const Late = () => {
+      const [shown, setShown] = useState(false)
+      const [folds, setFolds] = useState(['l1\u0000p1'])
+      return (
+        <DataProvider rev={0} onExpire={vi.fn()}>
+          {shown && <FoldFollower collapsed={folds} onChange={(n) => { onChange(n); setFolds(n) }} />}
+          <Mover t={parent} to="l2" />
+          <button onClick={() => setShown(true)}>folds loaded</button>
+        </DataProvider>
+      )
+    }
+    render(<Late />)
+    const user = userEvent.setup()
+    await screen.findByText('move (1)')
+    await user.click(screen.getByText('move (1)'))
+    await waitFor(() => expect(m.moveTask).toHaveBeenCalled())
+    await new Promise((r) => setTimeout(r, 20))
+    expect(onChange).not.toHaveBeenCalled()
+    await user.click(screen.getByText('folds loaded'))
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(['l2\u0000p1']))
+  })
+
   it('leaves the folds alone when nothing moved', async () => {
     const parent = task({})
     m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [parent] : []))

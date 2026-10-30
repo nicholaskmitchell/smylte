@@ -109,7 +109,11 @@ export interface TaskData {
    *  the list it went to, and every uid that went (the task and its subtasks).
    *  Returns the unsubscribe. `FoldFollower` keeps folds on their tasks with it,
    *  which the data alone cannot always show: a retry that finds the task in
-   *  both lists paints nothing and only removes the old row. */
+   *  both lists paints nothing and only removes the old row.
+   *
+   *  A new listener is first told every move of this session so far, since
+   *  the follower mounts only once the account's folds have loaded, and a move
+   *  made before that would otherwise never reach them. */
   onTasksMoved: (fn: (from: string, to: string, uids: string[]) => void) => () => void
   /** Move the task `from` to where `target` currently sits WITHIN `run`. Same
    *  gesture as the sidebar's list drag: dropping on a row below lands after
@@ -753,7 +757,11 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   }
 
   const movedListeners = useRef(new Set<(from: string, to: string, uids: string[]) => void>())
+  const movesSoFar = useRef<Array<[string, string, string[]]>>([])
+  // A session's moves are its own: signed out, they are forgotten.
+  useEffect(() => { if (!enabled) movesSoFar.current = [] }, [enabled])
   const onTasksMoved = useCallback((fn: (from: string, to: string, uids: string[]) => void) => {
+    for (const [from, to, uids] of movesSoFar.current) fn(from, to, uids)
     movedListeners.current.add(fn)
     return () => { movedListeners.current.delete(fn) }
   }, [])
@@ -794,6 +802,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     if (dto) {
       setTasks((ts) => ts.map((x) => (x.list === to && x.uid === t.uid ? dto : x)))
       if (clash) reloadTasks()
+      movesSoFar.current.push([from, to, [...moving]])
       for (const fn of movedListeners.current) fn(from, to, [...moving])
       return true
     }
