@@ -74,7 +74,9 @@ export interface TaskData {
   addSub: (parent: string, summary: string) => void
   toggle: (t: Task) => Promise<void>
   remove: (t: Task) => Promise<void>
-  saveDetail: (t: Task, patch: Record<string, unknown>) => Promise<void>
+  /** Answers whether the server took it, so a write that depends on it (the
+   *  editor's move) can stop when it didn't. */
+  saveDetail: (t: Task, patch: Record<string, unknown>) => Promise<boolean>
   /** "Notify me N minutes before this is due", or -1 to clear it. Its own call
    *  rather than a field on saveDetail: the reminder is app-only, and sending
    *  it through PATCH would PUT the VTODO back and move its etag, making every
@@ -102,7 +104,7 @@ export interface TaskData {
   /** Move the task, and every subtask under it, to list `to` without deleting
    *  it. Painted immediately, like every write here; the task leaves its own
    *  parent if it had one, which stays where it is. */
-  moveTask: (t: Task, to: string) => Promise<void>
+  moveTask: (t: Task, to: string) => Promise<boolean>
   /** Move the task `from` to where `target` currently sits WITHIN `run`. Same
    *  gesture as the sidebar's list drag: dropping on a row below lands after
    *  it, above lands before it. Positions are assigned across every task on the
@@ -729,7 +731,9 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     }
     invalidateFetches()
     patchLocal(t, opt)
-    settle(await write(() => api.patchTask(t.list, t.uid, patch), t), t)
+    const dto = await write(() => api.patchTask(t.list, t.uid, patch), t)
+    settle(dto, t)
+    return dto !== undefined
   }
 
   const park = async (t: Task, parked: boolean) => {
@@ -742,8 +746,8 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     settle(await write(() => api.park(t.list, t.uid, parked), t), t)
   }
 
-  const moveTask = async (t: Task, to: string) => {
-    if (to === t.list) return
+  const moveTask = async (t: Task, to: string): Promise<boolean> => {
+    if (to === t.list) return true
     // THE TASK AND EVERY STEP UNDER IT, which is what the server moves
     // (`service.move_task`): a parent is found only within its own list, so
     // steps left behind would lose it. The task itself leaves its own parent,
@@ -777,7 +781,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     if (dto) {
       setTasks((ts) => ts.map((x) => (x.list === to && x.uid === t.uid ? dto : x)))
       if (clash) reloadTasks()
-      return
+      return true
     }
     if (!clash && key === keyRef.current) {
       // Every row back where it was: its list and its parent, and nothing
@@ -791,6 +795,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     // some steps already, and those are the only ones it announces. Asking
     // again shows what really happened, where the rollback can only guess.
     reloadTasks()
+    return false
   }
 
   const forgetOriginalDue = async (t: Task) => {

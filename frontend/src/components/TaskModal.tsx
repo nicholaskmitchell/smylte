@@ -40,9 +40,9 @@ export const dateOut = (date: string, time: string, original: string | null | un
 /**
  * The single-task form, for both creating and editing — one property table and
  * one layout, so "add a task" and "edit a task" are the same form in two modes.
- * `task === null` means creating: the list picker appears (you're choosing where
- * it lands) and the footer offers the route to the bulk composer instead of
- * Delete.
+ * `task === null` means creating: the list picker chooses where it lands and
+ * the footer offers the route to the bulk composer instead of Delete. Editing,
+ * the same picker moves the task (`onSave`'s `moveTo`).
  */
 export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, onSave, onDelete, onMultiple, onReminderChange, onPark, onForgetOriginalDue, onDeadlineMoved }: {
   task: Task | null

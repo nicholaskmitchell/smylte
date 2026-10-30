@@ -56,7 +56,11 @@ survives, so other clients see the task change lists instead of one task ending
 and another starting. Subtasks go with their parent, because a parent is only
 looked for in its own list. A subtask moved on its own leaves its parent, which
 stays where it is. The subtasks are moved first and the task itself last, so a
-move that fails part-way can simply be retried. Everything Smylte keeps beside
+move that fails part-way can simply be retried. A copy the move wrote is
+recorded until the move finishes, and only that record lets a retry take over
+a copy already in the new list. Smylte names a task's file after its UID, so a
+different task with the same UID can sit exactly where the move would write,
+and it is refused, never overwritten. Everything Smylte keeps beside
 the task follows it: order, pin, parking, estimate, reminder, the remembered
 deadline, its rows on the day plan, and the email thread it came from. In the
 editor it is the List field, which used to appear only when creating a task.
@@ -113,8 +117,9 @@ deadline reads "moved from …" without the warning colour or a day count, and
 lateness is measured from the date it moved to. Because it was never a miss,
 it doesn't hold the record the way a miss does: if the new deadline passes and
 is moved again, that one is remembered instead. A miss is still never
-rewritten. An update approved from email that changes the date counts as the
-deadline moving, since someone wrote to say so. The triage strip and dragging
+rewritten. An update approved from email counts as the deadline moving when
+the email itself named the new date, since someone wrote to say so. A date the
+owner adds while approving is their own, and defaults to late. The triage strip and dragging
 across the day columns don't ask, so they record a move as late.
 
 **Rows and the add box.** A filled square is a task (a real VTODO that syncs),

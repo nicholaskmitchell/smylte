@@ -204,3 +204,10 @@ def test_a_move_clash_is_a_sentence_not_an_outage(api):
     with pytest.raises(ToolError) as caught:
         api.move_task("l", "t1", "l")
     assert "already exists in the target list" in str(caught.value)
+
+
+def test_a_false_deadline_moved_beside_other_fields_is_not_a_refusal(api):
+    # "Late" is what a task with nothing remembered already says, so the flag
+    # is dropped and the rename beside it still goes through.
+    api.update_task("l", "t1", {"summary": "Renewed", "deadline_moved": False})
+    assert len(api._svc.edits) == 1 and api._svc.sidecar_writes == []

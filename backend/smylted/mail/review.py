@@ -291,9 +291,11 @@ def approve(host, suggestion_id: str, *, config: MailConfig, title: str | None =
             # A date that arrives by email is the deadline moving: someone
             # wrote to say when it is due now. If the old one had passed, the
             # task was not late by it, and recording it as late would
-            # misstate what the email said.
+            # misstate what the email said. Only when the email named one,
+            # though: a date the owner types on an update that brought none
+            # is their own rescheduling, and reads as late like any other.
             created = host.edit_task(row["target_list"], row["target_uid"], edit,
-                                     deadline_moved=d is not None)
+                                     deadline_moved=d is not None and row["due"] is not None)
             result = None
         elif kind == "event":
             cid = calendar_id or config.event_calendar or _first_id(host.list_calendars())

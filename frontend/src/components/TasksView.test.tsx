@@ -809,6 +809,36 @@ describe('<TasksView> moving a task to another list', () => {
     await waitFor(() => expect(m.moveTask).toHaveBeenCalledWith('l1', 'u1', 'l2'))
   })
 
+  it('does not move a task whose edit the server refused', async () => {
+    // One Save, applied whole or not at all from the owner's side.
+    const t = task({ uid: 'u1', summary: 'Ship it' })
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [t] : []))
+    m.patchTask.mockResolvedValue(undefined as unknown as Task)
+    const { user } = setup()
+    await user.click(await screen.findByText('Ship it'))
+    await user.clear(screen.getByLabelText('Title'))
+    await user.type(screen.getByLabelText('Title'), 'Ship it today')
+    await user.selectOptions(screen.getByLabelText('List'), 'l2')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
+    await new Promise((r) => setTimeout(r, 20))
+    expect(m.moveTask).not.toHaveBeenCalled()
+  })
+
+  it('keeps a folded task folded under its new list', async () => {
+    const parent = task({ uid: 'p1', summary: 'Trip planning', children: ['c1'], child_count: 1 })
+    const child = task({ uid: 'c1', summary: 'Book flight', parent: 'p1' })
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [parent, child] : []))
+    m.moveTask.mockResolvedValue({ ...parent, list: 'l2' })
+    const { user, onCollapsedTasksChange } = setup('list', false, ['l1\u0000p1'])
+    await user.click(await screen.findByText('Trip planning'))
+    await user.selectOptions(screen.getByLabelText('List'), 'l2')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(onCollapsedTasksChange).toHaveBeenCalled())
+    const calls = onCollapsedTasksChange.mock.calls
+    expect(calls[calls.length - 1][0]).toContain('l2\u0000p1')
+  })
+
   it('says both things about a subtask that has subtasks of its own', async () => {
     const parent = task({ uid: 'p1', summary: 'Trip planning', children: ['c1'], child_count: 1 })
     const mid = task({ uid: 'c1', summary: 'Packing', parent: 'p1', children: ['g1'],

@@ -635,13 +635,16 @@ class McpApi:
             current = self._svc.get_task(href, uid)
             if current is None:
                 raise ToolError(f"No task {uid!r} in list {list_id!r}.")
-            if not current.get("original_due"):
+            # `false` on a task that remembers nothing already says what is
+            # true, so it is dropped rather than refusing the fields beside it.
+            if current.get("original_due"):
+                side["original_due_moved"] = int(bool(moved))
+            elif moved:
                 raise ToolError(
                     "This task remembers no passed deadline, so there is nothing "
                     "for deadline_moved to reclassify. Pass it together with "
                     "`due` to say why a passed deadline is changing."
                 )
-            side["original_due_moved"] = int(bool(moved))
         wire = {k: v for k, v in fields.items()
                 if k not in ("notify_minutes_before", "deadline_moved")}
         if side and not wire:
