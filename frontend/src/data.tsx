@@ -30,7 +30,7 @@ import {
   cacheCalendars, cacheEvents, cacheLists, cacheTasks,
   readCachedCalendars, readCachedEvents, readCachedLists, readCachedTasks,
 } from './cache'
-import { isOverdue, makeGuard } from './util'
+import { makeGuard, wouldRemember } from './util'
 
 /** The shape a bare client_id has, matching the backend's `_CLIENT_ID_RE`. */
 const LEGACY_PARENT = /^[0-9a-f]{16,64}$/
@@ -94,6 +94,11 @@ export interface TaskData {
    *  happened, written once by the server, and a client able to SET one could
    *  write a missed deadline that never existed. */
   forgetOriginalDue: (t: Task) => Promise<void>
+  /** Say why the remembered deadline was left: the deadline itself moved
+   *  (`true`), or the owner was late (`false`). Its own call for the reason
+   *  `forgetOriginalDue` has one, and like it, it reclassifies a record and
+   *  never makes one. */
+  setDeadlineMoved: (t: Task, moved: boolean) => Promise<void>
   /** Move the task `from` to where `target` currently sits WITHIN `run`. Same
    *  gesture as the sidebar's list drag: dropping on a row below lands after
    *  it, above lands before it. Positions are assigned across every task on the
@@ -397,7 +402,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     due_is_date: !!body.due && !body.due.includes('T'),
     // A task being created has missed no deadline: it has only ever had the one
     // it is being given. Nothing but the server ever writes this pair.
-    original_due: null, original_due_is_date: false,
+    original_due: null, original_due_is_date: false, original_due_moved: false,
     start: body.start ?? null, start_is_date: !!body.start && !body.start.includes('T'),
     tags: body.tags ?? [], parent: body.parent ?? null, children: [],
     child_count: 0, completed_child_count: 0, derived_percent: null,
@@ -682,18 +687,21 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
       // round trip. The one gesture meant to end the lateness opened by
       // denying it.
       //
-      // The same four tests the server applies, which is why they are spelled
-      // out rather than reduced: the edit mentions `due` (this branch), there
-      // IS an old deadline, it has PASSED, nothing is remembered yet, and the
-      // value actually changes. The last one is compared as strings here where
+      // The same four tests the server applies: the edit mentions `due` (this
+      // branch), there IS an old deadline, it has PASSED, no miss is
+      // remembered yet (`wouldRemember` has those three), and the value
+      // actually changes. The last one is compared as strings here where
       // the server compares parsed values, so a re-save that only reformats an
       // unchanged deadline could paint a mark for one frame; `settle` takes it
       // straight back off, and the alternative is a second parser in the
       // client that has to agree with `due_rules` forever.
-      if (t.due && !t.original_due && patch.due !== t.due
-          && isOverdue(t.due, t.due_is_date)) {
+      //
+      // `deadline_moved` rides in the same body and says which mark: the
+      // owner's answer to "late, or did the deadline move?" (see TaskModal).
+      if (wouldRemember(t) && patch.due !== t.due) {
         opt.original_due = t.due
         opt.original_due_is_date = t.due_is_date
+        opt.original_due_moved = patch.deadline_moved === true
       }
     }
     if ('start' in patch) opt.start = (patch.start as string) ?? null
@@ -721,9 +729,16 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     // Painted immediately and reconciled, like every write here. Both halves of
     // the pair are cleared on the optimistic row too: the flag alone would
     // leave `original_due_is_date` describing a date that is no longer there.
-    patchLocal(t, { original_due: null, original_due_is_date: false })
+    patchLocal(t, { original_due: null, original_due_is_date: false, original_due_moved: false })
     invalidateFetches()
     settle(await write(() => api.forgetOriginalDue(t.list, t.uid)), t)
+  }
+
+  const setDeadlineMoved = async (t: Task, moved: boolean) => {
+    // Painted immediately and reconciled, like every write here.
+    patchLocal(t, { original_due_moved: moved })
+    invalidateFetches()
+    settle(await write(() => api.setDeadlineMoved(t.list, t.uid, moved)), t)
   }
 
   const setReminder = async (t: Task, minutes: number) => {
@@ -849,7 +864,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   const value: TaskData = {
     lists: ordered, serverOrderedLists: lists, tasks, listsLoaded, listsOk, loaded, setLists,
     create, createMany, addSub, toggle, remove, saveDetail, setReminder, park,
-    forgetOriginalDue, reorder,
+    forgetOriginalDue, setDeadlineMoved, reorder,
     taskListErrors: listErrorNames, taskListsFailed: listErrorIds, reloadTasks,
   }
   return <TaskCtx.Provider value={value}>{children}</TaskCtx.Provider>

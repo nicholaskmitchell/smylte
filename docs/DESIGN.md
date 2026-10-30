@@ -93,6 +93,18 @@ rewritten, so a task moved four times still names its first promised date. It
 is recorded only when the old date had already passed, because moving future
 work is planning, not slipping. The task editor is where it can be cleared.
 
+**Late, or the deadline moved.** Both put a passed deadline on a new date, and
+only the owner knows which happened. When the date field leaves a passed
+deadline, the editor asks *Running late* or *Deadline moved*, defaulting to
+late. A remembered date can be answered the same way afterwards. A moved
+deadline reads "moved from …" without the warning colour or a day count, and
+lateness is measured from the date it moved to. Because it was never a miss,
+it doesn't hold the record the way a miss does: if the new deadline passes and
+is moved again, that one is remembered instead. A miss is still never
+rewritten. An update approved from email that changes the date counts as the
+deadline moving, since someone wrote to say so. The triage strip and dragging
+across the day columns don't ask, so they record a move as late.
+
 **Rows and the add box.** A filled square is a task (a real VTODO that syncs),
 a hollow one is a note (this day only, in Smylte only), and `↻` is a habit. The
 add box parses a line ("invoice friday", "gym at 7") and shows what Enter will

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthError } from './api'
-import { addDays, cssColor, dayKey, daysLate, daysPastDue, daysSlipped, hasZone, instantFromLocal, isOverdue, makeGuard, pad, parseDate, setErrorNotifier, slippedFrom, textDir, toLocalInput, ymd, type Slippable } from './util'
+import { addDays, cssColor, dayKey, daysLate, daysPastDue, daysSlipped, hasZone, instantFromLocal, isOverdue, makeGuard, movedFrom, pad, parseDate, setErrorNotifier, slippedFrom, textDir, toLocalInput, wouldRemember, ymd, type Slippable } from './util'
 
 describe('parseDate', () => {
   it('parses date-only strings as LOCAL midnight, not UTC', () => {
@@ -248,10 +248,11 @@ describe('slippedFrom / daysSlipped / daysLate', () => {
   })
   afterEach(() => vi.useRealTimers())
 
-  /** The four fields a slip is read off, with the shape of a task that has
+  /** The five fields a slip is read off, with the shape of a task that has
    *  never been moved off a deadline. */
   const t = (o: Partial<Slippable> = {}): Slippable => ({
-    due: null, due_is_date: true, original_due: null, original_due_is_date: false, ...o,
+    due: null, due_is_date: true, original_due: null, original_due_is_date: false,
+    original_due_moved: false, ...o,
   })
 
   it('reads nothing off a task that has never been rescheduled', () => {
@@ -335,5 +336,56 @@ describe('slippedFrom / daysSlipped / daysLate', () => {
       due: '2026-08-01', original_due: '2026-08-15', original_due_is_date: true,
     })
     expect(daysLate(backdated, DAY)).toBe(daysPastDue('2026-08-01', true, DAY))
+  })
+
+  // ── a deadline that moved ──────────────────────────────────────────────────
+  //
+  // Late and "the deadline moved" leave DUE on the same new date; the owner's
+  // answer is `original_due_moved`. A moved deadline was never missed, so it
+  // is not a slip and nothing measures lateness from it.
+
+  it('reads a moved deadline as moved, never as a slip', () => {
+    const moved = t({
+      due: '2026-09-20', original_due: '2026-08-15', original_due_is_date: true,
+      original_due_moved: true,
+    })
+    expect(slippedFrom(moved)).toBeNull()
+    expect(daysSlipped(moved, DAY)).toBeNull()
+    expect(movedFrom(moved)).toEqual(['2026-08-15', true])
+    // And the other way round for a miss.
+    expect(movedFrom({ ...moved, original_due_moved: false })).toBeNull()
+  })
+
+  it('measures lateness from the moved deadline alone', () => {
+    // Extended from Aug 15 to Sep 5, and now a day past THAT: one day late,
+    // not twenty-two.
+    const extended = t({
+      due: '2026-09-05', original_due: '2026-08-15', original_due_is_date: true,
+      original_due_moved: true,
+    })
+    expect(daysLate(extended, DAY)).toBe(1)
+  })
+
+  it('says nothing about a moved deadline that equals the one carried', () => {
+    const back = t({
+      due: '2026-08-16', original_due: '2026-08-16', original_due_is_date: true,
+      original_due_moved: true,
+    })
+    expect(movedFrom(back)).toBeNull()
+  })
+
+  it('knows when changing the deadline would remember the one it leaves', () => {
+    // Only a passed deadline, and only when no miss is remembered already: a
+    // miss is never rewritten, while a moved record gives way to the next miss.
+    expect(wouldRemember(t({ due: '2026-09-01' }))).toBe(true)
+    expect(wouldRemember(t({ due: '2026-09-10' }))).toBe(false)
+    expect(wouldRemember(t({ due: null }))).toBe(false)
+    expect(wouldRemember(t({
+      due: '2026-09-01', original_due: '2026-08-01', original_due_is_date: true,
+    }))).toBe(false)
+    expect(wouldRemember(t({
+      due: '2026-09-01', original_due: '2026-08-01', original_due_is_date: true,
+      original_due_moved: true,
+    }))).toBe(true)
   })
 })

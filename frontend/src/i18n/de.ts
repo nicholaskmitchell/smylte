@@ -411,6 +411,11 @@ export const de: Catalogue = {
   // Verschiebungen noch das Datum, für das die Aufgabe wirklich zugesagt war.
   'taskModal.originalDue': 'Ursprünglich fällig am {date}',
   'taskModal.forgetOriginalDue': 'Entfernen',
+  // Warum das Datum verlassen wurde: gefragt, wenn eine verstrichene Frist
+  // geändert wird, und danach umstellbar. „Verspätet“ ist die Vorgabe.
+  'taskModal.dueWhy': 'Warum sich das Datum ändert',
+  'taskModal.dueLate': 'Verspätet',
+  'taskModal.dueMovedChoice': 'Frist verschoben',
   'common.delete': 'Löschen',
   'common.add': 'Hinzufügen',
   'common.save': 'Speichern',
@@ -1157,6 +1162,9 @@ export const de: Catalogue = {
   // Frist, die noch am selben Tag verstrichen ist, wo keine Zahl ehrlicher
   // ist als eine Null.
   'today.wasDueDays': 'war fällig am {date} · {days} T',
+  // An derselben Stelle, wenn sich die Frist selbst verschoben hat: nichts
+  // wurde versäumt, also keine Zahl und keine Warnfarbe.
+  'today.dueMoved': 'verschoben vom {date}',
   'settings.staleOverdue': 'Tage Verzug bis zur Nachfrage',
   'settings.staleOverdue.hint': 'Danach fragt eine überfällige Aufgabe nach einem neuen Datum oder dem Zurückstellen, statt für heute angeboten zu werden. 0 schaltet das ab.',
   'settings.staleOverdue.off': 'Aus. Überfällige Aufgaben werden für heute angeboten, egal wie lange sie schon überfällig sind.',

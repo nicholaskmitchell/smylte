@@ -28,10 +28,18 @@
 // render it give their own due cell's warn up when it is present (see
 // `.was-due` in app.css). Two orange dates on one row read as two alarms; the
 // interesting one is not the date the reschedule chose.
+//
+// A DEADLINE THAT MOVED IS NOT A SLIP, and this is where the two are told
+// apart. Both leave DUE on a new date, but only one of them means the owner
+// was late. When the owner says the deadline itself moved (`original_due_moved`)
+// the chip reads "moved from …", quiet and with no count, since nothing slipped
+// for a count to measure. It also leaves the alarm with the due cell, which
+// takes its warn back the moment the moved deadline is missed in turn, because
+// `slippedFrom` is null for it.
 import { useI18n } from '../i18n'
 import { fmtDue } from '../time'
 import { useTimeFormat } from '../timeformat'
-import { daysSlipped, slippedFrom, ymd, type Slippable } from '../util'
+import { daysSlipped, movedFrom, slippedFrom, ymd, type Slippable } from '../util'
 
 /**
  * The chip, or nothing at all.
@@ -68,6 +76,14 @@ export function WasDue({ task, day = ymd(new Date()), done = false }: {
 }) {
   const { locale, t: tr } = useI18n()
   const tf = useTimeFormat()
+  const moved = task ? movedFrom(task) : null
+  if (moved) {
+    return (
+      <span className={`was-due moved mono ${done ? 'done' : ''}`}>
+        {tr('today.dueMoved', { date: fmtDue(moved[0], moved[1], tf, locale) })}
+      </span>
+    )
+  }
   const from = task ? slippedFrom(task) : null
   if (!from || !task) return null
   const days = daysSlipped(task, day)

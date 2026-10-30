@@ -104,6 +104,14 @@ export interface Task {
    *  `due_is_date` are, because `fmtDue` takes both — a remembered all-day
    *  deadline rendered as a timed one would read as midnight. */
   original_due_is_date: boolean
+  /** Why that deadline was left: true when THE DEADLINE ITSELF MOVED (an
+   *  extension, a postponed meeting, an email naming a new date), false when
+   *  the owner was late. The two leave DUE in the same place, so only the
+   *  owner, or the email, can say which. A moved deadline is not a missed one:
+   *  it is never counted as lateness (`slippedFrom` ignores it) and it reads
+   *  as "moved from …", not "was due …". Always false while `original_due` is
+   *  null. */
+  original_due_moved: boolean
   start: string | null
   start_is_date: boolean
   tags: string[]
@@ -1492,6 +1500,13 @@ export const api = {
   forgetOriginalDue: (listId: string, uid: string) =>
     j<Task>('PUT', `/api/lists/${listId}/tasks/${encodeURIComponent(uid)}/sidecar`,
       { forget_original_due: true }),
+  /** Say why the remembered deadline was left: `moved` when the deadline
+   *  itself moved, not when the owner was late. It reclassifies a record and
+   *  can't create one, so it can't invent a deadline. On a task that
+   *  remembers nothing the server ignores it. */
+  setDeadlineMoved: (listId: string, uid: string, moved: boolean) =>
+    j<Task>('PUT', `/api/lists/${listId}/tasks/${encodeURIComponent(uid)}/sidecar`,
+      { original_due_moved: moved }),
   deleteTask: (listId: string, uid: string) =>
     j<null>('DELETE', `/api/lists/${listId}/tasks/${encodeURIComponent(uid)}`),
 

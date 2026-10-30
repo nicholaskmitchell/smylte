@@ -114,11 +114,18 @@ export function daysPastDue(
   return Math.round(ms / 86_400_000)
 }
 
-/** The four fields a slip is read off. A `Pick` rather than the whole `Task`
+/** The five fields a slip is read off. A `Pick` rather than the whole `Task`
  *  so a test fixture — and the optimistic row `data.tsx` paints before the
  *  server answers — can be the shape these take without being a task. */
 export type Slippable = Pick<Task,
-  'due' | 'due_is_date' | 'original_due' | 'original_due_is_date'>
+  'due' | 'due_is_date' | 'original_due' | 'original_due_is_date' | 'original_due_moved'>
+
+/** The remembered deadline as `(iso, is_date)`, whichever reason it was left
+ *  for, or null. Suppressed when it equals `due`: see `slippedFrom`. */
+function rememberedDue(t: Slippable): [string, boolean] | null {
+  if (!t.original_due || t.original_due === t.due) return null
+  return [t.original_due, t.original_due_is_date]
+}
 
 /**
  * The deadline this task was moved off AFTER IT HAD ALREADY PASSED, as
@@ -135,10 +142,43 @@ export type Slippable = Pick<Task,
  * remembered all-day deadline and a timed one on the same day stay the
  * different answers they are — the same rule the chip rendered before this was
  * a function, kept in one place now that four surfaces ask it.
+ *
+ * NULL FOR A DEADLINE THAT MOVED. When the owner said the deadline itself
+ * moved (`original_due_moved`), the date it left was never missed, so it is
+ * not a slip and nothing that measures lateness may count it. `movedFrom`
+ * names it instead. Everything downstream (`daysSlipped`, `daysLate`, the
+ * triage group, the due cells that hand their warn to the chip) is right for
+ * it by asking this.
  */
 export function slippedFrom(t: Slippable): [string, boolean] | null {
-  if (!t.original_due || t.original_due === t.due) return null
-  return [t.original_due, t.original_due_is_date]
+  return t.original_due_moved ? null : rememberedDue(t)
+}
+
+/**
+ * The deadline this task MOVED OFF because the deadline itself moved, as
+ * `(iso, is_date)`, or null. The other half of `slippedFrom`: the same
+ * remembered date, read when the owner said it was not a miss. It is a fact
+ * worth showing, so a task whose deadline moved can be told apart from one that
+ * is late, and never a measure of lateness.
+ */
+export function movedFrom(t: Slippable): [string, boolean] | null {
+  return t.original_due_moved ? rememberedDue(t) : null
+}
+
+/**
+ * Whether giving this task a different deadline now would make the server
+ * remember the one it leaves (`service.py::_deadline_being_missed`): it has a
+ * deadline, that deadline has passed, and what is remembered is not already a
+ * miss, since a miss is never rewritten while a moved deadline gives way to
+ * the next one missed. The server's last test, that the value really changes,
+ * needs the new value and is the caller's.
+ *
+ * This is when "late, or did the deadline move?" is a real question. The
+ * editor asks it, and the optimistic row in `data.tsx` paints its answer.
+ */
+export function wouldRemember(t: Slippable): boolean {
+  return !!t.due && (!t.original_due || t.original_due_moved)
+    && isOverdue(t.due, t.due_is_date)
 }
 
 /**

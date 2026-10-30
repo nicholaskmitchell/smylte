@@ -300,7 +300,10 @@ def build_tools(api) -> dict[str, Tool]:
         "`original_due` is NOT the deadline. It is a deadline the task ALREADY "
         "MISSED and was rescheduled off, kept because writing a new DUE would "
         "otherwise erase the fact that it was ever late. `due` is the date the "
-        "task is working to now, and is the only one to report as its deadline.",
+        "task is working to now, and is the only one to report as its deadline. "
+        "When `original_due_moved` is true, the deadline itself moved away from "
+        "`original_due` and the task was NOT late. Report that as a moved "
+        "deadline, never as a missed one.",
         _obj({"list_id": _LIST_ID, "uid": {"type": "string"}}, ["list_id", "uid"]),
     )
     def _get_task(list_id, uid):
@@ -364,6 +367,19 @@ def build_tools(api) -> dict[str, Tool]:
             "parent": {"type": "string",
                        "description": "Re-parent the task. Empty string promotes it to top level."},
             "notify_minutes_before": _REMINDER,
+            "deadline_moved": {
+                "type": "boolean",
+                "description": (
+                    "Why a deadline that has already passed is changing. Pass true "
+                    "when the deadline itself moved (an extension, a postponed "
+                    "meeting, someone naming a new date), so the task is not late. "
+                    "Leave it out when the owner is simply running late; that is "
+                    "the default and keeps the missed date as `original_due`. "
+                    "Without `due`, it reclassifies the deadline the task already "
+                    "remembers. It never changes a future deadline's move, which "
+                    "is ordinary planning and records nothing."
+                ),
+            },
         }, ["list_id", "uid"]),
         scope=SCOPE_WRITE, read_only=False, idempotent=True,
     )

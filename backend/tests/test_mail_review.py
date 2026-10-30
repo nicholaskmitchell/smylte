@@ -335,8 +335,9 @@ class UpdateHost(TaskHost):
     def get_task(self, href, uid):
         return dict(self.TASK) if (href, uid) == ("/dav/me/family/", "t1") else None
 
-    def edit_task(self, href, uid, edit):
-        self.edits.append({"href": href, "uid": uid, "edit": edit})
+    def edit_task(self, href, uid, edit, *, deadline_moved=False):
+        self.edits.append({"href": href, "uid": uid, "edit": edit,
+                           "deadline_moved": deadline_moved})
         return dict(self.TASK)
 
 
@@ -367,6 +368,23 @@ def test_approving_an_update_maps_its_thread_to_the_task(svc, tmp_path):
     assert [c.label for c in llm.match_calls[1][1]] == ["T1"]
 
 
+def test_a_date_an_update_brings_is_the_deadline_moving(svc, tmp_path):
+    """Someone wrote to say when the task is due now. If the old deadline had
+    passed, the task was not late by it, so the edit says the deadline moved,
+    and the service records the date it leaves as moved rather than missed."""
+    llm = FakeLlm(extract=extraction("Bring the team snack list", due=date(2026, 10, 9)),
+                  match=Match("update", "T1"))
+    host = UpdateHost(svc)
+    ing = Ingestor(host, make_store(tmp_path), llm=llm, jev=FakeJev(),
+                   clock=lambda: at(2026, 10, 6))
+    out = ing.process_message(INBOX, eml("pipe_request"), uid=1)
+    assert (out.stage, out.outcome) == ("dedup", "staged")
+    review.approve(host, out.suggestion_id, config=MailConfig())
+    [e] = host.edits
+    assert e["edit"].due == date(2026, 10, 9)
+    assert e["deadline_moved"] is True
+
+
 def test_an_update_names_merged_senders_by_name(svc, tmp_path):
     llm = FakeLlm(extract=[extraction("Bring the team snack list", notes="Snacks."),
                            extraction("Bring cups", notes="Also please bring cups.")],
@@ -378,6 +396,8 @@ def test_an_update_names_merged_senders_by_name(svc, tmp_path):
     assert ing.process_message(INBOX, eml("pipe_reply_quoting"), uid=2).outcome == "attached"
     review.approve(host, first.suggestion_id, config=MailConfig())
     [e] = host.edits
+    # No date in it, so there is no move to explain.
+    assert e["deadline_moved"] is False
     assert e["edit"].description == (
         "Coach asked.\n\n"
         "— Update from Coach Miller, 2026-10-05: Snacks.\n"
@@ -394,8 +414,8 @@ class NotesHost(UpdateHost):
     def get_task(self, href, uid):
         return dict(self.task) if (href, uid) == ("/dav/me/family/", "t1") else None
 
-    def edit_task(self, href, uid, edit):
-        super().edit_task(href, uid, edit)
+    def edit_task(self, href, uid, edit, *, deadline_moved=False):
+        super().edit_task(href, uid, edit, deadline_moved=deadline_moved)
         if edit.description is not UNSET:
             self.task["notes"] = edit.description
         return dict(self.task)

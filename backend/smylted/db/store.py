@@ -215,6 +215,20 @@ def init_db(conn: sqlite3.Connection) -> None:
             "ALTER TABLE sidecar ADD COLUMN original_due_is_date "
             "INTEGER NOT NULL DEFAULT 0"
         )
+    if "original_due_moved" not in side_cols:
+        # 0 on every remembered deadline written before the owner could say the
+        # deadline had moved, which reads as "late" — what the app recorded
+        # them as at the time, and nothing since says otherwise. Its own `if`
+        # rather than a third ALTER in the block above: that block has already
+        # run on every database that has the pair, so this column would never
+        # be added to one of them.
+        #
+        # The same one-change rule as above: `service._task_dto` reads
+        # `s["original_due_moved"]`. ALTER first.
+        conn.execute(
+            "ALTER TABLE sidecar ADD COLUMN original_due_moved "
+            "INTEGER NOT NULL DEFAULT 0"
+        )
     ritual_cols = {r["name"] for r in conn.execute("PRAGMA table_info(day_ritual)")}
     if "committed_over_minutes" not in ritual_cols:
         # NULL on every day committed before the app recorded this, which is the
@@ -695,7 +709,7 @@ def set_sidecar(conn: sqlite3.Connection, collection_href: str, uid: str, **fiel
     """
     allowed = {"kanban_column", "sort_order", "pinned", "estimated_minutes",
                "repeat_from_completion", "notify_minutes_before", "parked_at",
-               "original_due", "original_due_is_date"}
+               "original_due", "original_due_is_date", "original_due_moved"}
     bad = set(fields) - allowed
     if bad:
         raise ValueError(f"unknown sidecar fields: {bad}")

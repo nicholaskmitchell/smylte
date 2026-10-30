@@ -20,7 +20,7 @@ const m = vi.mocked(api)
 const task = (o: Partial<Task> = {}): Task => ({
   uid: 'u1', list: 'l1', summary: 'Ship it', notes: null, status: 'NEEDS-ACTION',
   completed: false, cancelled: false, parked: false, parked_at: null,
-  original_due: null, original_due_is_date: false,
+  original_due: null, original_due_is_date: false, original_due_moved: false,
   priority: null, priority_label: 'none',
   percent_complete: null, due: null, due_is_date: true, start: null, start_is_date: true,
   tags: [],
@@ -1922,6 +1922,72 @@ describe('<TasksView> parked work', () => {
       expect(screen.queryByText(/Originally due/)).not.toBeInTheDocument())
   })
 
+  it('asks whether the deadline moved when a passed one is changed', async () => {
+    // Late and "the deadline moved" leave DUE in the same place, and only the
+    // owner knows which. The question appears with the change that raises it,
+    // defaults to late, and its answer rides in the same PATCH.
+    m.tasks.mockResolvedValue([task({
+      uid: 'grant', summary: 'Grant report', due: '2020-03-11', due_is_date: true,
+    })])
+    m.patchTask.mockResolvedValue(task({ uid: 'grant' }))
+    const { user } = setup()
+    await user.click(await screen.findByText('Grant report'))
+
+    expect(screen.queryByRole('group', { name: 'Why the date changed' })).toBeNull()
+    fireEvent.change(screen.getByLabelText('Due date'), { target: { value: '2099-01-04' } })
+    const why = screen.getByRole('group', { name: 'Why the date changed' })
+    expect(within(why).getByRole('button', { name: 'Running late' }))
+      .toHaveAttribute('aria-pressed', 'true')
+    await user.click(within(why).getByRole('button', { name: 'Deadline moved' }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
+    expect(m.patchTask.mock.calls[0][2]).toEqual({ due: '2099-01-04', deadline_moved: true })
+  })
+
+  it('sends no reason when the owner leaves it at late', async () => {
+    m.tasks.mockResolvedValue([task({
+      uid: 'grant', summary: 'Grant report', due: '2020-03-11', due_is_date: true,
+    })])
+    m.patchTask.mockResolvedValue(task({ uid: 'grant' }))
+    const { user } = setup()
+    await user.click(await screen.findByText('Grant report'))
+    fireEvent.change(screen.getByLabelText('Due date'), { target: { value: '2099-01-04' } })
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(m.patchTask).toHaveBeenCalled())
+    expect(m.patchTask.mock.calls[0][2]).toEqual({ due: '2099-01-04' })
+  })
+
+  it('does not ask when a future deadline moves', async () => {
+    // Moving future work is planning, and the server records nothing for it.
+    m.tasks.mockResolvedValue([task({
+      uid: 'flights', summary: 'Book the flights', due: '2099-04-01', due_is_date: true,
+    })])
+    const { user } = setup()
+    await user.click(await screen.findByText('Book the flights'))
+    fireEvent.change(screen.getByLabelText('Due date'), { target: { value: '2099-05-01' } })
+    expect(screen.queryByRole('group', { name: 'Why the date changed' })).toBeNull()
+  })
+
+  it('lets a remembered deadline be marked as moved afterwards', async () => {
+    // Immediate, like Clear beside it, and the dialog stays open for the same
+    // reason: it changes a line on this form, not the row behind it.
+    m.tasks.mockResolvedValue([task({
+      uid: 'passport', summary: 'Renew the passport', due: '2099-10-02',
+      original_due: '2020-03-11', original_due_is_date: true,
+    })])
+    const { user } = setup()
+    await user.click(await screen.findByText('Renew the passport'))
+
+    const why = screen.getByRole('group', { name: 'Why the date changed' })
+    await user.click(within(why).getByRole('button', { name: 'Deadline moved' }))
+    expect(m.setDeadlineMoved).toHaveBeenCalledWith('l1', 'passport', true)
+    expect(screen.getByRole('dialog', { name: 'Task' })).toBeInTheDocument()
+    await waitFor(() => expect(within(why).getByRole('button', { name: 'Deadline moved' }))
+      .toHaveAttribute('aria-pressed', 'true'))
+  })
+
   it('counts a parked step in the total, and never as done', async () => {
     // The fraction has to agree with the rule the SERVER applies to the same
     // three rows. `_nothing_left_in` counts a parked child as open and refuses
@@ -2075,6 +2141,43 @@ describe('<TasksView> the deadline a task was moved off', () => {
     setup()
     await screen.findByText('No date now')
     expect(screen.getByText(/was due .* · 21d/)).toBeInTheDocument()
+  })
+
+  it('reads a deadline that moved as moved, not as late', async () => {
+    // The distinction the owner draws in the editor, carried to the row. Moved
+    // is quiet and has no count, because nothing slipped for a count to
+    // measure, and the due cell keeps its own warn: once the moved deadline is
+    // missed in turn, that is the only lateness there is.
+    m.tasks.mockResolvedValue([
+      task({ uid: 'u1', summary: 'Extended', due: inDays(-1),
+             original_due: inDays(-21), original_due_is_date: true,
+             original_due_moved: true }),
+      task({ uid: 'u2', summary: 'On track', due: inDays(5),
+             original_due: inDays(-21), original_due_is_date: true,
+             original_due_moved: true }),
+    ])
+    setup()
+    await screen.findByText('Extended')
+
+    const row = (t: string) => screen.getByText(t).closest('.task')!
+    expect(screen.queryByText(/was due/)).toBeNull()
+    const chip = row('Extended').querySelector('.was-due')!
+    expect(chip).toHaveTextContent(/^moved from /)
+    expect(chip).toHaveClass('moved')
+    expect(row('Extended').querySelector('.due')).toHaveClass('overdue')
+    expect(row('On track').querySelector('.was-due')).toHaveTextContent(/^moved from /)
+    expect(row('On track').querySelector('.due')).not.toHaveClass('overdue')
+  })
+
+  it('still names a moved deadline on a task whose date was cleared', async () => {
+    m.tasks.mockResolvedValue([
+      task({ uid: 'u1', summary: 'No date now', due: null,
+             original_due: inDays(-21), original_due_is_date: true,
+             original_due_moved: true }),
+    ])
+    setup()
+    await screen.findByText('No date now')
+    expect(screen.getByText(/^moved from /)).toBeInTheDocument()
   })
 })
 

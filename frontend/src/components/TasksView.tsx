@@ -4,7 +4,7 @@ import {
 import { api, uidFor, uidCandidatesFor, type CreateTaskBody, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
 import { useTaskData } from '../data'
 import {
-  addDays, cssColor, dayKey, isOverdue, makeGuard, slippedFrom, toLocalInput, ymd,
+  addDays, cssColor, dayKey, isOverdue, makeGuard, movedFrom, slippedFrom, toLocalInput, ymd,
 } from '../util'
 import { fmtClock, fmtDue, inputLang } from '../time'
 import { sortByCompletion, sortTasks, taskKey } from '../order'
@@ -113,7 +113,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   const {
     lists, serverOrderedLists, tasks, listsLoaded, listsOk, loaded, setLists,
     create, createMany, addSub, toggle, remove, saveDetail, setReminder, park,
-    forgetOriginalDue, reorder,
+    forgetOriginalDue, setDeadlineMoved, reorder,
     taskListErrors, reloadTasks,
   } = useTaskData()
   const [detail, setDetail] = useState<Task | null>(null)
@@ -855,7 +855,14 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           // optimistic paint in `data.tsx`.
           onForgetOriginalDue={() => {
             void forgetOriginalDue(detail)
-            setDetail({ ...detail, original_due: null, original_due_is_date: false })
+            setDetail({ ...detail, original_due: null, original_due_is_date: false,
+              original_due_moved: false })
+          }}
+          // Stays open for the reason Clear does, and patches the snapshot for
+          // the same one: the answer moves nothing but a line on this form.
+          onDeadlineMoved={(moved) => {
+            void setDeadlineMoved(detail, moved)
+            setDetail({ ...detail, original_due_moved: moved })
           }}
           onDelete={() => { remove(detail); setDetail(null) }}
           onMultiple={() => {}} />
@@ -1161,8 +1168,10 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
         {/* `slippedFrom` in the gate as well as in the row: a deadline can be
             CLEARED while the remembered one survives (the sidecar route keeps
             `original_due` when `due` goes to null — see test_api.py), so a task
-            with no date and no tags still has something to say here. */}
-        {(showDate || timed || slippedFrom(task) || task.tags.length > 0) && (
+            with no date and no tags still has something to say here. The
+            same goes for a deadline that moved (`movedFrom`). */}
+        {(showDate || timed || slippedFrom(task) || movedFrom(task)
+          || task.tags.length > 0) && (
           <div className="task-meta">
             {/* `!slippedFrom(task)` on both: a task carrying a remembered
                 deadline hands its warn to the chip below, so a rescheduled row
@@ -1249,7 +1258,8 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
               differently: one is a verdict, the other is "not now". */}
           {task.parked && <span className="chip">{tr('tasks.parkedChip')}</span>}
         </div>
-        {(task.due || slippedFrom(task) || progress || task.tags.length > 0) && (
+        {(task.due || slippedFrom(task) || movedFrom(task) || progress
+          || task.tags.length > 0) && (
           <div className="task-meta">
             {task.due && (
               <span className={`due ${isOverdue(task.due, task.due_is_date)

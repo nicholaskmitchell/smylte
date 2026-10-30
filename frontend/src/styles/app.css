@@ -2227,8 +2227,7 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
 .original-due {
   flex-direction: row; flex-wrap: wrap; align-items: baseline;
   justify-content: space-between; gap: 4px 10px;
-}
-/* Inline "Remove it" inside a hintline: a link, not a button, because it sits
+}/* Inline "Remove it" inside a hintline: a link, not a button, because it sits
    mid-sentence and a button there would read as the section's main action. */
 .linklike {
   background: none; border: 0; padding: 0; font: inherit; color: var(--fg-muted);
@@ -2886,6 +2885,9 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
   font-size: calc(11px * var(--fs-scale)); color: var(--warn); flex: none;
   white-space: nowrap;
 }
+/* The deadline itself moved, so nothing was missed: the same place on the
+   row, without the alarm. Above `.done` so a finished row still goes faint. */
+.was-due.moved { color: var(--fg-muted); }
 /* Finished: the same words, without the alarm. How late a task ran is part of
    how the work went and the completed pane, the look-back and the dashboard's
    done rows are all fair places to say it — but warn is a call to act, and a

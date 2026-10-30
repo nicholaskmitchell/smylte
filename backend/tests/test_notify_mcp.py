@@ -18,7 +18,10 @@ class StubSvc:
         self.sidecar_writes = []
         self.event_sidecar_writes = []
         self.edits = []
-        self.tasks = {"t1": {"uid": "t1", "summary": "Renew passport"}}
+        self.moved = []
+        self.tasks = {"t1": {"uid": "t1", "summary": "Renew passport"},
+                      "t2": {"uid": "t2", "summary": "Grant report",
+                             "original_due": "2026-01-01"}}
         self.events = {"e1": {"uid": "e1", "summary": "Standup"}}
 
     def list_lists(self):
@@ -43,8 +46,9 @@ class StubSvc:
         self.tasks["new"] = {"uid": "new", "summary": summary}
         return self.tasks["new"]
 
-    def edit_task(self, href, uid, edit):
+    def edit_task(self, href, uid, edit, *, deadline_moved=False):
         self.edits.append(("task", uid, edit))
+        self.moved.append(deadline_moved)
         return self.tasks.get(uid)
 
     def edit_event(self, href, uid, edit, *, recurrence_id=None, scope="all"):
@@ -149,3 +153,40 @@ def test_a_created_task_gets_its_reminder_after_the_uid_exists(api):
 def test_a_create_without_a_reminder_writes_no_sidecar_row(api):
     api.create_task("l", summary="Ordinary task")
     assert api._svc.sidecar_writes == []
+
+
+# ── deadline_moved rides the same split ──────────────────────────────────────
+#
+# Not a field of the task: with `due` it says why a passed deadline is
+# changing, and without it it reclassifies the one the task remembers, which
+# is a sidecar write and must not PUT the resource back.
+
+def test_deadline_moved_is_offered_as_a_boolean():
+    tools = build_tools(McpApi(StubSvc()))
+    field = tools["smylte_update_task"].schema["properties"]["deadline_moved"]
+    assert field["type"] == "boolean"
+    assert "not late" in field["description"]
+
+
+def test_with_a_due_it_explains_the_move(api):
+    api.update_task("l", "t1", {"due": "2099-01-04", "deadline_moved": True})
+    assert len(api._svc.edits) == 1 and api._svc.moved == [True]
+    assert api._svc.sidecar_writes == []
+
+
+def test_a_due_alone_is_still_late(api):
+    api.update_task("l", "t1", {"due": "2099-01-04"})
+    assert api._svc.moved == [False]
+
+
+def test_alone_it_reclassifies_without_touching_the_wire(api):
+    api.update_task("l", "t2", {"deadline_moved": True})
+    assert api._svc.edits == []
+    assert api._svc.sidecar_writes == [("t2", {"original_due_moved": 1})]
+
+
+def test_alone_on_a_task_that_remembers_nothing_it_says_so(api):
+    with pytest.raises(ToolError) as caught:
+        api.update_task("l", "t1", {"deadline_moved": True})
+    assert "nothing" in str(caught.value)
+    assert api._svc.edits == [] and api._svc.sidecar_writes == []

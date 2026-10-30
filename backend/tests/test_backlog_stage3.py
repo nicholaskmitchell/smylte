@@ -58,7 +58,7 @@ class _Svc:
     def get_event(self, href, uid):
         return None
 
-    def edit_task(self, href, uid, edit):
+    def edit_task(self, href, uid, edit, *, deadline_moved=False):
         # engine._edit: `row is None -> raise KeyError(f"unknown task ...")`
         raise KeyError(f"unknown task {uid} in {href}")
 
