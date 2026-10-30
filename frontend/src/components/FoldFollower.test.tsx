@@ -118,6 +118,43 @@ describe('<FoldFollower>', () => {
     await waitFor(() => expect(onChange).toHaveBeenCalledWith(['l2\u0000p1']))
   })
 
+  it('does not carry a move answered after sign-out into the next session', async () => {
+    const parent = task({})
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [parent] : []))
+    let answer: (v: Task) => void = () => {}
+    m.moveTask.mockImplementation(() => new Promise<Task>((r) => { answer = r }))
+    const heard = vi.fn()
+    const Listener = () => {
+      const { onTasksMoved } = useTaskData()
+      useState(() => onTasksMoved(heard))
+      return null
+    }
+    const Sessions = () => {
+      const [enabled, setEnabled] = useState(true)
+      const [listening, setListening] = useState(false)
+      return (
+        <DataProvider rev={0} onExpire={vi.fn()} enabled={enabled}>
+          <Mover t={parent} to="l2" />
+          <button onClick={() => setEnabled((e) => !e)}>session</button>
+          <button onClick={() => setListening(true)}>listen</button>
+          {listening && <Listener />}
+        </DataProvider>
+      )
+    }
+    render(<Sessions />)
+    const user = userEvent.setup()
+    await screen.findByText('move (1)')
+    await user.click(screen.getByText('move (1)'))
+    await waitFor(() => expect(m.moveTask).toHaveBeenCalled())
+    await user.click(screen.getByText('session'))          // signed out
+    answer({ ...parent, list: 'l2' })                      // the old session's answer lands
+    await new Promise((r) => setTimeout(r, 20))
+    await user.click(screen.getByText('session'))          // the next session
+    await user.click(screen.getByText('listen'))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(heard).not.toHaveBeenCalled()
+  })
+
   it('leaves the folds alone when nothing moved', async () => {
     const parent = task({})
     m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [parent] : []))

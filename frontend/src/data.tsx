@@ -758,8 +758,14 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
 
   const movedListeners = useRef(new Set<(from: string, to: string, uids: string[]) => void>())
   const movesSoFar = useRef<Array<[string, string, string[]]>>([])
-  // A session's moves are its own: signed out, they are forgotten.
-  useEffect(() => { if (!enabled) movesSoFar.current = [] }, [enabled])
+  // A session's moves are its own: signed out, they are forgotten, and a move
+  // whose answer lands after that (`generation`) is not remembered into the
+  // next session.
+  const generation = useRef(0)
+  useEffect(() => {
+    generation.current += 1
+    if (!enabled) movesSoFar.current = []
+  }, [enabled])
   const onTasksMoved = useCallback((fn: (from: string, to: string, uids: string[]) => void) => {
     for (const [from, to, uids] of movesSoFar.current) fn(from, to, uids)
     movedListeners.current.add(fn)
@@ -768,6 +774,7 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
 
   const moveTask = async (t: Task, to: string): Promise<boolean> => {
     if (to === t.list) return true
+    const gen = generation.current
     // THE TASK AND EVERY STEP UNDER IT, which is what the server moves
     // (`service.move_task`): a parent is found only within its own list, so
     // steps left behind would lose it. The task itself leaves its own parent,
@@ -802,8 +809,10 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
     if (dto) {
       setTasks((ts) => ts.map((x) => (x.list === to && x.uid === t.uid ? dto : x)))
       if (clash) reloadTasks()
-      movesSoFar.current.push([from, to, [...moving]])
-      for (const fn of movedListeners.current) fn(from, to, [...moving])
+      if (gen === generation.current) {
+        movesSoFar.current.push([from, to, [...moving]])
+        for (const fn of movedListeners.current) fn(from, to, [...moving])
+      }
       return true
     }
     if (!clash && key === keyRef.current) {
