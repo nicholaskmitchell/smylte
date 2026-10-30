@@ -648,9 +648,10 @@ def _two_lists(svc, initial):
 
 
 def test_a_task_move_whose_source_delete_failed_can_be_retried(svc):
-    """The copy landed, the DELETE's reply was lost, and the next sync cached
-    the copy in the destination. The retry must recognise that copy as its own
-    and finish, or the task stays in both lists for good."""
+    """The copy landed, the DELETE failed, and the next sync cached the copy in
+    the destination. The retry recognises that copy as its own, because it
+    says what the source does, and finishes; otherwise the task would stay in
+    both lists for good."""
     dav, _ = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
     store.set_sidecar(svc._conn, LIST_A, "t1", pinned=1)
     dav.fail_delete = True
@@ -663,15 +664,13 @@ def test_a_task_move_whose_source_delete_failed_can_be_retried(svc):
     assert moved["pinned"] is True
     assert sorted(dav.store) == [f"{LIST_B}t1.ics"]
     assert svc.get_task(LIST_A, "t1") is None
-    # Finished, so nothing is left claiming the copy as a move in progress.
-    assert store.get_meta(svc._conn, f"task_move:{LIST_B}|t1") is None
 
 
 @pytest.mark.parametrize("synced", [False, True])
 def test_a_task_move_whose_copy_reply_was_lost_can_be_retried(svc, synced):
-    """The PUT of the copy landed and its answer did not. The journal was
-    written as an intent before the PUT, so the retry knows the copy is its
-    own, whether or not a sync has cached it meanwhile."""
+    """The PUT of the copy landed and its answer did not. The retry finds the
+    copy in place, saying what the source does, whether or not a sync has
+    cached it meanwhile."""
     dav, _ = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
     dav.lose_put_reply = f"{LIST_B}t1.ics"
     with pytest.raises(DavError):
@@ -682,13 +681,32 @@ def test_a_task_move_whose_copy_reply_was_lost_can_be_retried(svc, synced):
     svc.move_task(LIST_A, LIST_B, "t1")
 
     assert sorted(dav.store) == [f"{LIST_B}t1.ics"]
-    assert store.get_meta(svc._conn, f"task_move:{LIST_B}|t1") is None
+
+
+def test_a_subtask_moved_alone_can_be_retried_though_each_attempt_restamps_it(svc):
+    """A subtask moved on its own is rewritten without its parent, and every
+    write renews DTSTAMP, LAST-MODIFIED and SEQUENCE, so no two attempts write
+    the same bytes. The comparison ignores those stamps, or the retry would
+    refuse the move's own copy and the task would be wedged in both lists."""
+    dav, _ = _two_lists(svc, {
+        f"{LIST_A}p.ics": foreign_raw("p", "Trip"),
+        f"{LIST_A}c.ics": foreign_raw("c", "Charger", extra=("RELATED-TO;RELTYPE=PARENT:p",)),
+    })
+    dav.fail_delete = True
+    with pytest.raises(DavError):
+        svc.move_task(LIST_A, LIST_B, "c")
+    _sync_copy(svc, dav, f"{LIST_B}c.ics")
+    time_mod.sleep(1.1)                       # a later second, so the stamps differ
+
+    moved = svc.move_task(LIST_A, LIST_B, "c")
+
+    assert moved["parent"] is None
+    assert sorted(dav.store) == sorted([f"{LIST_A}p.ics", f"{LIST_B}c.ics"])
 
 
 def test_a_task_move_whose_delete_reply_was_lost_finishes_at_once(svc):
     """The source DELETE landed and its answer did not. The engine asks the
-    server, finds the source gone, and finishes: the refs follow, and nothing
-    is left in the journal to adopt anything later."""
+    server, finds the source gone, and finishes, and the refs follow."""
     dav, published = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
     store.set_sidecar(svc._conn, LIST_A, "t1", pinned=1)
     dav.lose_delete_reply = True
@@ -697,60 +715,99 @@ def test_a_task_move_whose_delete_reply_was_lost_finishes_at_once(svc):
 
     assert moved["pinned"] is True
     assert sorted(dav.store) == [f"{LIST_B}t1.ics"]
-    assert store.get_meta(svc._conn, f"task_move:{LIST_B}|t1") is None
     assert ("task_created", "t1") in {(e["type"], e["uid"]) for e in published}
 
 
-def test_a_move_finished_on_the_wire_is_finished_by_the_retry(svc):
-    """The DELETE's answer was lost and so was the question asked after it,
-    so the move raised with the task really moved. A sync then cached that.
-    The retry finds no source but a journal naming this move and its copy in
-    place, and does Smylte's half: the refs follow."""
+def test_a_retry_after_a_lost_delete_answer_finishes_the_move(svc):
+    """The DELETE's answer was lost and so was the question asked after it, so
+    the move raised with the task really moved. The retry finds the source
+    gone and its copy in place, saying what the cached source did, and does
+    Smylte's half: the refs follow."""
     dav, _ = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
     store.set_sidecar(svc._conn, LIST_A, "t1", pinned=1)
     dav.lose_delete_reply = True
-    dav.fail_get = f"{LIST_A}t1.ics"          # the probe after the lost answer
-    real_get = dav.get
-    calls = {"n": 0}
+    real_get, calls = dav.get, {"n": 0}
 
-    def get(href):                            # the move's own GET of the source goes through
-        if href == f"{LIST_A}t1.ics" and calls["n"] == 0:
+    def get(href):                            # the probe after the lost answer fails
+        if href == f"{LIST_A}t1.ics":
             calls["n"] += 1
-            return _FakeDav.get(dav, href)
+            if calls["n"] == 2:
+                raise DavError(f"GET {href}: connection reset")
         return real_get(href)
     dav.get = get
     with pytest.raises(DavError):
         svc.move_task(LIST_A, LIST_B, "t1")
-    store.delete_item_by_href(svc._conn, LIST_A, f"{LIST_A}t1.ics")   # the sync tick
-    _sync_copy(svc, dav, f"{LIST_B}t1.ics")
 
     moved = svc.move_task(LIST_A, LIST_B, "t1")
 
     assert moved["pinned"] is True
-    assert store.get_meta(svc._conn, f"task_move:{LIST_B}|t1") is None
+    assert svc.get_task(LIST_A, "t1") is None
 
 
-def test_a_copy_edited_since_the_failed_move_is_not_overwritten(svc):
-    """The source DELETE failed, so the task showed in both lists, and the
-    owner edited the copy. Repeating the move must not put the old bytes over
-    that edit: the journal's etag no longer matches, so it is refused."""
+@pytest.mark.parametrize("synced", [False, True])
+@pytest.mark.parametrize("first", ["delete_failed", "put_reply_lost"])
+def test_a_copy_edited_since_the_failed_move_is_not_overwritten(svc, first, synced):
+    """The first attempt left the copy in place, so the task showed in both
+    lists, and the owner edited the copy. Repeating the move must not put the
+    source's bytes over that edit. The copy no longer says what the source
+    does, so the move is refused and both stay for the owner to settle."""
     dav, _ = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
-    dav.fail_delete = True
+    if first == "delete_failed":
+        dav.fail_delete = True
+    else:
+        dav.lose_put_reply = f"{LIST_B}t1.ics"
     with pytest.raises(DavError):
         svc.move_task(LIST_A, LIST_B, "t1")
     edited = foreign_raw("t1", "Pack the charger too")
     dav.put(f"{LIST_B}t1.ics", edited)
-    _sync_copy(svc, dav, f"{LIST_B}t1.ics")
+    if synced:
+        _sync_copy(svc, dav, f"{LIST_B}t1.ics")
+
+    for _ in range(2):
+        with pytest.raises(ConflictError):
+            svc.move_task(LIST_A, LIST_B, "t1")
+    assert dav.store[f"{LIST_B}t1.ics"][1] == edited
+    assert f"{LIST_A}t1.ics" in dav.store
+
+
+def test_a_source_edited_since_the_failed_move_is_not_lost_either(svc):
+    """The other way round: another client edited the source after the first
+    attempt left a copy. The copy is older, so it is not this move's to keep,
+    and overwriting it would need to know nobody edited it. The move is
+    refused, with both versions still there."""
+    dav, _ = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
+    dav.fail_delete = True
+    with pytest.raises(DavError):
+        svc.move_task(LIST_A, LIST_B, "t1")
+    newer = foreign_raw("t1", "Pack, and the charger")
+    dav.put(f"{LIST_A}t1.ics", newer)
+    _cache(svc._conn, LIST_A, "t1", newer)
 
     with pytest.raises(ConflictError):
         svc.move_task(LIST_A, LIST_B, "t1")
-    assert dav.store[f"{LIST_B}t1.ics"][1] == edited
+    assert dav.store[f"{LIST_A}t1.ics"][1] == newer
+    assert f"{LIST_B}t1.ics" in dav.store
 
 
-def test_a_rolled_back_copy_leaves_nothing_to_clash_with(svc):
-    """The source changed during the move, so the copy is undone. The copy's
-    cached row and the journal go with it, so the retry the error asks for
-    goes straight through instead of reading the undone copy as a clash."""
+def test_a_copy_this_attempt_wrote_is_undone_with_its_cached_row(svc):
+    """The source changed during the move, so the copy this attempt wrote is
+    undone, cached row and all, and the retry the error asks for goes straight
+    through instead of reading the undone copy as a clash."""
+    dav, _ = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
+    dav.delete_412 = True
+    with pytest.raises(ConflictError, match="changed during the move"):
+        svc.move_task(LIST_A, LIST_B, "t1")
+    assert f"{LIST_B}t1.ics" not in dav.store
+    assert svc.get_task(LIST_B, "t1") is None
+
+    svc.move_task(LIST_A, LIST_B, "t1")
+    assert sorted(dav.store) == [f"{LIST_B}t1.ics"]
+
+
+def test_a_copy_an_earlier_attempt_left_is_not_undone(svc):
+    """Found in place rather than written now, the copy may be an identical
+    twin that was there before any move, so a 412 on the source leaves it be.
+    The task stays as it was before this attempt, and the retry finishes."""
     dav, _ = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
     dav.fail_delete = True
     with pytest.raises(DavError):
@@ -759,9 +816,7 @@ def test_a_rolled_back_copy_leaves_nothing_to_clash_with(svc):
     dav.delete_412 = True
     with pytest.raises(ConflictError, match="changed during the move"):
         svc.move_task(LIST_A, LIST_B, "t1")
-    assert f"{LIST_B}t1.ics" not in dav.store
-    assert svc.get_task(LIST_B, "t1") is None
-    assert store.get_meta(svc._conn, f"task_move:{LIST_B}|t1") is None
+    assert f"{LIST_B}t1.ics" in dav.store and f"{LIST_A}t1.ics" in dav.store
 
     svc.move_task(LIST_A, LIST_B, "t1")
     assert sorted(dav.store) == [f"{LIST_B}t1.ics"]
@@ -779,16 +834,23 @@ def test_a_task_already_in_the_destination_under_another_name_is_a_clash(svc):
     assert sorted(dav.store) == sorted([f"{LIST_A}t1.ics", f"{LIST_B}other.ics"])
 
 
-def test_a_same_uid_task_at_the_same_filename_is_never_overwritten(svc):
+@pytest.mark.parametrize("before", ["nothing", "refused_put"])
+def test_a_same_uid_task_at_the_same_filename_is_never_overwritten(svc, before):
     """Smylte names a task's file after its UID, so a different task with the
     same UID in the destination sits exactly where the move would write. Not
     cached yet, it gets past the precheck; the engine must still refuse it,
-    because nothing says this move wrote it."""
+    every time, however earlier attempts ended (one whose PUT was refused
+    outright used to leave a record that made the next attempt adopt it)."""
     dav, _ = _two_lists(svc, {f"{LIST_A}t1.ics": foreign_raw("t1", "Pack")})
+    if before == "refused_put":
+        dav.fail_put = f"{LIST_B}t1.ics"
+        with pytest.raises(DavError):
+            svc.move_task(LIST_A, LIST_B, "t1")
     twin = foreign_raw("t1", "Someone else's task")
     dav.store[f"{LIST_B}t1.ics"] = ('"1"', twin)
-    with pytest.raises(ConflictError):
-        svc.move_task(LIST_A, LIST_B, "t1")
+    for _ in range(2):
+        with pytest.raises(ConflictError):
+            svc.move_task(LIST_A, LIST_B, "t1")
     assert dav.store[f"{LIST_B}t1.ics"][1] == twin
     assert f"{LIST_A}t1.ics" in dav.store
 

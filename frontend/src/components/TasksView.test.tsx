@@ -922,6 +922,71 @@ describe('<TasksView> moving a task to another list', () => {
     await waitFor(() => expect(onCollapsedTasksChange).toHaveBeenCalledWith(['l2\u0000p1']))
   })
 
+  it('does not hand a deleted task\'s fold to another task with the same uid', async () => {
+    // Uids are shared across lists. 'Theirs' was in l2 all along, so it did not
+    // arrive from anywhere, and folding it would be a fold nobody made.
+    const mine = task({ uid: 'p1', summary: 'Mine', children: ['c1'], child_count: 1 })
+    const mineKid = task({ uid: 'c1', summary: 'Mine step', parent: 'p1' })
+    const theirs = task({ uid: 'p1', list: 'l2', summary: 'Theirs', children: ['k2'], child_count: 1 })
+    const theirKid = task({ uid: 'k2', list: 'l2', summary: 'Their step', parent: 'p1' })
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [mine, mineKid] : [theirs, theirKid]))
+    const { onCollapsedTasksChange, bumpRev } = setup('list', false, ['l1\u0000p1'])
+    await screen.findByText('Theirs')
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [] : [theirs, theirKid]))
+    bumpRev(1)
+    await waitFor(() => expect(screen.queryByText('Mine')).not.toBeInTheDocument())
+    expect(onCollapsedTasksChange).not.toHaveBeenCalled()
+  })
+
+  it('leaves a fold alone when the view is behind the account', async () => {
+    // Another device moved the task and re-keyed its fold first. Until this
+    // view's tasks catch up, the account's key looks dead here; re-keying it
+    // back would start the two devices fighting over the setting.
+    const parent = task({ uid: 'p1', summary: 'Trip planning', children: ['c1'], child_count: 1 })
+    const child = task({ uid: 'c1', summary: 'Book flight', parent: 'p1' })
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [parent, child] : []))
+    const { onCollapsedTasksChange, bumpRev } = setup('list', false, ['l2\u0000p1'])
+    await screen.findByText('Trip planning')
+    m.tasks.mockImplementation(async (id: string) => (id === 'l2'
+      ? [{ ...parent, list: 'l2' }, { ...child, list: 'l2' }] : []))
+    bumpRev(1)
+    await waitFor(() => expect(m.tasks.mock.calls.length).toBeGreaterThan(2))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(onCollapsedTasksChange).not.toHaveBeenCalled()
+  })
+
+  it('still follows a move while another list fails to load', async () => {
+    const parent = task({ uid: 'p1', summary: 'Trip planning', children: ['c1'], child_count: 1 })
+    const child = task({ uid: 'c1', summary: 'Book flight', parent: 'p1' })
+    m.lists.mockResolvedValue([list, personal, { ...list, id: 'l3', href: '/l3/', name: 'Broken' }])
+    m.tasks.mockImplementation(async (id: string) => {
+      if (id === 'l3') throw new Error('a VTODO nobody can parse')
+      return id === 'l1' ? [parent, child] : []
+    })
+    m.moveTask.mockResolvedValue({ ...parent, list: 'l2' })
+    const { user, onCollapsedTasksChange } = setup('list', false, ['l1\u0000p1'])
+    await user.click(await screen.findByText('Trip planning'))
+    await user.selectOptions(screen.getByLabelText('List'), 'l2')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(onCollapsedTasksChange).toHaveBeenCalledWith(['l2\u0000p1']))
+  })
+
+  it('puts the fold back when the move fails', async () => {
+    const parent = task({ uid: 'p1', summary: 'Trip planning', children: ['c1'], child_count: 1 })
+    const child = task({ uid: 'c1', summary: 'Book flight', parent: 'p1' })
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [parent, child] : []))
+    let answer: (v: Task | undefined) => void = () => {}
+    m.moveTask.mockImplementation(() => new Promise((r) => { answer = r as typeof answer }))
+    const { user, onCollapsedTasksChange } = setup('list', false, ['l1\u0000p1'])
+    await user.click(await screen.findByText('Trip planning'))
+    await user.selectOptions(screen.getByLabelText('List'), 'l2')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(onCollapsedTasksChange).toHaveBeenCalledWith(['l2\u0000p1']))
+    m.tasks.mockImplementation(async () => new Promise<Task[]>(() => {}))   // the refetch never answers
+    answer(undefined)
+    await waitFor(() => expect(onCollapsedTasksChange).toHaveBeenLastCalledWith(['l1\u0000p1']))
+  })
+
   it('says both things about a subtask that has subtasks of its own', async () => {
     const parent = task({ uid: 'p1', summary: 'Trip planning', children: ['c1'], child_count: 1 })
     const mid = task({ uid: 'c1', summary: 'Packing', parent: 'p1', children: ['g1'],

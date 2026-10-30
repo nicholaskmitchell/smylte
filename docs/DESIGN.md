@@ -56,12 +56,15 @@ survives, so other clients see the task change lists instead of one task ending
 and another starting. Subtasks go with their parent, because a parent is only
 looked for in its own list. A subtask moved on its own leaves its parent, which
 stays where it is. The subtasks are moved first and the task itself last, so a
-move that fails part-way can simply be retried. A copy the move wrote is
-recorded, from just before it is written until the move finishes, and only
-that record lets a retry take over a copy already in the new list, and only
-while nobody has edited the copy since. Smylte names a task's file after its UID, so a
-different task with the same UID can sit exactly where the move would write,
-and it is refused, never overwritten. Everything Smylte keeps beside
+move that fails part-way can simply be retried. A retry recognises a copy an
+earlier attempt left in the new list by what it says. It must match the
+task, apart from the timestamps every write renews. A move never overwrites
+what it finds there. Smylte names a task's file after its UID, so a different
+task with the same UID can sit exactly where the move would write. That task,
+or a copy someone edited since, is refused, and the task stays in both lists
+for the owner to settle. A twin identical to the task can't be told apart from
+the move's own copy, and the two become one, which loses nothing. Nothing about earlier attempts is recorded, so no
+lost answer can leave a wrong record behind. Everything Smylte keeps beside
 the task follows it: order, pin, parking, estimate, reminder, the remembered
 deadline, its rows on the day plan, and the email thread it came from. In the
 editor it is the List field, which used to appear only when creating a task.

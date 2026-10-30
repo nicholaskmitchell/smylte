@@ -43,7 +43,7 @@ from .ical import (
 )
 from .ical.read import advance
 from .sync import ConflictError, SyncEngine, SyncStats
-from .sync.engine import moved_href, task_move_key
+from .sync.engine import moved_href, same_task
 
 log = logging.getLogger("smylted.service")
 
@@ -1211,9 +1211,9 @@ class SmylteService:
         holds and a conflict found half-way would leave exactly that split.
         The one exception is the move's own earlier copy: an attempt whose
         source delete failed leaves it in the destination, and refusing it
-        would leave the task in both lists for good. It is recognised by the
-        engine's journal (`task_move_key`), never by its UID or filename
-        alone, because a different task can share both.
+        would leave the task in both lists for good. It is recognised by what
+        it says (`engine.same_task`), never by its UID or filename alone,
+        because a different task can share both.
 
         WHAT MOVED IS ANNOUNCED EVEN WHEN THE REST FAILS, since otherwise
         nothing would tell a client that some steps already moved. Each task's
@@ -1230,15 +1230,6 @@ class SmylteService:
         try:
             with self._lock:
                 root = store.get_item(self._conn, src_href, uid)
-                if root is None and self._finished_on_the_wire(src_href, dst_href, uid):
-                    # An earlier attempt moved it and lost the answer, and a
-                    # sync has since cached the result. Only Smylte's own half
-                    # is left to do.
-                    with store.tx(self._conn):
-                        store.move_task_refs(self._conn, src_href, dst_href, uid)
-                        store.set_meta(self._conn, task_move_key(dst_href, uid), None)
-                    moved.append(uid)
-                    return self.get_task(dst_href, uid)
                 if root is None or root["component"] != "VTODO":
                     raise KeyError(f"unknown task {uid} in {src_href}")
                 tasks = [i for i in store.get_items(self._conn, src_href)
@@ -1259,21 +1250,22 @@ class SmylteService:
                     order.append(u)
                 walk(uid)
 
+                unparent = bool(root["related_parent"])
                 for u in order:
                     there = store.get_item(self._conn, dst_href, u)
                     if there is None:
                         continue
-                    j = store.get_meta_json(self._conn, task_move_key(dst_href, u))
-                    ours = (j.get("src") == src_href
-                            and there["href"] == moved_href(rows[u]["href"], dst_href)
-                            and j.get("etag") in (None, there["etag"]))
+                    # The task itself arrives without its parent, so that one
+                    # line is not a difference.
+                    ignore = frozenset({"RELATED-TO"}) if u == uid and unparent else frozenset()
+                    ours = (there["href"] == moved_href(rows[u]["href"], dst_href)
+                            and same_task(there["raw_ics"], rows[u]["raw_ics"], ignore=ignore))
                     if not ours:
                         raise ConflictError(f"task {u} already exists in the target list")
                 for u in order:
                     try:
-                        self._engine.move_task(
-                            src_href, dst_href, u,
-                            unparent=u == uid and bool(root["related_parent"]))
+                        self._engine.move_task(src_href, dst_href, u,
+                                               unparent=u == uid and unparent)
                     except Exception:
                         if store.get_item(self._conn, src_href, u) is None:
                             with store.tx(self._conn):
@@ -1289,15 +1281,6 @@ class SmylteService:
                 self._publish({"type": "task_deleted", "list": _slug(src_href), "uid": u})
                 self._publish({"type": "task_created", "list": _slug(dst_href), "uid": u})
         return self.get_task(dst_href, uid)
-
-    def _finished_on_the_wire(self, src_href: str, dst_href: str, uid: str) -> bool:
-        """Whether a move of `uid` from `src_href` already happened on the wire
-        but not in Smylte's own records: the engine's journal names this move,
-        and the destination holds the copy it wrote. Called under the lock."""
-        j = store.get_meta_json(self._conn, task_move_key(dst_href, uid))
-        there = store.get_item(self._conn, dst_href, uid)
-        return (j.get("src") == src_href and there is not None
-                and j.get("etag") in (None, there["etag"]))
 
     def reorder_tasks(self, placed: list[tuple[str, str]]) -> None:
         """Persist a manual task order — (collection_href, uid) pairs, in order.

@@ -1394,12 +1394,47 @@ def test_moving_a_task_refuses_what_it_cannot_do_cleanly(client):
     assert client.post(f"/api/lists/{a}/tasks/{t['uid']}/move",
                        json={"list": cal}).status_code == 404
 
+    # A different task with the same UID, at the very filename the move would
+    # write (Smylte names files after UIDs), is refused and left alone.
     cid = uuid.uuid4().hex
     here = client.post(f"/api/lists/{a}/tasks", json={"summary": "Twin", "client_id": cid}).json()
-    client.post(f"/api/lists/{b}/tasks", json={"summary": "Twin", "client_id": cid})
+    client.post(f"/api/lists/{b}/tasks", json={"summary": "Twin, elsewhere", "client_id": cid})
     r = client.post(f"/api/lists/{a}/tasks/{here['uid']}/move", json={"list": b})
     assert r.status_code == 409, r.text
     assert client.get(f"/api/lists/{a}/tasks/{here['uid']}").json()["summary"] == "Twin"
+    assert client.get(f"/api/lists/{b}/tasks/{here['uid']}").json()["summary"] == "Twin, elsewhere"
+
+
+def test_a_copy_left_by_an_earlier_move_is_recognised_by_what_it_says(client):
+    """Against real Radicale, because the rule depends on what Radicale stores:
+    a copy is recognised by its content (apart from the stamps every write
+    renews), so Radicale's own serialisation of what it was sent has to compare
+    equal to the bytes it came from. A copy left in the new list by an attempt
+    whose source delete failed is finished; one edited since is refused, and
+    nothing is overwritten."""
+    svc = client.app.state.service
+    a, b = _list(client), _list(client)
+    for summary, edit in (("Pack, then; leave", False), ("Unpack", True)):
+        t = client.post(f"/api/lists/{a['id']}/tasks", json={
+            "summary": summary, "notes": "line one\nline two", "due": "2099-05-01",
+            "tags": ["b", "a"],
+        }).json()
+        src = svc._dav.get(t["href"])
+        copy = f"{b['href']}{t['href'].rstrip('/').rsplit('/', 1)[-1]}"
+        data = src.data
+        if edit:
+            data = data.replace(b"SUMMARY:Unpack", b"SUMMARY:Unpack the car")
+        svc._dav.put(copy, data, if_none_match="*")      # what the failed attempt left
+        svc.sync_all()
+
+        r = client.post(f"/api/lists/{a['id']}/tasks/{t['uid']}/move", json={"list": b["id"]})
+        if not edit:
+            assert r.status_code == 200, r.text
+            assert client.get(f"/api/lists/{a['id']}/tasks").json() == []
+        else:
+            assert r.status_code == 409, r.text
+            assert b"Unpack the car" in svc._dav.get(copy).data, "the edited copy was overwritten"
+            assert client.get(f"/api/lists/{a['id']}/tasks/{t['uid']}").status_code == 200
 
 
 def test_parking_an_unknown_task_is_a_404_and_writes_nothing(client):

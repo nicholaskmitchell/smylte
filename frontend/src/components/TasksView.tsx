@@ -437,27 +437,38 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   }, [collapsedSet, collapsedTasks, kidsByParent, legacyParents, onCollapsedTasksChange])
   // A FOLD FOLLOWS ITS TASK TO ANOTHER LIST. The key names the list, so a task
   // moved from either editor, over MCP or by another client came back unfolded
-  // under its new one. A keyed entry whose (list, uid) is gone is re-keyed to
-  // the one task that now has that uid: never when the uid is in more than one
-  // list, which is two tasks rather than one moved, and never while a list is
-  // missing from the fan-out, where an absent task may only be unloaded. A
-  // failed move puts the row back, and this puts the fold back with it.
+  // under its new one. Only a MOVE is followed: a folded key that was live on
+  // the previous pass and is gone now, while exactly one key with its uid has
+  // just appeared. Everything else that makes a key look dead is left alone: a
+  // view that is behind the account (another device re-keyed first), a cache
+  // seed before the fetch, a list that failed to load, or a deleted task whose
+  // uid an unrelated task in another list also has, which was already there.
+  // A failed move puts the row back, and the same rule puts the fold back.
+  const seenLive = useRef<Set<string> | null>(null)
   useEffect(() => {
-    if (!loaded || taskListErrors.length > 0) return
+    if (!loaded) return
     const live = new Set(tasks.map(taskKey))
-    const homes = new Map<string, Task[]>()
-    for (const t of tasks) homes.set(t.uid, [...(homes.get(t.uid) ?? []), t])
+    const before = seenLive.current
+    seenLive.current = live
+    if (!before) return
+    const arrived = new Map<string, string[]>()
+    for (const k of live) {
+      if (before.has(k)) continue
+      const uid = k.slice(k.indexOf('\u0000') + 1)
+      arrived.set(uid, [...(arrived.get(uid) ?? []), k])
+    }
+    if (arrived.size === 0) return
     let changed = false
     const next = collapsedTasks.map((k) => {
       const at = k.indexOf('\u0000')
-      if (at < 0 || live.has(k)) return k
-      const found = homes.get(k.slice(at + 1)) ?? []
-      if (found.length !== 1) return k
+      if (at < 0 || live.has(k) || !before.has(k)) return k
+      const to = arrived.get(k.slice(at + 1)) ?? []
+      if (to.length !== 1) return k
       changed = true
-      return taskKey(found[0])
+      return to[0]
     })
     if (changed) onCollapsedTasksChange([...new Set(next)])
-  }, [loaded, taskListErrors, tasks, collapsedTasks, onCollapsedTasksChange])
+  }, [loaded, tasks, collapsedTasks, onCollapsedTasksChange])
   // Sorted, not just filtered. These render straight into the list view, which
   // used to show them in raw array order — so a new task appeared at the bottom
   // and then jumped when the refetch replaced the array. `compareTasks` is a
