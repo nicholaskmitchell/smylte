@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from icalendar import Calendar
 
 from .. import ical
+from ..ical import canonical
 from ..ical.read import unfold
 from ..dav.client import CollectionInfo, DavClient
 from ..dav.errors import (Conflict, DavError, InvalidSyncToken, MalformedResponse,
@@ -82,10 +83,21 @@ def moved_href(src_item_href: str, dst_href: str) -> str:
     return f"{dst_href}{src_item_href.rstrip('/').rsplit('/', 1)[-1]}"
 
 
-def task_move_key(dst_href: str, uid: str) -> str:
-    """The `meta` key recording a task copy that a move wrote and has not yet
-    finished. Its value is the list the copy came from (see `_move`)."""
-    return f"task_move:{dst_href}|{uid}"
+# What every write of a task renews, so two writes of the same task differ in
+# them. PRODID names the writer, not the task.
+_RESTAMPED = frozenset({"DTSTAMP", "LAST-MODIFIED", "SEQUENCE", "PRODID"})
+
+
+def same_task(a: bytes | str, b: bytes | str, *, ignore: frozenset[str] = frozenset()) -> bool:
+    """Whether two serialisations of a calendar object say the same thing:
+    the same components, properties and parameters, in any order and folding,
+    apart from what every write renews (`_RESTAMPED`) and the names in
+    `ignore`. Radicale stores what it is sent in this sense, so a copy and the
+    bytes it was written from compare equal."""
+    text = lambda x: x.decode("utf-8", "replace") if isinstance(x, bytes) else x  # noqa: E731
+    drop = _RESTAMPED | ignore
+    return (canonical.signature(canonical.parse(text(a)), drop=drop)
+            == canonical.signature(canonical.parse(text(b)), drop=drop))
 
 
 class ConflictError(DavError):
@@ -542,23 +554,22 @@ class SyncEngine:
         reasoning is in `move_event`'s docstring. `transform`, when given, is
         applied to the wire bytes before they are written to the destination.
 
-        TASKS KEEP A JOURNAL (`task_move_key`), because a task's copy can only
-        be adopted when this engine provably wrote it. Tasks really do share
-        UIDs across lists (a client copying one keeps its UID, and Smylte names
-        a task's file after its UID), so a same-UID resource at the copy's href
-        may be another task, and adopting it would overwrite that task with
-        this one. The entry is `{"src", "etag"}`:
+        A TASK'S COPY IS RECOGNISED BY WHAT IT SAYS, and a task never
+        overwrites what it finds. Tasks really do share UIDs across lists (a
+        client copying one keeps its UID, and Smylte names a task's file after
+        its UID), so a same-UID resource at the copy's href may be another task,
+        or this move's copy edited since, and overwriting either would lose it.
+        An occupant that says what the copy would (`same_task`, which ignores
+        the stamps every write renews) is this move's earlier copy, or a twin
+        identical to it, and the move goes on to delete the source. Any other
+        is a conflict, and the task stays in both lists for the owner to
+        settle. Nothing about earlier attempts is recorded, so no lost answer
+        can leave behind a record that is wrong.
 
-        * written as an INTENT before the PUT, with no etag, since a PUT whose
-          reply is lost may still have landed and the retry must know it;
-        * given the copy's etag once the PUT (or an adoption) answers, so a
-          retry adopts the copy only while nobody has edited it since;
-        * cleared when the move finishes or is undone, and restored to what it
-          was when the PUT is refused for a resource that is not ours.
-
-        A source DELETE whose reply is lost is checked against the server, and
-        a retry that finds the source already gone finishes a move whose copy
-        is ours. Events keep the older rule: any same-UID occupant is adopted."""
+        A source DELETE whose answer is lost is checked against the server, and
+        a retry that finds the source gone and its copy in place finishes. The
+        copy is undone after a 412 only when this attempt wrote it. Events keep
+        the older rule: the occupant is adopted and refreshed."""
         where = "calendar" if kind == "event" else "list"
         if not store.has_collection(self.conn, dst_href):
             raise ValueError(f"collection {dst_href} is unknown; run discover() first")
@@ -566,23 +577,22 @@ class SyncEngine:
         if row is None:
             raise KeyError(f"unknown {kind} {uid} in {src_href}")
         new_href = moved_href(row["href"], dst_href)
-        journal = task_move_key(dst_href, uid) if kind == "task" else None
-        prior = store.get_meta_json(self.conn, journal) if journal else {}
-        ours = journal is None or prior.get("src") == src_href
+        task = kind == "task"
         try:
             current = self.dav.get(row["href"])  # NotFound => already gone; surfaces as 404
         except NotFound:
-            # Gone, and the journal says the copy is ours: the source DELETE
-            # landed and its answer did not. The move is done on the wire.
-            if journal and ours and self._copy_is_ours(new_href, uid, prior.get("etag")):
-                return self._finish_move(src_href, dst_href, row["href"], uid, new_href, journal)
+            # Gone. For a task, an earlier attempt's DELETE may have landed with
+            # its answer lost: if the copy says what the cached source did, that
+            # attempt finished the move on the wire.
+            if task:
+                cached = transform(row["raw_ics"]) if transform else row["raw_ics"]
+                if self._holds(new_href, cached):
+                    return self._finish_move(src_href, dst_href, row["href"], uid, new_href)
             raise
         data = transform(current.data) if transform else current.data
-        if journal:
-            store.set_meta_json(self.conn, journal,
-                                {"src": src_href, "etag": prior.get("etag") if ours else None})
+        wrote = True
         try:
-            etag = self.dav.put(new_href, data, if_none_match="*")
+            copy_etag = self.dav.put(new_href, data, if_none_match="*")
         except (PreconditionFailed, Conflict) as e:
             # PreconditionFailed covers an occupied HREF. Radicale also enforces
             # UID uniqueness per collection and answers 409 `no-uid-conflict` when
@@ -602,41 +612,36 @@ class SyncEngine:
             # again shortly" over MCP) something close to the opposite. This is
             # `_put_new`'s replay tolerance, applied to the same problem: read
             # the occupant, and only a resource that is NOT ours is a conflict.
-            if not ours:
-                # Nothing of ours was written, so the journal goes back to what
-                # it said before this attempt.
-                if prior:
-                    store.set_meta_json(self.conn, journal, prior)
-                else:
-                    store.set_meta(self.conn, journal, None)
-                raise ConflictError(
-                    f"{kind} {uid} already exists in the target {where}") from e
-            etag = self._adopt_moved_copy(
-                new_href, uid, data, e, kind=kind,
-                expect_etag=prior.get("etag") if journal else None)
-        if journal:
-            store.set_meta_json(self.conn, journal, {"src": src_href, "etag": etag})
+            #
+            # A task's occupant is accepted only as it is (see the docstring).
+            if task:
+                copy_etag = self._own_copy(new_href, uid, data, e)
+                wrote = False
+            else:
+                self._adopt_moved_copy(new_href, uid, data, e, kind=kind)
+                copy_etag = None
         try:
             self.dav.delete(row["href"], if_match=current.etag)
         except PreconditionFailed as e:
             # Edited again between our GET and the DELETE. Undo the copy and make
             # the caller retry rather than silently discarding that revision.
-            # A task's copy is undone only as written (`if_match`), and its
-            # cached row goes with it, or the retry would read it as a clash.
-            try:
-                self.dav.delete(new_href, if_match=etag if journal else None)
-                if journal:
-                    with _tx(self.conn):
-                        store.delete_item_by_href(self.conn, dst_href, new_href)
-                        store.set_meta(self.conn, journal, None)
-            except DavError:
-                log.warning("move_%s: could not roll back the copy at %s", kind, new_href)
+            # A task's copy is undone only if this attempt wrote it, only as
+            # written (`if_match`), and with its cached row, or the retry would
+            # read the undone copy as a clash.
+            if not task or wrote:
+                try:
+                    self.dav.delete(new_href, if_match=copy_etag)
+                    if task:
+                        with _tx(self.conn):
+                            store.delete_item_by_href(self.conn, dst_href, new_href)
+                except DavError:
+                    log.warning("move_%s: could not roll back the copy at %s", kind, new_href)
             raise ConflictError(f"{kind} {uid} changed during the move; retry") from e
         except DavError:
             # A task asks the server whether the delete happened after all: a
-            # lost reply to a DELETE that landed is the move finished.
-            if journal and self._gone(row["href"]):
-                return self._finish_move(src_href, dst_href, row["href"], uid, new_href, journal)
+            # lost answer to a DELETE that landed is the move finished.
+            if task and self._gone(row["href"]):
+                return self._finish_move(src_href, dst_href, row["href"], uid, new_href)
             # A lost reply, a 403, a 423. The copy is NOT rolled back: unlike the
             # 412 above, this is precisely the case where the delete cannot be
             # proved not to have happened, and undoing it would risk destroying
@@ -650,18 +655,16 @@ class SyncEngine:
                 "the %s is in BOTH %ss until the move is retried",
                 kind, uid, new_href, row["href"], kind, where, exc_info=True)
             raise
-        return self._finish_move(src_href, dst_href, row["href"], uid, new_href, journal)
+        return self._finish_move(src_href, dst_href, row["href"], uid, new_href)
 
     def _finish_move(self, src_href: str, dst_href: str, src_item_href: str, uid: str,
-                     new_href: str, journal: str | None) -> str:
+                     new_href: str) -> str:
         """The cache's half of a move whose wire half is done: the source row
-        leaves, its sidecar is orphaned for the service to re-point, and the
-        journal entry is cleared, in one transaction. Then the copy is cached."""
+        leaves and its sidecar is orphaned for the service to re-point, in one
+        transaction. Then the copy is cached."""
         with _tx(self.conn):
             store.delete_item_by_href(self.conn, src_href, src_item_href)
             store.orphan_sidecar(self.conn, src_href, uid)
-            if journal:
-                store.set_meta(self.conn, journal, None)
         return self._refresh_from_wire(dst_href, new_href)
 
     def _gone(self, href: str) -> bool:
@@ -675,25 +678,35 @@ class SyncEngine:
             return False
         return False
 
-    def _copy_is_ours(self, new_href: str, uid: str, etag: str | None) -> bool:
-        """Whether the resource at `new_href` is the copy the journal records:
-        our UID, and, when the journal knows the copy's etag, unedited since."""
+    def _holds(self, href: str, data: bytes) -> bool:
+        """Whether the resource at `href` says what `data` does."""
         try:
-            stored = self.dav.get(new_href)
-            fields = ical.extract_from_raw(stored.data)
+            return same_task(self.dav.get(href).data, data)
         except DavError:
             return False
-        return fields is not None and fields.uid == uid and etag in (None, stored.etag)
+
+    def _own_copy(self, new_href: str, uid: str, data: bytes, cause: DavError) -> str:
+        """The copy's href is taken. Accept the occupant, unchanged, when it
+        says what the copy would; anything else is a conflict, never
+        overwritten. Returns the occupant's etag.
+
+        A `Conflict` whose occupant is NOT at `new_href` (Radicale's
+        `no-uid-conflict`: the same UID under another filename) reads as a 404
+        here and stays a conflict: this move did not put it there."""
+        try:
+            stored = self.dav.get(new_href)
+        except NotFound:
+            stored = None
+        if stored is None or not same_task(stored.data, data):
+            log.warning("move_task: %s holds a different task with uid %s", new_href, uid)
+            raise ConflictError(f"task {uid} already exists in the target list") from cause
+        return stored.etag
 
     def _adopt_moved_copy(self, new_href: str, uid: str, data: bytes, cause: DavError,
-                          *, kind: str = "event", expect_etag: str | None = None) -> str:
+                          *, kind: str = "event") -> None:
         """The destination href is occupied. Treat it as the move's own earlier
         copy when it carries `uid`; raise `ConflictError` when it is a stranger's.
-        Returns the copy's etag after the refresh.
-
-        `expect_etag` is the etag the journal recorded for a task's copy. A copy
-        edited since (any other etag) is refused rather than overwritten: the
-        edit may be the only record of something the owner did there.
+        Events only: a task's occupant is never overwritten (see `_move`).
 
         The occupant is REFRESHED from `data` (the source's current bytes, as
         the move writes them) rather than merely accepted. The
@@ -719,12 +732,8 @@ class SyncEngine:
             log.warning("move_%s: %s is occupied by another resource", kind, new_href)
             raise ConflictError(
                 f"{kind} {uid} already exists in the target {where}") from cause
-        if expect_etag is not None and stored.etag != expect_etag:
-            raise ConflictError(
-                f"{kind} {uid} was changed in the target {where} since an earlier "
-                f"attempt to move it; it is in both {where}s, so resolve it there") from cause
         try:
-            return self.dav.put(new_href, data, if_match=stored.etag)
+            self.dav.put(new_href, data, if_match=stored.etag)
         except PreconditionFailed as e:
             raise ConflictError(f"{kind} {uid} changed during the move; retry") from e
 
