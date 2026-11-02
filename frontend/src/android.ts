@@ -12,9 +12,13 @@
 // reaches the page as a JS exception. Methods are always called on the bridge
 // object, never detached, since the bridge looks the call up by receiver.
 //
+// The host sends `back` while this page reports an open layer (layers.ts): a
+// dialog, sheet or popover Back should close before it leaves the page.
+//
 // The module has no side effects on import: `startAndroidHost` is called from
 // main.tsx, and everything else reads the bridge when it is called.
 
+import { backTopLayer, layerDepth, onLayerDepth } from './layers'
 import type { TimeFormat } from './time'
 
 export const ANDROID_EVENT = 'smylte-android'
@@ -26,11 +30,12 @@ const ENV_VERSION = 1
 // What this page announces in `hello`. Only what it actually does: a host may
 // act on a capability, for instance by holding the splash screen for one, so
 // announcing one the page never fulfils would cost the user time.
-const CAPS = 'save'
+const CAPS = 'back,save'
 
 interface AndroidBridge {
   themeColour?: (hex: string) => void
   hello?: (caps: string) => unknown
+  layers?: (depth: number) => unknown
   saveFile?: (name: string, mime: string, text: string) => unknown
 }
 
@@ -48,6 +53,9 @@ let listening = false
 let env: HostEnv | null = null
 const envListeners = new Set<(env: HostEnv) => void>()
 let pendingSave: ((outcome: SaveOutcome) => void) | null = null
+// What the host was last told, and whether a report is already queued.
+let reportedDepth = 0
+let reportQueued = false
 
 function bridge(): AndroidBridge | null {
   try {
@@ -84,6 +92,31 @@ export function readEnv(raw: unknown): HostEnv | null {
   return out
 }
 
+/** Tell the host how many layers are open. Always sends, because repairing a
+ *  count the host holds wrongly needs a report even of what was reported before. */
+function sendLayers(depth: number) {
+  const b = bridge()
+  if (!b || typeof b.layers !== 'function') return
+  try {
+    b.layers(depth)
+    reportedDepth = depth
+  } catch {
+    // The host failed, so Back keeps its route and the next change tries again.
+  }
+}
+
+/** Report the depth once per burst: a dialog closing as another opens, and
+ *  StrictMode's double effects, come as bursts and need one report between them. */
+function queueLayers() {
+  if (reportQueued) return
+  reportQueued = true
+  queueMicrotask(() => {
+    reportQueued = false
+    const d = layerDepth()
+    if (d !== reportedDepth) sendLayers(d)
+  })
+}
+
 function onEvent(e: Event) {
   const d = (e as CustomEvent).detail as unknown
   if (typeof d !== 'object' || d === null) return
@@ -105,6 +138,17 @@ function onEvent(e: Event) {
     if (!done) return
     pendingSave = null
     done(msg.outcome === 'saved' || msg.outcome === 'cancelled' ? msg.outcome : 'failed')
+  } else if (msg.type === 'back') {
+    // The host sends this only while this page said a layer is open, so none
+    // open means its count is stale, for instance a report lost across a
+    // document change. Saying 0 lets the next Back walk history or leave.
+    let handled = true
+    try {
+      handled = backTopLayer()
+    } catch (err) {
+      console.error(err)
+    }
+    if (!handled) sendLayers(0)
   }
   // Any other type comes from a newer host and is none of this page's business.
 }
@@ -132,6 +176,7 @@ export function startAndroidHost(): void {
       env = null
     }
   }
+  if (typeof b.layers === 'function') onLayerDepth(queueLayers)
 }
 
 /** What the host said about the device, or null when it said nothing (a

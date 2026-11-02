@@ -73,8 +73,11 @@ class MainActivity : Activity() {
 
     /// What hello() answers. Written on the main thread, read on the bridge thread.
     @Volatile private var envJson = HostProtocol.envJson(clock24 = false)
-    /// Counts committed documents, so a save's result reaches only the document that asked.
-    private var docGeneration = 0
+    /// Counts committed documents, so a save's result reaches only the document
+    /// that asked. Also read on the bridge thread, by layers().
+    @Volatile private var docGeneration = 0
+    /// How many layers the page says are open. Main thread.
+    private var pageLayers = 0
     /// Claimed on the bridge thread, so two calls cannot both open a picker.
     private val saveBusy = AtomicBoolean(false)
     /// The payload while the picker is open; null after a restore that could not read it back.
@@ -276,6 +279,17 @@ class MainActivity : Activity() {
         // half of the handshake unchanged when one does.
         override fun hello(caps: Set<String>): String = envJson
 
+        override fun layers(depth: Int) {
+            // Read at the call, so a report still queued when the next document
+            // starts is known as the old page's.
+            val document = docGeneration
+            main.post {
+                if (isDestroyed) return@post
+                pageLayers = HostProtocol.layersAfterReport(pageLayers, depth, document, docGeneration)
+                syncBack()
+            }
+        }
+
         override fun save(request: SaveRequest): Boolean {
             if (!saveBusy.compareAndSet(false, true)) return false
             main.post { launchSave(request) }
@@ -295,11 +309,13 @@ class MainActivity : Activity() {
         sendEvent(HostProtocol.envEvent(next))
     }
 
+    private fun showingOurPage(): Boolean = loaded && web.url?.let { isOurs(Uri.parse(it)) } == true
+
+    private fun canWalkBack(): Boolean = loaded && web.canGoBack()
+
     /// One DOM event to the app's own document; never to a page anywhere else.
     private fun sendEvent(detail: String) {
-        if (isDestroyed || !loaded) return
-        val url = web.url ?: return
-        if (!isOurs(Uri.parse(url))) return
+        if (isDestroyed || !showingOurPage()) return
         web.evaluateJavascript(HostProtocol.eventScript(detail), null)
     }
 
@@ -311,7 +327,7 @@ class MainActivity : Activity() {
             saveBusy.set(false)
             return
         }
-        val ours = loaded && web.url?.let { isOurs(Uri.parse(it)) } == true
+        val ours = showingOurPage()
         if (!HostProtocol.allowSave(resumed, ours, SystemClock.uptimeMillis(), lastPickerClosed)) {
             saveBusy.set(false)
             sendEvent(HostProtocol.savedEvent(HostProtocol.SaveOutcome.FAILED))
@@ -408,6 +424,10 @@ class MainActivity : Activity() {
         /// instead (saveReport).
         override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
             docGeneration++
+            // The old page cannot report its layers going, so a new document
+            // starts at none.
+            pageLayers = 0
+            syncBack()
         }
 
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
@@ -505,16 +525,19 @@ class MainActivity : Activity() {
 
     // ── back ────────────────────────────────────────────────────────────────
 
-    /// Back walks the page's history, then leaves. On 13 and later that is an
-    /// OnBackInvokedCallback registered only while there is history to walk,
-    /// so the system's own back-to-home gesture plays when there is not; and
-    /// an app targeting 16 is never sent onBackPressed at all.
+    /// Back closes the page's top layer, then walks its history, then leaves.
+    /// On 13 and later that is an OnBackInvokedCallback held only while there is
+    /// a layer or history to walk, so the system's own back-to-home gesture
+    /// plays when there is not; and an app targeting 16 is never sent
+    /// onBackPressed at all.
     private fun syncBack() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-        val want = web.canGoBack()
+        val want = HostProtocol.wantsBackCallback(pageLayers, showingOurPage(), canWalkBack())
         val registered = backCallback
         if (want && registered == null) {
-            val callback = OnBackInvokedCallback { if (web.canGoBack()) web.goBack() }
+            // Registered for a reason that has since gone, so drop it and the
+            // next Back reaches the system.
+            val callback = OnBackInvokedCallback { if (!routeBack()) syncBack() }
             onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback)
             backCallback = callback
         } else if (!want && registered != null) {
@@ -523,14 +546,23 @@ class MainActivity : Activity() {
         }
     }
 
+    /// False when Back is not the app's to handle: no layer and no history.
+    private fun routeBack(): Boolean {
+        when (HostProtocol.backAction(pageLayers, showingOurPage(), canWalkBack())) {
+            HostProtocol.BackAction.PAGE -> sendEvent(HostProtocol.backEvent())
+            HostProtocol.BackAction.HISTORY -> web.goBack()
+            HostProtocol.BackAction.SYSTEM -> return false
+        }
+        return true
+    }
+
     /// Android 11 and 12 only. On 13 and later the OnBackInvokedCallback in
     /// syncBack is what runs, which is what the lint check asks for; it cannot
     /// see that this override is the fallback for the versions without one.
     @SuppressLint("GestureBackNavigation")
     @Deprecated("Used below Android 13 only; see syncBack")
     override fun onBackPressed() {
-        if (loaded && web.canGoBack()) web.goBack()
-        else @Suppress("DEPRECATION") super.onBackPressed()
+        if (!routeBack()) @Suppress("DEPRECATION") super.onBackPressed()
     }
 
     // ── the update strip ────────────────────────────────────────────────────

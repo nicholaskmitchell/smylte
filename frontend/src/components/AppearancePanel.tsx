@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { canSaveFiles, saveTextFile } from '../android'
 import { clientId } from '../api'
 import { useEscape, useSegmentThumb } from '../hooks'
+import { useLayer } from '../layers'
 import { useT } from '../i18n'
 import { showNotice } from '../util'
 import {
@@ -61,6 +62,11 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
   // Was bound to `document`, which does not see a keydown dispatched at
   // `window` — one of the three bindings this hook exists to collapse.
   useEscape(onClose)
+  // Back closes the panel too, but asks first when the rename row holds a name
+  // that was not saved. Everything else here applies as it is picked.
+  useLayer(onClose, {
+    unsaved: renaming && active !== null && !isPreset && name !== active.name,
+  })
 
   // Close the rename row whenever the theme it was opened for stops being the
   // active one. `renaming`/`name` are captured when Rename is pressed and were

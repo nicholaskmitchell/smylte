@@ -66,6 +66,11 @@ class HostProtocolTest {
             """window.dispatchEvent(new CustomEvent('smylte-android',{detail:{"type":"saved","outcome":"saved"}}));""",
             HostProtocol.eventScript(HostProtocol.savedEvent(HostProtocol.SaveOutcome.SAVED)),
         )
+        assertEquals("""{"type":"back"}""", HostProtocol.backEvent())
+        assertEquals(
+            """window.dispatchEvent(new CustomEvent('smylte-android',{detail:{"type":"back"}}));""",
+            HostProtocol.eventScript(HostProtocol.backEvent()),
+        )
     }
 
     // ── a file to save ──────────────────────────────────────────────────────
@@ -218,6 +223,57 @@ class HostProtocolTest {
         assertEquals(listOf(true, true, true, true, false), states)
     }
 
+    // ── back ────────────────────────────────────────────────────────────────
+
+    @Test
+
+    fun back_closes_the_pages_top_layer_first() {
+        assertEquals(HostProtocol.BackAction.PAGE, HostProtocol.backAction(1, pageIsOurs = true, canGoBack = true))
+        assertEquals(HostProtocol.BackAction.PAGE, HostProtocol.backAction(1, pageIsOurs = true, canGoBack = false))
+        assertEquals(HostProtocol.BackAction.HISTORY, HostProtocol.backAction(0, pageIsOurs = true, canGoBack = true))
+        assertEquals(HostProtocol.BackAction.SYSTEM, HostProtocol.backAction(0, pageIsOurs = true, canGoBack = false))
+    }
+
+    @Test
+
+    fun a_page_that_is_not_ours_gets_no_back() {
+        assertEquals(HostProtocol.BackAction.HISTORY, HostProtocol.backAction(2, pageIsOurs = false, canGoBack = true))
+        assertEquals(HostProtocol.BackAction.SYSTEM, HostProtocol.backAction(2, pageIsOurs = false, canGoBack = false))
+    }
+
+    @Test
+
+    fun the_callback_is_held_only_while_back_stays_in_the_app() {
+        assertTrue(HostProtocol.wantsBackCallback(1, pageIsOurs = true, canGoBack = true))
+        assertTrue(HostProtocol.wantsBackCallback(1, pageIsOurs = true, canGoBack = false))
+        assertTrue(HostProtocol.wantsBackCallback(0, pageIsOurs = true, canGoBack = true))
+        assertFalse(HostProtocol.wantsBackCallback(0, pageIsOurs = true, canGoBack = false))
+        assertTrue(HostProtocol.wantsBackCallback(2, pageIsOurs = false, canGoBack = true))
+        assertFalse(HostProtocol.wantsBackCallback(2, pageIsOurs = false, canGoBack = false))
+    }
+
+    @Test
+
+    fun layer_counts_are_clamped() {
+        assertEquals(0, HostProtocol.clampLayers(Int.MIN_VALUE))
+        assertEquals(0, HostProtocol.clampLayers(-1))
+        assertEquals(0, HostProtocol.clampLayers(0))
+        assertEquals(3, HostProtocol.clampLayers(3))
+        assertEquals(16, HostProtocol.clampLayers(16))
+        assertEquals(16, HostProtocol.clampLayers(17))
+        assertEquals(16, HostProtocol.clampLayers(Int.MAX_VALUE))
+        assertEquals(16, HostProtocol.MAX_LAYERS)
+    }
+
+    @Test
+
+    fun a_report_from_a_replaced_document_is_dropped() {
+        assertEquals(2, HostProtocol.layersAfterReport(held = 0, depth = 2, reportedIn = 4, current = 4))
+        assertEquals(0, HostProtocol.layersAfterReport(held = 0, depth = 2, reportedIn = 3, current = 4))
+        assertEquals(1, HostProtocol.layersAfterReport(held = 1, depth = 0, reportedIn = 3, current = 4))
+        assertEquals(0, HostProtocol.layersAfterReport(held = 1, depth = 0, reportedIn = 4, current = 4))
+    }
+
     // ── drift and purity ────────────────────────────────────────────────────
 
     @Test
@@ -249,6 +305,22 @@ class HostProtocolTest {
         assertTrue("the env carries no fields", fields.isNotEmpty())
         for (field in fields) {
             assertTrue(field, Regex("""\.$field\b""").containsMatchIn(ts))
+        }
+    }
+
+    @Test
+
+    fun the_page_answers_every_event_type() {
+        val ts = File("../frontend/src/android.ts").readText()
+        val events = listOf(
+            HostProtocol.envEvent(HostProtocol.envJson(true)),
+            HostProtocol.savedEvent(HostProtocol.SaveOutcome.SAVED),
+            HostProtocol.backEvent(),
+        )
+        for (event in events) {
+            val type = Regex(""""type":"(\w+)"""").find(event)?.groupValues?.get(1)
+            assertNotNull(event, type)
+            assertTrue(type, ts.contains("msg.type === '$type'"))
         }
     }
 

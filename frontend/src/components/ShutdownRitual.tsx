@@ -22,6 +22,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { DayEntry, Task } from '../api'
 import { useEscape } from '../hooks'
+import { useLayer } from '../layers'
 import { useTimeFormat } from '../timeformat'
 import { fmtClock, fmtDuration } from '../time'
 import { taskKey } from '../order'
@@ -89,6 +90,9 @@ export function ShutdownRitual({
   const [step, setStep] = useState(0)
   const scrimPress = useRef(false)
   useEscape(onClose)
+  // Back closes it as ✕ does. The note commits on blur and again on unmount, so
+  // closing keeps it, and there is nothing to ask about.
+  useLayer(onClose)
 
   const unfinished = entries.filter((e) => !isDone(e))
   const last = step === STEPS.length - 1

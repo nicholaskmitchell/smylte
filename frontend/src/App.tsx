@@ -50,6 +50,7 @@ import { DEFAULT_LANGUAGE, deviceLanguage, isLanguage, type Language } from './l
 import { I18nProvider } from './i18n'
 import { translate } from './i18n/index'
 import { AppearancePanel } from './components/AppearancePanel'
+import { DiscardPrompt } from './components/DiscardPrompt'
 import { SettingsMenu, type SettingsSection } from './components/SettingsMenu'
 import { AppNav, TabBar } from './components/AppNav'
 
@@ -1572,6 +1573,9 @@ export function App() {
           onClose={() => setAppearanceOpen(false)} />
       )}
       {(layout === 'classic' || focusOpen) && offlineBar}
+      {/* The one "Discard changes?" dialog, for whichever layer Back asked
+          about. Only the Android client's Back opens it. */}
+      <DiscardPrompt />
       {toast && (
         <div className="toast" role="alert">
           <span>{toast}</span>

@@ -28,6 +28,11 @@ export const de: Catalogue = {
   'app.nav': 'Ansichten',
   'app.back': 'Zurück',
   'app.closeSettings': 'Einstellungen schließen',
+  // Android Back on a form with unsaved changes
+  'discard.title': 'Änderungen verwerfen?',
+  'discard.body': 'Deine Änderungen sind noch nicht gespeichert.',
+  'discard.discard': 'Verwerfen',
+  'discard.keep': 'Weiter bearbeiten',
 
   'tab.today': 'Heute',
   'tab.home': 'Start',

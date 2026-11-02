@@ -48,15 +48,24 @@ export function useMinWidth(px: number): boolean {
  * fires while focus is inside the dialog, and with no focus trap that is exactly
  * the state a keyboard user needs the escape hatch from.
  *
+ * `capture` runs in the window's capture phase, before every other `useEscape`
+ * and every field's own handler, and stops the key there. It exists for a dialog
+ * stacked over another. Callers without it are unchanged.
+ *
  * `globalThis.KeyboardEvent` because React re-exports a `KeyboardEvent` type of
  * its own, and a component importing that one shadows the DOM's.
  */
-export function useEscape(onEscape: () => void): void {
+export function useEscape(onEscape: () => void, options: { capture?: boolean } = {}): void {
+  const capture = options.capture ?? false
   useEffect(() => {
-    const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') onEscape() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onEscape])
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (capture) e.stopPropagation()
+      onEscape()
+    }
+    window.addEventListener('keydown', onKey, capture)
+    return () => window.removeEventListener('keydown', onKey, capture)
+  }, [onEscape, capture])
 }
 
 /**

@@ -1247,6 +1247,11 @@ describe('aug19 leftovers — every dialog answers Escape at the window', () => 
       // out, and Escape is that way. FocusView.test.tsx's 'leaves on an Escape
       // dispatched at the window'.
       'FocusView',
+      // "Discard changes?", which Android's Back opens over the layer it asks
+      // about (layers.ts). Its Escape keeps editing in the capture phase, so the
+      // editor underneath never sees the key; layers.test.tsx's 'answers Escape
+      // at the prompt by keeping editing, and never closes the editor' drives it.
+      'DiscardPrompt',
     ])
     const missing = users.filter((u) => !covered.has(u))
     expect(missing,

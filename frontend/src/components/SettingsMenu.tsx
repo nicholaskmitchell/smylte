@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { calendarFitKey, type CalendarFit } from '../calendar'
 import { useIsMobile, useEscape } from '../hooks'
+import { useLayer } from '../layers'
 import { sessionKey } from '../session'
 import { timeFormatKey, type TimeFormat } from '../time'
 import { LANGUAGES, languageLabel, type Language } from '../lang'
@@ -222,6 +223,10 @@ export function SettingsMenu({
   // exactly and this is the last hand-rolled copy. Its own suite covers all
   // three levels (agenda -> section -> closed) and is the control.
   useEscape(back)
+  // Back takes the same step. The inline fields in the sections are not layers:
+  // they stop Escape at the field and commit on blur, and Back blurs them first
+  // (layers.ts), so they commit as a tap on the section's ‹ would.
+  useLayer(back)
   const sheetPress = useRef(false)
 
   const tr = useT()

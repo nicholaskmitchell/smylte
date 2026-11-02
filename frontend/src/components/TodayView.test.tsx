@@ -5,6 +5,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event'
 import { TodayView, dueFromParse, orderEntries, weekStartOf } from './TodayView'
 import { DataProvider } from '../data'
+import { pressBack, withPrompt } from '../test/back'
 import { ShellProvider } from '../shell'
 import {
   cacheDayPlan, cacheDayRange, cacheHabits,
@@ -124,11 +125,11 @@ const held = <T,>() => {
  *  under a frozen clock they never resolve unless it is told how to move one. */
 function setup(opts: Parameters<typeof userEvent.setup>[0] = {},
   props: Partial<Parameters<typeof TodayView>[0]> = {}) {
-  render(
+  render(withPrompt(
     <DataProvider rev={0} onExpire={vi.fn()}>
       <TodayView rev={0} onExpire={vi.fn()} {...props} />
     </DataProvider>,
-  )
+  ))
   return userEvent.setup(opts)
 }
 
@@ -457,6 +458,16 @@ describe('<TodayView> the day picker', () => {
     expect(screen.queryByRole('button', { name: 'More actions' })).not.toBeInTheDocument()
     // …and the heading says which of the two screens this is.
     expect(screen.getByText('Look back')).toBeInTheDocument()
+  })
+
+  it('closes the menu on Back', async () => {
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'More actions' }))
+    expect(await screen.findByRole('button', { name: 'Habits' })).toBeInTheDocument()
+
+    pressBack()
+    expect(screen.queryByRole('button', { name: 'Habits' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
   it('leaves the habits sheet behind when the day moves', async () => {
@@ -1812,6 +1823,17 @@ describe('<TodayView> the planning ritual', () => {
       screen.queryByRole('dialog', { name: 'Plan your day' })).not.toBeInTheDocument())
   })
 
+  it('closes on Back', async () => {
+    m.openDay.mockResolvedValue(unplanned())
+    const user = setup()
+    await user.click(await screen.findByRole('button', { name: 'Plan my day' }))
+    await screen.findByRole('dialog', { name: 'Plan your day' })
+
+    pressBack()
+    expect(screen.queryByRole('dialog', { name: 'Plan your day' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+
   // ── the picking step ────────────────────────────────────────────────────
   //
   // Nothing below this heading was asserted before. The ritual's tests covered
@@ -2135,6 +2157,26 @@ describe('<TodayView> the shutdown ritual', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
     await waitFor(() => expect(
       screen.queryByRole('dialog', { name: 'Shut down the day' })).not.toBeInTheDocument())
+  })
+
+  it('closes on Back and keeps a typed reflection, as the close button does', async () => {
+    // The note commits on blur and on unmount, so closing keeps it and there is
+    // nothing to ask about: a "Discard" here would offer to drop what every
+    // other way out keeps.
+    m.patchDay.mockImplementation(async (d, body) =>
+      plan([], d, { reflection: body.reflection || null }))
+    const user = setup()
+    const dialog = await open(user)
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Next' }))
+    await user.type(within(dialog).getByLabelText('A note about today'), 'Slow start.')
+    expect(m.patchDay).not.toHaveBeenCalled()
+
+    pressBack()
+    expect(screen.queryByRole('dialog', { name: 'Shut down the day' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    await waitFor(() => expect(m.patchDay).toHaveBeenCalledWith(
+      today(), { reflection: 'Slow start.' }))
   })
 
   it('states what happened as a fact and never as a score', async () => {
@@ -4338,6 +4380,28 @@ describe('<TodayView> the habits sheet', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Habits' })).not.toBeInTheDocument())
+  })
+
+  it('closes on Back', async () => {
+    const user = setup()
+    await openSheet(user)
+    pressBack()
+    expect(screen.queryByRole('dialog', { name: 'Habits' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+
+  it('asks on Back when a habit has been typed and not added', async () => {
+    const user = setup()
+    await openSheet(user)
+    await user.type(screen.getByLabelText('New habit'), 'Stretch')
+
+    pressBack()
+    expect(screen.getByRole('alertdialog', { name: 'Discard changes?' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Habits' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Discard' }))
+    expect(screen.queryByRole('dialog', { name: 'Habits' })).not.toBeInTheDocument()
+    expect(m.createHabit).not.toHaveBeenCalled()
   })
 
   it('takes its Escape listener with it when it closes', async () => {

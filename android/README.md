@@ -148,6 +148,10 @@ can't be read there anyway.
   account the first time it opens, so reminders, the daily digest and wall
   displays match. After that, Smylte's own clock setting decides on every
   device, and changing the phone's setting doesn't change it.
+- **Back closes what is open.** Back closes the top dialog, sheet or menu,
+  then goes back through the app's pages, then leaves Smylte. A form with
+  unsaved changes asks before discarding them, and Back on that question keeps
+  editing.
 
 ## Building
 
@@ -279,12 +283,14 @@ The JVM unit tests run without a device. They cover:
 - the server address rules;
 - the bar colours;
 - the page bridge: exactly which methods the page can call, that release builds
-  keep them, and what each accepts;
+  keep them, that `android.ts` declares the same methods, and what each accepts;
 - the bridge's rules: capabilities, the env and its events, a saved file's type,
   name and size, the wait between save dialogs, where a save's result is shown,
-  and touch tracking;
+  touch tracking, where Back goes, and which page a count of open layers
+  belongs to;
 - that the page and the window agree on the event, its outcomes, the env
-  version and the env's fields (against `frontend/src/android.ts`);
+  version and the env's fields, and every event type (against
+  `frontend/src/android.ts`);
 - the text zoom, and the body size it is measured at, against the stylesheet;
 - the launcher icon against `frontend/public/favicon.svg`.
 

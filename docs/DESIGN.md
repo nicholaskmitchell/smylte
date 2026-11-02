@@ -705,6 +705,33 @@ The settings API has no "only if absent" write, so a choice made on another
 device during that one round trip would be overwritten; that can happen once per
 account.
 
+**Back closes what is open, and asks before it discards.** Every dialog, sheet
+and popover registers as a layer (`layers.ts`), in the order it opened, and the
+page reports how many are open through `layers(n)`, which the host clamps to 16
+and forgets with each new document. The host sends `back` only while that count
+is above zero, and the page closes the top layer with the same handler it gives
+Escape, so a scope prompt still closes before its editor and Settings still
+steps back one level. With no layer open, Back walks the page's history (the
+focus view has an entry of its own) and then leaves. On Android 13 and later
+that is an `OnBackInvokedCallback` held only while there is a layer or history
+to walk, so the system's back-to-home animation still plays when there is not;
+on 11 and 12 it is `onBackPressed`. It is not a synthetic Escape: `useEscape`
+binds the window, so one Escape would close every open layer at once, and it
+would never reach an inline field, which stops the key at the field. An edge
+swipe is far more often an accident than Escape, and the usual sequence is one
+Back that closes the keyboard and a second that would close the form. So a layer
+that holds unsaved input gets an in-app "Discard changes?" first, whose own Back
+keeps editing, so a second Back can never be the one that discards. Back never
+saves. It leaves the focused field first, as a tap elsewhere would, so the
+settings fields, which are not layers and commit on blur, keep what was typed,
+which is what Back does in a settings section. The two rituals keep their notes
+the same way, because they commit on blur and on close, as the ✕ and Escape
+already do, so there is nothing to discard. A count left stale by a document
+change costs one Back press: the host drops a report that belongs to a replaced
+document, and a Back that finds no layer makes the page report zero. Browsers
+and the desktop clients never hear `back`, so Escape is exactly what it was
+there.
+
 **Stage, then swap.** Android keeps processes alive for days, so the client also
 checks for updates when it returns to the foreground after six hours or more. A
 build must never change under a running page, so downloading and swapping are

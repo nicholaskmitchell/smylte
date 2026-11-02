@@ -19,6 +19,11 @@ export const en = {
   'app.nav': 'Views',
   'app.back': 'Back',
   'app.closeSettings': 'Close settings',
+  // Android Back on a form with unsaved changes
+  'discard.title': 'Discard changes?',
+  'discard.body': 'Your changes haven’t been saved.',
+  'discard.discard': 'Discard',
+  'discard.keep': 'Keep editing',
 
   'tab.today': 'Today',
   'tab.home': 'Home',

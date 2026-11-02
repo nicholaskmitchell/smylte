@@ -5,6 +5,7 @@ import {
   type List, type MailSuggestion, type Share, type Task,
 } from '../api'
 import { useIsMobile, useToday } from '../hooks'
+import { useLayer } from '../layers'
 import { useCalendarData, useTaskData, type TaskData } from '../data'
 import {
   cssColor, makeGuard, addDays, dayKey, daysLate, isOverdue, slippedFrom, textDir, ymd,
@@ -72,6 +73,9 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   const isMobile = useIsMobile()
   const [arranging, setArranging] = useState(false)
   const [picking, setPicking] = useState(false)
+  // Back closes the picker. It has no Escape, and gets none here: that would
+  // change the key on desktops.
+  useLayer(() => setPicking(false), { open: picking })
   // The layout as it looks mid-drag. Null when nothing is being dragged, so the
   // committed prop is what renders.
   const [preview, setPreview] = useState<DashboardModule[] | null>(null)

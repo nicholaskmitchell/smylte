@@ -30,6 +30,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { DayEntry, Task } from '../api'
 import { useEscape } from '../hooks'
+import { useLayer } from '../layers'
 import { taskKey } from '../order'
 import { textDir } from '../util'
 import { fmtDuration } from '../time'
@@ -83,6 +84,9 @@ export function PlanRitual({
   /** Whether the press that started this click landed on the scrim itself. */
   const scrimPress = useRef(false)
   useEscape(onClose)
+  // Back closes it as ✕ does. The note commits on blur and again on unmount, so
+  // closing keeps it, and there is nothing to ask about.
+  useLayer(onClose)
 
   const over = capacity != null && planned > capacity
   const last = step === STEPS.length - 1

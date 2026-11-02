@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
-import { useIsMobile } from './hooks'
+import { useEscape, useIsMobile } from './hooks'
 
 // hooks.ts had no test file at all — the only non-trivial module in src/ that
 // did not. It also used to hold `useAllTasks`, whose `loading` flag was never
@@ -88,5 +88,58 @@ describe('useIsMobile', () => {
     unmount()
     expect(mq.listenerCount()).toBe(0)
     expect(mq.removed).toEqual(['change'])
+  })
+})
+
+describe('useEscape', () => {
+  const escape = (target: EventTarget = window) =>
+    target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+
+  it('fires every mounted hook without capture, as it always did', () => {
+    const a = vi.fn()
+    const b = vi.fn()
+    renderHook(() => { useEscape(a); useEscape(b) })
+    escape()
+    expect(a).toHaveBeenCalledTimes(1)
+    expect(b).toHaveBeenCalledTimes(1)
+  })
+
+  it('fires only the capturing hook, at the window and at a focused button', () => {
+    const plain = vi.fn()
+    const capturing = vi.fn()
+    renderHook(() => { useEscape(plain); useEscape(capturing, { capture: true }) })
+    const button = document.body.appendChild(document.createElement('button'))
+    try {
+      escape()
+      escape(button)
+      expect(capturing).toHaveBeenCalledTimes(2)
+      expect(plain).not.toHaveBeenCalled()
+    } finally {
+      button.remove()
+    }
+  })
+
+  it('ignores other keys, and leaves them to everyone else', () => {
+    const plain = vi.fn()
+    const capturing = vi.fn()
+    const later = vi.fn()
+    renderHook(() => { useEscape(plain); useEscape(capturing, { capture: true }) })
+    window.addEventListener('keydown', later)
+    try {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }))
+      expect(plain).not.toHaveBeenCalled()
+      expect(capturing).not.toHaveBeenCalled()
+      expect(later).toHaveBeenCalledTimes(1)
+    } finally {
+      window.removeEventListener('keydown', later)
+    }
+  })
+
+  it('removes its listener on unmount', () => {
+    const fn = vi.fn()
+    const { unmount } = renderHook(() => useEscape(fn, { capture: true }))
+    unmount()
+    escape()
+    expect(fn).not.toHaveBeenCalled()
   })
 })

@@ -6,6 +6,7 @@ import {
 } from '../api'
 import { useCalendarData, useTaskData } from '../data'
 import { useEscape, useToday } from '../hooks'
+import { useLayer } from '../layers'
 import {
   cssColor, dayKey, hasZone, instantFromLocal, makeGuard, pad, sameValue, textDir, toLocalInput, ymd,
 } from '../util'
@@ -562,6 +563,9 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   // listener is not re-bound on every drag: when nothing is asking, Escape here
   // returns the same state and React re-renders nothing.
   useEscape(useCallback(() => setMoveAsk((a) => (a ? null : a)), []))
+  // Back closes the prompt as Escape does. Nothing is written until a scope is
+  // picked, so there is nothing to ask about.
+  useLayer(() => setMoveAsk(null), { open: moveAsk !== null })
 
   const pickMoveScope = (scope: EventScope) => {
     if (!moveAsk) return
@@ -1297,10 +1301,21 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete,
   // the form's state still held behind it; a bare `onClose` there threw away a
   // filled-in event because the user pressed Escape at a prompt they only meant
   // to back out of — and the prompt's own Cancel button does exactly this.
-  useEscape(useCallback(() => {
+  const dismiss = useCallback(() => {
     if (scopeAsk) { setScopeAsk(null); return }
     onClose()
-  }, [scopeAsk, onClose]))
+  }, [scopeAsk, onClose])
+  useEscape(dismiss)
+
+  // Back answers the same way, and asks before it throws the form away. While
+  // the scope prompt shows, Back answers it as Escape does, one step out, and
+  // asks nothing: that step leaves the form behind it untouched.
+  const edited = summary !== (e?.summary || '') || timeChanged
+    || location !== (e?.location || '') || description !== (e?.description || '')
+    || !sameValue(tags, e?.tags || []) || busy !== (e?.busy ?? true)
+    || reminder !== (e?.notify_minutes_before ?? null)
+    || repeat !== (recurring ? 'keep' : 'none') || repeatUntil !== '' || calPick !== initialCal
+  useLayer(dismiss, { unsaved: scopeAsk === null && edited })
 
   return (
     <div className="overlay"

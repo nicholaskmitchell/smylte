@@ -19,6 +19,9 @@ class PageBridge(private val host: Host) {
         /// The env JSON for a page announcing `caps`. Bridge thread; must not block.
         fun hello(caps: Set<String>): String
 
+        /// How many layers the page has open, already clamped. Bridge thread; must not block.
+        fun layers(depth: Int)
+
         /// Start a save; false when one is already pending. Bridge thread; must not block.
         fun save(request: SaveRequest): Boolean
     }
@@ -35,6 +38,14 @@ class PageBridge(private val host: Host) {
     @JavascriptInterface
     fun hello(caps: String?): String =
         runCatching { host.hello(HostProtocol.parseCaps(caps)) }.getOrDefault(HostProtocol.NO_ENV)
+
+    /// How many layers (dialogs, sheets, popovers) the page has open. While there is
+    /// one, Back goes to the page to close it. At worst a script keeps Back inside
+    /// the app, which history.pushState already can; Home and Recents still work.
+    @JavascriptInterface
+    fun layers(depth: Int) {
+        runCatching { host.layers(HostProtocol.clampLayers(depth)) }
+    }
 
     /// Asks to save a file through Android's own dialog; true when the request
     /// was accepted, and the outcome follows as an event. There is no touch

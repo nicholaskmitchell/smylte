@@ -9,6 +9,7 @@
 
 import { useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
 import { useEscape, useSegmentThumb } from '../hooks'
+import { useLayer } from '../layers'
 import type { CreateTaskBody, List, Task } from '../api'
 import {
   dayKey, hasZone, instantFromLocal, sameValue, toLocalInput, wouldRemember,
@@ -221,6 +222,16 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
   // focus trap and no keydown listener at all, a keyboard or screen-reader user
   // had no way out of it but the mouse.
   useEscape(onClose)
+
+  // Back closes the form as Escape does, but asks first when that would throw
+  // away what was typed. Creating, anything typed counts, the title QuickAdd
+  // handed over included, because QuickAdd empties its own box on the hand-off;
+  // editing, anything Save would send.
+  const unsaved = (creating ? summary.trim() !== '' : summary !== (task.summary || ''))
+    || notes !== (task?.notes || '')
+    || changed(...(Object.keys(start) as (keyof RowValues)[]))
+    || reminder !== (task?.notify_minutes_before ?? null)
+  useLayer(onClose, { unsaved })
 
   return (
     // Closes on a press AND release that both land on the scrim. A bare onClick

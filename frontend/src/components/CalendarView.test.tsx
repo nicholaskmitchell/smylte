@@ -18,6 +18,7 @@ import { DataProvider } from '../data'
 import { setCacheUser } from '../cache'
 import { api, type CalEvent, type List, type Task } from '../api'
 import type { CalendarFit } from '../calendar'
+import { pressBack, withPrompt } from '../test/back'
 
 vi.mock('../api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../api')>()
@@ -102,7 +103,7 @@ function setup(events?: CalEvent[], props?: {
   if (events) m.events.mockResolvedValue(events)
   // The month lives in App now, so the harness has to hold it — a fixed cursor
   // would make the ‹ › buttons no-ops and quietly pass the navigation tests.
-  render(<Harness {...props} />)
+  render(withPrompt(<Harness {...props} />))
   return userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
 }
 
@@ -795,6 +796,75 @@ describe('Escape unwinds one step', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(screen.queryByText('Apply the change to which events?')).toBeNull()
     // Escape declines the move; it does not silently pick a scope.
+    expect(m.patchEvent).not.toHaveBeenCalled()
+  })
+})
+
+describe('Back unwinds one step', () => {
+  const discardPrompt = () => screen.queryByRole('alertdialog', { name: 'Discard changes?' })
+
+  it('backs out of the save-scope prompt first, and writes nothing', async () => {
+    const user = setup([occurrence()])
+    await openEvent(user)
+    const title = screen.getByLabelText('Title')
+    await user.clear(title)
+    await user.type(title, 'Renamed standup')
+    await user.click(screen.getByText('Save'))
+    expect(await screen.findByText('Apply changes to which events?')).toBeInTheDocument()
+
+    pressBack()
+
+    // One step, as Escape takes it, and no question: the form behind the
+    // prompt is untouched by that step.
+    expect(screen.queryByText('Apply changes to which events?')).toBeNull()
+    expect(discardPrompt()).toBeNull()
+    expect(screen.getByRole('dialog', { name: 'Repeating event' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Title')).toHaveValue('Renamed standup')
+    expect(m.patchEvent).not.toHaveBeenCalled()
+
+    // The next Back is at the form, which holds an edit, so it asks.
+    pressBack()
+    expect(discardPrompt()).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Repeating event' })).toBeInTheDocument()
+  })
+
+  it('asks about an edited event, and Discard closes it without a write', async () => {
+    const user = setup([ev()])
+    await openEvent(user)
+    await user.type(screen.getByLabelText('Title'), '!')
+
+    pressBack()
+    expect(discardPrompt()).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Event' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Discard' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Event' })).toBeNull())
+    expect(m.patchEvent).not.toHaveBeenCalled()
+  })
+
+  it('closes an untouched event at once', async () => {
+    const user = setup([ev()])
+    await openEvent(user)
+    pressBack()
+    expect(discardPrompt()).toBeNull()
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('closes the move-scope prompt, and saves nothing', async () => {
+    setup([occurrence()])
+    await waitFor(() => expect(screen.getAllByTitle(/^Standup/)[0]).toBeInTheDocument())
+    const chip = screen.getAllByTitle(/^Standup/)[0]
+    const target = Array.from(document.querySelectorAll('.cal-cell')).find(
+      (c) => !c.classList.contains('dim')
+        && c.querySelector('.daynum')?.textContent === '10')
+    expect(target, 'could not find the 10th in the grid').toBeTruthy()
+    fireEvent.dragStart(chip, { dataTransfer: { setData: () => {}, effectAllowed: 'move' } })
+    fireEvent.drop(target!)
+
+    expect(await screen.findByText('Apply the change to which events?')).toBeInTheDocument()
+    pressBack()
+    expect(screen.queryByText('Apply the change to which events?')).toBeNull()
+    expect(discardPrompt()).toBeNull()
     expect(m.patchEvent).not.toHaveBeenCalled()
   })
 })

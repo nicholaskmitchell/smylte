@@ -290,6 +290,7 @@ import {
 } from '../api'
 import { useCalendarData, useTaskData } from '../data'
 import { useEscape, useIsMobile, useMinWidth } from '../hooks'
+import { useLayer } from '../layers'
 import { useShell } from '../shell'
 import {
   CACHE_DEBOUNCE_MS,
@@ -2301,6 +2302,8 @@ export function TodayView({
    *  Unconditional, like every other hook: with the menu already closed this
    *  is a no-op, and the two rituals answer the same key for themselves. */
   useEscape(useCallback(() => setMenu(false), []))
+  // Back closes the menu too, while it is open.
+  useLayer(() => setMenu(false), { open: menu })
   useEffect(() => {
     if (!menu) return
     const onDown = (e: MouseEvent) => {
@@ -4209,6 +4212,9 @@ function HabitsSheet({ rev, guard, onClose }: {
   }, [habits, pending])
 
   useEscape(onClose)
+  // Back closes the sheet as Escape does, but asks first when a habit's title
+  // has been typed and not yet added.
+  useLayer(onClose, { unsaved: title.trim() !== '' })
 
   /** Replace one habit in the list in hand, or take it out (`next` null). */
   const put = useCallback((id: string, next: Habit | null) => {

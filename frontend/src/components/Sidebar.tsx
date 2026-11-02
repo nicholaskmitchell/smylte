@@ -5,6 +5,7 @@ import {
 import { clientId, type List, type TaskGroup } from '../api'
 import { cssColor } from '../util'
 import { useEscape, useIsMobile } from '../hooks'
+import { useLayer } from '../layers'
 import { useT } from '../i18n'
 
 // Preset collection colors — muted, editorial, distinct from the accent.
@@ -178,6 +179,15 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
   // and Escape closed nothing. `drawerOpen` gates it so the desktop rail, which
   // renders no drawer, does not answer the key on EditModal's behalf.
   useEscape(useCallback(() => { if (drawerOpen) closeDrawer() }, [drawerOpen, closeDrawer]))
+  // Back closes the drawer as Escape does. Its add fields keep their text
+  // through a blur, and `closeDrawer` would drop it, so Back asks first.
+  const [addDraft, setAddDraft] = useState('')
+  const [groupDraft, setGroupDraft] = useState('')
+  useEffect(() => { if (!adding) setAddDraft('') }, [adding])
+  useEffect(() => { if (!addingGroup) setGroupDraft('') }, [addingGroup])
+  const drawerDraft = (adding && addDraft.trim() !== '')
+    || (addingGroup && groupDraft.trim() !== '')
+  useLayer(closeDrawer, { open: drawerOpen, unsaved: drawerDraft })
   const drawerPress = useRef(false)
 
   // What `items` holds NOW, for the rollbacks below. `onItems` is the
@@ -466,6 +476,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
       {addingGroup && (
         <div className="side-add">
           <input className="input" autoFocus placeholder={tr('side.groupName')}
+            onChange={(e) => setGroupDraft(e.target.value)}
             onBlur={(e) => { if (!e.target.value.trim()) setAddingGroup(false) }}
             onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
               const v = (e.target as HTMLInputElement).value
@@ -475,7 +486,8 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
         </div>
       )}
       {adding && (
-        <AddForm placeholder={tr(words.one)} onCancel={() => setAdding(false)} onCreate={create} />
+        <AddForm placeholder={tr(words.one)} onCancel={() => setAdding(false)} onCreate={create}
+          onDraft={setAddDraft} />
       )}
     </>
   )
@@ -852,10 +864,13 @@ function ColorRow({ color, onPick }: { color: string | null; onPick: (c: string 
  * rather than landing uncolored and needing a second trip through the edit
  * modal — which matters most at exactly the point you are adding the ninth one.
  */
-function AddForm({ placeholder, onCancel, onCreate }: {
+function AddForm({ placeholder, onCancel, onCreate, onDraft }: {
   placeholder: string
   onCancel: () => void
   onCreate: (name: string, color: string | null) => void
+  /** The name as typed, for an owner that must know whether the form holds
+   *  input (the phone drawer asks before Back throws it away). */
+  onDraft?: (name: string) => void
 }) {
   const [name, setName] = useState('')
   const [color, setColor] = useState<string | null>(null)
@@ -869,7 +884,7 @@ function AddForm({ placeholder, onCancel, onCreate }: {
       if (!name.trim() && !e.currentTarget.contains(e.relatedTarget as Node | null)) onCancel()
     }}>
       <input className="input" autoFocus placeholder={placeholder} value={name}
-        onChange={(e) => setName(e.target.value)}
+        onChange={(e) => { setName(e.target.value); onDraft?.(e.target.value) }}
         onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
           if (e.key === 'Enter' && name.trim()) onCreate(name.trim(), color)
           if (e.key === 'Escape') onCancel()
@@ -900,6 +915,11 @@ function EditModal({ item, placeholder, groups, groupId, onSetGroup, onClose, on
   const [color, setColor] = useState<string | null>(item.color)
   const [confirming, setConfirming] = useState(false)
 
+  // Whether the picked colour is the one the list already has, case-insensitively.
+  const colorSame = color === item.color
+    || (color !== null && item.color !== null
+      && color.toLowerCase() === item.color.toLowerCase())
+
   const save = () => {
     // Send the color only when the user actually picked one, so a rename never
     // rewrites a color it merely displayed — case-insensitively, now that a
@@ -909,10 +929,7 @@ function EditModal({ item, placeholder, groups, groupId, onSetGroup, onClose, on
     // `#D9480F`, and a bare !== would PROPPATCH that case flip out to every
     // other client as though it were a real recolour.
     const body: { name?: string; color?: string | null } = { name: name.trim() || item.name }
-    const same = color === item.color
-      || (color !== null && item.color !== null
-        && color.toLowerCase() === item.color.toLowerCase())
-    if (!same) body.color = color
+    if (!colorSame) body.color = color
     onSave(item.id, body)
   }
 
@@ -921,6 +938,8 @@ function EditModal({ item, placeholder, groups, groupId, onSetGroup, onClose, on
   // last dialog in the app with no Escape, no dialog role and a bare
   // click-to-close scrim over a form.
   useEscape(onClose)
+  // Back closes it too, but asks first when a rename or a recolour would go.
+  useLayer(onClose, { unsaved: (name.trim() || item.name) !== item.name || !colorSame })
   const scrimPress = useRef(false)
 
   return (

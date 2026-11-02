@@ -44,6 +44,13 @@ object HostProtocol {
 
     enum class SaveReport { PAGE, TOAST }
 
+    /// Where Back goes: the page's top layer, then its history, then the system.
+    enum class BackAction { PAGE, HISTORY, SYSTEM }
+
+    /// The host only asks whether the page has a layer open; the bound keeps a
+    /// hostile count meaningless.
+    const val MAX_LAYERS = 16
+
     /// The capabilities a page announces in hello. The host acts on a token
     /// only by asking for it by name, so unknown tokens are simply never
     /// consulted. Input over MAX_CAPS_CHARS is ignored whole, and a token
@@ -60,6 +67,9 @@ object HostProtocol {
     fun envEvent(env: String): String = """{"type":"env","env":$env}"""
 
     fun savedEvent(outcome: SaveOutcome): String = """{"type":"saved","outcome":"${outcome.wire}"}"""
+
+    /// Back, for the page to close its top layer (layers.ts).
+    fun backEvent(): String = """{"type":"back"}"""
 
     /// The script that delivers one event to the page. The detail is always
     /// built by this object from host values, never from a string the page
@@ -80,6 +90,26 @@ object HostProtocol {
     /// toast says it instead.
     fun saveReport(restored: Boolean, askedBy: Int, current: Int, alive: Boolean): SaveReport =
         if (!restored && alive && askedBy == current) SaveReport.PAGE else SaveReport.TOAST
+
+    fun clampLayers(depth: Int): Int = depth.coerceIn(0, MAX_LAYERS)
+
+    /// A report from a document that has since been replaced is dropped: the new
+    /// one started at none (onPageStarted), and the old page's layers went with it.
+    fun layersAfterReport(held: Int, depth: Int, reportedIn: Int, current: Int): Int =
+        if (reportedIn == current) depth else held
+
+    /// The page's top layer first, then its history, then the system (which
+    /// leaves). A page that is not the app's own cannot be sent the event.
+    fun backAction(layers: Int, pageIsOurs: Boolean, canGoBack: Boolean): BackAction = when {
+        layers > 0 && pageIsOurs -> BackAction.PAGE
+        canGoBack -> BackAction.HISTORY
+        else -> BackAction.SYSTEM
+    }
+
+    /// Hold an OnBackInvokedCallback only while Back stays in the app, so the
+    /// system's back-to-home animation plays when it does not.
+    fun wantsBackCallback(layers: Int, pageIsOurs: Boolean, canGoBack: Boolean): Boolean =
+        backAction(layers, pageIsOurs, canGoBack) != BackAction.SYSTEM
 
     /// Whether a finger is down after this event. A list of the actions that
     /// set it rather than a range: DOWN..MOVE would include UP (1). POINTER_UP

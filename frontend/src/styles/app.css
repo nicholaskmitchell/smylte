@@ -906,6 +906,10 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .scope-q { font-family: var(--serif); font-size-adjust: none; font-size: calc(15px * var(--fs-scale)); margin: 2px 0 4px; }
 .scope-hint { font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted); margin: -2px 0 2px; line-height: 1.35;
   font-weight: var(--wght-ui); }   /* T9 */
+/* "Discard changes?" (DiscardPrompt) sits over the editor it asks about, so
+   above every other overlay (100) and under the toast (120), which stays the
+   app's one error channel. */
+.discard-overlay { z-index: 110; }
 /* A line under one field, explaining what its current value will do. Inside a
    `.field`, which already supplies the 5px gap, so this carries no margin of
    its own — the same weight and colour as `.scope-hint` above and `.plan-hint`,

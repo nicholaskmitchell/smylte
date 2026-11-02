@@ -3,6 +3,7 @@ package com.nicholaskmitchell.smylte
 import android.webkit.JavascriptInterface
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -17,6 +18,7 @@ class PageBridgeTest {
         val colours = mutableListOf<Int>()
         val caps = mutableListOf<Set<String>>()
         val saves = mutableListOf<SaveRequest>()
+        val depths = mutableListOf<Int>()
 
         override fun colour(colour: Int) {
             if (fail) throw IllegalStateException("host failed")
@@ -27,6 +29,11 @@ class PageBridgeTest {
             if (fail) throw IllegalStateException("host failed")
             this.caps += caps
             return env
+        }
+
+        override fun layers(depth: Int) {
+            if (fail) throw IllegalStateException("host failed")
+            depths += depth
         }
 
         override fun save(request: SaveRequest): Boolean {
@@ -41,7 +48,7 @@ class PageBridgeTest {
     fun the_page_can_call_exactly_these_methods() {
         val methods = PageBridge::class.java.declaredMethods
             .filter { Modifier.isPublic(it.modifiers) && !it.isSynthetic }
-        assertEquals(setOf("themeColour", "hello", "saveFile"), methods.map { it.name }.toSet())
+        assertEquals(setOf("themeColour", "hello", "saveFile", "layers"), methods.map { it.name }.toSet())
         for (m in methods) {
             assertTrue(m.name, m.isAnnotationPresent(JavascriptInterface::class.java))
         }
@@ -83,6 +90,32 @@ class PageBridgeTest {
         assertEquals("{}", bridge.hello("save"))
         bridge.themeColour("#112233")
         assertFalse(bridge.saveFile("a", "application/json", "{}"))
+        bridge.layers(1)
+    }
+
+    @Test
+
+    fun layer_counts_reach_the_host_clamped() {
+        val host = FakeHost()
+        val bridge = PageBridge(host)
+        bridge.layers(2)
+        bridge.layers(-3)
+        bridge.layers(1000)
+        assertEquals(listOf(2, 0, 16), host.depths)
+    }
+
+    @Test
+
+    fun the_page_declares_exactly_these_methods() {
+        val ts = File("../frontend/src/android.ts").readText()
+        val body = Regex("""interface AndroidBridge \{(.*?)\n\}""", RegexOption.DOT_MATCHES_ALL)
+            .find(ts)?.groupValues?.get(1)
+        assertNotNull("no AndroidBridge in android.ts", body)
+        val declared = body!!.lines().mapNotNull { Regex("""^\s*(\w+)\?:""").find(it)?.groupValues?.get(1) }.toSet()
+        val exposed = PageBridge::class.java.declaredMethods
+            .filter { it.isAnnotationPresent(JavascriptInterface::class.java) }
+            .map { it.name }.toSet()
+        assertEquals(exposed, declared)
     }
 
     @Test

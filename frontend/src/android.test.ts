@@ -5,11 +5,22 @@ import { resolve } from 'node:path'
 // The module keeps its state at module level, so each test gets a fresh one.
 let a: typeof import('./android')
 
+// A module that listened for the host's events keeps listening after its test,
+// and would answer the next test's events with a bridge that is not its own.
+// So the listeners added for the host are remembered and removed after each test.
+const heard: EventListenerOrEventListenerObject[] = []
+const addListener = window.addEventListener.bind(window)
+window.addEventListener = ((type: string, fn: EventListenerOrEventListenerObject, opts?: unknown) => {
+  if (type === 'smylte-android') heard.push(fn)
+  addListener(type, fn, opts as AddEventListenerOptions)
+}) as typeof window.addEventListener
+
 beforeEach(async () => {
   vi.resetModules()
   a = await import('./android')
 })
 afterEach(() => {
+  for (const fn of heard.splice(0)) window.removeEventListener('smylte-android', fn)
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
@@ -58,7 +69,7 @@ describe('android: starting', () => {
     a.startAndroidHost()
     a.startAndroidHost()
     expect(hello).toHaveBeenCalledTimes(1)
-    expect(hello).toHaveBeenCalledWith('save')
+    expect(hello).toHaveBeenCalledWith('back,save')
   })
 
   it.each([
@@ -217,6 +228,120 @@ describe('android: saving a file', () => {
     const p = a.saveTextFile('a', 'application/json', '{}')
     fire({ type: 'saved', outcome: 'saved' })
     expect(await p).toBe('saved')
+  })
+})
+
+describe('android: back', () => {
+  // The real layer stack has its own suite (layers.test.tsx); here it is a
+  // fake, so this file sees exactly what android.ts asks of it.
+  let depth = 0
+  let listeners: Set<(n: number) => void>
+  let backTopLayer: ReturnType<typeof vi.fn<() => boolean>>
+
+  beforeEach(async () => {
+    depth = 0
+    listeners = new Set()
+    backTopLayer = vi.fn(() => depth > 0)
+    vi.resetModules()
+    vi.doMock('./layers', () => ({
+      layerDepth: () => depth,
+      onLayerDepth: (fn: (n: number) => void) => {
+        listeners.add(fn)
+        return () => { listeners.delete(fn) }
+      },
+      backTopLayer: () => backTopLayer(),
+    }))
+    a = await import('./android')
+  })
+  afterEach(() => {
+    vi.doUnmock('./layers')
+  })
+
+  const set = (n: number) => {
+    depth = n
+    for (const fn of [...listeners]) fn(n)
+  }
+  const tick = () => Promise.resolve()
+
+  it('reports depth only to a host that has layers()', async () => {
+    const layers = vi.fn()
+    bridge({ hello: () => '{"v":1}', layers })
+    a.startAndroidHost()
+    set(1)
+    await tick()
+    expect(layers).toHaveBeenCalledTimes(1)
+    expect(layers).toHaveBeenCalledWith(1)
+  })
+
+  it('subscribes to nothing in a client without layers()', () => {
+    bridge({ hello: () => '{"v":1}' })
+    a.startAndroidHost()
+    expect(listeners.size).toBe(0)
+  })
+
+  it('nothing listens outside the client', () => {
+    a.startAndroidHost()
+    expect(listeners.size).toBe(0)
+    fire({ type: 'back' })
+    expect(backTopLayer).not.toHaveBeenCalled()
+  })
+
+  it('coalesces a burst and skips an unchanged depth', async () => {
+    const layers = vi.fn()
+    bridge({ layers })
+    a.startAndroidHost()
+    set(1); set(0); set(1)
+    await tick()
+    expect(layers.mock.calls).toEqual([[1]])
+    set(2); set(1)
+    await tick()
+    expect(layers).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes the top layer on a back event', async () => {
+    const layers = vi.fn()
+    bridge({ layers })
+    a.startAndroidHost()
+    set(1)
+    await tick()
+    fire({ type: 'back' })
+    expect(backTopLayer).toHaveBeenCalledTimes(1)
+    expect(layers.mock.calls).toEqual([[1]])
+  })
+
+  it('tells the host nothing is open when Back finds no layer', () => {
+    const layers = vi.fn()
+    bridge({ layers })
+    a.startAndroidHost()
+    // 0 is what the host was last told, and it is sent again: the host's count
+    // is the one that is wrong.
+    fire({ type: 'back' })
+    expect(layers.mock.calls).toEqual([[0]])
+  })
+
+  it('survives a host whose layers() throws, and retries on the next change', async () => {
+    const layers = vi.fn(() => { throw new Error('boom') })
+    bridge({ layers })
+    a.startAndroidHost()
+    expect(() => set(1)).not.toThrow()
+    await tick()
+    set(0)
+    await tick()
+    set(1)
+    await tick()
+    expect(layers.mock.calls).toEqual([[1], [1]])
+    expect(() => fire({ type: 'back' })).not.toThrow()
+  })
+
+  it('logs a layer handler that throws instead of reporting 0', () => {
+    const layers = vi.fn()
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    bridge({ layers })
+    a.startAndroidHost()
+    backTopLayer.mockImplementation(() => { throw new Error('boom') })
+    fire({ type: 'back' })
+    expect(error).toHaveBeenCalled()
+    expect(layers).not.toHaveBeenCalled()
   })
 })
 

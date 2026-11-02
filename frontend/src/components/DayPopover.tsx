@@ -11,6 +11,7 @@ import { dayKey } from '../util'
 import { fmtClock, type TimeFormat } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { useEscape } from '../hooks'
+import { useLayer } from '../layers'
 import { useI18n, type I18n } from '../i18n'
 
 /** The time label for an event as it appears on `day`: a continuation day shows
@@ -88,6 +89,7 @@ export function DayPopover({ day, x, y, events, tasks = [], styleOf, taskStyleOf
 }) {
   const { locale } = useI18n()
   useEscape(onClose)
+  useLayer(onClose)
   const long = new Date(`${day}T00:00`).toLocaleDateString(locale,
     { weekday: 'long', month: 'long', day: 'numeric' })
   // Clamp to the viewport so edge cells don't push the popover off-screen.

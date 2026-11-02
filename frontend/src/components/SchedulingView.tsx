@@ -5,6 +5,7 @@ import { makeGuard } from '../util'
 import { fmtWhen, inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { useEscape } from '../hooks'
+import { useLayer } from '../layers'
 import { DateTimeInput } from './DateTimeInput'
 import { useI18n } from '../i18n'
 import { weekdayNames } from '../names'
@@ -412,9 +413,19 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
     if (!ok) setSaving(false)
   }
 
+  // Every field the form holds, as it was when the editor opened and as it is
+  // now, so Back can tell an untouched editor from one with input to lose.
+  const fields = JSON.stringify(
+    [title, description, calendar, duration, tz, days, showBusy, buffer, notice, horizon])
+  const [opened] = useState(fields)
+
   // The modal contract every other dialog here keeps (see TabsModal): Escape
   // closes it, and a screen reader is told it is a dialog rather than a div.
   useEscape(onClose)
+  // Back closes it too, but asks first when that would throw away an edit.
+  // While a save is in flight the write is already sent, so closing throws
+  // nothing away.
+  useLayer(onClose, { unsaved: !saving && fields !== opened })
 
   return (
     /* Escape and role="dialog" landed when this was last fixed; the SCRIM did

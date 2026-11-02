@@ -8,6 +8,7 @@ import { api, AuthError, type MailSuggestion, type Share } from '../api'
 import { monthGrid } from '../calendar'
 import { DEFAULT_LAYOUT, type DashboardModule } from '../dashboard'
 import type { SettingsSection } from './SettingsMenu'
+import { pressBack } from '../test/back'
 
 vi.mock('../api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../api')>()
@@ -140,6 +141,20 @@ describe('<HomeView>', () => {
     const picker = screen.getByRole('dialog', { name: /add a module/i })
     expect(within(picker).getByText('Overdue')).toBeInTheDocument()
     expect(within(picker).queryByText('Today')).not.toBeInTheDocument()
+  })
+
+  it('closes the picker on Back, and changes nothing', async () => {
+    // The picker has no Escape, and gets none for this: it is a layer only so
+    // the Android client's Back can close it.
+    const { onLayoutChange } = setup([{ id: 'only', kind: 'today', x: 0, y: 0, w: 4, h: 6 }])
+    await screen.findByText('Today')
+    await userEvent.click(screen.getByRole('button', { name: 'Arrange' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Add module' }))
+    expect(screen.getByRole('dialog', { name: /add a module/i })).toBeInTheDocument()
+
+    pressBack()
+    expect(screen.queryByRole('dialog', { name: /add a module/i })).not.toBeInTheDocument()
+    expect(onLayoutChange).not.toHaveBeenCalled()
   })
 
   it('adds a picked module and saves the result', async () => {

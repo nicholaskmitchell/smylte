@@ -6,6 +6,7 @@ import { sameValue } from '../util'
 import { inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { useEscape } from '../hooks'
+import { useLayer } from '../layers'
 import { DateTimeInput } from './DateTimeInput'
 import { useI18n, useT } from '../i18n'
 
@@ -301,7 +302,19 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
   // The guard is preserved by passing a no-op rather than by not calling the
   // hook: hooks cannot be conditional, and a dismissal mid-batch would strand a
   // half-created run with nowhere to report its failures.
-  useEscape(useCallback(() => { if (!busy) onClose() }, [busy, onClose]))
+  const dismiss = useCallback(() => { if (!busy) onClose() }, [busy, onClose])
+  useEscape(dismiss)
+
+  // Back closes the modal as Escape does, but asks first when that would throw
+  // away input: a title in any row, or any value in a row or the shared bar.
+  // The blank rows the modal opens with, or keeps after a partial failure, are
+  // not input. While busy closing is refused anyway, so there is nothing to ask.
+  const blank = blankValues(defaultList)
+  const keys = Object.keys(blank) as (keyof RowValues)[]
+  const unsaved = !busy
+    && (rows.some((r) => r.summary.trim() !== '' || keys.some((k) => !sameValue(r[k], blank[k])))
+      || keys.some((k) => !sameValue(shared[k], blank[k])))
+  useLayer(dismiss, { unsaved })
 
   // Focus moves by row key, not index, so it survives inserts and removals.
   useEffect(() => {

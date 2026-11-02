@@ -6,6 +6,7 @@ import { createRef } from 'react'
 import { SettingsMenu } from './SettingsMenu'
 import { api } from '../api'
 import { DEFAULT_TAB_ORDER } from '../tabs'
+import { pressBack } from '../test/back'
 
 vi.mock('../api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../api')>()
@@ -210,6 +211,51 @@ describe('<SettingsMenu> on a phone', () => {
 
     await userEvent.keyboard('{Escape}')
     expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it('takes the same steps on Back: index first, then closed', async () => {
+    const { onClose } = show()
+    await userEvent.click(nav('Account'))
+    pressBack()
+    expect(sheet()).toHaveAttribute('data-view', 'index')
+    expect(onClose).not.toHaveBeenCalled()
+
+    pressBack()
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it('leaves the archived-calendar agenda before the section on Back', async () => {
+    m.calendars.mockResolvedValue([
+      { id: 'c1', name: 'Old work', color: '#888', event_count: 2 },
+    ] as never)
+    m.events.mockResolvedValue([])
+    const { onClose } = show({ archivedCals: ['c1'] })
+
+    await userEvent.click(nav('Calendar'))
+    await userEvent.click(await screen.findByRole('button', { name: 'View events' }))
+    expect(document.querySelector('.set-title')).toHaveTextContent('Old work')
+
+    pressBack()
+    expect(document.querySelector('.set-title')).toHaveTextContent('Calendar')
+    pressBack()
+    expect(sheet()).toHaveAttribute('data-view', 'index')
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('commits a half-typed field before it steps back, as the section\'s ‹ would', async () => {
+    // The inline fields are not layers: they stop Escape at the field and
+    // commit on blur, so Back leaves the field first and then takes the step.
+    const onFocusChange = vi.fn()
+    show({ onFocusChange })
+    await userEvent.click(nav('Focus'))
+    const interval = within(panel()).getByLabelText('Interval')
+    await userEvent.clear(interval)
+    await userEvent.type(interval, '50')
+    expect(onFocusChange).not.toHaveBeenCalled()
+
+    pressBack()
+    expect(onFocusChange).toHaveBeenCalledWith(expect.objectContaining({ interval: 50 }))
+    expect(sheet()).toHaveAttribute('data-view', 'index')
   })
 
   it('unwinds the archived-calendar agenda one step at a time', async () => {

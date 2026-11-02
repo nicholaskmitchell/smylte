@@ -28,6 +28,7 @@ import { DataProvider, useTaskData } from './data'
 import { TaskModal } from './components/TaskModal'
 import { SchedulingView } from './components/SchedulingView'
 import { api, type List, type Task } from './api'
+import { pressBack, withPrompt } from './test/back'
 
 vi.mock('./api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('./api')>()
@@ -224,7 +225,7 @@ describe('stage 4 — booking-link editor', () => {
     m.calendars.mockResolvedValue([
       { ...list, id: 'c1', name: 'Cal', is_calendar: true, is_task_list: false }])
     m.schedulingBookings.mockResolvedValue([])
-    return render(<SchedulingView rev={0} onExpire={vi.fn()} />)
+    return render(withPrompt(<SchedulingView rev={0} onExpire={vi.fn()} />))
   }
 
   // AUDIT closed: SchedulingView.tsx:348 and :235 — covered together because
@@ -263,5 +264,41 @@ describe('stage 4 — booking-link editor', () => {
 
     fireEvent.keyDown(window, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('closes an untouched editor on Back, and asks about a typed one', async () => {
+    const user = userEvent.setup()
+    openEditor()
+    await user.click(await screen.findByRole('button', { name: 'New link' }))
+    await screen.findByRole('dialog')
+
+    pressBack()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+
+    await user.click(await screen.findByRole('button', { name: 'New link' }))
+    await user.type(await screen.findByPlaceholderText('30-minute intro call'), 'Intro call')
+    pressBack()
+    expect(screen.getByRole('alertdialog', { name: 'Discard changes?' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'New booking link' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Discard' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(m.createSchedulingLink).not.toHaveBeenCalled()
+  })
+
+  it('closes without a question while a save is in flight', async () => {
+    // The write is already sent, so closing throws nothing away.
+    const user = userEvent.setup()
+    openEditor()
+    await user.click(await screen.findByRole('button', { name: 'New link' }))
+    await user.type(await screen.findByPlaceholderText('30-minute intro call'), 'Intro call')
+    m.createSchedulingLink.mockReturnValue(new Promise(() => {}))
+    await user.click(screen.getByRole('button', { name: /create link/i }))
+    expect(m.createSchedulingLink).toHaveBeenCalledTimes(1)
+
+    pressBack()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 })
