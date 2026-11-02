@@ -1,9 +1,12 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { StrictMode, useRef, useState, type ReactNode } from 'react'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { SHIELD_MS } from './components/DiscardPrompt'
 import { useEscape } from './hooks'
 import {
-  backTopLayer, layerDepth, onLayerDepth, UnsentInput, useLayer, useUnsent, useUnsentCount,
+  backTopLayer, layerDepth, onLayerDepth, PendingWrite, UnsentInput, useDiscardAsk, useLayer,
+  usePending, usePendingCount, useUnsent, useUnsentCount,
 } from './layers'
 import { pressBack, withPrompt } from './test/back'
 
@@ -14,9 +17,10 @@ function Layer({ onBack, name, ...options }: {
   name?: string
   open?: boolean
   unsaved?: boolean
+  busy?: boolean
   children?: ReactNode
 }) {
-  useLayer(onBack, { open: options.open, unsaved: options.unsaved })
+  useLayer(onBack, { open: options.open, unsaved: options.unsaved, busy: options.busy })
   return <div data-testid={name}>{options.children}</div>
 }
 
@@ -212,6 +216,46 @@ describe('layers: unsaved input', () => {
     rerender(withPrompt(<></>))
     expect(screen.queryByRole('alertdialog')).toBeNull()
     expect(layerDepth()).toBe(0)
+  })
+
+  it('drops the question when the layer it asks about stops holding unsaved input', () => {
+    const onBack = vi.fn()
+    const seen: Array<unknown> = []
+    function Probe() {
+      seen.push(useDiscardAsk())
+      return null
+    }
+    const { rerender } = render(<>{withPrompt(<Layer onBack={onBack} unsaved />)}<Probe /></>)
+    pressBack()
+    expect(screen.getByRole('alertdialog', { name: 'Discard changes?' })).toBeInTheDocument()
+    expect(seen[seen.length - 1]).not.toBeNull()
+
+    rerender(<>{withPrompt(<Layer onBack={onBack} unsaved={false} />)}<Probe /></>)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(seen[seen.length - 1]).toBeNull()
+    expect(onBack).not.toHaveBeenCalled()
+    expect(layerDepth()).toBe(1)
+  })
+})
+
+describe('layers: busy', () => {
+  it('ignores Back while the top layer waits, without blurring, closing or asking', () => {
+    const onBack = vi.fn()
+    const ui = (busy: boolean) => withPrompt(
+      <Layer onBack={onBack} unsaved busy={busy}><input aria-label="title" /></Layer>)
+    const { rerender } = render(ui(true))
+    const field = screen.getByLabelText('title')
+    field.focus()
+    expect(pressBack()).toBe(true)
+    expect(onBack).not.toHaveBeenCalled()
+    expect(field).toHaveFocus()
+    expect(document.activeElement).toBe(field)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+
+    rerender(ui(false))
+    expect(pressBack()).toBe(true)
+    expect(screen.getByRole('alertdialog', { name: 'Discard changes?' })).toBeInTheDocument()
+    expect(onBack).not.toHaveBeenCalled()
   })
 })
 
@@ -515,5 +559,149 @@ describe('unsent input in fields the layer cannot see', () => {
     render(<Field label="loose" />)
     fireEvent.change(screen.getByLabelText('loose'), { target: { value: 'x' } })
     expect(layerDepth()).toBe(0)
+  })
+})
+
+describe('pending writes in sections the layer cannot see', () => {
+  function Section({ label, pending }: { label: string; pending: boolean }) {
+    usePending(pending)
+    return <span>{label}</span>
+  }
+  function Sheet({ onBack, children }: { onBack: () => void; children: ReactNode }) {
+    const [pending, report] = usePendingCount()
+    useLayer(onBack, { busy: pending > 0 })
+    return <PendingWrite.Provider value={report}>
+      <output aria-label="pending">{pending}</output>{children}
+    </PendingWrite.Provider>
+  }
+  const count = () => screen.getByLabelText('pending').textContent
+
+  it('counts a section while it reports pending, and not once it stops or unmounts', () => {
+    const onBack = vi.fn()
+    const ui = (a: boolean, b: boolean | null) => (
+      <Sheet onBack={onBack}>
+        <Section label="a" pending={a} />
+        {b !== null && <Section label="b" pending={b} />}
+      </Sheet>
+    )
+    const { rerender } = render(ui(false, false))
+    expect(count()).toBe('0')
+    rerender(ui(true, false))
+    expect(count()).toBe('1')
+    rerender(ui(true, true))
+    expect(count()).toBe('2')
+    expect(pressBack()).toBe(true)
+    expect(onBack).not.toHaveBeenCalled()
+    rerender(ui(false, true))
+    expect(count()).toBe('1')
+    rerender(ui(false, null))
+    expect(count()).toBe('0')
+    pressBack()
+    expect(onBack).toHaveBeenCalledOnce()
+  })
+
+  it('counts a section once under StrictMode, and releases it', () => {
+    const onBack = vi.fn()
+    const ui = (pending: boolean) => (
+      <StrictMode><Sheet onBack={onBack}><Section label="a" pending={pending} /></Sheet></StrictMode>
+    )
+    const { rerender } = render(ui(true))
+    expect(count()).toBe('1')
+    rerender(ui(false))
+    expect(count()).toBe('0')
+    pressBack()
+    expect(onBack).toHaveBeenCalledOnce()
+  })
+
+  it('is inert outside a layer that provides it', () => {
+    render(<Section label="loose" pending />)
+    expect(layerDepth()).toBe(0)
+    expect(screen.getByText('loose')).toBeInTheDocument()
+  })
+})
+
+describe('DiscardPrompt: Tab', () => {
+  it('keeps Tab and Shift+Tab on the two answers', async () => {
+    const user = userEvent.setup()
+    render(withPrompt(<>
+      <button>before</button>
+      <Layer onBack={() => {}} unsaved><input aria-label="title" /></Layer>
+      <button>after</button>
+    </>))
+    pressBack()
+    const dialog = screen.getByRole('alertdialog')
+    expect(dialog).toContainElement(document.activeElement as HTMLElement)
+    const presses = [false, false, false, true, true, false, true, true, false, false, true]
+    for (const shift of presses) {
+      await user.tab({ shift })
+      expect(dialog).toContainElement(document.activeElement as HTMLElement)
+    }
+
+    // From Keep editing, Tab comes round to Discard, and Shift+Tab from Discard to Keep editing.
+    screen.getByRole('button', { name: 'Keep editing' }).focus()
+    await user.tab()
+    expect(screen.getByRole('button', { name: 'Discard' })).toHaveFocus()
+    await user.tab({ shift: true })
+    expect(screen.getByRole('button', { name: 'Keep editing' })).toHaveFocus()
+
+    dialog.focus()
+    expect(dialog).toHaveFocus()
+    await user.tab({ shift: true })
+    expect(screen.getByRole('button', { name: 'Keep editing' })).toHaveFocus()
+  })
+})
+
+describe('DiscardPrompt: the shield', () => {
+  const shield = () => document.querySelector('.discard-shield')
+
+  // Fake timers, so that a slow machine cannot run the 400 ms out between the
+  // answer and the assertions.
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  function answered(button: string) {
+    render(withPrompt(<Layer onBack={() => {}} unsaved />))
+    expect(shield()).toBeNull()
+    pressBack()
+    expect(shield()).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: button }))
+  }
+
+  it('covers the page after Keep editing, takes presses, and goes after SHIELD_MS', () => {
+    answered('Keep editing')
+    const el = shield() as HTMLElement
+    expect(el).not.toBeNull()
+    expect(el).toHaveAttribute('aria-hidden', 'true')
+
+    const seen = vi.fn()
+    const clicked = vi.fn()
+    document.addEventListener('mousedown', seen)
+    document.addEventListener('click', clicked)
+    try {
+      const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+      el.dispatchEvent(event)
+      expect(event.defaultPrevented).toBe(true)
+      expect(fireEvent.mouseDown(el)).toBe(false)
+      expect(seen).not.toHaveBeenCalled()
+      fireEvent.click(el)
+      expect(clicked).not.toHaveBeenCalled()
+    } finally {
+      document.removeEventListener('mousedown', seen)
+      document.removeEventListener('click', clicked)
+    }
+
+    act(() => { vi.advanceTimersByTime(SHIELD_MS - 1) })
+    expect(shield()).not.toBeNull()
+    act(() => { vi.advanceTimersByTime(1) })
+    expect(shield()).toBeNull()
+  })
+
+  it('stands after Discard too', () => {
+    answered('Discard')
+    const el = shield() as HTMLElement
+    expect(el).not.toBeNull()
+    expect(el).toHaveAttribute('aria-hidden', 'true')
+    act(() => { vi.advanceTimersByTime(SHIELD_MS) })
+    expect(shield()).toBeNull()
   })
 })

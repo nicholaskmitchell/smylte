@@ -850,6 +850,43 @@ describe('Back unwinds one step', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 
+  it('closes at once after Repeat is set and set back, though an end date was typed', async () => {
+    const user = setup([ev()])
+    await openEvent(user)
+    setField('Repeat', 'weekly')
+    setField('Repeat until (optional)', '2026-12-31')
+    setField('Repeat', 'none')
+    expect(screen.queryByLabelText('Repeat until (optional)')).toBeNull()
+
+    pressBack()
+    expect(discardPrompt()).toBeNull()
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('closes a recurring occurrence at once after keep, weekly with an end date, and keep', async () => {
+    const user = setup([occurrence()])
+    await openEvent(user)
+    setField('Repeat', 'weekly')
+    setField('Repeat until (optional)', '2026-12-31')
+    setField('Repeat', 'keep')
+    expect(screen.queryByLabelText('Repeat until (optional)')).toBeNull()
+
+    pressBack()
+    expect(discardPrompt()).toBeNull()
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('still asks while the end date of a chosen repeat is showing', async () => {
+    const user = setup([ev()])
+    await openEvent(user)
+    setField('Repeat', 'weekly')
+    setField('Repeat until (optional)', '2026-12-31')
+
+    pressBack()
+    expect(discardPrompt()).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Event' })).toBeInTheDocument()
+  })
+
   it('closes an untouched new event at once, though its default calendar moved', async () => {
     // A new event's calendar is the first one shown, worked out again on every
     // render. Hiding that calendar under the open form moves the default; the

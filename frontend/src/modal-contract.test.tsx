@@ -332,6 +332,34 @@ describe("<Sidebar>'s edit modal and Back", () => {
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(noopApi.update).not.toHaveBeenCalled()
   })
+
+  it('closes an untouched modal whose stored name ends in a space, and asks about a real rename', async () => {
+    // Another CalDAV client wrote 'Work ': Save would trim it, but an untouched
+    // form has nothing to lose.
+    const user = userEvent.setup()
+    render(withPrompt(
+      <Sidebar kind="list" items={[list('work', 'Work ')]}
+        countOf={(l) => l.open_count} onItems={() => {}} api={noopApi as never}
+        hiddenIds={new Set()} onHiddenChange={() => {}} />,
+    ))
+    const edit = () => screen.getByRole('button', { name: /^Edit Work\s*$/ })
+
+    await user.click(edit())
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    pressBack()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    await user.click(edit())
+    const field = within(screen.getByRole('dialog')).getByRole('textbox')
+    expect(field).toHaveValue('Work ')
+    await user.clear(field)
+    await user.type(field, 'Work')
+    pressBack()
+    expect(screen.getByRole('alertdialog', { name: 'Discard changes?' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(noopApi.update).not.toHaveBeenCalled()
+  })
 })
 
 describe("<Sidebar>'s phone drawer and Back", () => {

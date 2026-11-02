@@ -4911,6 +4911,44 @@ describe('<TodayView> the habits sheet, before the server answers', () => {
     expect([...document.querySelectorAll('.habit-name')]
       .map((n) => (n as HTMLInputElement).value)).toEqual(['Read', 'Stretch'])
   })
+
+  it('ignores Back while an add is in flight, and asks again once a refusal puts the line back', async () => {
+    const create = held<Habit>()
+    m.createHabit.mockReturnValue(create.promise)
+    const user = setup()
+    await openSheet(user)
+    await user.type(screen.getByLabelText('New habit'), 'Stretch{Enter}')
+    await screen.findByLabelText('Rename Stretch')
+
+    // Waiting: the sheet stays, and nothing is asked, though a refusal would
+    // need the box it is about to refill.
+    expect(pressBack()).toBe(true)
+    expect(screen.getByRole('dialog', { name: 'Habits' })).toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+
+    await act(async () => { create.fail(new Error('boom')) })
+    await waitFor(() => expect(screen.getByLabelText('New habit')).toHaveValue('Stretch'))
+
+    pressBack()
+    expect(screen.getByRole('alertdialog', { name: 'Discard changes?' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Habits' })).toBeInTheDocument()
+  })
+
+  it('closes on Back, with no question, once the add has landed', async () => {
+    const create = held<Habit>()
+    m.createHabit.mockReturnValue(create.promise)
+    const user = setup()
+    await openSheet(user)
+    await user.type(screen.getByLabelText('New habit'), 'Stretch{Enter}')
+    await screen.findByLabelText('Rename Stretch')
+
+    await act(async () => { create.land(habit({ id: 'hb-new', title: 'Stretch' })) })
+    await waitFor(() => expect(screen.getByLabelText('Rename Stretch')).toBeEnabled())
+
+    pressBack()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Habits' })).not.toBeInTheDocument()
+  })
 })
 
 
