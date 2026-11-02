@@ -102,8 +102,12 @@ class Notifier:
     """Owns one sender and the sweep over the rules. One per process."""
 
     def __init__(self, svc, sender: TelegramSender, chat_id: str, *, log,
-                 token: str = "") -> None:
+                 token: str = "", interval_s: float = 60.0) -> None:
         self._svc = svc
+        # How often sweep() runs (SMYLTE_NOTIFY_INTERVAL; the default is the
+        # shipped one). The rules need it: it is the width of the window an
+        # "at the time" reminder may go out in (rules.late_grace).
+        self._interval_s = interval_s
         self._sender = sender
         # Environment fallbacks. The account's own values (Settings →
         # Notifications) win when present: the settings blob is the more
@@ -204,7 +208,7 @@ class Notifier:
         tz = self._svc._home_tz()
         day = now.astimezone(tz).date().isoformat()
         sweep = R.Sweep(svc=self._svc, now=now, tz=tz, day=day, prefs=prefs,
-                        interval_s=0.0)
+                        interval_s=self._interval_s)
 
         if tz is None and not self._warned_no_tz:
             self._warned_no_tz = True

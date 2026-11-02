@@ -32,6 +32,40 @@ def _digest_svc(db, **kw):
     return StubSvc(db, **kw)
 
 
+# ── "at the time" ────────────────────────────────────────────────────────────
+
+def test_a_reminder_at_the_time_goes_out_on_the_next_real_sweep_and_once(db):
+    # End to end, because the bug lived in the seam: the rules had a window
+    # width (`Sweep.interval_s`) and the scheduler always passed 0, so an "at
+    # the time" reminder waited for a sweep at the exact second, forever.
+    from tests.test_notify_rules import _task
+    # The digest is moved off 10:00 so the only thing this sweep can send is
+    # the reminder; counting sends alone once passed here for the digest.
+    svc = StubSvc(db, settings={**ON, "time_format": "24h", "notify_digest_time": "07:30"},
+                  tasks=[_task(notify=0)])
+    sender = StubSender()
+    n = Notifier(svc, sender, "555", log=NullLog(), token="env-token", interval_s=60.0)
+
+    due = datetime(2026, 8, 31, 14, 0, tzinfo=timezone.utc)          # 10:00 in NY
+    n.sweep(due.replace(second=37))
+    reminders = [m for m in sender.sent if "Renew passport due 10:00" in m["text"]]
+    assert len(reminders) == 1 and "— now." in reminders[0]["text"]
+    # The next sweep is still inside the window and must not send it again.
+    n.sweep(due.replace(minute=1, second=37))
+    assert len([m for m in sender.sent if "Renew passport" in m["text"]]) == 1
+
+
+def test_the_notifier_defaults_to_the_shipped_sweep_cadence(db):
+    # Every caller that predates the parameter (and the tests that build one
+    # bare) gets the cadence the service actually runs at, not 0.
+    from tests.test_notify_rules import _task
+    svc = StubSvc(db, settings={**ON, "notify_digest_time": "07:30"}, tasks=[_task(notify=0)])
+    sender = StubSender()
+    due = datetime(2026, 8, 31, 14, 0, tzinfo=timezone.utc)
+    _notifier(svc, sender).sweep(due.replace(second=20))
+    assert [m for m in sender.sent if "Renew passport" in m["text"]]
+
+
 # ── claiming ─────────────────────────────────────────────────────────────────
 
 def test_a_sweep_sends_once_and_a_second_sweep_sends_nothing(db):

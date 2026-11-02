@@ -207,6 +207,9 @@ data is frozen).
 - Per-item reminders are stored app-side rather than as `VALARM`. Tasks.org,
   Thunderbird and Apple Calendar would each fire their own alarm from a VALARM,
   so one reminder would arrive three times.
+- "At the time" (a lead of zero) can't use the usual window, which closes at
+  the moment and would be a single instant. Its window opens at the moment and
+  stays open for two sweep intervals, and the message says "now".
 - Eight more rules exist, off by default, each documented with why. Before
   every task is due, overdue counts, "today isn't planned" and the others
   restate something already on screen.

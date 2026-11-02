@@ -527,12 +527,21 @@ def _reminder_pending(
 ) -> Pending | None:
     """The shared window and wording for both halves of the rule.
 
-    `fire <= now < moment` — the same closing window every other rule uses. The
+    `fire <= now <= moment` — the same closing window every other rule uses. The
     upper bound is the moment itself: once it has passed, saying "in -3 minutes"
     is noise, and nothing is claimed, so a later restart cannot resurrect it.
+
+    Except for a lead of zero, "at the time", where that window is a single
+    instant and sweeps run a minute apart: one landing exactly on the moment is
+    luck. So that window OPENS at the moment and stays open for two sweep
+    intervals (`late_grace`), and the message says "now". Two sweeps inside it
+    still send once, because the moment is in the dedupe key.
     """
     delta = moment - s.now
-    if not (timedelta(0) <= delta <= lead):
+    if lead > timedelta(0):
+        if not (timedelta(0) <= delta <= lead):
+            return None
+    elif not (-late_grace(s) <= delta <= timedelta(0)):
         return None
     minutes = max(0, int(delta.total_seconds() // 60))
     local = moment.astimezone(s.tz) if s.tz else moment
@@ -546,9 +555,16 @@ def _reminder_pending(
         # re-arms, and changing the lead on an item whose reminder already went
         # out does not send a second one.
         f"{key}|{moment.astimezone(timezone.utc).isoformat()}",
-        f"{summary} {verb} {when} — in {minutes} min.",
+        f"{summary} {verb} {when} — " + ("now." if delta <= timedelta(0) else f"in {minutes} min."),
         silent=False,
     )
+
+
+def late_grace(s: Sweep) -> timedelta:
+    """How long after its moment an "at the time" reminder may still go out:
+    two sweep intervals, so the sweep after the moment catches it even when
+    that tick runs late. A Sweep with no cadence (0) keeps the exact instant."""
+    return timedelta(seconds=2 * max(s.interval_s, 0.0))
 
 
 # ── booking_created ──────────────────────────────────────────────────────────

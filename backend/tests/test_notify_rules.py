@@ -453,7 +453,46 @@ def test_a_lead_of_zero_means_tell_me_exactly_when_it_is_due(db):
     svc = StubSvc(db, tasks=[_task(notify=0)])
     at_due = datetime(2026, 8, 31, 14, 0, tzinfo=timezone.utc)
     out = R._eval_item_reminder(_sweep(svc, at_due))
-    assert len(out) == 1 and "in 0 min" in out[0].text
+    assert len(out) == 1 and out[0].text.endswith("— now.")
+
+
+# "At the time" used to fire only when a sweep landed ON the moment. Sweeps run
+# a minute apart, so it almost never did: the window `0 <= delta <= lead` is a
+# single instant when the lead is 0. The test above passed because it swept at
+# exactly 14:00:00, which no real sweep does.
+@pytest.mark.parametrize("late_s", [1, 30, 59, 61, 119])
+def test_a_lead_of_zero_fires_on_the_sweeps_just_after_the_moment(db, late_s):
+    # Up to two sweep intervals, so one late tick does not lose it. The moment
+    # is in the dedupe key, so two sweeps inside the window still send once
+    # (test_notify_scheduler covers the ledger).
+    svc = StubSvc(db, tasks=[_task(notify=0)])
+    swept = datetime(2026, 8, 31, 14, 0, tzinfo=timezone.utc) + timedelta(seconds=late_s)
+    out = R._eval_item_reminder(_sweep(svc, swept))
+    assert len(out) == 1 and out[0].text.endswith("— now.")
+
+
+@pytest.mark.parametrize("off_s", [-30, -1, 121, 600])
+def test_a_lead_of_zero_never_fires_early_or_long_after(db, off_s):
+    svc = StubSvc(db, tasks=[_task(notify=0)])
+    swept = datetime(2026, 8, 31, 14, 0, tzinfo=timezone.utc) + timedelta(seconds=off_s)
+    assert R._eval_item_reminder(_sweep(svc, swept)) == []
+
+
+def test_a_lead_above_zero_still_closes_at_the_moment(db):
+    # Only "at the time" waits past the moment. "10 minutes before" said after
+    # the fact is noise, and the window for it still ends where it did.
+    svc = StubSvc(db, tasks=[_task(notify=10)])
+    after = datetime(2026, 8, 31, 14, 0, 30, tzinfo=timezone.utc)
+    assert R._eval_item_reminder(_sweep(svc, after)) == []
+
+
+def test_with_no_sweep_interval_a_lead_of_zero_keeps_the_exact_instant(db):
+    # A Sweep built without a cadence (interval_s=0) has no window to stretch.
+    svc = StubSvc(db, tasks=[_task(notify=0)])
+    late = datetime(2026, 8, 31, 14, 0, 30, tzinfo=timezone.utc)
+    sweep = R.Sweep(svc=svc, now=late, tz=svc._home_tz(), day="2026-08-31",
+                    prefs=svc.get_settings(), interval_s=0.0)
+    assert R._eval_item_reminder(sweep) == []
 
 
 @pytest.mark.parametrize("junk", [None, True, False, -1, -5, 999_999, "10", 10.5])

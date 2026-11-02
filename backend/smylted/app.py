@@ -1343,7 +1343,8 @@ def _build_notifier(settings: Settings, svc: SmylteService):
     # id exist, so an unconfigured deployment pays one idle timer.
     sender = TelegramSender(settings.telegram_bot_token)
     return Notifier(svc, sender, settings.telegram_chat_id, log=log,
-                    token=settings.telegram_bot_token)
+                    token=settings.telegram_bot_token,
+                    interval_s=settings.notify_interval_s)
 
 
 
