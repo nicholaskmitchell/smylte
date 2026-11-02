@@ -1,5 +1,7 @@
 package com.nicholaskmitchell.smylte
 
+import android.os.Build
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -223,6 +225,132 @@ class HostProtocolTest {
         assertEquals(listOf(true, true, true, true, false), states)
     }
 
+    // ── haptics ─────────────────────────────────────────────────────────────
+
+    private fun tapped(upAt: Long) = HapticGate().apply {
+        onTouch(HostProtocol.ACTION_DOWN, upAt - 80)
+        onTouch(HostProtocol.ACTION_UP, upAt)
+    }
+
+    @Test
+
+    fun haptic_names_are_exact() {
+        assertEquals(HostProtocol.Haptic.CONFIRM, HostProtocol.hapticNamed("confirm"))
+        assertEquals(HostProtocol.Haptic.REJECT, HostProtocol.hapticNamed("reject"))
+        assertEquals(HostProtocol.Haptic.TOGGLE_ON, HostProtocol.hapticNamed("toggleOn"))
+        assertEquals(HostProtocol.Haptic.TOGGLE_OFF, HostProtocol.hapticNamed("toggleOff"))
+        for (name in listOf(null, "", "Confirm", "confirm ", "dragStart", "drop", "x".repeat(100_000))) {
+            assertNull("$name".take(20), HostProtocol.hapticNamed(name))
+        }
+    }
+
+    @Test
+
+    fun haptic_constants_are_the_platforms() {
+        assertEquals(HapticFeedbackConstants.CLOCK_TICK, HostProtocol.FEEDBACK_CLOCK_TICK)
+        assertEquals(HapticFeedbackConstants.CONFIRM, HostProtocol.FEEDBACK_CONFIRM)
+        assertEquals(HapticFeedbackConstants.REJECT, HostProtocol.FEEDBACK_REJECT)
+        assertEquals(HapticFeedbackConstants.TOGGLE_ON, HostProtocol.FEEDBACK_TOGGLE_ON)
+        assertEquals(HapticFeedbackConstants.TOGGLE_OFF, HostProtocol.FEEDBACK_TOGGLE_OFF)
+        assertEquals(Build.VERSION_CODES.UPSIDE_DOWN_CAKE, HostProtocol.SDK_TOGGLE_FEEDBACK)
+    }
+
+    @Test
+
+    fun toggles_fall_back_before_android_14() {
+        for (sdk in 30..33) {
+            assertEquals("$sdk", 4, HostProtocol.hapticConstant(HostProtocol.Haptic.TOGGLE_ON, sdk))
+            assertEquals("$sdk", 4, HostProtocol.hapticConstant(HostProtocol.Haptic.TOGGLE_OFF, sdk))
+            assertEquals("$sdk", 16, HostProtocol.hapticConstant(HostProtocol.Haptic.CONFIRM, sdk))
+            assertEquals("$sdk", 17, HostProtocol.hapticConstant(HostProtocol.Haptic.REJECT, sdk))
+        }
+        for (sdk in 34..36) {
+            assertEquals("$sdk", 21, HostProtocol.hapticConstant(HostProtocol.Haptic.TOGGLE_ON, sdk))
+            assertEquals("$sdk", 22, HostProtocol.hapticConstant(HostProtocol.Haptic.TOGGLE_OFF, sdk))
+            assertEquals("$sdk", 16, HostProtocol.hapticConstant(HostProtocol.Haptic.CONFIRM, sdk))
+            assertEquals("$sdk", 17, HostProtocol.hapticConstant(HostProtocol.Haptic.REJECT, sdk))
+        }
+    }
+
+    @Test
+
+    fun a_haptic_answers_a_touch_only() {
+        assertFalse(HapticGate().allow(1_000, true, true))
+    }
+
+    @Test
+
+    fun a_haptic_plays_while_a_finger_is_down() {
+        val gate = HapticGate()
+        gate.onTouch(HostProtocol.ACTION_DOWN, 1_000)
+        assertTrue(gate.allow(60_000, true, true))
+    }
+
+    @Test
+
+    fun a_haptic_plays_up_to_1500_ms_after_the_finger_lifts() {
+        assertTrue(tapped(1_000).allow(2_499, true, true))
+        assertTrue(tapped(1_000).allow(2_500, true, true))
+        assertFalse(tapped(1_000).allow(2_501, true, true))
+    }
+
+    @Test
+
+    fun a_lifted_finger_closes_the_gate() {
+        // The range DOWN..MOVE would have left the gate open after the UP.
+        val gate = HapticGate()
+        gate.onTouch(HostProtocol.ACTION_DOWN, 100)
+        gate.onTouch(HostProtocol.ACTION_MOVE, 500)
+        gate.onTouch(HostProtocol.ACTION_UP, 1_000)
+        assertFalse(gate.allow(2_501, true, true))
+    }
+
+    @Test
+
+    fun two_haptics_a_touch() {
+        val gate = tapped(1_000)
+        assertTrue(gate.allow(1_010, true, true))
+        // No minimum gap: a write refused at once still gets its reject.
+        assertTrue(gate.allow(1_015, true, true))
+        assertFalse(gate.allow(1_020, true, true))
+        gate.onTouch(HostProtocol.ACTION_DOWN, 1_100)
+        assertTrue(gate.allow(1_100, true, true))
+        val other = HapticGate()
+        other.onTouch(HostProtocol.ACTION_DOWN, 100)
+        assertTrue(other.allow(110, true, true))
+        assertTrue(other.allow(120, true, true))
+        other.onTouch(HostProtocol.ACTION_POINTER_DOWN, 130)
+        assertFalse(other.allow(140, true, true))
+    }
+
+    @Test
+
+    fun no_haptic_in_the_background_or_on_another_page() {
+        val gate = tapped(1_000)
+        assertFalse(gate.allow(1_010, resumed = false, pageIsOurs = true))
+        assertFalse(gate.allow(1_010, resumed = true, pageIsOurs = false))
+        // A refusal costs nothing.
+        assertTrue(gate.allow(1_010, true, true))
+        assertTrue(gate.allow(1_010, true, true))
+    }
+
+    @Test
+
+    fun leaving_closes_the_gate() {
+        val gate = HapticGate()
+        gate.onTouch(HostProtocol.ACTION_DOWN, 1_000)
+        gate.reset()
+        assertFalse(gate.allow(1_001, true, true))
+        gate.onTouch(HostProtocol.ACTION_DOWN, 1_002)
+        assertTrue(gate.allow(1_003, true, true))
+    }
+
+    @Test
+
+    fun a_clock_that_went_backwards_is_refused() {
+        assertFalse(tapped(2_000).allow(1_999, true, true))
+    }
+
     // ── back ────────────────────────────────────────────────────────────────
 
     @Test
@@ -322,6 +450,28 @@ class HostProtocolTest {
             assertNotNull(event, type)
             assertTrue(type, ts.contains("msg.type === '$type'"))
         }
+    }
+
+    @Test
+
+    fun the_page_names_the_same_haptics() {
+        val ts = File("../frontend/src/android.ts").readText()
+        val line = Regex("""export type HapticKind = ([^\n]+)""").find(ts)?.groupValues?.get(1)
+        assertNotNull("no HapticKind in android.ts", line)
+        val names = Regex("""'(\w+)'""").findAll(line!!).map { it.groupValues[1] }.toSet()
+        assertTrue("HapticKind is empty", names.isNotEmpty())
+        assertEquals(HostProtocol.Haptic.values().map { it.wire }.toSet(), names)
+    }
+
+    @Test
+
+    fun haptics_honour_the_system_setting() {
+        // The one-argument call lets the phone's touch feedback setting decide;
+        // a flag or a permission would be a way around it.
+        val activity = File("src/main/kotlin/com/nicholaskmitchell/smylte/MainActivity.kt").readText()
+        assertFalse(activity.contains("FLAG_IGNORE"))
+        assertFalse(activity.contains("HapticFeedbackEnabled"))
+        assertFalse(File("src/main/AndroidManifest.xml").readText().contains("android.permission.VIBRATE"))
     }
 
     @Test

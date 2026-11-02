@@ -152,6 +152,10 @@ can't be read there anyway.
   then goes back through the app's pages, then leaves Smylte. A form with
   unsaved changes asks before discarding them, and Back on that question keeps
   editing.
+- **Taps can be felt.** Ticking a task, flipping a switch and an action that
+  fails each give a short vibration, as the phone's own controls do. It
+  follows the phone's touch feedback setting and answers only a touch, so
+  TalkBack (which has its own) and a keyboard get none.
 
 ## Building
 
@@ -286,11 +290,13 @@ The JVM unit tests run without a device. They cover:
   keep them, that `android.ts` declares the same methods, and what each accepts;
 - the bridge's rules: capabilities, the env and its events, a saved file's type,
   name and size, the wait between save dialogs, where a save's result is shown,
-  touch tracking, where Back goes, and which page a count of open layers
+  touch tracking, when a haptic may play and which one each name plays on each
+  Android version, where Back goes, and which page a count of open layers
   belongs to;
 - that the page and the window agree on the event, its outcomes, the env
-  version and the env's fields, and every event type (against
-  `frontend/src/android.ts`);
+  version and the env's fields, every event type and the haptic names (against
+  `frontend/src/android.ts`), and that the window never overrides the system's
+  touch feedback setting;
 - the text zoom, and the body size it is measured at, against the stylesheet;
 - the launcher icon against `frontend/public/favicon.svg`.
 
@@ -300,7 +306,7 @@ server's.
 ## Source layout
 
 ```
-MainActivity.kt   the window: WebView, splash, update strip, back, file picker and saves
+MainActivity.kt   the window: WebView, splash, update strip, back, haptics, file picker and saves
 SetupActivity.kt  the settings screen
 LocalAssets.kt    answers the WebView's requests from the web build
 PageBridge.kt     what the page can ask of the window (window.SmylteAndroid)

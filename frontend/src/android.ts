@@ -15,6 +15,11 @@
 // The host sends `back` while this page reports an open layer (layers.ts): a
 // dialog, sheet or popover Back should close before it leaves the page.
 //
+// A tap that completes a task or flips a toggle asks the host for a haptic,
+// through one capture-phase click listener rather than a call at each control,
+// and the app's failure toast asks for a `reject` (App.tsx). The host plays
+// them only in answer to a touch, and only if the phone's touch feedback is on.
+//
 // The module has no side effects on import: `startAndroidHost` is called from
 // main.tsx, and everything else reads the bridge when it is called.
 
@@ -30,12 +35,13 @@ const ENV_VERSION = 1
 // What this page announces in `hello`. Only what it actually does: a host may
 // act on a capability, for instance by holding the splash screen for one, so
 // announcing one the page never fulfils would cost the user time.
-const CAPS = 'back,save'
+const CAPS = 'back,haptics,save'
 
 interface AndroidBridge {
   themeColour?: (hex: string) => void
   hello?: (caps: string) => unknown
   layers?: (depth: number) => unknown
+  haptic?: (kind: string) => unknown
   saveFile?: (name: string, mime: string, text: string) => unknown
 }
 
@@ -43,6 +49,15 @@ interface AndroidBridge {
 /// may be older than the page or newer. `clock24` is the phone's 12/24-hour
 /// setting; App shows it while the account has none and saves it once.
 export type HostEnv = { clock24?: boolean }
+
+/** The haptics the host can play; HostProtocolTest holds this list to the
+ *  host's, reading it from this one line. */
+export type HapticKind = 'confirm' | 'reject' | 'toggleOn' | 'toggleOff'
+const HAPTIC_KINDS: readonly string[] = ['confirm', 'reject', 'toggleOn', 'toggleOff']
+const isHapticKind = (s: string): s is HapticKind => HAPTIC_KINDS.includes(s)
+// The controls whose click can play one. The nearest to the click decides, so
+// a plain button inside a toggle's row plays nothing.
+const HAPTIC_CONTROL = 'button, [role="button"], [role="checkbox"], [role="switch"], input[type="checkbox"]'
 
 /** 'busy' is page-only: a save is already waiting for the picker (a second tap).
  *  The host never sends it. */
@@ -177,6 +192,9 @@ export function startAndroidHost(): void {
     }
   }
   if (typeof b.layers === 'function') onLayerDepth(queueLayers)
+  // Capturing on the document runs before React's own listeners, so the
+  // control still holds the state the click changes from.
+  if (typeof b.haptic === 'function') document.addEventListener('click', onClickHaptic, true)
 }
 
 /** What the host said about the device, or null when it said nothing (a
@@ -202,6 +220,51 @@ export function onHostEnv(fn: (env: HostEnv) => void): () => void {
 /** Whether the host can save a file through Android's own dialog. */
 export function canSaveFiles(): boolean {
   return typeof bridge()?.saveFile === 'function'
+}
+
+/** Ask the host for a haptic. A no-op outside the client and in a client
+ *  without `haptic`. The host decides whether it plays: only after a touch, and
+ *  only with the phone's touch feedback on. */
+export function haptic(kind: HapticKind): void {
+  const b = bridge()
+  if (!b || typeof b.haptic !== 'function') return
+  try {
+    b.haptic(kind)
+  } catch {
+    // A haptic is never worth an error in the page.
+  }
+}
+
+/** The haptic a click on `target` plays, or null for none.
+ *
+ *  It is read in the capture phase, before the app's handlers, so the control
+ *  still shows the state the click changes from. The checkbox input is the
+ *  exception: the browser has already flipped `checked`.
+ *
+ *  The rules, in order: `data-haptic` names a completion that is no toggle (the
+ *  focus view's Done); a task's `.check` going on is `confirm`; anything that
+ *  tells a screen reader it is a toggle plays the state it goes to. A disabled
+ *  control plays nothing, and so does any other button. A button that cycles
+ *  values (the clock row) is not a toggle to a screen reader either. */
+export function hapticFor(target: EventTarget | null): HapticKind | null {
+  if (!(target instanceof Element)) return null
+  const el = target.closest(HAPTIC_CONTROL)
+  if (!el) return null
+  if (el.matches(':disabled') || el.getAttribute('aria-disabled') === 'true') return null
+  const named = el.getAttribute('data-haptic')
+  if (named !== null && isHapticKind(named)) return named
+  if (el instanceof HTMLInputElement) return el.checked ? 'toggleOn' : 'toggleOff'
+  const role = el.getAttribute('role')
+  const state = el.getAttribute(role === 'checkbox' || role === 'switch' ? 'aria-checked' : 'aria-pressed')
+  if (state === null) return null
+  const was = state === 'true'
+  if (el.classList.contains('check')) return was ? 'toggleOff' : 'confirm'
+  return was ? 'toggleOff' : 'toggleOn'
+}
+
+function onClickHaptic(e: Event) {
+  const kind = hapticFor(e.target)
+  if (kind) haptic(kind)
 }
 
 /** Save text through Android's save dialog. Resolves when the user has chosen

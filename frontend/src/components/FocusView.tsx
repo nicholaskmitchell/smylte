@@ -508,8 +508,11 @@ export function FocusView({
             )}
           </div>
           <div className="focus-actions">
+            {/* A completion, though no toggle, so the Android client plays the same
+                tick a task's check does (android.ts hapticFor). */}
             {!onBreak && (
-              <button type="button" className="btn" onClick={() => void tickCurrent()}>
+              <button type="button" className="btn" data-haptic="confirm"
+                onClick={() => void tickCurrent()}>
                 {tr('focus.done')}
               </button>
             )}

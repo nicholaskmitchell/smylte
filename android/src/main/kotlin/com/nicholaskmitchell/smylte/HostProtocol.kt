@@ -51,6 +51,47 @@ object HostProtocol {
     /// hostile count meaningless.
     const val MAX_LAYERS = 16
 
+    /// The haptics the page can ask for, by the name it sends. Any other name is
+    /// ignored, so a page newer than this client can ask for one it lacks.
+    enum class Haptic(val wire: String) {
+        CONFIRM("confirm"),
+        REJECT("reject"),
+        TOGGLE_ON("toggleOn"),
+        TOGGLE_OFF("toggleOff"),
+    }
+
+    // HapticFeedbackConstants, restated because this object takes no Android
+    // classes. HostProtocolTest holds them to the platform's.
+    const val FEEDBACK_CLOCK_TICK = 4
+    const val FEEDBACK_CONFIRM = 16
+    const val FEEDBACK_REJECT = 17
+    const val FEEDBACK_TOGGLE_ON = 21
+    const val FEEDBACK_TOGGLE_OFF = 22
+
+    /// Android 14, which added TOGGLE_ON and TOGGLE_OFF.
+    const val SDK_TOGGLE_FEEDBACK = 34
+
+    /// How long after the last touch event a haptic may still play: long enough
+    /// for a write that fails at once to answer the tap that started it, and
+    /// short enough that a script cannot save a touch for later.
+    const val HAPTIC_WINDOW_MS = 1_500L
+
+    /// A tap's own haptic and the reject of the write it started.
+    const val HAPTICS_PER_TOUCH = 2
+
+    fun hapticNamed(name: String?): Haptic? = Haptic.values().firstOrNull { it.wire == name }
+
+    /// The platform constant for a haptic. TOGGLE_ON and TOGGLE_OFF are Android
+    /// 14's; before it both are CLOCK_TICK, because a constant the platform does
+    /// not know plays nothing. CONFIRM and REJECT are Android 11's, the minimum
+    /// version.
+    fun hapticConstant(kind: Haptic, sdk: Int): Int = when (kind) {
+        Haptic.CONFIRM -> FEEDBACK_CONFIRM
+        Haptic.REJECT -> FEEDBACK_REJECT
+        Haptic.TOGGLE_ON -> if (sdk >= SDK_TOGGLE_FEEDBACK) FEEDBACK_TOGGLE_ON else FEEDBACK_CLOCK_TICK
+        Haptic.TOGGLE_OFF -> if (sdk >= SDK_TOGGLE_FEEDBACK) FEEDBACK_TOGGLE_OFF else FEEDBACK_CLOCK_TICK
+    }
+
     /// The capabilities a page announces in hello. The host acts on a token
     /// only by asking for it by name, so unknown tokens are simply never
     /// consulted. Input over MAX_CAPS_CHARS is ignored whole, and a token
@@ -171,5 +212,45 @@ class SaveRequest private constructor(val name: String, val mime: String, val te
             if (stem.isEmpty()) stem = DEFAULT_STEM
             return stem + ext
         }
+    }
+}
+
+/// Whether a haptic may play. A haptic always answers a touch: the page asks
+/// for one on a tap that completes or toggles, and when the app reports a
+/// failure. The gate is open while a finger is on the page and for
+/// HAPTIC_WINDOW_MS after the last touch event, at most HAPTICS_PER_TOUCH times
+/// in one touch. Any script can ask, so these bounds are what a hostile one
+/// gets. TalkBack, Switch Access and a keyboard produce no touch, so they get
+/// none; TalkBack gives its own.
+///
+/// It is not thread-safe: MainActivity calls it on the main thread only.
+class HapticGate {
+    private var touching = false
+    private var lastTouch: Long? = null
+    private var playedThisTouch = 0
+
+    /// Every MotionEvent the page receives, by masked action. A first finger
+    /// down starts a new touch, with its own allowance.
+    fun onTouch(actionMasked: Int, now: Long) {
+        if (actionMasked == HostProtocol.ACTION_DOWN) playedThisTouch = 0
+        touching = HostProtocol.touching(actionMasked, touching)
+        lastTouch = now
+    }
+
+    /// The window left the front. A touch cut off as it went may never send
+    /// its UP here, and what was touched before is no reason to buzz on return.
+    fun reset() {
+        touching = false
+        lastTouch = null
+    }
+
+    /// True when a haptic may play now; it then counts. A refusal costs
+    /// nothing. Elapsed time is compared, so a clock that went backwards is refused.
+    fun allow(now: Long, resumed: Boolean, pageIsOurs: Boolean): Boolean {
+        val touched = lastTouch
+        val recent = touching || (touched != null && now - touched in 0L..HostProtocol.HAPTIC_WINDOW_MS)
+        if (!resumed || !pageIsOurs || !recent || playedThisTouch >= HostProtocol.HAPTICS_PER_TOUCH) return false
+        playedThisTouch += 1
+        return true
     }
 }

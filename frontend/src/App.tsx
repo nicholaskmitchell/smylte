@@ -32,7 +32,7 @@ import {
   sanitizeTriggers, type Trigger,
 } from './notifications'
 import { TimeFormatProvider } from './timeformat'
-import { hostClock, onHostEnv } from './android'
+import { haptic, hostClock, onHostEnv } from './android'
 import {
   DEFAULT_TAB_ORDER, DEFAULT_TAB_START, TAB_LABELS, cacheTab, isTab, readCachedTab,
   resolveStartTab, sanitizeTabOrder, sanitizeTabStart, type Tab, type TabStart,
@@ -307,6 +307,11 @@ export function App() {
 
   const showToast = useCallback((msg: string) => {
     setToast(msg)
+    // Every toast is a failure or a refusal (makeGuard, showNotice and the
+    // settings writes below), so on a phone it is felt as one too. The host
+    // plays it only just after a touch, so a failure that arrives on its own
+    // stays silent. Outside the Android client this does nothing.
+    haptic('reject')
     clearTimeout(toastTimer.current)
     toastTimer.current = setTimeout(() => setToast(null), 6000)
   }, [])

@@ -22,6 +22,9 @@ class PageBridge(private val host: Host) {
         /// How many layers the page has open, already clamped. Bridge thread; must not block.
         fun layers(depth: Int)
 
+        /// One of the haptics HostProtocol knows. Bridge thread; the host posts to the main thread and decides there whether it plays.
+        fun haptic(kind: HostProtocol.Haptic)
+
         /// Start a save; false when one is already pending. Bridge thread; must not block.
         fun save(request: SaveRequest): Boolean
     }
@@ -45,6 +48,16 @@ class PageBridge(private val host: Host) {
     @JavascriptInterface
     fun layers(depth: Int) {
         runCatching { host.layers(HostProtocol.clampLayers(depth)) }
+    }
+
+    /// A haptic for what the user just did: "confirm", "reject", "toggleOn" or
+    /// "toggleOff"; any other name is ignored. At worst a script buzzes the phone
+    /// while it is being touched: the host plays one only while a finger is on
+    /// the page or just after, at most twice a touch (HapticGate), and the
+    /// system's touch feedback setting still decides.
+    @JavascriptInterface
+    fun haptic(kind: String?) {
+        runCatching { HostProtocol.hapticNamed(kind)?.let(host::haptic) }
     }
 
     /// Asks to save a file through Android's own dialog; true when the request

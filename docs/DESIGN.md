@@ -743,6 +743,33 @@ document, and a Back that finds no layer makes the page report zero. Browsers
 and the desktop clients never hear `back`, so Escape is exactly what it was
 there.
 
+**A tap can be felt.** The page can ask the host for four haptics, `confirm`,
+`reject`, `toggleOn` and `toggleOff`, and the host ignores any other name. One
+capture-phase `click` listener on the document, installed only when the host has
+`haptic`, decides which one a tap plays, so no control carries a call of its own.
+A task's check going on is `confirm`. Anything that tells a screen reader it is
+a toggle (`aria-pressed`, `aria-checked` or a checkbox) plays the state it goes
+to, read before the app's own handler changes it. A button that cycles values,
+such as the clock row, is not a toggle to a screen reader and plays nothing, and
+neither does any other button; `data-haptic` names one outright, which is how the
+focus view's Done button, a completion that is no toggle, plays `confirm`.
+`reject` comes with the app's error toast, which every failed write and every
+refusal shows, so one call covers task writes, entry ticks, event writes and
+settings alike. A load that a tap started and that fails within the window shows
+the same toast and so plays `reject` too. The mapping is `CONFIRM` and `REJECT`
+for those two, and `TOGGLE_ON` and `TOGGLE_OFF` on Android 14 and later; on 11 to
+13, which lack them, both toggles are `CLOCK_TICK`, because a constant the
+platform does not know plays nothing. The host makes the one-argument
+`performHapticFeedback` call, so the phone's touch feedback setting decides, and
+it needs no VIBRATE permission. Any script on the page can ask, so a haptic plays
+only when the window is in front, the page is the app's own, and a finger is down
+or lifted at most 1.5 s ago, and at most twice in one touch: a tap's own haptic
+and the reject of the write it started. There is no minimum gap between the two,
+because a write refused at once on a fast network would lose its reject to one.
+TalkBack, Switch Access and a keyboard produce no touch, so they get none, and
+TalkBack gives its own. Drags play nothing yet, because whether HTML5 drag works
+on touch in WebView is unverified.
+
 **Stage, then swap.** Android keeps processes alive for days, so the client also
 checks for updates when it returns to the foreground after six hours or more. A
 build must never change under a running page, so downloading and swapping are

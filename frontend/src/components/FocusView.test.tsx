@@ -204,6 +204,12 @@ describe('<FocusView>', () => {
     expect(m.focusClock).toHaveBeenCalledTimes(1)
   })
 
+  it('marks Done as a completion for the Android client', async () => {
+    show()
+    await screen.findByRole('heading', { name: 'Memo' })
+    expect(screen.getByRole('button', { name: 'Done' })).toHaveAttribute('data-haptic', 'confirm')
+  })
+
   it('pauses and resumes from the anchor', async () => {
     m.focusClock.mockImplementation(async (_d, body) =>
       body.action === 'pause' ? session({ running_since: null, phase_elapsed_s: 60 }) : session({ phase_elapsed_s: 60 }))

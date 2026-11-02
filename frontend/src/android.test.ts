@@ -15,12 +15,22 @@ window.addEventListener = ((type: string, fn: EventListenerOrEventListenerObject
   addListener(type, fn, opts as AddEventListenerOptions)
 }) as typeof window.addEventListener
 
+// The same for the click listener the host installs on the document.
+const clicked: EventListenerOrEventListenerObject[] = []
+const addDocListener = document.addEventListener.bind(document)
+document.addEventListener = ((type: string, fn: EventListenerOrEventListenerObject, opts?: unknown) => {
+  if (type === 'click') clicked.push(fn)
+  addDocListener(type, fn, opts as AddEventListenerOptions)
+}) as typeof document.addEventListener
+
 beforeEach(async () => {
   vi.resetModules()
   a = await import('./android')
 })
 afterEach(() => {
   for (const fn of heard.splice(0)) window.removeEventListener('smylte-android', fn)
+  for (const fn of clicked.splice(0)) document.removeEventListener('click', fn, true)
+  document.body.innerHTML = ''
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
@@ -69,7 +79,7 @@ describe('android: starting', () => {
     a.startAndroidHost()
     a.startAndroidHost()
     expect(hello).toHaveBeenCalledTimes(1)
-    expect(hello).toHaveBeenCalledWith('back,save')
+    expect(hello).toHaveBeenCalledWith('back,haptics,save')
   })
 
   it.each([
@@ -352,5 +362,105 @@ describe('android: main.tsx', () => {
     const start = src.indexOf('startAndroidHost()')
     expect(start).toBeGreaterThan(-1)
     expect(start).toBeLessThan(src.indexOf('createRoot('))
+  })
+})
+
+describe('android: haptics', () => {
+  const hello = () => '{"v":1}'
+  const html = (markup: string) => {
+    document.body.innerHTML = markup
+    return document.body.firstElementChild as HTMLElement
+  }
+
+  it('plays nothing outside the client', () => {
+    const add = vi.spyOn(document, 'addEventListener')
+    expect(() => a.haptic('confirm')).not.toThrow()
+    a.startAndroidHost()
+    expect(add).not.toHaveBeenCalledWith('click', expect.anything(), expect.anything())
+  })
+
+  it('installs nothing in a client without haptic()', () => {
+    bridge({ hello, layers: vi.fn() })
+    const add = vi.spyOn(document, 'addEventListener')
+    a.startAndroidHost()
+    expect(add).not.toHaveBeenCalledWith('click', expect.anything(), expect.anything())
+  })
+
+  it('passes the kind through, and survives a host that throws', () => {
+    const haptic = vi.fn()
+    bridge({ haptic })
+    a.haptic('toggleOn')
+    expect(haptic).toHaveBeenCalledWith('toggleOn')
+    bridge({ haptic: () => { throw new Error('host failed') } })
+    expect(() => a.haptic('reject')).not.toThrow()
+  })
+
+  it.each<[string, string | null, string?]>([
+    ['<button class="check" aria-pressed="false"></button>', 'confirm'],
+    ['<button class="check" aria-pressed="true"></button>', 'toggleOff'],
+    ['<button aria-pressed="false">Busy</button>', 'toggleOn'],
+    ['<button aria-pressed="true">Busy</button>', 'toggleOff'],
+    ['<div role="checkbox" aria-checked="false"></div>', 'toggleOn'],
+    ['<div role="checkbox" aria-checked="true"></div>', 'toggleOff'],
+    // The role decides which attribute is the state.
+    ['<button role="switch" aria-checked="true" aria-pressed="false"></button>', 'toggleOff'],
+    ['<button>Save</button>', null],
+    ['<div role="button">Open</div>', null],
+    ['<button class="check" aria-pressed="false" disabled></button>', null],
+    ['<button aria-pressed="false" aria-disabled="true"></button>', null],
+    ['<button data-haptic="confirm">Done</button>', 'confirm'],
+    ['<button data-haptic="buzz" aria-pressed="false"></button>', 'toggleOn'],
+    ['<button aria-pressed="false"><span>Busy</span></button>', 'toggleOn', 'span'],
+    ['<div role="checkbox" aria-checked="false"><button>Edit</button></div>', null, 'button'],
+  ])('reads %s as %s', (markup, expected, inner) => {
+    const root = html(markup)
+    const el = inner ? root.querySelector(inner) : root
+    expect(a.hapticFor(el)).toBe(expected)
+  })
+
+  it('reads nothing from no target or the document', () => {
+    expect(a.hapticFor(null)).toBeNull()
+    expect(a.hapticFor(document)).toBeNull()
+  })
+
+  it('a checkbox plays the state it goes to', () => {
+    const haptic = vi.fn()
+    bridge({ haptic })
+    a.startAndroidHost()
+    const input = html('<input type="checkbox">') as HTMLInputElement
+    input.click()
+    input.click()
+    expect(haptic.mock.calls).toEqual([['toggleOn'], ['toggleOff']])
+  })
+
+  it('a label plays once', () => {
+    const haptic = vi.fn()
+    bridge({ haptic })
+    a.startAndroidHost()
+    html('<label><input type="checkbox"><span>Busy</span></label>')
+    document.querySelector<HTMLElement>('span')!.click()
+    expect(haptic.mock.calls).toEqual([['toggleOn']])
+  })
+
+  it('reads the state before the app\'s handler changes it', () => {
+    const haptic = vi.fn()
+    bridge({ haptic })
+    a.startAndroidHost()
+    for (const [cls, expected] of [['', 'toggleOn'], ['check', 'confirm']]) {
+      haptic.mockClear()
+      const button = html(`<button class="${cls}" aria-pressed="false"></button>`)
+      button.addEventListener('click', () => button.setAttribute('aria-pressed', 'true'))
+      button.click()
+      expect(haptic.mock.calls).toEqual([[expected]])
+    }
+  })
+
+  it('delegates once however often it starts', () => {
+    const haptic = vi.fn()
+    bridge({ haptic })
+    a.startAndroidHost()
+    a.startAndroidHost()
+    html('<button aria-pressed="false"></button>').click()
+    expect(haptic).toHaveBeenCalledTimes(1)
   })
 })

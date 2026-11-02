@@ -19,6 +19,7 @@ class PageBridgeTest {
         val caps = mutableListOf<Set<String>>()
         val saves = mutableListOf<SaveRequest>()
         val depths = mutableListOf<Int>()
+        val haptics = mutableListOf<HostProtocol.Haptic>()
 
         override fun colour(colour: Int) {
             if (fail) throw IllegalStateException("host failed")
@@ -36,6 +37,11 @@ class PageBridgeTest {
             depths += depth
         }
 
+        override fun haptic(kind: HostProtocol.Haptic) {
+            if (fail) throw IllegalStateException("host failed")
+            haptics += kind
+        }
+
         override fun save(request: SaveRequest): Boolean {
             if (fail) throw IllegalStateException("host failed")
             saves += request
@@ -48,7 +54,7 @@ class PageBridgeTest {
     fun the_page_can_call_exactly_these_methods() {
         val methods = PageBridge::class.java.declaredMethods
             .filter { Modifier.isPublic(it.modifiers) && !it.isSynthetic }
-        assertEquals(setOf("themeColour", "hello", "saveFile", "layers"), methods.map { it.name }.toSet())
+        assertEquals(setOf("themeColour", "hello", "saveFile", "layers", "haptic"), methods.map { it.name }.toSet())
         for (m in methods) {
             assertTrue(m.name, m.isAnnotationPresent(JavascriptInterface::class.java))
         }
@@ -91,6 +97,7 @@ class PageBridgeTest {
         bridge.themeColour("#112233")
         assertFalse(bridge.saveFile("a", "application/json", "{}"))
         bridge.layers(1)
+        bridge.haptic("confirm")
     }
 
     @Test
@@ -102,6 +109,22 @@ class PageBridgeTest {
         bridge.layers(-3)
         bridge.layers(1000)
         assertEquals(listOf(2, 0, 16), host.depths)
+    }
+
+    @Test
+
+    fun only_known_haptics_reach_the_host() {
+        val host = FakeHost()
+        val bridge = PageBridge(host)
+        for (kind in listOf("confirm", "reject", "toggleOn", "toggleOff")) bridge.haptic(kind)
+        for (kind in listOf("dragStart", "drop", "Confirm", "", null, "x".repeat(100_000))) bridge.haptic(kind)
+        assertEquals(
+            listOf(
+                HostProtocol.Haptic.CONFIRM, HostProtocol.Haptic.REJECT,
+                HostProtocol.Haptic.TOGGLE_ON, HostProtocol.Haptic.TOGGLE_OFF,
+            ),
+            host.haptics,
+        )
     }
 
     @Test

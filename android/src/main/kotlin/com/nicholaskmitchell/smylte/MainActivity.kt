@@ -88,6 +88,9 @@ class MainActivity : Activity() {
     private var pickerOpen = false
     private var lastPickerClosed: Long? = null
 
+    /// Whether the page may play a haptic now. Main thread: the touch listener and the posted haptic both run there.
+    private val hapticGate = HapticGate()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         settings = Settings(this)
@@ -191,7 +194,9 @@ class MainActivity : Activity() {
 
     // ── the WebView ─────────────────────────────────────────────────────────
 
-    @SuppressLint("SetJavaScriptEnabled")   // it is the app
+    // SetJavaScriptEnabled: it is the app. ClickableViewAccessibility: the touch
+    // listener only watches.
+    @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
     private fun configureWebView() {
         WebView.setWebContentsDebuggingEnabled(
             (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0,
@@ -225,6 +230,14 @@ class MainActivity : Activity() {
         // scrolling reaches an end, so the whole app seemed to bounce.
         web.overScrollMode = View.OVER_SCROLL_NEVER
         applyTextZoom()
+        // Haptics answer touches (HapticGate), so the gate sees every touch on
+        // the page. The listener only watches and returns false, so the WebView
+        // still handles each touch, clicks and accessibility included; the lint
+        // check it suppresses is about listeners that consume touches.
+        web.setOnTouchListener { _, event ->
+            hapticGate.onTouch(event.actionMasked, SystemClock.uptimeMillis())
+            false
+        }
         // The app registers no service worker, and a service worker's requests
         // would bypass shouldInterceptRequest, and with it the files from disk
         // and their CSP. So none can fetch anything.
@@ -287,6 +300,17 @@ class MainActivity : Activity() {
                 if (isDestroyed) return@post
                 pageLayers = HostProtocol.layersAfterReport(pageLayers, depth, document, docGeneration)
                 syncBack()
+            }
+        }
+
+        /// The one-argument performHapticFeedback, so the system's touch feedback
+        /// setting and the view's own still decide, as for native controls.
+        override fun haptic(kind: HostProtocol.Haptic) {
+            main.post {
+                if (isDestroyed) return@post
+                if (hapticGate.allow(SystemClock.uptimeMillis(), resumed, showingOurPage())) {
+                    web.performHapticFeedback(HostProtocol.hapticConstant(kind, Build.VERSION.SDK_INT))
+                }
             }
         }
 
@@ -831,6 +855,7 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         resumed = false
+        hapticGate.reset()
         CookieManager.getInstance().flush()
         web.onPause()
         super.onPause()
