@@ -26,6 +26,29 @@ open Smylte at in a browser, with no path. The server's sign-in cookie is
 
 [rel]: https://github.com/nicholaskmitchell/smylte/releases/tag/desktop-latest
 
+### Where your server runs
+
+The app doesn't care how Smylte is hosted, only that the phone can reach it at
+an `https://` address, with a certificate Android trusts, and with Smylte at the
+root of that address. How that works out for common setups:
+
+| Hosting | Works? | Notes |
+| --- | --- | --- |
+| Tailscale Funnel | Yes | The public `https://<machine>.<tailnet>.ts.net` address and its certificate work as they are. |
+| Tailscale, tailnet only (`tailscale serve` without Funnel) | Only while the phone's Tailscale app is connected | Any later background feature, such as reminders, will also need it connected. |
+| Cloudflare Tunnel (`docs/DEPLOY.md`) | Yes | — |
+| Cloudflare Access, or any proxy that asks you to sign in through a web page before letting requests through | No, when it covers `/api` | The app's API calls are redirected to the sign-in page instead of getting data, and the app never shows that page. The desktop clients have the same limitation. Leave `/api` to Smylte's own sign-in. |
+| Your own reverse proxy with a public certificate (Caddy, nginx, Let's Encrypt) | Yes | — |
+| Plain `http://`, a self-signed certificate, or a private CA | No | The sign-in cookie is `Secure`, Android refuses cleartext, and the app trusts only the system's certificate authorities. |
+
+This is about the app, not the server's own setup. One server point does vary
+with hosting, though. Sign-in and booking are rate-limited per client address,
+which Smylte reads from `X-Real-IP`, and the provided Caddy snippet fills that
+in from a Cloudflare header. Behind anything other than Cloudflare, that header
+must come from whatever terminates TLS, and any copy a client sends must be
+discarded. Otherwise the limits can be bypassed, or every client shares one
+limit. See `docs/DEPLOY.md` step 3.
+
 ### Google's developer verification
 
 Google has announced that from 2027 certified Android phones will refuse apps
