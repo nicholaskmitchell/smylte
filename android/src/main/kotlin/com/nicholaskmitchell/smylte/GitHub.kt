@@ -25,12 +25,49 @@ object GitHub {
 
     /// Open `url` and return the connection with its status read. The caller
     /// disconnects it.
+    ///
+    /// A token api.github.com answers 401 to (expired, revoked, mistyped) is
+    /// reported through `onTokenRejected` and the request is made again
+    /// without it. Without that, a stale token would quietly stop every
+    /// update while the app kept opening on its old build.
     fun open(
         url: String,
         token: String?,
         accept: String,
         timeouts: Timeouts,
         ifNoneMatch: String? = null,
+        onTokenRejected: (() -> Unit)? = null,
+    ): HttpURLConnection {
+        val conn = openOnce(url, token, accept, timeouts, ifNoneMatch)
+        if (conn.responseCode != 401 || token.isNullOrBlank()) return conn
+        conn.disconnect()
+        onTokenRejected?.invoke()
+        return openOnce(url, null, accept, timeouts, ifNoneMatch)
+    }
+
+    /// Does api.github.com accept `token`? True or false when it answered,
+    /// null when it could not be asked. /rate_limit costs no quota.
+    fun tokenAccepted(token: String): Boolean? = try {
+        val conn = openOnce("https://$API_HOST/rate_limit", token, "application/vnd.github+json", QUICK, null)
+        try {
+            when (conn.responseCode) {
+                in 200..299 -> true
+                401 -> false
+                else -> null
+            }
+        } finally {
+            conn.disconnect()
+        }
+    } catch (_: IOException) {
+        null
+    }
+
+    private fun openOnce(
+        url: String,
+        token: String?,
+        accept: String,
+        timeouts: Timeouts,
+        ifNoneMatch: String?,
     ): HttpURLConnection {
         var target = URL(url)
         var hops = 0
@@ -80,10 +117,14 @@ object GitHub {
         dest: File,
         what: String,
         progress: (String) -> Unit,
+        onTokenRejected: (() -> Unit)? = null,
     ) {
         // The asset endpoint, not browser_download_url: it works unchanged
         // whether the repository is public or private.
-        val conn = open("${Release.API}/releases/assets/$assetId", token, "application/octet-stream", NORMAL)
+        val conn = open(
+            "${Release.API}/releases/assets/$assetId", token, "application/octet-stream", NORMAL,
+            onTokenRejected = onTokenRejected,
+        )
         try {
             if (conn.responseCode !in 200..299) throw IOException("GitHub answered ${conn.responseCode}.")
             val total = conn.contentLengthLong

@@ -677,11 +677,17 @@ using only the SDK's tools. The key lives in a GitHub environment that only
 `main` may use, because a repository secret is readable from any pushed branch,
 and only `main` signs or publishes. Keeping the key out of the build keeps it
 secret, but the key still vouches for whatever the build produced. So Gradle
-checks every artifact against `verification-metadata.xml`, and the signing job
-reads the APK before signing it: it refuses a wrong package, a debuggable
-build, or a version code ahead of the clock. That last would make every later
-update a downgrade that phones refuse. Without the secrets the job signs
-nothing, so the web build and the desktop binaries keep publishing.
+checks every artifact against `verification-metadata.xml`. A job that holds
+nothing reads the APK before anything signs it, and refuses a wrong package, a
+debuggable build, or a version code ahead of the clock. That last would make
+every later update a downgrade that phones refuse. It reads the compiled
+manifest attribute by attribute, because `aapt2 dump badging` prints the
+version name unescaped, so a planted quote could fake a second, smaller version
+code. Its parsers are native code reading an untrusted file, so they don't run
+where the key is: the signing job signs only the file whose hash the inspection
+reported. Only the newest commit on `main` publishes, so re-running an old run
+can't roll clients back. Without the secrets nothing is signed, and the web
+build and the desktop binaries keep publishing.
 
 ## Panel firmware
 

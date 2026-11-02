@@ -167,12 +167,12 @@ jobs:
     # runs the Android Gradle Plugin and everything it resolves from Maven,
     # which is third-party build code in exactly the sense `npm ci` is above,
     # and a key that build code could read is a key that could sign anything.
-    # `sign-android` applies it with the SDK's own tools and nothing else.
+    # `sign-android` applies it with the SDK's apksigner and nothing else.
     #
     # That keeps the key SECRET; it does not make what this job built
     # trustworthy. Gradle checks every artifact it resolves against
-    # android/gradle/verification-metadata.xml, and `sign-android` inspects the
-    # APK before it signs anything.
+    # android/gradle/verification-metadata.xml, and `inspect-android` reads the
+    # APK before anything signs it.
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -199,7 +199,7 @@ jobs:
         # Android's ceiling of 2,100,000,000 for about four thousand years.
         # Runs never overlap (the concurrency group above), so two builds can
         # share a minute only by being re-runs of one commit; Android accepts
-        # an equal code as an update anyway. `sign-android` reads the code
+        # an equal code as an update anyway. `inspect-android` reads the code
         # back out of the APK rather than trusting this step to report it.
         run: |
           code=$(( ($(date -u +%s) - 1767225600) / 60 ))
@@ -222,11 +222,88 @@ jobs:
       - name: Unit tests and lint
         run: ./gradlew --no-daemon test lint
 
+  inspect-android:
+    # Reads the APK `client-android` built, BEFORE anything signs it, in a job
+    # that holds nothing: no environment, no secrets, a token that can do
+    # nothing. The key vouches for whatever it signs, and that build ran
+    # third-party code, so an APK that is not this app, is debuggable, or
+    # carries a version code from the future (which would make every later
+    # build a downgrade phones refuse, for good) stops here.
+    #
+    # Its own job, not a step before the signing, because aapt2 and zipalign
+    # are native parsers of an untrusted file. A bug in either that the APK
+    # exploits must not run where the key is, and a compromised step can reach
+    # later steps of its job through $GITHUB_ENV. `sign-android` then signs
+    # only the file whose SHA-256 this job reports.
+    needs: client-android
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      version_code: ${{ steps.inspect.outputs.version_code }}
+      sha256: ${{ steps.inspect.outputs.sha256 }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: client-android-unsigned
+
+      - name: Inspect
+        id: inspect
+        run: |
+          tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          # A pipeline's status is its last command's, so a missing SDK would
+          # otherwise surface as "/aapt2: No such file".
+          for tool in aapt2 zipalign; do
+            if [ ! -x "$tools/$tool" ]; then
+              echo "::error::no $tool under ANDROID_HOME=${ANDROID_HOME:-<unset>}"
+              exit 1
+            fi
+          done
+          apk=Smylte-android-unsigned.apk
+
+          # The compiled manifest, attribute by attribute. Not `dump badging`:
+          # its summary line prints the version name unescaped, so a name
+          # holding "' versionCode='1" read as a second, smaller code.
+          manifest=$("$tools/aapt2" dump xmltree --file AndroidManifest.xml "$apk")
+          package=$(printf '%s\n' "$manifest" | sed -n 's/^ *A: package="\([^"]*\)".*/\1/p')
+          codes=$(printf '%s\n' "$manifest" \
+            | sed -n 's/^ *A: http:\/\/schemas.android.com\/apk\/res\/android:versionCode(0x0101021b)=\(.*\)$/\1/p')
+          if [ "$package" != com.nicholaskmitchell.smylte ]; then
+            echo "::error::the APK's package is '${package}', not com.nicholaskmitchell.smylte"
+            exit 1
+          fi
+          if [ "$(printf '%s\n' "$codes" | grep -c .)" != 1 ] || ! [[ "$codes" =~ ^[0-9]{1,10}$ ]]; then
+            echo "::error::the APK's version code is not one plain number: '${codes}'"
+            exit 1
+          fi
+          # versionCodeMajor is the high 32 bits of the real version code, so
+          # any value at all puts it beyond every build this workflow makes.
+          if printf '%s\n' "$manifest" | grep -q 'versionCodeMajor(0x01010576)'; then
+            echo "::error::the APK sets versionCodeMajor"
+            exit 1
+          fi
+          now=$(( ($(date -u +%s) - 1767225600) / 60 ))
+          if [ "$codes" -gt $(( now + 60 )) ]; then
+            echo "::error::the APK's version code ${codes} is ahead of the clock (${now})"
+            exit 1
+          fi
+          # `badging` resolves a debuggable flag given as a resource reference.
+          if "$tools/aapt2" dump badging "$apk" | grep -q '^application-debuggable'; then
+            echo "::error::the APK is debuggable"
+            exit 1
+          fi
+          # AGP aligns what it packages; a signature over an unaligned APK
+          # would be refused by the installer, so check rather than assume.
+          "$tools/zipalign" -c -P 16 4 "$apk"
+
+          echo "version_code=$codes" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "$apk" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
   sign-android:
-    # The only job that sees the signing key, and it runs no dependency code:
-    # aapt2, zipalign and apksigner from the runner's Android SDK, over the APK
-    # `client-android` built. The two artifact actions around it are the only
-    # other code here, and the job's token can do nothing (`permissions: {}`).
+    # The only job that sees the signing key, and it runs no dependency code
+    # and parses nothing natively: apksigner (Java) from the runner's Android
+    # SDK, over the exact file `inspect-android` read. The two artifact actions
+    # around it are the only other code here, and the job's token can do
+    # nothing (`permissions: {}`).
     #
     # The key is permanent: Android installs an update only when it is signed
     # with the same key as the installed app, and there is no revoking one. So
@@ -238,64 +315,35 @@ jobs:
     # Without the secrets it signs nothing and says so, rather than failing:
     # the web build and the desktop binaries must not stop publishing because
     # the Android key has not been set up yet.
-    needs: client-android
+    needs: inspect-android
     if: github.ref == 'refs/heads/main'
     environment: android-signing
     runs-on: ubuntu-latest
     permissions: {}
     outputs:
       signed: ${{ steps.sign.outputs.signed }}
-      version_code: ${{ steps.sign.outputs.version_code }}
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: client-android-unsigned
 
-      - name: Inspect and sign
+      - name: Sign
         id: sign
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          INSPECTED_SHA256: ${{ needs.inspect-android.outputs.sha256 }}
           # Optional: the signing certificate's SHA-256, as android/README.md
           # prints it. When set, an APK signed by any other key (a swapped or
           # mistyped secret) fails here instead of reaching phones that would
           # refuse it.
           EXPECTED_CERT: ${{ vars.ANDROID_SIGNING_CERT_SHA256 }}
         run: |
-          tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-          # A pipeline's status is its last command's, so a missing SDK would
-          # otherwise surface as "/zipalign: No such file".
-          for tool in aapt2 zipalign apksigner; do
-            if [ ! -x "$tools/$tool" ]; then
-              echo "::error::no $tool under ANDROID_HOME=${ANDROID_HOME:-<unset>}"
-              exit 1
-            fi
-          done
-
-          # What is about to be signed, read from the APK itself. The key
-          # vouches for whatever it signs, and the build that produced this
-          # ran third-party code: a release that is not this app, is
-          # debuggable, or carries a version code from the future (which would
-          # make every later build a downgrade Android refuses, for good) is
-          # refused here, whether or not the key is configured.
-          badging=$("$tools/aapt2" dump badging Smylte-android-unsigned.apk)
-          package=$(printf '%s\n' "$badging" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
-          code=$(printf '%s\n' "$badging" | sed -n "s/^package: .* versionCode='\([^']*\)'.*/\1/p")
-          if [ "$package" != com.nicholaskmitchell.smylte ]; then
-            echo "::error::the APK's package is '${package}', not com.nicholaskmitchell.smylte"
-            exit 1
-          fi
-          if ! [[ "$code" =~ ^[0-9]{1,10}$ ]]; then
-            echo "::error::the APK's version code '${code}' is not a number"
-            exit 1
-          fi
-          now=$(( ($(date -u +%s) - 1767225600) / 60 ))
-          if [ "$code" -gt $(( now + 60 )) ]; then
-            echo "::error::the APK's version code ${code} is ahead of the clock (${now})"
-            exit 1
-          fi
-          if printf '%s\n' "$badging" | grep -q '^application-debuggable'; then
-            echo "::error::the APK is debuggable"
+          apk=Smylte-android-unsigned.apk
+          # The file inspected is the file signed.
+          actual=$(sha256sum "$apk" | cut -d' ' -f1)
+          if ! [[ "${INSPECTED_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] || [ "$actual" != "$INSPECTED_SHA256" ]; then
+            echo "::error::the APK here (${actual}) is not the one inspect-android read (${INSPECTED_SHA256:-<none>})"
             exit 1
           fi
 
@@ -305,20 +353,22 @@ jobs:
             exit 0
           fi
 
+          tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          if [ ! -x "$tools/apksigner" ]; then
+            echo "::error::no apksigner under ANDROID_HOME=${ANDROID_HOME:-<unset>}"
+            exit 1
+          fi
           keystore="$RUNNER_TEMP/smylte-release.p12"
           trap 'rm -f "$keystore"' EXIT
           (umask 077 && printf '%s' "$ANDROID_KEYSTORE_B64" | base64 -d > "$keystore")
 
-          # AGP aligns what it packages; a signature over an unaligned APK
-          # would be refused by the installer, so check rather than assume.
-          "$tools/zipalign" -c -P 16 4 Smylte-android-unsigned.apk
           # No --ks-key-alias: the keystore holds one key and apksigner takes
           # it. No v4 signature: that is a sidecar file for streaming installs
           # over adb, and nothing here would publish it.
           "$tools/apksigner" sign \
             --ks "$keystore" --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
             --v4-signing-enabled false \
-            --out Smylte-android.apk Smylte-android-unsigned.apk
+            --out Smylte-android.apk "$apk"
 
           certs=$("$tools/apksigner" verify --print-certs Smylte-android.apk)
           printf '%s\n' "$certs"
@@ -334,7 +384,6 @@ jobs:
           fi
 
           echo "signed=true" >> "$GITHUB_OUTPUT"
-          echo "version_code=$code" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         if: steps.sign.outputs.signed == 'true'
@@ -344,7 +393,7 @@ jobs:
           retention-days: 7
 
   release:
-    needs: [web, client, client-linux, sign-android]
+    needs: [web, client, client-linux, inspect-android, sign-android]
     # Only `main` publishes. A dispatch from any other ref would put code that
     # never went through review (main is merged on GitLab) in front of every
     # installed client, and for the APK under the permanent key.
@@ -368,8 +417,8 @@ jobs:
           CLIENT_PUBLISH: ${{ inputs.client }}
           # "true" only when `sign-android` produced a signed APK.
           ANDROID_SIGNED: ${{ needs.sign-android.outputs.signed }}
-          # The version code that APK carries, as sign-android read it.
-          ANDROID_VERSION_CODE: ${{ needs.sign-android.outputs.version_code }}
+          # The version code that APK carries, as inspect-android read it.
+          ANDROID_VERSION_CODE: ${{ needs.inspect-android.outputs.version_code }}
         # Upload --clobber onto the existing release rather than delete-and-recreate,
         # so there is never a window where a client checking for updates finds no
         # release at all.
@@ -427,6 +476,18 @@ jobs:
             printf '%s\n' "$err" >&2
             return 1
           }
+
+          # Only the newest commit on main publishes. `if:` keeps other refs
+          # out, but "Re-run all jobs" on an older main run passes it: it
+          # rebuilds the old commit with a fresh APK version code and would
+          # roll every client back to that build. A run that main has moved
+          # past is not a failure either; the newer run publishes. A head that
+          # cannot be read is, since retrying converges.
+          MAIN_HEAD=$(retry gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
+          if [ "$MAIN_HEAD" != "$GITHUB_SHA" ]; then
+            echo "::warning::main is at ${MAIN_HEAD}, not ${GITHUB_SHA}; this run publishes nothing" >&2
+            exit 0
+          fi
 
           RELEASE_STATE=$(retry release_state)
 
@@ -529,8 +590,9 @@ jobs:
           #   * An APK with a LOWER version code than the published one is not
           #     published, forced or not. Android refuses it as a downgrade, so
           #     every phone would be told to update and then be refused. Only a
-          #     re-run of an old run's jobs can produce one, because a fresh
-          #     build's code is taken from the clock.
+          #     re-run of an old run's FAILED jobs can produce one (a full
+          #     re-run rebuilds with a fresh code, and the head check above
+          #     stops it), because a fresh build's code is taken from the clock.
           ANDROID_RECORDED_KEY=""
           ANDROID_RECORDED_CODE=""
           if [ "$RELEASE_STATE" = present ]; then

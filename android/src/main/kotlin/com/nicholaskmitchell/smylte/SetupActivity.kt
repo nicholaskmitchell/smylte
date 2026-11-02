@@ -37,12 +37,19 @@ class SetupActivity : Activity() {
         status = findViewById(R.id.status)
 
         shownOrigin = settings.origin
-        shownPassword = settings.password
+        // After a rotation the guard below may already have asked for the
+        // password again, and the field then holds what was typed since. Only
+        // that fact is kept across the restart, never the password itself:
+        // instance state can be written to disk.
+        shownPassword = if (savedInstanceState?.getBoolean(KEY_DROPPED) == true) "" else settings.password
         if (savedInstanceState == null) {
             server.setText(shownOrigin)
             username.setText(settings.username)
             password.setText(shownPassword)
             token.setText(settings.githubToken)
+            if (settings.tokenRejected) status.setText(R.string.setup_token_rejected)
+        } else {
+            status.text = savedInstanceState.getCharSequence(KEY_STATUS)
         }
 
         @Suppress("DEPRECATION")   // the PackageInfoFlags overload is API 33
@@ -50,6 +57,12 @@ class SetupActivity : Activity() {
         findViewById<TextView>(R.id.version).text = getString(R.string.setup_version, version)
 
         save.setOnClickListener { check() }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(KEY_DROPPED, shownPassword.isEmpty())
+        outState.putCharSequence(KEY_STATUS, status.text)
     }
 
     /// Check the address answers as Smylte before saving it, as the desktop
@@ -89,7 +102,11 @@ class SetupActivity : Activity() {
             val (ok, probed) = Session.probe(origin)
             var message = probed
             var saved = false
-            if (ok) {
+            // A token GitHub refuses would only be dropped later, in silence.
+            val tokenRefused = ok && gh.isNotEmpty() && GitHub.tokenAccepted(gh) == false
+            if (tokenRefused) message = getString(R.string.setup_token_refused)
+            // Back, pressed while this ran, means "don't".
+            if (ok && !tokenRefused && !isFinishing && !isDestroyed) {
                 // Sealing touches the keystore, so not on the main thread, and
                 // a keystore that refuses is a sentence, not a crash.
                 try {
@@ -112,5 +129,10 @@ class SetupActivity : Activity() {
                 finish()
             }
         }.start()
+    }
+
+    private companion object {
+        const val KEY_DROPPED = "password_dropped"
+        const val KEY_STATUS = "status"
     }
 }

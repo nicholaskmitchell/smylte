@@ -28,20 +28,12 @@ object PasswordVault {
     private const val TRANSFORM = "AES/GCM/NoPadding"
     private const val PREFIX = "v1:"
 
-    /// Seal `plain` for `purpose`. Throws when the keystore will not work at
-    /// all. A key entry the keystore can no longer use (seen after some OEM
-    /// updates) is deleted and generated again, once; anything sealed under
-    /// the old key was unreadable already.
-    fun seal(plain: String, purpose: String): String = try {
-        sealWith(key(), plain, purpose)
-    } catch (_: Exception) {
-        deleteKey()
-        sealWith(key(), plain, purpose)
-    }
-
-    private fun sealWith(key: SecretKey, plain: String, purpose: String): String {
+    /// Seal `plain` for `purpose`. Throws when the keystore refuses; the
+    /// caller decides whether to `reset` and seal everything again
+    /// (Settings.save), because a reset strands whatever else was sealed.
+    fun seal(plain: String, purpose: String): String {
         val cipher = Cipher.getInstance(TRANSFORM)
-        cipher.init(Cipher.ENCRYPT_MODE, key)
+        cipher.init(Cipher.ENCRYPT_MODE, key())
         cipher.updateAAD(purpose.toByteArray(Charsets.UTF_8))
         val sealed = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
         val b64 = Base64.getEncoder()
@@ -71,7 +63,9 @@ object PasswordVault {
     private fun existingKey(): SecretKey? =
         (store().getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey
 
-    private fun deleteKey() {
+    /// Delete the key, so the next seal generates a new one. Everything
+    /// sealed under the old key becomes unreadable.
+    fun reset() {
         try {
             store().deleteEntry(ALIAS)
         } catch (_: Exception) {

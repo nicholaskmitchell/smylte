@@ -35,4 +35,6 @@
     <string name="setup_version">Smylte for Android %1$s</string>
     <string name="setup_password_dropped">The saved password belongs to the old address, so it is not sent to this one. Type it again to use it here, or leave it empty, then save.</string>
     <string name="setup_not_saved">Could not save the settings: %1$s</string>
+    <string name="setup_token_refused">GitHub refused this token, so it was not saved. Check it, or leave the field empty.</string>
+    <string name="setup_token_rejected">GitHub refused the saved token, so update checks are running without it. Replace it or leave the field empty.</string>
 </resources>

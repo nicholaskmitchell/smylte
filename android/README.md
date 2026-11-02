@@ -239,13 +239,23 @@ Keep `smylte-release.p12` and its password somewhere safe outside the
 repository, such as a password manager. `.gitignore` refuses keystore files.
 
 Only the `sign-android` job uses the key, and it runs only for `main`. It runs
-no Gradle and no dependency code: `aapt2`, `zipalign` and `apksigner` from the
+no Gradle, no dependency code and no native parser: only `apksigner` from the
 runner's Android SDK, between the two GitHub artifact actions, with a token
-that has no permissions. Before signing it reads the APK and refuses one that
-isn't `com.nicholaskmitchell.smylte`, is debuggable, or has a version code
-ahead of the clock. Keeping the key out of the build keeps it secret, but it
-doesn't make the build trustworthy. That is what the checksums above and these
-checks are for.
+that has no permissions.
+
+Keeping the key out of the build keeps it secret, but it doesn't make the build
+trustworthy. That is what the checksums above and the `inspect-android` job are
+for. That job holds nothing. It reads the APK first and refuses one that:
+
+- isn't `com.nicholaskmitchell.smylte`;
+- is debuggable;
+- sets `versionCodeMajor`;
+- has a version code ahead of the clock.
+
+`sign-android` signs only the file whose SHA-256 it reported.
+
+Only the newest commit on `main` publishes. A re-run of an older run on `main`
+publishes nothing, so it can't roll phones back.
 
 ## Tests
 

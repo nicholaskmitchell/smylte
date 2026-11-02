@@ -62,6 +62,11 @@ run_case() {
     # The body fetch is the one call in the step whose failure the code is
     # allowed to swallow, so it is the one that most needs a knob.
     : "${FAIL_BODY_TIMES:=0}"
+    # Particular body fetches by number ("3 4 5 6 7"), for the ones that come
+    # after others which must succeed: FAIL_BODY_TIMES can only fail the first.
+    : "${FAIL_BODY_CALLS:=}"
+    # Where main is: this run's own commit unless a case says otherwise.
+    : "${MAIN_HEAD:=}" "${FAIL_HEAD_TIMES:=0}"
     # What the release already holds: its asset names, and the client source
     # tree its notes record (empty = a release from before that line existed).
     : "${ASSETS:=smylte-web.zip Smylte.exe Smylte-linux-x86_64}" "${PUBLISHED_TREE:=}"
@@ -124,6 +129,10 @@ run_case() {
     gh() {
       local n
       case "$1 ${2:-}" in
+        "api repos/nicholaskmitchell/smylte/commits/main")
+          n=$(_bump head); echo "  [gh] api commits/main (call $n)" >&2
+          [ "$n" -le "$FAIL_HEAD_TIMES" ] && { echo "gh: HTTP 503" >&2; return 1; }
+          echo "${MAIN_HEAD:-$GITHUB_SHA}"; return 0 ;;
         "api repos/nicholaskmitchell/smylte/releases/tags/desktop-latest")
           _probe "api tags" && { echo '{"tag_name":"desktop-latest"}'; return 0; }; return 1 ;;
         "release view")
@@ -135,6 +144,7 @@ run_case() {
             # otherwise be the same file under $_STUB.
             n=$(_bump bodyfetch); echo "  [gh] release view --json body (call $n)" >&2
             [ "$n" -le "$FAIL_BODY_TIMES" ] && { echo "gh: HTTP 503" >&2; return 1; }
+            [[ " $FAIL_BODY_CALLS " == *" $n "* ]] && { echo "gh: HTTP 503" >&2; return 1; }
             cat "$_STUB/body"; return 0
           fi
           _probe "release view" || return 1
@@ -331,6 +341,22 @@ case_is    "a version code with a second line fails"          1 'no usable versi
 # The key's pipefail: without it a failed ls-tree hashes empty input into a
 # constant, and the APK is never republished again, silently.
 case_lacks "a failed ls-tree stops the run before any upload" 1 'release (upload|create)' FAIL_LS_TREE=1
+
+# ── only main's newest commit publishes ─────────────────────────────────────
+# "Re-run all jobs" on an older main run passes every `if:`, rebuilds the old
+# commit with a fresh version code, and would roll every client back. It must
+# publish nothing and stay green: a newer run is the one that publishes.
+case_lacks "a run main has moved past publishes nothing"     0 'release (upload|create|edit)' MAIN_HEAD=0123456789abcdef0123456789abcdef01234567
+case_is    "a run main has moved past says so"               0 'this run publishes nothing' MAIN_HEAD=0123456789abcdef0123456789abcdef01234567
+case_is    "a transient on the head check is retried"        0 'release upload' FAIL_HEAD_TIMES=2
+case_lacks "a dead head check fails without publishing"      1 'release (upload|create|edit)' FAIL_HEAD_TIMES=99
+
+# ── the Android notes fetch ─────────────────────────────────────────────────
+# The third body fetch, after the exe's and the Linux client's: dead for all
+# five attempts. It must fail the job, not read as "nothing recorded", which
+# would drop the Android lines (unsigned) or skip the downgrade guard (signed).
+case_lacks "a dead Android notes fetch fails an unsigned run" 1 'release (upload|create|edit)' FAIL_BODY_CALLS="3 4 5 6 7" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY=$OLD PUBLISHED_ANDROID_CODE=600000
+case_lacks "a dead Android notes fetch fails a signed run"    1 'release (upload|create|edit)' ANDROID_SIGNED=true ASSETS="$FOUR" FAIL_BODY_CALLS="3 4 5 6 7" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY=$OLD PUBLISHED_ANDROID_CODE=600000
 
 echo
 echo "$pass passed, $fail failed"

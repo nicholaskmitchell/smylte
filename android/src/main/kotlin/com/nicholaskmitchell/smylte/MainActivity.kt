@@ -118,7 +118,10 @@ class MainActivity : Activity() {
             } catch (e: Exception) {
                 Result.failure(StartupFailure("Smylte could not start: ${Updater.describe(e)}"))
             }
-            if (outcome.isSuccess) Session.ensureSignedIn(origin, settings.username, settings.password)
+            // Unsealed for the address it is about to be sent to, so a change
+            // of server made while this ran yields "" rather than the new
+            // server's password, sent to the old one.
+            if (outcome.isSuccess) Session.ensureSignedIn(origin, settings.username, settings.passwordFor(origin))
             main.post {
                 booting = false
                 if (isDestroyed) return@post
@@ -343,7 +346,9 @@ class MainActivity : Activity() {
         data object NeedsPermission : ClientStep
         data class Downloading(val progress: String?) : ClientStep
         data object InstallerOpened : ClientStep
-        data class Failed(val message: String) : ClientStep
+        /// `retried`: a failure that has already been tried again offers the
+        /// release page instead of a third attempt.
+        data class Failed(val message: String, val retried: Boolean) : ClientStep
     }
 
     /// The published APK, while it differs from the installed one.
@@ -371,12 +376,13 @@ class MainActivity : Activity() {
     private fun refreshStrip() {
         val client = clientUpdate
         val build = staged
-        val clientBusy = clientStep !is ClientStep.Offered && clientStep !is ClientStep.NeedsPermission
         when {
-            // An APK step under way is shown whatever else is pending.
-            client != null && clientBusy -> showClient(client)
+            // A download under way is shown whatever else is pending; it is
+            // the only step that is actually running.
+            client != null && clientStep is ClientStep.Downloading -> showClient(client)
             // A reload takes a second and asks nothing of the user, so it
-            // comes before offering a new APK.
+            // comes before any other step of the APK offer, all of which can
+            // be dismissed.
             build != null && build != dismissedBuild ->
                 showStrip(getString(R.string.web_staged), getString(R.string.reload), { dismissedBuild = build }) {
                     reloadIntoStaged()
@@ -411,11 +417,17 @@ class MainActivity : Activity() {
                     startClientUpdate()
                 }
             is ClientStep.Failed ->
-                // The release page, in the browser, where the APK can be
-                // downloaded and installed by hand. Kept until a check finds a
-                // different APK, so the reason does not vanish with the screen.
-                showStrip(step.message, getString(R.string.download), dismiss) {
-                    openExternally(Uri.parse(Release.PAGE))
+                // Kept until a check finds a different APK, so the reason does
+                // not vanish with the screen. The first failure can be tried
+                // again, since most are a dropped connection; after that, the
+                // release page in the browser, where the APK can be downloaded
+                // and installed by hand.
+                if (step.retried) {
+                    showStrip(step.message, getString(R.string.download), dismiss) {
+                        openExternally(Uri.parse(Release.PAGE))
+                    }
+                } else {
+                    showStrip(step.message, getString(R.string.try_again), dismiss) { startClientUpdate() }
                 }
         }
     }
@@ -442,7 +454,7 @@ class MainActivity : Activity() {
                 ),
             )
         } catch (_: ActivityNotFoundException) {
-            clientStep = ClientStep.Failed(getString(R.string.allow_installs))
+            clientStep = ClientStep.Failed(getString(R.string.allow_installs), retried = true)
             refreshStrip()
         }
     }
@@ -456,6 +468,7 @@ class MainActivity : Activity() {
             refreshStrip()
             return
         }
+        val retrying = clientStep is ClientStep.Failed
         clientStep = ClientStep.Downloading(null)
         refreshStrip()
         Background.updates.execute {
@@ -484,7 +497,7 @@ class MainActivity : Activity() {
                         }
                     },
                     onFailure = {
-                        clientStep = ClientStep.Failed(Updater.describe(it))
+                        clientStep = ClientStep.Failed(Updater.describe(it), retried = retrying)
                         refreshStrip()
                     },
                 )
@@ -505,7 +518,7 @@ class MainActivity : Activity() {
             .queryIntentActivities(intent, PackageManager.MATCH_SYSTEM_ONLY)
             .firstOrNull()?.activityInfo?.packageName
         if (installer == null) {
-            clientStep = ClientStep.Failed(getString(R.string.no_installer))
+            clientStep = ClientStep.Failed(getString(R.string.no_installer), retried = true)
             refreshStrip()
             return
         }
@@ -513,7 +526,7 @@ class MainActivity : Activity() {
             startActivity(intent.setPackage(installer))
             clientStep = ClientStep.InstallerOpened
         } catch (_: ActivityNotFoundException) {
-            clientStep = ClientStep.Failed(getString(R.string.no_installer))
+            clientStep = ClientStep.Failed(getString(R.string.no_installer), retried = true)
         }
         refreshStrip()
     }

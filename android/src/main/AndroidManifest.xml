@@ -48,7 +48,7 @@
              whatever was open in it. The window handles each of these itself. -->
         <activity
             android:name=".MainActivity"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|fontWeightAdjustment|layoutDirection|locale|colorMode|touchscreen|mcc|mnc|grammaticalGender"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|fontWeightAdjustment|layoutDirection|locale|colorMode|touchscreen|mcc|mnc|grammaticalGender|assetsPaths"
             android:exported="true"
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">

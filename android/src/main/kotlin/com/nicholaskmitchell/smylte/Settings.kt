@@ -20,12 +20,17 @@ class Settings(context: Context) {
         get() = prefs.getString(USERNAME, "") ?: ""
 
     /// The password for the CURRENT server, or "" when none is stored or it
-    /// cannot be unsealed. It is sealed for the address it was saved with
-    /// (PasswordVault), so after the address changes it reads as "" until it
-    /// is saved again. Either way the app's own sign-in screen takes over, so
-    /// a lost key never locks anyone out.
+    /// cannot be unsealed. Either way the app's own sign-in screen takes over,
+    /// so a lost key never locks anyone out.
     val password: String
-        get() = PasswordVault.open(prefs.getString(PASSWORD, null), passwordPurpose(origin)) ?: ""
+        get() = passwordFor(origin)
+
+    /// The password, unsealed for `origin`: "" unless it was saved for exactly
+    /// that address. Anything about to SEND the password must ask for it this
+    /// way, naming where it is going, so GCM's check of the sealed purpose is
+    /// what stops it reaching any other server, whatever changed meanwhile.
+    fun passwordFor(origin: String): String =
+        PasswordVault.open(prefs.getString(PASSWORD, null), passwordPurpose(origin)) ?: ""
 
     val githubToken: String
         get() = PasswordVault.open(prefs.getString(TOKEN, null), TOKEN_PURPOSE) ?: ""
@@ -33,17 +38,37 @@ class Settings(context: Context) {
     /// Save what setup collected, in one write. Sealing happens first, so a
     /// keystore that refuses leaves the old settings exactly as they were;
     /// the exception is the caller's to report.
+    ///
+    /// A key entry the keystore can no longer use (seen after some OEM
+    /// updates) gets one reset, and then BOTH values are sealed again under
+    /// the new key: resetting between the two would leave the first sealed
+    /// under a key that no longer exists.
     fun save(origin: String, username: String, password: String, githubToken: String) {
-        val sealedPassword = if (password.isEmpty()) null else PasswordVault.seal(password, passwordPurpose(origin))
         val token = githubToken.trim()
-        val sealedToken = if (token.isEmpty()) null else PasswordVault.seal(token, TOKEN_PURPOSE)
+        fun sealBoth(): Pair<String?, String?> = Pair(
+            if (password.isEmpty()) null else PasswordVault.seal(password, passwordPurpose(origin)),
+            if (token.isEmpty()) null else PasswordVault.seal(token, TOKEN_PURPOSE),
+        )
+        val (sealedPassword, sealedToken) = try {
+            sealBoth()
+        } catch (_: Exception) {
+            PasswordVault.reset()
+            sealBoth()
+        }
         prefs.edit()
             .putString(ORIGIN, origin)
             .putString(USERNAME, username)
             .putString(PASSWORD, sealedPassword)
             .putString(TOKEN, sealedToken)
+            .putBoolean(TOKEN_REJECTED, false)
             .apply()
     }
+
+    /// Set when api.github.com refused the stored token (401). Updates carry
+    /// on without it; setup says so until the token is replaced or removed.
+    var tokenRejected: Boolean
+        get() = prefs.getBoolean(TOKEN_REJECTED, false)
+        set(v) = prefs.edit().putBoolean(TOKEN_REJECTED, v).apply()
 
     /// The ETag of the last release body fetched, for conditional checks
     /// (Updater.fetchAssets says what they do and do not save).
@@ -72,6 +97,7 @@ class Settings(context: Context) {
         const val RELEASE_ETAG = "release_etag"
         const val LAST_CHECK = "last_check"
         const val THEME_COLOUR = "theme_colour"
+        const val TOKEN_REJECTED = "github_token_rejected"
 
         const val TOKEN_PURPOSE = "github-token"
         fun passwordPurpose(origin: String) = "password for $origin"

@@ -119,10 +119,11 @@ class Updater(private val context: Context, private val settings: Settings) {
         val etag = settings.releaseEtag.takeIf { it.isNotEmpty() && releaseCache.isFile }
         val conn = GitHub.open(
             "${Release.API}/releases/tags/${Release.TAG}",
-            settings.githubToken,
+            token(),
             "application/vnd.github+json",
             timeouts,
             etag,
+            onTokenRejected = ::tokenRejected,
         )
         try {
             val assets = when (val code = conn.responseCode) {
@@ -165,7 +166,10 @@ class Updater(private val context: Context, private val settings: Settings) {
 
         val zip = File(downloads, "smylte-web-${asset.id}.zip")
         try {
-            GitHub.downloadAsset(asset.id, settings.githubToken, zip, "Downloading the latest build…", progress)
+            GitHub.downloadAsset(
+                asset.id, token(), zip, "Downloading the latest build…", progress,
+                onTokenRejected = ::tokenRejected,
+            )
             if (!UpdatePolicy.webBuildMatches(zip, asset.digest)) {
                 throw IOException("The download did not match the digest the release publishes.")
             }
@@ -174,6 +178,14 @@ class Updater(private val context: Context, private val settings: Settings) {
         } finally {
             zip.delete()
         }
+    }
+
+    /// The stored token, unless GitHub has already refused it: sending it
+    /// again would only cost a second request each time.
+    private fun token(): String? = if (settings.tokenRejected) null else settings.githubToken
+
+    private fun tokenRejected() {
+        settings.tokenRejected = true
     }
 
     /// The published APK when it differs from the installed one, else null.
@@ -218,7 +230,10 @@ class Updater(private val context: Context, private val settings: Settings) {
             val have = apk.isFile && UpdatePolicy.sha256(apk) == digest
             if (!have) {
                 apk.delete()
-                GitHub.downloadAsset(asset.id, settings.githubToken, apk, "Downloading the new app…", progress)
+                GitHub.downloadAsset(
+                    asset.id, token(), apk, "Downloading the new app…", progress,
+                    onTokenRejected = ::tokenRejected,
+                )
                 if (UpdatePolicy.sha256(apk) != digest) {
                     throw IOException("The downloaded app did not match the digest the release publishes; nothing was changed.")
                 }

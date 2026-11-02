@@ -645,12 +645,17 @@ _ANY_INSTALL = re.compile(
     r"|\bpip install\b|\bpip-audit\b|\buv (pip|sync)\b|\bpoetry install\b"
     r"|\bdotnet (publish|build|restore|test)\b|\bnuget restore\b"
     r"|\bgem install\b|\bcargo (build|install)\b|\bgo (get|mod|install)\b"
+    r"|\bgradlew\b|\bgradle\s|\bmvn\s"
 )
 
 _INSTALLS = re.compile(
     r"\bnpm (ci|install)\b"
     r"|\bdotnet (publish|build|restore|test)\b"
     r"|\bpip install\b|\bpip-audit\b|\buv (pip|sync)\b|\bpoetry install\b"
+    # The Android client: the Gradle wrapper resolves and runs the Android
+    # Gradle Plugin and everything it pulls from Maven, which is third-party
+    # build code in exactly the sense `npm ci` is.
+    r"|\bgradlew\b|\bgradle\s"
 )
 
 
