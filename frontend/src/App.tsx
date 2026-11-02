@@ -51,6 +51,7 @@ import { I18nProvider } from './i18n'
 import { translate } from './i18n/index'
 import { AppearancePanel } from './components/AppearancePanel'
 import { DiscardPrompt } from './components/DiscardPrompt'
+import { isAskingToDiscard } from './layers'
 import { SettingsMenu, type SettingsSection } from './components/SettingsMenu'
 import { AppNav, TabBar } from './components/AppNav'
 
@@ -1309,6 +1310,10 @@ export function App() {
     const onClick = (e: MouseEvent) => {
       const t = e.target as Node
       if (settingsRef.current?.contains(t) || gearRef.current?.contains(t)) return
+      // A press on "Discard changes?" is outside the menu but answers it: its
+      // own buttons decide whether Settings closes, and "Keep editing" must
+      // not lose the text it is keeping.
+      if (isAskingToDiscard()) return
       setSettingsOpen(false)
     }
     document.addEventListener('mousedown', onClick)

@@ -633,8 +633,9 @@ function SecretField({ id, label, status, envVar, onSave, onClear }: {
   const [replacing, setReplacing] = useState(false)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
-  // Saved only by Enter or Save, so Back asks before Settings drops it.
-  useUnsent(draft.trim() !== '')
+  // Saved only by Enter or Save, so Back asks before Settings drops it. Not
+  // while it is being saved: it is on its way whatever Back does.
+  useUnsent(draft.trim() !== '' && !busy)
 
   // The environment wins over the store on the server, so there is nothing
   // here that could change the value: say who holds it and stop.

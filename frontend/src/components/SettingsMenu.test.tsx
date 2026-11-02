@@ -160,6 +160,40 @@ describe('<SettingsMenu> on a desktop', () => {
     expect(onClose).not.toHaveBeenCalled()
     expect(name).toHaveValue('Hallway')
   })
+
+  it('does not ask about a display name that is already being added', async () => {
+    m.displays.mockResolvedValue([])
+    m.lists.mockResolvedValue([])
+    m.createDisplay.mockReturnValue(new Promise(() => {}))
+    const { onClose } = show()
+    render(<DiscardPrompt />)
+    await userEvent.click(nav('Displays'))
+    await userEvent.type(await within(panel()).findByLabelText('Name'), 'Hallway')
+    await userEvent.click(within(panel()).getByRole('button', { name: 'Add' }))
+    expect(m.createDisplay).toHaveBeenCalledOnce()
+
+    pressBack()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it('does not ask about a share name that is already being added', async () => {
+    // It reaches the server whatever Back does, so "Discard" would promise
+    // what it cannot do.
+    m.shares.mockResolvedValue([])
+    m.lists.mockResolvedValue([])
+    m.createShare.mockReturnValue(new Promise(() => {}))
+    const { onClose } = show()
+    render(<DiscardPrompt />)
+    await userEvent.click(nav('Shares'))
+    await userEvent.type(await within(panel()).findByLabelText('Who is it for?'), 'Sam')
+    await userEvent.click(within(panel()).getByRole('button', { name: 'Create link' }))
+    expect(m.createShare).toHaveBeenCalledOnce()
+
+    pressBack()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(onClose).toHaveBeenCalledOnce()
+  })
 })
 
 // ── about: the licence's own requirement, rendered ──────────────────────────

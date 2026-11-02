@@ -125,6 +125,25 @@ describe('a stored credential', () => {
     await waitFor(() => expect(release).toHaveBeenCalledOnce())
   })
 
+  it('stops counting a key as unsent once it is being saved', async () => {
+    // It is on its way whatever Back does, so "Discard" would promise what it
+    // cannot do.
+    const release = vi.fn()
+    const report = vi.fn(() => release)
+    m.mailSettings.mockResolvedValue(stored_())
+    m.putMailSettings.mockReturnValue(new Promise(() => {}))
+    const user = userEvent.setup()
+    render(
+      <UnsentInput.Provider value={report}><MailSection onExpire={vi.fn()} /></UnsentInput.Provider>,
+    )
+    await screen.findByText('Anthropic')
+    await user.click(screen.getByRole('button', { name: 'Replace' }))
+    await user.type(el('mail-api-key'), 'new')
+    await user.click(screen.getAllByRole('button', { name: 'Save' })[0])
+    expect(m.putMailSettings).toHaveBeenCalledOnce()
+    expect(release).toHaveBeenCalledOnce()
+  })
+
   it('Clear sends an empty string', async () => {
     const user = userEvent.setup()
     await show(stored_())

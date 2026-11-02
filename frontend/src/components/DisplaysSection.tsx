@@ -72,8 +72,6 @@ export function DisplaysSection(
   const [open, setOpen] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<string | null>(null)
   const [name, setName] = useState('')
-  // Added only by Enter or the button, so Back asks before Settings drops it.
-  useUnsent(name.trim() !== '')
 
   // Archived calendars are NOT offered as display sources. `api.calendars()`
   // returns them — the backend never filters, which is what
@@ -111,6 +109,10 @@ export function DisplaysSection(
   // without a session. Two rows called "Kitchen" are indistinguishable, so the
   // one deleted as the duplicate could be the one the panel was paired to.
   const [adding, setAdding] = useState(false)
+  // Added only by Enter or the button, so Back asks before Settings drops it.
+  // Not while it is being added: that name is on its way whatever Back does,
+  // so a "Discard" would promise what it cannot do.
+  useUnsent(name.trim() !== '' && !adding)
   const add = async () => {
     const trimmed = name.trim()
     if (!trimmed || adding) return

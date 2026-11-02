@@ -279,6 +279,16 @@ function readAsk(): DiscardAsk | null {
   return ask
 }
 
+/**
+ * Whether "Discard changes?" is open. Its dialog and scrim cover the window, so
+ * while it is, every press lands on the question; a handler that closes
+ * something on a press outside it must leave that press alone, or "Keep
+ * editing" would close the very layer it keeps.
+ */
+export function isAskingToDiscard(): boolean {
+  return ask !== null
+}
+
 /** The question Back is asking, or null. For DiscardPrompt. */
 export function useDiscardAsk(): DiscardAsk | null {
   return useSyncExternalStore(subscribeAsk, readAsk, readAsk)

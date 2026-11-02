@@ -454,8 +454,8 @@ describe('layers: focus', () => {
 })
 
 describe('unsent input in fields the layer cannot see', () => {
-  function Field({ label }: { label: string }) {
-    const [text, setText] = useState('')
+  function Field({ label, initial = '' }: { label: string; initial?: string }) {
+    const [text, setText] = useState(initial)
     useUnsent(text !== '')
     return <input aria-label={label} value={text} onChange={(e) => setText(e.target.value)} />
   }
@@ -486,6 +486,26 @@ describe('unsent input in fields the layer cannot see', () => {
     expect(onBack).not.toHaveBeenCalled()
 
     fireEvent.change(b, { target: { value: '' } })
+    pressBack()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(onBack).toHaveBeenCalledOnce()
+  })
+
+  it('counts a field once though StrictMode mounts it twice', () => {
+    // StrictMode runs the effect, its cleanup and the effect again while the
+    // field already holds text. A release that did not undo its report would
+    // leave the count at 2, and clearing the field would still ask.
+    const onBack = vi.fn()
+    render(withPrompt(
+      <StrictMode>
+        <Sheet onBack={onBack}><Field label="a" initial="x" /></Sheet>
+      </StrictMode>,
+    ))
+    pressBack()
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
+
+    fireEvent.change(screen.getByLabelText('a'), { target: { value: '' } })
     pressBack()
     expect(screen.queryByRole('alertdialog')).toBeNull()
     expect(onBack).toHaveBeenCalledOnce()

@@ -62,8 +62,6 @@ export function SharesSection(
   const [open, setOpen] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<string | null>(null)
   const [name, setName] = useState('')
-  // Added only by Enter or the button, so Back asks before Settings drops it.
-  useUnsent(name.trim() !== '')
   const [copied, setCopied] = useState<string | null>(null)
   // A preview is the server's own answer for one share, so it is never built
   // here. `'failed'` is kept apart from absent so the button can say what happened.
@@ -123,6 +121,10 @@ export function SharesSection(
   // token that reaches the calendar without a session, so a second Enter during
   // the round trip must not mint a second link of the same name.
   const [adding, setAdding] = useState(false)
+  // Added only by Enter or the button, so Back asks before Settings drops it.
+  // Not while it is being added: that name is on its way whatever Back does,
+  // so a "Discard" would promise what it cannot do.
+  useUnsent(name.trim() !== '' && !adding)
   const add = async () => {
     const trimmed = name.trim()
     if (!trimmed || adding) return
