@@ -7,11 +7,14 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import android.text.format.DateFormat
 import android.util.TypedValue
 import android.view.View
 import android.view.WindowInsetsController
@@ -31,7 +34,9 @@ import android.widget.TextView
 import android.widget.Toast
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
+import java.io.File
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 
 /// The window: a WebView showing the app at the server's own origin, with its
 /// files answered from the downloaded web build (LocalAssets), plus the
@@ -66,6 +71,20 @@ class MainActivity : Activity() {
     private var backCallback: Any? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
 
+    /// What hello() answers. Written on the main thread, read on the bridge thread.
+    @Volatile private var envJson = HostProtocol.envJson(clock24 = false)
+    /// Counts committed documents, so a save's result reaches only the document that asked.
+    private var docGeneration = 0
+    /// Claimed on the bridge thread, so two calls cannot both open a picker.
+    private val saveBusy = AtomicBoolean(false)
+    /// The payload while the picker is open; null after a restore that could not read it back.
+    private var saveRequest: SaveRequest? = null
+    private var saveDocument = 0
+    /// The picker was opened by an earlier instance of this activity, which has no page now.
+    private var saveRestored = false
+    private var pickerOpen = false
+    private var lastPickerClosed: Long? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         settings = Settings(this)
@@ -78,6 +97,8 @@ class MainActivity : Activity() {
         updater = Updater(this, settings)
         assets = LocalAssets(updater.web.root, origin)
         restorePath = savedInstanceState?.getString(KEY_PATH)
+        envJson = HostProtocol.envJson(DateFormat.is24HourFormat(this))
+        restoreSave(savedInstanceState)
 
         setContentView(R.layout.activity_main)
         root = findViewById(R.id.root)
@@ -208,18 +229,13 @@ class MainActivity : Activity() {
             override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse =
                 LocalAssets.refused()
         })
-        web.addJavascriptInterface(
-            ThemeBridge { colour ->
-                main.post {
-                    if (isDestroyed) return@post
-                    applyThemeColour(colour)
-                    settings.themeColour = colour
-                }
-            },
-            "SmylteAndroid",
-        )
+        // Every script on the page can call it; PageBridge says what each
+        // method may do.
+        web.addJavascriptInterface(PageBridge(Bridge()), "SmylteAndroid")
         web.webViewClient = Client()
         web.webChromeClient = Chrome()
+        // A page from before saveFile still exports through a blob download,
+        // which the WebView cannot hand to Android, so it is told so.
         web.setDownloadListener { url, _, _, _, _ ->
             if (url.startsWith("https://") || url.startsWith("http://")) openExternally(Uri.parse(url))
             else Toast.makeText(this, R.string.export_unavailable, Toast.LENGTH_LONG).show()
@@ -245,7 +261,155 @@ class MainActivity : Activity() {
 
     private fun isOurs(url: Uri): Boolean = AssetRoutes.isSameOrigin(origin, url.scheme, url.host, url.port)
 
+    // ── the page bridge ─────────────────────────────────────────────────────
+
+    private inner class Bridge : PageBridge.Host {
+        override fun colour(colour: Int) {
+            main.post {
+                if (isDestroyed) return@post
+                applyThemeColour(colour)
+                settings.themeColour = colour
+            }
+        }
+
+        // The host acts on no capability yet; reading them now keeps the page's
+        // half of the handshake unchanged when one does.
+        override fun hello(caps: Set<String>): String = envJson
+
+        override fun save(request: SaveRequest): Boolean {
+            if (!saveBusy.compareAndSet(false, true)) return false
+            main.post { launchSave(request) }
+            return true
+        }
+    }
+
+    /// Tell the page when the facts hello reported have changed. It runs in
+    /// onResume, so a Settings change made while away is picked up (a
+    /// ContentObserver is skipped because its notifications are unconfirmed),
+    /// and in onConfigurationChanged, because a locale change changes the
+    /// default.
+    private fun refreshEnv() {
+        val next = HostProtocol.envJson(DateFormat.is24HourFormat(this))
+        if (next == envJson) return
+        envJson = next
+        sendEvent(HostProtocol.envEvent(next))
+    }
+
+    /// One DOM event to the app's own document; never to a page anywhere else.
+    private fun sendEvent(detail: String) {
+        if (isDestroyed || !loaded) return
+        val url = web.url ?: return
+        if (!isOurs(Uri.parse(url))) return
+        web.evaluateJavascript(HostProtocol.eventScript(detail), null)
+    }
+
+    /// The picker cannot overwrite a file (it appends "(1)") and the host
+    /// writes only to the URI it returns, so the worst a script gets is a save
+    /// dialog the user can cancel.
+    private fun launchSave(request: SaveRequest) {
+        if (isDestroyed) {
+            saveBusy.set(false)
+            return
+        }
+        val ours = loaded && web.url?.let { isOurs(Uri.parse(it)) } == true
+        if (!HostProtocol.allowSave(resumed, ours, SystemClock.uptimeMillis(), lastPickerClosed)) {
+            saveBusy.set(false)
+            sendEvent(HostProtocol.savedEvent(HostProtocol.SaveOutcome.FAILED))
+            return
+        }
+        saveRequest = request
+        saveDocument = docGeneration
+        saveRestored = false
+        pickerOpen = true
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType(request.mime)
+            .putExtra(Intent.EXTRA_TITLE, request.name)
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, REQUEST_SAVE)
+        } catch (_: ActivityNotFoundException) {
+            saveRequest = null
+            pickerOpen = false
+            saveBusy.set(false)
+            sendEvent(HostProtocol.savedEvent(HostProtocol.SaveOutcome.FAILED))
+        }
+    }
+
+    /// Mode "wt" truncates. After a failed write the host deletes nothing: a
+    /// provider might have returned an existing document, and deleting it would
+    /// lose the user's file.
+    private fun finishSave(resultCode: Int, data: Intent?) {
+        pickerOpen = false
+        lastPickerClosed = SystemClock.uptimeMillis()
+        stashFile().delete()   // the payload is in memory from here on
+        val request = saveRequest
+        val uri = if (resultCode == RESULT_OK) data?.data else null
+        if (uri == null) {
+            completeSave(HostProtocol.SaveOutcome.CANCELLED)
+            return
+        }
+        if (request == null) {
+            completeSave(HostProtocol.SaveOutcome.FAILED)
+            return
+        }
+        val resolver = contentResolver
+        Background.files.execute {
+            val written = runCatching {
+                resolver.openOutputStream(uri, "wt")?.use {
+                    it.write(request.text.toByteArray(Charsets.UTF_8))
+                    true
+                } ?: false
+            }.getOrDefault(false)
+            main.post {
+                completeSave(if (written) HostProtocol.SaveOutcome.SAVED else HostProtocol.SaveOutcome.FAILED)
+            }
+        }
+    }
+
+    /// applicationContext is used for the toast because this instance may
+    /// already be destroyed.
+    private fun completeSave(outcome: HostProtocol.SaveOutcome) {
+        val report = HostProtocol.saveReport(saveRestored, saveDocument, docGeneration, alive = !isDestroyed)
+        saveRequest = null
+        saveRestored = false
+        saveBusy.set(false)
+        when (report) {
+            HostProtocol.SaveReport.PAGE -> sendEvent(HostProtocol.savedEvent(outcome))
+            HostProtocol.SaveReport.TOAST -> when (outcome) {
+                HostProtocol.SaveOutcome.SAVED -> R.string.file_saved
+                HostProtocol.SaveOutcome.FAILED -> R.string.file_not_saved
+                HostProtocol.SaveOutcome.CANCELLED -> null   // the user's own act needs no word
+            }?.let { Toast.makeText(applicationContext, it, Toast.LENGTH_LONG).show() }
+        }
+    }
+
+    /// The picker can outlive this activity, through process death, recreate()
+    /// after a renderer crash, or a wallpaper palette change, and Android
+    /// delivers its result to the new one. The slot stays claimed even when the
+    /// payload is unreadable, so a page call cannot take over a picker the user
+    /// is already looking at.
+    private fun restoreSave(state: Bundle?) {
+        val stash = stashFile()
+        if (state?.getBoolean(KEY_SAVE_OPEN) == true) {
+            val text = runCatching { stash.readText() }.getOrNull()
+            saveRequest = SaveRequest.of(state.getString(KEY_SAVE_NAME), state.getString(KEY_SAVE_MIME), text)
+            saveBusy.set(true)
+            saveRestored = true
+            pickerOpen = true
+        }
+        stash.delete()   // read once; a stale one from a killed process goes too
+    }
+
+    private fun stashFile() = File(cacheDir, STASH)
+
     private inner class Client : WebViewClient() {
+        /// A new document. A save the last one started reports through a toast
+        /// instead (saveReport).
+        override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+            docGeneration++
+        }
+
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
             assets.answer(request)
 
@@ -308,6 +472,10 @@ class MainActivity : Activity() {
         if (requestCode == REQUEST_FILE) {
             fileCallback?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data))
             fileCallback = null
+            return
+        }
+        if (requestCode == REQUEST_SAVE) {
+            finishSave(resultCode, data)
             return
         }
         @Suppress("DEPRECATION")
@@ -623,6 +791,7 @@ class MainActivity : Activity() {
         super.onResume()
         resumed = true
         web.onResume()
+        refreshEnv()
         if (pendingInstall) launchInstaller()
         // Back from the "install unknown apps" screen, or the installer.
         if (loaded) refreshStrip()
@@ -641,12 +810,25 @@ class MainActivity : Activity() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         // Not set up when onCreate sent a first run to the settings screen.
-        if (::web.isInitialized) applyTextZoom()
+        if (::web.isInitialized) {
+            applyTextZoom()
+            refreshEnv()
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         if (loaded) outState.putString(KEY_PATH, currentPath())
+        // The payload is at most 512 Ki characters and is written only while a
+        // picker is open, which is the only time a process death could lose it.
+        if (pickerOpen) {
+            outState.putBoolean(KEY_SAVE_OPEN, true)
+            saveRequest?.let { r ->
+                runCatching { stashFile().apply { parentFile?.mkdirs() }.writeText(r.text) }
+                outState.putString(KEY_SAVE_NAME, r.name)
+                outState.putString(KEY_SAVE_MIME, r.mime)
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -661,6 +843,11 @@ class MainActivity : Activity() {
     private companion object {
         const val KEY_PATH = "path"
         const val REQUEST_FILE = 1
+        const val REQUEST_SAVE = 2
+        const val KEY_SAVE_OPEN = "save_open"
+        const val KEY_SAVE_NAME = "save_name"
+        const val KEY_SAVE_MIME = "save_mime"
+        const val STASH = "export/pending"
         const val RECHECK_MS = 6 * 60 * 60 * 1000L
         const val RETRY_MS = 15 * 60 * 1000L
     }

@@ -13,6 +13,7 @@ import { App } from './App'
 import { BookingPage } from './components/BookingPage'
 import { DisplayView } from './components/DisplayView'
 import { SharePage } from './components/SharePage'
+import { startAndroidHost } from './android'
 import { startCaptionSync } from './desktop'
 
 // /book/<token> is the public client-booking page: no session, no login — the
@@ -36,6 +37,12 @@ const share = location.pathname.match(/^\/share\/([A-Za-z0-9_-]+)\/?$/)
 // than inside App so the booking and display routes get it too: a wall panel
 // and a booking page have themes as much as the app does.
 startCaptionSync()
+
+// Read the Android client's facts before anything renders: `hello` is
+// synchronous, so they are known on the first render. Started here for the same
+// reason as the caption sync, so every route gets it, and a no-op in a browser
+// and in the desktop clients.
+startAndroidHost()
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

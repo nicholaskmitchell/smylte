@@ -1,6 +1,5 @@
 package com.nicholaskmitchell.smylte
 
-import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import java.io.ByteArrayInputStream
@@ -94,17 +93,5 @@ class LocalAssets(private val root: File, private val origin: String) {
             mapOf("Content-Security-Policy" to "default-src 'none'", "X-Content-Type-Options" to "nosniff"),
             ByteArrayInputStream(ByteArray(0)),
         )
-    }
-}
-
-/// The one thing the page can tell this host: its background colour, from the
-/// watcher ThemeColour.WATCH_SCRIPT installs. Called on a WebView thread.
-///
-/// Exposed as `window.SmylteAndroid`. It takes a colour string and does
-/// nothing else, so anything that can call it can at worst repaint the bars.
-class ThemeBridge(private val onColour: (Int) -> Unit) {
-    @JavascriptInterface
-    fun themeColour(hex: String?) {
-        ThemeColour.parse(hex)?.let(onColour)
     }
 }

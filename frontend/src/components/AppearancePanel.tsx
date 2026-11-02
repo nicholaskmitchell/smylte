@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { canSaveFiles, saveTextFile } from '../android'
 import { clientId } from '../api'
 import { useEscape, useSegmentThumb } from '../hooks'
 import { useT } from '../i18n'
@@ -175,13 +176,26 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
     })
   }
 
+  // The Android WebView cannot hand a blob download to the system, and the URL
+  // is revoked straight after the click, so there the host saves the text
+  // through its own dialog. The browser path stays synchronous so the download
+  // stays inside the click's user activation. 'cancelled' is the user's own
+  // choice and 'busy' is a second tap, so only 'failed' gets a message.
   const exportTheme = () => {
     if (!active) return
-    const blob = new Blob([serializeTheme(active)], { type: 'application/json' })
+    const name = `${active.name.replace(/[^\w-]+/g, '-').toLowerCase()}.smylte-theme.json`
+    const text = serializeTheme(active)
+    if (canSaveFiles()) {
+      void saveTextFile(name, 'application/json', text).then((outcome) => {
+        if (outcome === 'failed') showNotice(tr('appear.exportFailed'))
+      })
+      return
+    }
+    const blob = new Blob([text], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${active.name.replace(/[^\w-]+/g, '-').toLowerCase()}.smylte-theme.json`
+    a.download = name
     a.click()
     URL.revokeObjectURL(url)
   }

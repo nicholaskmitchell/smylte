@@ -125,6 +125,7 @@ can't be read there anyway.
 | `files/web.next/` | A newer build waiting for a reload, when there is one |
 | `files/release.json` | The last release description, for conditional checks |
 | `cache/updates/` | An app update between download and install |
+| `cache/export/` | A file being saved, while Android's save dialog is open, in case Android closes Smylte meanwhile |
 | `app_webview/` | The WebView's cookies and local storage |
 
 ## Differences from the desktop clients
@@ -139,9 +140,9 @@ can't be read there anyway.
   don't exist here, so Settings doesn't show them. The status and navigation
   bars take the page's background colour, from the `theme-color` the app
   already publishes for mobile browsers.
-- **Theme export isn't available yet.** The app saves the file through a
-  browser download, which the WebView can't hand to Android. Theme import
-  works.
+- **Saving a file asks where.** Theme export opens Android's own save dialog,
+  where you choose the folder (or a cloud drive) and the name. Theme import
+  works as in a browser.
 
 ## Building
 
@@ -272,6 +273,9 @@ The JVM unit tests run without a device. They cover:
 - the update decisions and digest checks;
 - the server address rules;
 - the bar colours;
+- the page bridge: exactly which methods the page can call, that release builds keep them, and what each accepts;
+- the bridge's rules: capabilities, the env and its events, a saved file's type, name and size, the wait between save dialogs, where a save's result is shown, and touch tracking;
+- that the page and the window agree on the event, its outcomes and the env version (against `frontend/src/android.ts`);
 - the text zoom, and the body size it is measured at, against the stylesheet;
 - the launcher icon against `frontend/public/favicon.svg`.
 
@@ -281,9 +285,11 @@ server's.
 ## Source layout
 
 ```
-MainActivity.kt   the window: WebView, splash, update strip, back, file picker
+MainActivity.kt   the window: WebView, splash, update strip, back, file picker and saves
 SetupActivity.kt  the settings screen
-LocalAssets.kt    answers the WebView's requests from the web build; the colour bridge
+LocalAssets.kt    answers the WebView's requests from the web build
+PageBridge.kt     what the page can ask of the window (window.SmylteAndroid)
+HostProtocol.kt   the bridge's rules and messages, free of Android classes so they are tested
 AssetRoutes.kt    which requests are answered locally, and the traversal guard
 Csp.kt            Content-Security-Policy, a port of backend/smylted/csp.py
 Updater.kt        release check, web build download, APK download and checks
@@ -298,6 +304,6 @@ ThemeColour.kt    the page colour and the script that reports it
 TextZoom.kt       the page's text size, from the system font size
 ApkProvider.kt    hands the downloaded APK to the installer
 Insets.kt         edge to edge, clear of the bars and the keyboard
-Background.kt     the one thread updates run on
+Background.kt     the threads updates and file saves run on
 Release.kt        where the release is
 ```

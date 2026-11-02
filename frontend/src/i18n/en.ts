@@ -980,6 +980,7 @@ export const en = {
   'appear.duplicate': 'Duplicate',
   'appear.rename': 'Rename',
   'appear.export': 'Export',
+  'appear.exportFailed': 'Couldn’t export the theme. Try again.',
   'appear.import': 'Import',
   'appear.themeName': 'Theme name',
   'appear.presetHint': '{name} is built in. Editing it creates your own copy.',

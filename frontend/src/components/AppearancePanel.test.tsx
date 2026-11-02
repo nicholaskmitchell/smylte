@@ -1,8 +1,8 @@
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AppearancePanel } from './AppearancePanel'
-import { DEFAULTS, MAX_THEMES, PRESETS, type Appearance, type CustomTheme } from '../appearance'
+import { DEFAULTS, MAX_THEMES, PRESETS, serializeTheme, type Appearance, type CustomTheme } from '../appearance'
 import { setErrorNotifier } from '../util'
 
 const theme = (o: Partial<CustomTheme> = {}): CustomTheme => ({
@@ -315,5 +315,106 @@ describe('<AppearancePanel> importing a file that is not a theme', () => {
     await waitFor(() => expect(notice).toHaveBeenCalledWith('That file is not a Smylte theme.'))
     expect(onChange).not.toHaveBeenCalled()
     expect(alertSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('<AppearancePanel> export', () => {
+  let notice: ReturnType<typeof vi.fn<(msg: string) => void>>
+  let alertSpy: ReturnType<typeof vi.spyOn>
+  let clicks: HTMLAnchorElement[]
+  let clickSpy: ReturnType<typeof vi.spyOn>
+  const createObjectURL = vi.fn(() => 'blob:theme')
+  const revokeObjectURL = vi.fn()
+  const originalCreate = URL.createObjectURL
+  const originalRevoke = URL.revokeObjectURL
+
+  const exportButton = () => screen.getByRole('button', { name: 'Export' })
+  // The host's answer, as the Android client sends it.
+  const hostSays = (outcome: string) => act(() => {
+    window.dispatchEvent(new CustomEvent('smylte-android', { detail: { type: 'saved', outcome } }))
+  })
+
+  beforeEach(() => {
+    notice = vi.fn<(msg: string) => void>()
+    setErrorNotifier(notice)
+    alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+    // jsdom has neither.
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, writable: true, value: createObjectURL })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, writable: true, value: revokeObjectURL })
+    clicks = []
+    clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      clicks.push(this)
+    })
+    setup({ active: 't1', themes: [theme()] })
+  })
+  afterEach(async () => {
+    // The module's state is shared across tests: answer any save still waiting.
+    hostSays('cancelled')
+    vi.unstubAllGlobals()
+    setErrorNotifier(null)
+    alertSpy.mockRestore()
+    clickSpy.mockRestore()
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, writable: true, value: originalCreate })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, writable: true, value: originalRevoke })
+  })
+
+  it('in a browser it downloads the file', async () => {
+    await userEvent.click(exportButton())
+    expect(createObjectURL).toHaveBeenCalledTimes(1)
+    const blob = (createObjectURL.mock.calls[0] as unknown as [Blob])[0]
+    expect(blob.type).toBe('application/json')
+    expect(await blob.text()).toBe(serializeTheme(theme()))
+    expect(clicks).toHaveLength(1)
+    expect(clicks[0].download).toBe('mine.smylte-theme.json')
+    expect(revokeObjectURL).toHaveBeenCalled()
+  })
+
+  it('inside an old Android client it still downloads', async () => {
+    vi.stubGlobal('SmylteAndroid', { themeColour: vi.fn() })
+    await userEvent.click(exportButton())
+    expect(createObjectURL).toHaveBeenCalledTimes(1)
+  })
+
+  it('inside the Android client it asks the host to save', async () => {
+    const saveFile = vi.fn(() => true)
+    vi.stubGlobal('SmylteAndroid', { saveFile })
+    await userEvent.click(exportButton())
+    expect(saveFile).toHaveBeenCalledWith('mine.smylte-theme.json', 'application/json', serializeTheme(theme()))
+    expect(createObjectURL).not.toHaveBeenCalled()
+    hostSays('saved')
+    expect(notice).not.toHaveBeenCalled()
+  })
+
+  it('a cancelled save says nothing', async () => {
+    vi.stubGlobal('SmylteAndroid', { saveFile: vi.fn(() => true) })
+    await userEvent.click(exportButton())
+    hostSays('cancelled')
+    await Promise.resolve()
+    expect(notice).not.toHaveBeenCalled()
+  })
+
+  it('a refused save says so in the toast', async () => {
+    vi.stubGlobal('SmylteAndroid', { saveFile: vi.fn(() => false) })
+    await userEvent.click(exportButton())
+    await waitFor(() => expect(notice).toHaveBeenCalledWith('Couldn’t export the theme. Try again.'))
+    expect(alertSpy).not.toHaveBeenCalled()
+  })
+
+  it('a failed write says so in the toast', async () => {
+    vi.stubGlobal('SmylteAndroid', { saveFile: vi.fn(() => true) })
+    await userEvent.click(exportButton())
+    hostSays('failed')
+    await waitFor(() => expect(notice).toHaveBeenCalledWith('Couldn’t export the theme. Try again.'))
+    expect(alertSpy).not.toHaveBeenCalled()
+  })
+
+  it('a second tap while the picker opens does nothing', async () => {
+    const saveFile = vi.fn(() => true)
+    vi.stubGlobal('SmylteAndroid', { saveFile })
+    await userEvent.click(exportButton())
+    await userEvent.click(exportButton())
+    expect(saveFile).toHaveBeenCalledTimes(1)
+    await Promise.resolve()
+    expect(notice).not.toHaveBeenCalled()
   })
 })

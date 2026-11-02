@@ -20,6 +20,8 @@
     <string name="downloading">Downloading the new app…</string>
     <string name="no_installer">Android\'s own installer could not be found, so the update was not opened. Download it from the release page instead.</string>
     <string name="export_unavailable">Saving files is not available in the Android app yet.</string>
+    <string name="file_saved">The file was saved.</string>
+    <string name="file_not_saved">The file could not be saved.</string>
     <string name="no_app_for_link">No app on this device can open that link.</string>
 
     <string name="setup_title">Smylte</string>

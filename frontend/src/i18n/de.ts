@@ -1041,6 +1041,7 @@ export const de: Catalogue = {
   'appear.duplicate': 'Duplizieren',
   'appear.rename': 'Umbenennen',
   'appear.export': 'Exportieren',
+  'appear.exportFailed': 'Das Theme konnte nicht exportiert werden. Versuch es noch einmal.',
   'appear.import': 'Importieren',
   'appear.themeName': 'Theme-Name',
   'appear.presetHint': '{name} ist mitgeliefert. Beim Bearbeiten entsteht eine eigene Kopie.',
