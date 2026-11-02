@@ -155,6 +155,9 @@ class Sweep:
     day: str                         # local day key, YYYY-MM-DD
     prefs: dict[str, Any]            # the app_settings blob
     interval_s: float                # the sweep cadence, i.e. the window width
+    # When the previous sweep in this process ran, if one did. "At the time"
+    # reminders use it to make consecutive windows meet exactly (late_floor).
+    since: datetime | None = None
 
     @property
     def local_now(self) -> datetime:
@@ -533,15 +536,15 @@ def _reminder_pending(
 
     Except for a lead of zero, "at the time", where that window is a single
     instant and sweeps run a minute apart: one landing exactly on the moment is
-    luck. So that window OPENS at the moment and stays open for two sweep
-    intervals (`late_grace`), and the message says "now". Two sweeps inside it
-    still send once, because the moment is in the dedupe key.
+    luck. So that window OPENS at the moment and stays open until a sweep has
+    seen it (`late_floor`), and the message says "now". Two sweeps that both
+    see it still send once, because the moment is in the dedupe key.
     """
     delta = moment - s.now
     if lead > timedelta(0):
         if not (timedelta(0) <= delta <= lead):
             return None
-    elif not (-late_grace(s) <= delta <= timedelta(0)):
+    elif not (late_floor(s) <= moment <= s.now):
         return None
     minutes = max(0, int(delta.total_seconds() // 60))
     local = moment.astimezone(s.tz) if s.tz else moment
@@ -560,11 +563,34 @@ def _reminder_pending(
     )
 
 
+# However the sweeps fall, "now" about something due longer ago than this is
+# not worth saying: a loop that stalled for an hour stays quiet about it.
+ZERO_LEAD_MAX_LATE = timedelta(minutes=15)
+
+
 def late_grace(s: Sweep) -> timedelta:
-    """How long after its moment an "at the time" reminder may still go out:
-    two sweep intervals, so the sweep after the moment catches it even when
-    that tick runs late. A Sweep with no cadence (0) keeps the exact instant."""
+    """Two sweep intervals: the fallback window for an "at the time" reminder
+    when no previous sweep is known (the first after a start). A Sweep with no
+    cadence (0) keeps the exact instant."""
     return timedelta(seconds=2 * max(s.interval_s, 0.0))
+
+
+def late_floor(s: Sweep) -> datetime:
+    """The earliest moment an "at the time" reminder may still go out on this
+    sweep.
+
+    With the previous sweep known, just after it: consecutive windows then meet
+    exactly, so every moment falls in one sweep's window however long a sweep
+    took (the loop waits a full interval AFTER a sweep finishes, so starts can
+    be further apart than any fixed grace). The first sweep after a start has no
+    predecessor and falls back to `late_grace`. Never further back than
+    ZERO_LEAD_MAX_LATE.
+    """
+    if s.since is None:
+        return s.now - late_grace(s)
+    # A moment exactly at `since` was the previous sweep's to send.
+    floor = s.since + timedelta(microseconds=1)
+    return max(floor, s.now - ZERO_LEAD_MAX_LATE)
 
 
 # ── booking_created ──────────────────────────────────────────────────────────

@@ -39,7 +39,12 @@ object GitHub {
         onTokenRejected: (() -> Unit)? = null,
     ): HttpURLConnection {
         val conn = openOnce(url, token, accept, timeouts, ifNoneMatch)
-        if (conn.responseCode != 401 || token.isNullOrBlank()) return conn
+        // Only api.github.com ever receives the token (openOnce), so only its
+        // 401 says anything about it. A 401 from the download CDN a redirect
+        // led to is that host's business.
+        if (conn.responseCode != 401 || token.isNullOrBlank() ||
+            !conn.url.host.equals(API_HOST, ignoreCase = true)
+        ) return conn
         conn.disconnect()
         onTokenRejected?.invoke()
         return openOnce(url, null, accept, timeouts, ifNoneMatch)
@@ -58,7 +63,9 @@ object GitHub {
         } finally {
             conn.disconnect()
         }
-    } catch (_: IOException) {
+    } catch (_: Exception) {
+        // Unreachable, or a token Android will not even put in a header (a
+        // control character pasted into it). Either way: could not ask.
         null
     }
 

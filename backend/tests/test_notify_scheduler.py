@@ -55,6 +55,20 @@ def test_a_reminder_at_the_time_goes_out_on_the_next_real_sweep_and_once(db):
     assert len([m for m in sender.sent if "Renew passport" in m["text"]]) == 1
 
 
+def test_a_reminder_at_the_time_survives_a_slow_sweep(db):
+    # The Notifier remembers when it last swept, so a gap longer than the
+    # fallback grace (two intervals) still covers the moment.
+    from tests.test_notify_rules import _task
+    svc = StubSvc(db, settings={**ON, "notify_digest_time": "07:30"}, tasks=[_task(notify=0)])
+    sender = StubSender()
+    n = Notifier(svc, sender, "555", log=NullLog(), token="env-token", interval_s=60.0)
+    reminder = "Renew passport due 10:00"      # not the digest, which lists it too
+    n.sweep(datetime(2026, 8, 31, 13, 59, 30, tzinfo=timezone.utc))   # 30 s before
+    assert not [m for m in sender.sent if reminder in m["text"]]
+    n.sweep(datetime(2026, 8, 31, 14, 3, 20, tzinfo=timezone.utc))    # 200 s after
+    assert len([m for m in sender.sent if reminder in m["text"]]) == 1
+
+
 def test_the_notifier_defaults_to_the_shipped_sweep_cadence(db):
     # Every caller that predates the parameter (and the tests that build one
     # bare) gets the cadence the service actually runs at, not 0.
@@ -351,3 +365,17 @@ def test_an_opt_in_rule_stays_off_until_it_is_asked_for(db):
     sender = StubSender()
     assert _notifier(svc, sender).sweep(MORNING).sent == 0
     assert sender.sent == []
+
+
+def test_the_loop_and_the_notifier_share_one_sanitised_cadence():
+    # The Notifier sizes the "at the time" window from the same number the
+    # loop waits, so the two cannot disagree: floored at 5 s, and a setting
+    # that is not a positive finite number takes the shipped 60 s.
+    from types import SimpleNamespace
+    from smylted.app import notify_cadence
+    def cadence(v):
+        return notify_cadence(SimpleNamespace(notify_interval_s=v))
+    assert cadence(60.0) == 60.0
+    assert cadence(2.0) == 5.0
+    for bad in (0.0, -1.0, float("nan"), float("inf")):
+        assert cadence(bad) == 60.0

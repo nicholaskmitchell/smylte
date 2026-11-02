@@ -486,6 +486,45 @@ def test_a_lead_above_zero_still_closes_at_the_moment(db):
     assert R._eval_item_reminder(_sweep(svc, after)) == []
 
 
+# With the previous sweep known (`since`), the window is exactly the time since
+# it: contiguous however long a sweep took, so no moment falls between two.
+def _since_sweep(svc, now, since):
+    return R.Sweep(svc=svc, now=now, tz=svc._home_tz(), day="2026-08-31",
+                   prefs=svc.get_settings(), interval_s=60.0, since=since)
+
+
+def test_a_lead_of_zero_fires_after_a_long_gap_between_sweeps(db):
+    # The loop waits a full interval AFTER a sweep finishes, so a slow sweep
+    # puts more than two intervals between starts. 200 s is past the fallback
+    # grace (120 s) and must still fire, because nothing else will.
+    svc = StubSvc(db, tasks=[_task(notify=0)])
+    due = datetime(2026, 8, 31, 14, 0, tzinfo=timezone.utc)
+    out = R._eval_item_reminder(_since_sweep(svc, due + timedelta(seconds=200),
+                                             since=due - timedelta(seconds=10)))
+    assert len(out) == 1 and out[0].text.endswith("— now.")
+
+
+def test_a_lead_of_zero_belongs_to_the_sweep_that_first_passed_it(db):
+    # The previous sweep's window was (…, since]; a moment at or before `since`
+    # was that sweep's to send.
+    svc = StubSvc(db, tasks=[_task(notify=0)])
+    due = datetime(2026, 8, 31, 14, 0, tzinfo=timezone.utc)
+    assert R._eval_item_reminder(_since_sweep(svc, due + timedelta(seconds=40), since=due)) == []
+    assert R._eval_item_reminder(_since_sweep(svc, due + timedelta(seconds=40),
+                                              since=due + timedelta(seconds=1))) == []
+
+
+def test_a_lead_of_zero_is_never_sent_more_than_a_quarter_hour_late(db):
+    # A loop that stalled for an hour does not then say "now" about something
+    # that was due 20 minutes ago.
+    svc = StubSvc(db, tasks=[_task(notify=0)])
+    due = datetime(2026, 8, 31, 14, 0, tzinfo=timezone.utc)
+    assert R._eval_item_reminder(_since_sweep(svc, due + timedelta(minutes=20),
+                                              since=due - timedelta(hours=1))) == []
+    assert len(R._eval_item_reminder(_since_sweep(svc, due + timedelta(minutes=14),
+                                                  since=due - timedelta(hours=1)))) == 1
+
+
 def test_with_no_sweep_interval_a_lead_of_zero_keeps_the_exact_instant(db):
     # A Sweep built without a cadence (interval_s=0) has no window to stretch.
     svc = StubSvc(db, tasks=[_task(notify=0)])

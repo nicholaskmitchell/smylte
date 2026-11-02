@@ -54,7 +54,7 @@ bash -n "$WORK/publish.sh" || { echo "publish step is not valid bash"; exit 1; }
 run_case() {
   (
     set -uo pipefail
-    export GITHUB_SHA=deadbeefcafe1234
+    export GITHUB_SHA=deadbeefcafe1234deadbeefcafe1234deadbeef
     export GITHUB_REPOSITORY=nicholaskmitchell/smylte
     _STUB=$(mktemp -d)
     : "${FAIL_PROBE_TIMES:=0}" "${API_ANSWER:=present}" "${FAIL_UPLOAD_TIMES:=0}"
@@ -131,7 +131,13 @@ run_case() {
       case "$1 ${2:-}" in
         "api repos/nicholaskmitchell/smylte/commits/main")
           n=$(_bump head); echo "  [gh] api commits/main (call $n)" >&2
-          [ "$n" -le "$FAIL_HEAD_TIMES" ] && { echo "gh: HTTP 503" >&2; return 1; }
+          # As the real `gh api` does: the JSON error body on STDOUT, --jq
+          # ignored, and the status line on stderr.
+          if [ "$n" -le "$FAIL_HEAD_TIMES" ]; then
+            echo '{"message":"Server Error","status":"500"}'
+            echo "gh: Server Error (HTTP 500)" >&2
+            return 1
+          fi
           echo "${MAIN_HEAD:-$GITHUB_SHA}"; return 0 ;;
         "api repos/nicholaskmitchell/smylte/releases/tags/desktop-latest")
           _probe "api tags" && { echo '{"tag_name":"desktop-latest"}'; return 0; }; return 1 ;;
@@ -350,6 +356,11 @@ case_lacks "a run main has moved past publishes nothing"     0 'release (upload|
 case_is    "a run main has moved past says so"               0 'this run publishes nothing' MAIN_HEAD=0123456789abcdef0123456789abcdef01234567
 case_is    "a transient on the head check is retried"        0 'release upload' FAIL_HEAD_TIMES=2
 case_lacks "a dead head check fails without publishing"      1 'release (upload|create|edit)' FAIL_HEAD_TIMES=99
+# The trap: a failed attempt's JSON body on stdout must not end up in front of
+# the next attempt's sha and read as "main moved".
+case_lacks "a transient head error does not skip publishing" 0 'this run publishes nothing' FAIL_HEAD_TIMES=1
+case_is    "a forced run main moved past fails"              1 'Dispatch it again' CLIENT_PUBLISH=force MAIN_HEAD=0123456789abcdef0123456789abcdef01234567
+case_is    "a head that is not a sha fails"                  1 'could not read main' MAIN_HEAD=not-a-sha
 
 # ── the Android notes fetch ─────────────────────────────────────────────────
 # The third body fetch, after the exe's and the Linux client's: dead for all

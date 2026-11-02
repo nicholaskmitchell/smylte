@@ -263,10 +263,14 @@ jobs:
           # The compiled manifest, attribute by attribute. Not `dump badging`:
           # its summary line prints the version name unescaped, so a name
           # holding "' versionCode='1" read as a second, smaller code.
+          #
+          # Matched by RESOURCE ID, never by the printed name: Android reads
+          # these attributes by ID alone, and the name is just a string in the
+          # manifest's pool that a build can rename. 0x0101021b is versionCode
+          # and 0x01010576 versionCodeMajor.
           manifest=$("$tools/aapt2" dump xmltree --file AndroidManifest.xml "$apk")
           package=$(printf '%s\n' "$manifest" | sed -n 's/^ *A: package="\([^"]*\)".*/\1/p')
-          codes=$(printf '%s\n' "$manifest" \
-            | sed -n 's/^ *A: http:\/\/schemas.android.com\/apk\/res\/android:versionCode(0x0101021b)=\(.*\)$/\1/p')
+          codes=$(printf '%s\n' "$manifest" | sed -n 's/^ *A: .*(0x0101021b)=\(.*\)$/\1/p')
           if [ "$package" != com.nicholaskmitchell.smylte ]; then
             echo "::error::the APK's package is '${package}', not com.nicholaskmitchell.smylte"
             exit 1
@@ -277,7 +281,7 @@ jobs:
           fi
           # versionCodeMajor is the high 32 bits of the real version code, so
           # any value at all puts it beyond every build this workflow makes.
-          if printf '%s\n' "$manifest" | grep -q 'versionCodeMajor(0x01010576)'; then
+          if printf '%s\n' "$manifest" | grep -q '(0x01010576)'; then
             echo "::error::the APK sets versionCodeMajor"
             exit 1
           fi
@@ -483,8 +487,29 @@ jobs:
           # roll every client back to that build. A run that main has moved
           # past is not a failure either; the newer run publishes. A head that
           # cannot be read is, since retrying converges.
-          MAIN_HEAD=$(retry gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
+          #
+          # Read through a function that prints only on success: on an HTTP
+          # error `gh api` writes the JSON error body to STDOUT, ignoring --jq,
+          # so `$(retry gh api …)` would capture one failed attempt's body in
+          # front of the next attempt's sha, compare unequal, and skip
+          # publishing on a green job. The same trap `release_state` avoids.
+          head_sha() {
+            local sha
+            sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha) || return 1
+            printf '%s\n' "$sha"
+          }
+          MAIN_HEAD=$(retry head_sha)
+          if ! [[ "$MAIN_HEAD" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::could not read main's head (got '${MAIN_HEAD}')" >&2
+            exit 1
+          fi
           if [ "$MAIN_HEAD" != "$GITHUB_SHA" ]; then
+            # A forced republish asked for something the newer push run will
+            # not do (it runs `auto`), so that one must not end green.
+            if [ "${CLIENT_PUBLISH:-auto}" = force ]; then
+              echo "::error::main moved to ${MAIN_HEAD} during this forced run; nothing was published. Dispatch it again." >&2
+              exit 1
+            fi
             echo "::warning::main is at ${MAIN_HEAD}, not ${GITHUB_SHA}; this run publishes nothing" >&2
             exit 0
           fi

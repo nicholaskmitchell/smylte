@@ -22,6 +22,8 @@ class SetupActivity : Activity() {
     /// a new address from one carried over from the old one.
     private var shownPassword = ""
     private var shownOrigin = ""
+    /// A check is under way; its "Checking…" is not worth restoring.
+    private var checking = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,7 +64,7 @@ class SetupActivity : Activity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putBoolean(KEY_DROPPED, shownPassword.isEmpty())
-        outState.putCharSequence(KEY_STATUS, status.text)
+        if (!checking) outState.putCharSequence(KEY_STATUS, status.text)
     }
 
     /// Check the address answers as Smylte before saving it, as the desktop
@@ -95,6 +97,7 @@ class SetupActivity : Activity() {
         val gh = token.text.toString().trim()
 
         save.isEnabled = false
+        checking = true
         status.setText(R.string.setup_checking)
         // Its own thread rather than Background.updates, which may be busy
         // with a download that has nothing to do with this.
@@ -105,8 +108,9 @@ class SetupActivity : Activity() {
             // A token GitHub refuses would only be dropped later, in silence.
             val tokenRefused = ok && gh.isNotEmpty() && GitHub.tokenAccepted(gh) == false
             if (tokenRefused) message = getString(R.string.setup_token_refused)
-            // Back, pressed while this ran, means "don't".
-            if (ok && !tokenRefused && !isFinishing && !isDestroyed) {
+            // Back, pressed while this ran, means "don't". A rotation is not
+            // Back: the window is rebuilt, not finished, and the save goes on.
+            if (ok && !tokenRefused && !isFinishing) {
                 // Sealing touches the keystore, so not on the main thread, and
                 // a keystore that refuses is a sentence, not a crash.
                 try {
@@ -116,17 +120,22 @@ class SetupActivity : Activity() {
                     message = getString(R.string.setup_not_saved, Updater.describe(e))
                 }
             }
+            val app = applicationContext
             runOnUiThread {
+                checking = false
+                if (saved) {
+                    // From the application, because this window may have been
+                    // rebuilt by a rotation meanwhile; CLEAR_TASK replaces
+                    // whichever setup window is showing now.
+                    app.startActivity(
+                        Intent(app, MainActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
+                    )
+                }
                 if (isDestroyed) return@runOnUiThread
                 save.isEnabled = true
                 status.text = message
-                if (!saved) return@runOnUiThread
-                server.setText(origin)
-                startActivity(
-                    Intent(this, MainActivity::class.java)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
-                )
-                finish()
+                if (saved) finish()
             }
         }.start()
     }

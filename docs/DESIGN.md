@@ -209,7 +209,10 @@ data is frozen).
   so one reminder would arrive three times.
 - "At the time" (a lead of zero) can't use the usual window, which closes at
   the moment and would be a single instant. Its window opens at the moment and
-  stays open for two sweep intervals, and the message says "now".
+  runs to the sweep that first passes it: the Notifier remembers its last
+  sweep, so consecutive windows meet however long a sweep takes. The first
+  sweep after a start allows two intervals, nothing goes out more than 15
+  minutes late, and the message says "now".
 - Eight more rules exist, off by default, each documented with why. Before
   every task is due, overdue counts, "today isn't planned" and the others
   restate something already on screen.

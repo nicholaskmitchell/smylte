@@ -11,6 +11,7 @@ import contextlib
 import hashlib
 import hmac
 import json
+import math
 import logging
 import os
 import re
@@ -1344,8 +1345,22 @@ def _build_notifier(settings: Settings, svc: SmylteService):
     sender = TelegramSender(settings.telegram_bot_token)
     return Notifier(svc, sender, settings.telegram_chat_id, log=log,
                     token=settings.telegram_bot_token,
-                    interval_s=settings.notify_interval_s)
+                    interval_s=notify_cadence(settings))
 
+
+
+def notify_cadence(settings: Settings) -> float:
+    """Seconds between notification sweeps, as the loop actually waits them.
+
+    One function for the loop and the Notifier, because the Notifier sizes the
+    "at the time" window from it: a window computed from the raw setting while
+    the loop waited something else (it floors at 5 s) could fall between two
+    sweeps. A setting that is not a positive finite number takes the default.
+    """
+    raw = settings.notify_interval_s
+    if not math.isfinite(raw) or raw <= 0:
+        return 60.0
+    return max(5.0, raw)
 
 
 async def _notification_loop(app: FastAPI) -> None:
@@ -1371,7 +1386,7 @@ async def _notification_loop(app: FastAPI) -> None:
         if not first:
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(
-                    trigger.wait(), timeout=max(5.0, svc.settings.notify_interval_s)
+                    trigger.wait(), timeout=notify_cadence(svc.settings)
                 )
             trigger.clear()
         first = False

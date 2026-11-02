@@ -108,6 +108,9 @@ class Notifier:
         # shipped one). The rules need it: it is the width of the window an
         # "at the time" reminder may go out in (rules.late_grace).
         self._interval_s = interval_s
+        # When the last sweep evaluated the rules, so the next one's "at the
+        # time" window starts exactly where that one's ended (rules.late_floor).
+        self._last_swept: datetime | None = None
         self._sender = sender
         # Environment fallbacks. The account's own values (Settings →
         # Notifications) win when present: the settings blob is the more
@@ -207,8 +210,12 @@ class Notifier:
         # end up disagreeing about what day it is.
         tz = self._svc._home_tz()
         day = now.astimezone(tz).date().isoformat()
+        # Only an earlier `now` counts: a test (or a clock step) sweeping
+        # backwards must not get a window that ends before it starts.
+        since = self._last_swept if self._last_swept and self._last_swept < now else None
         sweep = R.Sweep(svc=self._svc, now=now, tz=tz, day=day, prefs=prefs,
-                        interval_s=self._interval_s)
+                        interval_s=self._interval_s, since=since)
+        self._last_swept = now
 
         if tz is None and not self._warned_no_tz:
             self._warned_no_tz = True
