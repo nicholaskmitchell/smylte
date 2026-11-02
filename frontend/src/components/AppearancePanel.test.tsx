@@ -1,8 +1,9 @@
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AppearancePanel } from './AppearancePanel'
 import { DEFAULTS, MAX_THEMES, PRESETS, type Appearance, type CustomTheme } from '../appearance'
+import { setErrorNotifier } from '../util'
 
 const theme = (o: Partial<CustomTheme> = {}): CustomTheme => ({
   id: 't1', name: 'Mine', base: 'light',
@@ -21,6 +22,13 @@ function setup(appearance: Appearance = {}, mode: 'light' | 'dark' = 'light') {
 // by label rather than value: the row also carries a native color swatch, which
 // mirrors the same value.
 const accentField = () => screen.getByLabelText('Accent') as HTMLInputElement
+
+// The hidden file input behind Import, and a file it accepts as a theme.
+const picker = () => document.querySelector('input[type="file"]') as HTMLInputElement
+const themeFile = () => new File([JSON.stringify({
+  smylte_theme: 1, name: 'Nordic', base: 'light',
+  light: { '--accent': '#5e81ac' }, dark: { '--accent': '#88c0d0' },
+})], 'nordic.smylte-theme.json', { type: 'application/json' })
 
 beforeEach(() => vi.clearAllMocks())
 
@@ -226,16 +234,27 @@ describe('<AppearancePanel> at the theme cap', () => {
     id: `t${i}`, name: `Theme ${i}`, base: 'light' as const, light: {}, dark: {},
   }))
 
+  // The panel is rendered without App, so the toast's notifier is this spy, and
+  // `alert` is spied only to prove nothing native opens.
+  let notice: ReturnType<typeof vi.fn<(msg: string) => void>>
   let alertSpy: ReturnType<typeof vi.spyOn>
-  beforeEach(() => { alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {}) })
-  afterEach(() => alertSpy.mockRestore())
+  beforeEach(() => {
+    notice = vi.fn<(msg: string) => void>()
+    setErrorNotifier(notice)
+    alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    setErrorNotifier(null)
+    alertSpy.mockRestore()
+  })
 
   it('explains why editing the shipped design does nothing', async () => {
     const { onChange } = setup({ active: null, themes: full() })
     const field = accentField()
     await userEvent.clear(field)
     await userEvent.type(field, '#00ff00')
-    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining(String(MAX_THEMES)))
+    expect(notice).toHaveBeenCalledWith(expect.stringContaining(String(MAX_THEMES)))
+    expect(alertSpy).not.toHaveBeenCalled()
     expect(onChange).not.toHaveBeenCalled()
   })
 
@@ -243,7 +262,8 @@ describe('<AppearancePanel> at the theme cap', () => {
     const themes = full()
     const { onChange } = setup({ active: themes[0].id, themes })
     await userEvent.click(screen.getByRole('button', { name: /duplicate/i }))
-    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining(String(MAX_THEMES)))
+    expect(notice).toHaveBeenCalledWith(expect.stringContaining(String(MAX_THEMES)))
+    expect(alertSpy).not.toHaveBeenCalled()
     expect(onChange).not.toHaveBeenCalled()
   })
 
@@ -252,7 +272,8 @@ describe('<AppearancePanel> at the theme cap', () => {
     const field = accentField()
     await userEvent.clear(field)
     await userEvent.type(field, '#00ff00')
-    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining(String(MAX_THEMES)))
+    expect(notice).toHaveBeenCalledWith(expect.stringContaining(String(MAX_THEMES)))
+    expect(alertSpy).not.toHaveBeenCalled()
     expect(onChange).not.toHaveBeenCalled()
   })
 
@@ -261,7 +282,38 @@ describe('<AppearancePanel> at the theme cap', () => {
     const field = accentField()
     await userEvent.clear(field)
     await userEvent.type(field, '#00ff00')
-    expect(alertSpy).not.toHaveBeenCalled()
+    expect(notice).not.toHaveBeenCalled()
     expect(onChange).toHaveBeenCalled()
+  })
+
+  it('explains why Import does nothing', async () => {
+    const { onChange } = setup({ active: null, themes: full() })
+    await userEvent.upload(picker(), themeFile())
+    await waitFor(() => expect(notice).toHaveBeenCalledWith(expect.stringContaining(String(MAX_THEMES))))
+    expect(alertSpy).not.toHaveBeenCalled()
+    expect(onChange).not.toHaveBeenCalled()
+  })
+})
+
+describe('<AppearancePanel> importing a file that is not a theme', () => {
+  let notice: ReturnType<typeof vi.fn<(msg: string) => void>>
+  let alertSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    notice = vi.fn<(msg: string) => void>()
+    setErrorNotifier(notice)
+    alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    setErrorNotifier(null)
+    alertSpy.mockRestore()
+  })
+
+  it('says so in the toast and adds nothing', async () => {
+    const { onChange } = setup()
+    await userEvent.upload(picker(),
+      new File(['{"hello":1}'], 'notes.json', { type: 'application/json' }))
+    await waitFor(() => expect(notice).toHaveBeenCalledWith('That file is not a Smylte theme.'))
+    expect(onChange).not.toHaveBeenCalled()
+    expect(alertSpy).not.toHaveBeenCalled()
   })
 })

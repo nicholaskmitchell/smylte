@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthError } from './api'
-import { addDays, cssColor, dayKey, daysLate, daysPastDue, daysSlipped, hasZone, instantFromLocal, isOverdue, makeGuard, movedFrom, pad, parseDate, setErrorNotifier, slippedFrom, textDir, toLocalInput, wouldRemember, ymd, type Slippable } from './util'
+import { addDays, cssColor, dayKey, daysLate, daysPastDue, daysSlipped, hasZone, instantFromLocal, isOverdue, makeGuard, movedFrom, pad, parseDate, setErrorNotifier, showNotice, slippedFrom, textDir, toLocalInput, wouldRemember, ymd, type Slippable } from './util'
 
 describe('parseDate', () => {
   it('parses date-only strings as LOCAL midnight, not UTC', () => {
@@ -82,6 +82,23 @@ describe('makeGuard', () => {
       .resolves.toBeUndefined()
     expect(notify).toHaveBeenCalledWith('server exploded')
     expect(onExpire).not.toHaveBeenCalled()
+  })
+})
+
+describe('showNotice', () => {
+  afterEach(() => setErrorNotifier(null))
+
+  it('hands the message to the app\'s notifier', () => {
+    const notify = vi.fn()
+    setErrorNotifier(notify)
+    showNotice('x')
+    expect(notify).toHaveBeenCalledOnce()
+    expect(notify).toHaveBeenCalledWith('x')
+  })
+
+  it('does nothing, and does not throw, before a notifier is registered', () => {
+    setErrorNotifier(null)
+    expect(() => showNotice('x')).not.toThrow()
   })
 })
 

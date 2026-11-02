@@ -8,6 +8,17 @@ export function setErrorNotifier(fn: ((msg: string) => void) | null) {
   notifyError = fn
 }
 
+/** Tell the user something through the app's toast, the channel failed saves
+ *  already use (makeGuard). It is for a refusal the user caused, where a native
+ *  `window.alert` would otherwise stand: a browser, the desktop clients and the
+ *  Android WebView each draw that dialog themselves, outside the app's design,
+ *  and it blocks the page until it is dismissed. It does nothing before App has
+ *  registered the notifier, which no caller can reach: every caller is
+ *  rendered inside App. */
+export function showNotice(msg: string): void {
+  notifyError?.(msg)
+}
+
 // Wrap API calls so a session expiry logs the user out and other errors surface
 // without crashing the view.
 export function makeGuard(onExpire: () => void) {

@@ -645,6 +645,15 @@ a JavaScript interface that takes only a colour. The document served from disk
 gets a port of `csp.py`'s policy (`Csp.kt`), which `test_csp.py` checks as it
 checks the desktop's copy.
 
+**An app, not a page in a browser.** A WebView's defaults give the page away in a few places, and the client changes the ones that are WebView settings.
+- Its edge effect is off. WebView draws the stretch (a glow on Android 11) over the whole view, header and tab bar included, while what actually scrolls is a list inside a fixed shell.
+- Page zoom stays off, as it already was by default, and is stated so nobody turns it on. The shell is a fixed `100dvh` box that clips, so a zoom could only pan a cropped layout, and the system's magnification works over any app.
+- Text size is set by the client. WebView takes the system font scale only once, when it is created, while this activity handles font-size changes itself instead of being recreated. So the client sets the text zoom at creation and on every configuration change.
+  - The zoom is the ratio of the body size converted as sp to the same size converted as dp, not `fontScale`. Android 14 scales text non-linearly, and the converted size follows that curve.
+  - Its bounds (50% to 300%) lie outside anything Android offers, so they cap nothing. A layout that breaks at the largest sizes is fixed in the page.
+
+The rest belongs to the SPA and applies in every client: a long press selects content, including a pressable row's title, but never a control's label; and a refusal is shown in the app's toast rather than in `window.alert`.
+
 **Stage, then swap.** Android keeps processes alive for days, so the client also
 checks for updates when it returns to the foreground after six hours or more. A
 build must never change under a running page, so downloading and swapping are

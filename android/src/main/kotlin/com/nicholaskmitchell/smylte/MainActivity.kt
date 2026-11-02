@@ -6,11 +6,13 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.TypedValue
 import android.view.View
 import android.view.WindowInsetsController
 import android.webkit.CookieManager
@@ -184,7 +186,21 @@ class MainActivity : Activity() {
             setGeolocationEnabled(false)
             // The focus timer's chime plays when a phase ends, not on a tap.
             mediaPlaybackRequiresUserGesture = false
+            // Page zoom stays off. That is already WebView's default, and is
+            // stated so nobody turns it on: the shell is a fixed 100dvh box
+            // that clips (app.css `.shell`), so a zoom could only pan a cropped
+            // layout. Text size is the zoom people need, and it follows the
+            // system font size (applyTextZoom) and the app's own text size;
+            // the system's magnification still works over any app.
+            setSupportZoom(false)
+            builtInZoomControls = false
+            displayZoomControls = false
         }
+        // No edge effect. WebView draws its stretch (a glow on Android 11) over
+        // the whole view, header and tab bar included, when the page's
+        // scrolling reaches an end, so the whole app seemed to bounce.
+        web.overScrollMode = View.OVER_SCROLL_NEVER
+        applyTextZoom()
         // The app registers no service worker, and a service worker's requests
         // would bypass shouldInterceptRequest, and with it the files from disk
         // and their CSP. So none can fetch anything.
@@ -208,6 +224,23 @@ class MainActivity : Activity() {
             if (url.startsWith("https://") || url.startsWith("http://")) openExternally(Uri.parse(url))
             else Toast.makeText(this, R.string.export_unavailable, Toast.LENGTH_LONG).show()
         }
+    }
+
+    /// The page's text follows the system font size, while the app runs. WebView
+    /// applies the system font scale itself only when it is created, and this
+    /// activity handles font-size changes rather than being recreated
+    /// (configChanges), so without this a change made while Smylte runs would
+    /// wait for a cold start. The zoom is measured at the body text's size
+    /// (TextZoom) through TypedValue rather than taken from fontScale, because
+    /// Android 14 scales text non-linearly and TypedValue applies the curve
+    /// native text gets. Once it is set, WebView never applies its own value
+    /// again, so the host owns it from the first call.
+    private fun applyTextZoom() {
+        val metrics = resources.displayMetrics
+        web.settings.textZoom = TextZoom.percent(
+            TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, TextZoom.BODY_SP, metrics),
+            TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, TextZoom.BODY_SP, metrics),
+        )
     }
 
     private fun isOurs(url: Uri): Boolean = AssetRoutes.isSameOrigin(origin, url.scheme, url.host, url.port)
@@ -600,6 +633,15 @@ class MainActivity : Activity() {
         CookieManager.getInstance().flush()
         web.onPause()
         super.onPause()
+    }
+
+    /// Every change listed in the manifest's configChanges arrives here instead
+    /// of recreating the window. The activity's resources are updated before
+    /// this is called, so applyTextZoom reads the new display metrics.
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Not set up when onCreate sent a first run to the settings screen.
+        if (::web.isInitialized) applyTextZoom()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {

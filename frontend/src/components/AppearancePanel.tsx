@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { clientId } from '../api'
 import { useEscape, useSegmentThumb } from '../hooks'
 import { useT } from '../i18n'
+import { showNotice } from '../util'
 import {
   DEFAULTS, FONT_CHOICES, GROUPS, MAX_NAME_LEN, MAX_THEMES, PRESETS, SHARED_DEFAULTS,
   GROUP_LABEL, TOKENS, defaultValue, ensureFont, findPreset, isSharedToken, isValidToken,
@@ -28,7 +29,7 @@ import {
 
 // Every path that would need to create a theme says the same thing when there
 // is no room for one, rather than each failing its own silent way. A KEY now,
-// resolved at the two call sites — a module constant has no translator.
+// resolved at each call site — a module constant has no translator.
 const AT_CAP = 'appear.atCap'
 
 export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }: {
@@ -125,7 +126,7 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
     // with no room for one there is nothing to write. This used to be a bare
     // `return`: the panel stayed fully interactive, the sliders moved and the
     // color field accepted typing, and nothing was ever applied or saved.
-    if (themes.length >= MAX_THEMES) { window.alert(tr(AT_CAP, { max: MAX_THEMES })); return }
+    if (themes.length >= MAX_THEMES) { showNotice(tr(AT_CAP, { max: MAX_THEMES })); return }
     // Merged, not replaced: the seed has to survive the very edit that made it.
     const fork = splitPatch(seedFork(preset), patch)
     onChange({ active: fork.id, themes: [...themes, fork] })
@@ -135,7 +136,7 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
 
   const saveAs = () => {
     if (!active) return
-    if (themes.length >= MAX_THEMES) { window.alert(tr(AT_CAP, { max: MAX_THEMES })); return }
+    if (themes.length >= MAX_THEMES) { showNotice(tr(AT_CAP, { max: MAX_THEMES })); return }
     const copy = seedFork(active)
     onChange({ active: copy.id, themes: [...themes, copy] })
   }
@@ -188,8 +189,8 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
   const importTheme = async (file: File) => {
     const parsed = parseTheme(await file.text(), clientId().slice(0, 16),
       tr('appear.importedTheme'))
-    if (!parsed) { window.alert(tr('appear.notATheme')); return }
-    if (themes.length >= MAX_THEMES) { window.alert(tr(AT_CAP, { max: MAX_THEMES })); return }
+    if (!parsed) { showNotice(tr('appear.notATheme')); return }
+    if (themes.length >= MAX_THEMES) { showNotice(tr(AT_CAP, { max: MAX_THEMES })); return }
     onChange({ active: parsed.id, themes: [...themes, parsed] })
   }
 

@@ -472,6 +472,27 @@ body {
 button { font-family: inherit; color: inherit; }
 /* touch-action: no 300ms double-tap-zoom delay on interactive bits */
 button, input, select, label { touch-action: manipulation; }
+/* A long press selects content, never a control's label. Android's WebView,
+   like Chrome and iOS Safari, starts a text selection on a long press wherever
+   the text allows one, so a held tab, toggle or button lit its label up with
+   selection handles, which no native app does. Controls opt out here; content
+   keeps the default.
+
+   A pressable row that holds a task or event title is content and stays
+   selectable. `role="button"` is on exactly those rows (the task rows and the
+   calendar chips), so it is not listed, and the three buttons that wrap a title
+   are excluded by name: the Parked pane's `.task-main`, the day agenda's
+   `.agenda-ev` and the focus view's `.focus-pick`. :where() keeps the rule at
+   zero specificity, so a component rule can opt a control back in. */
+:where(button:not(.task-main):not(.agenda-ev):not(.focus-pick),
+  [role="tab"], [role="checkbox"], [role="switch"], [role="menuitem"], label) {
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* A field always selects, whatever wraps it. WebKit (Safari, iOS, the Linux
+   client) carries `-webkit-user-select: none` from a <label> into a field
+   inside it, and iOS Safari has refused input in such a field. */
+input, textarea { -webkit-user-select: text; user-select: text; }
 input, select, textarea { font-family: inherit; }
 /* The elements the user agent sets in a monospace inherit the adjust (they
    take the family, not the shorthand), so they put it back. The

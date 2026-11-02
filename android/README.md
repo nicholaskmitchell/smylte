@@ -272,6 +272,7 @@ The JVM unit tests run without a device. They cover:
 - the update decisions and digest checks;
 - the server address rules;
 - the bar colours;
+- the text zoom, and the body size it is measured at, against the stylesheet;
 - the launcher icon against `frontend/public/favicon.svg`.
 
 `backend/tests/test_csp.py` fails if `Csp.kt`'s directives drift from the
@@ -294,6 +295,7 @@ Settings.kt       stored settings
 PasswordVault.kt  AES-GCM under an Android keystore key
 ServerAddress.kt  the server address rules
 ThemeColour.kt    the page colour and the script that reports it
+TextZoom.kt       the page's text size, from the system font size
 ApkProvider.kt    hands the downloaded APK to the installer
 Insets.kt         edge to edge, clear of the bars and the keyboard
 Background.kt     the one thread updates run on
