@@ -18,6 +18,10 @@ class SetupActivity : Activity() {
     private lateinit var token: EditText
     private lateinit var save: Button
     private lateinit var status: TextView
+    /// What the password field was filled with, to tell a password typed for
+    /// a new address from one carried over from the old one.
+    private var shownPassword = ""
+    private var shownOrigin = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,10 +36,12 @@ class SetupActivity : Activity() {
         save = findViewById(R.id.save)
         status = findViewById(R.id.status)
 
+        shownOrigin = settings.origin
+        shownPassword = settings.password
         if (savedInstanceState == null) {
-            server.setText(settings.origin)
+            server.setText(shownOrigin)
             username.setText(settings.username)
-            password.setText(settings.password)
+            password.setText(shownPassword)
             token.setText(settings.githubToken)
         }
 
@@ -57,7 +63,22 @@ class SetupActivity : Activity() {
         }
         val origin = (parsed as ServerAddress.Parsed.Ok).origin
         val user = username.text.toString().trim()
-        val pass = password.text.toString()
+        val typed = password.text.toString()
+        // A saved password goes to the address it was saved for and no other.
+        // Moved to a new address without being typed again, it is dropped
+        // rather than sent there: a mistyped or planted address would
+        // otherwise receive it without anyone entering it.
+        val carriedOver = origin != shownOrigin && shownOrigin.isNotEmpty() &&
+            shownPassword.isNotEmpty() && typed == shownPassword
+        if (carriedOver) {
+            // Asked rather than decided: whatever is in the field from now on
+            // was typed for this address.
+            shownPassword = ""
+            password.setText("")
+            password.requestFocus()
+            status.setText(R.string.setup_password_dropped)
+            return
+        }
         val gh = token.text.toString().trim()
 
         save.isEnabled = false
@@ -65,19 +86,24 @@ class SetupActivity : Activity() {
         // Its own thread rather than Background.updates, which may be busy
         // with a download that has nothing to do with this.
         Thread {
-            val (ok, message) = Session.probe(origin)
+            val (ok, probed) = Session.probe(origin)
+            var message = probed
+            var saved = false
             if (ok) {
-                // Sealing touches the keystore, so not on the main thread.
-                settings.origin = origin
-                settings.username = user
-                settings.password = pass
-                settings.githubToken = gh
+                // Sealing touches the keystore, so not on the main thread, and
+                // a keystore that refuses is a sentence, not a crash.
+                try {
+                    settings.save(origin, user, typed, gh)
+                    saved = true
+                } catch (e: Exception) {
+                    message = getString(R.string.setup_not_saved, Updater.describe(e))
+                }
             }
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
                 save.isEnabled = true
                 status.text = message
-                if (!ok) return@runOnUiThread
+                if (!saved) return@runOnUiThread
                 server.setText(origin)
                 startActivity(
                     Intent(this, MainActivity::class.java)

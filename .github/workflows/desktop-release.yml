@@ -167,12 +167,13 @@ jobs:
     # runs the Android Gradle Plugin and everything it resolves from Maven,
     # which is third-party build code in exactly the sense `npm ci` is above,
     # and a key that build code could read is a key that could sign anything.
-    # `sign-android` applies it with the SDK's own apksigner and nothing else.
+    # `sign-android` applies it with the SDK's own tools and nothing else.
+    #
+    # That keeps the key SECRET; it does not make what this job built
+    # trustworthy. Gradle checks every artifact it resolves against
+    # android/gradle/verification-metadata.xml, and `sign-android` inspects the
+    # APK before it signs anything.
     runs-on: ubuntu-latest
-    outputs:
-      # Kept by GitHub when only a later job is re-run, so `release` always
-      # sees the code the APK it publishes was built with.
-      version_code: ${{ steps.build.outputs.version_code }}
     defaults:
       run:
         working-directory: android
@@ -191,20 +192,15 @@ jobs:
       - name: The Gradle wrapper is Gradle's
         run: ./check-gradle-wrapper.sh
 
-      # The same gate the desktop clients have, for the same reason: `release`
-      # needs this job, so failing here is what holds the APK back.
-      - name: Unit tests and lint
-        run: ./gradlew --no-daemon test lint
-
       - name: Build
-        id: build
         # The version code has to rise with every published APK, or Android
         # refuses the update as a downgrade. Minutes since 2026-01-01 UTC rises
         # on its own, needs nobody to remember a bump, and stays under
         # Android's ceiling of 2,100,000,000 for about four thousand years.
         # Runs never overlap (the concurrency group above), so two builds can
         # share a minute only by being re-runs of one commit; Android accepts
-        # an equal code as an update anyway.
+        # an equal code as an update anyway. `sign-android` reads the code
+        # back out of the APK rather than trusting this step to report it.
         run: |
           code=$(( ($(date -u +%s) - 1767225600) / 60 ))
           name="$(date -u +%Y.%m.%d)-${GITHUB_SHA::7}"
@@ -212,52 +208,103 @@ jobs:
             -PsmylteVersionCode="$code" -PsmylteVersionName="$name"
           cp build/outputs/apk/release/smylte-android-release-unsigned.apk \
             "$GITHUB_WORKSPACE/Smylte-android-unsigned.apk"
-          echo "version_code=$code" >> "$GITHUB_OUTPUT"
 
+      # Uploaded BEFORE the tests run, so test code (which is not part of the
+      # APK, and is left out of the Android key) has no chance to touch it.
       - uses: actions/upload-artifact@v4
         with:
           name: client-android-unsigned
           path: Smylte-android-unsigned.apk
           retention-days: 7
 
+      # The same gate the desktop clients have, for the same reason: `release`
+      # needs this job, so failing here is what holds the APK back.
+      - name: Unit tests and lint
+        run: ./gradlew --no-daemon test lint
+
   sign-android:
-    # The only job that sees the signing key, and it runs no dependency code at
-    # all: zipalign and apksigner from the runner's Android SDK, over the APK
-    # `client-android` built.
+    # The only job that sees the signing key, and it runs no dependency code:
+    # aapt2, zipalign and apksigner from the runner's Android SDK, over the APK
+    # `client-android` built. The two artifact actions around it are the only
+    # other code here, and the job's token can do nothing (`permissions: {}`).
     #
-    # Without the two secrets it signs nothing and says so, rather than
-    # failing: the web build and the desktop binaries must not stop publishing
-    # because the Android key has not been set up yet. android/README.md says
-    # how to create them. The key is permanent: Android installs an update only
-    # when it is signed with the same key as the installed app.
+    # The key is permanent: Android installs an update only when it is signed
+    # with the same key as the installed app, and there is no revoking one. So
+    # it lives in the `android-signing` ENVIRONMENT, which the owner restricts
+    # to `main` (android/README.md). Repository secrets would be readable by a
+    # workflow on any branch anyone can push, and masking in logs does not stop
+    # an upload. The `if:` keeps a dispatch from another ref from signing.
+    #
+    # Without the secrets it signs nothing and says so, rather than failing:
+    # the web build and the desktop binaries must not stop publishing because
+    # the Android key has not been set up yet.
     needs: client-android
+    if: github.ref == 'refs/heads/main'
+    environment: android-signing
     runs-on: ubuntu-latest
+    permissions: {}
     outputs:
       signed: ${{ steps.sign.outputs.signed }}
+      version_code: ${{ steps.sign.outputs.version_code }}
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: client-android-unsigned
 
-      - name: Sign
+      - name: Inspect and sign
         id: sign
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          # Optional: the signing certificate's SHA-256, as android/README.md
+          # prints it. When set, an APK signed by any other key (a swapped or
+          # mistyped secret) fails here instead of reaching phones that would
+          # refuse it.
+          EXPECTED_CERT: ${{ vars.ANDROID_SIGNING_CERT_SHA256 }}
         run: |
+          tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          # A pipeline's status is its last command's, so a missing SDK would
+          # otherwise surface as "/zipalign: No such file".
+          for tool in aapt2 zipalign apksigner; do
+            if [ ! -x "$tools/$tool" ]; then
+              echo "::error::no $tool under ANDROID_HOME=${ANDROID_HOME:-<unset>}"
+              exit 1
+            fi
+          done
+
+          # What is about to be signed, read from the APK itself. The key
+          # vouches for whatever it signs, and the build that produced this
+          # ran third-party code: a release that is not this app, is
+          # debuggable, or carries a version code from the future (which would
+          # make every later build a downgrade Android refuses, for good) is
+          # refused here, whether or not the key is configured.
+          badging=$("$tools/aapt2" dump badging Smylte-android-unsigned.apk)
+          package=$(printf '%s\n' "$badging" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
+          code=$(printf '%s\n' "$badging" | sed -n "s/^package: .* versionCode='\([^']*\)'.*/\1/p")
+          if [ "$package" != com.nicholaskmitchell.smylte ]; then
+            echo "::error::the APK's package is '${package}', not com.nicholaskmitchell.smylte"
+            exit 1
+          fi
+          if ! [[ "$code" =~ ^[0-9]{1,10}$ ]]; then
+            echo "::error::the APK's version code '${code}' is not a number"
+            exit 1
+          fi
+          now=$(( ($(date -u +%s) - 1767225600) / 60 ))
+          if [ "$code" -gt $(( now + 60 )) ]; then
+            echo "::error::the APK's version code ${code} is ahead of the clock (${now})"
+            exit 1
+          fi
+          if printf '%s\n' "$badging" | grep -q '^application-debuggable'; then
+            echo "::error::the APK is debuggable"
+            exit 1
+          fi
+
           if [ -z "$ANDROID_KEYSTORE_B64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ]; then
-            echo "::warning::ANDROID_KEYSTORE_B64 and ANDROID_KEYSTORE_PASSWORD are not both set, so the Android app is not signed and not published. See android/README.md."
+            echo "::warning::ANDROID_KEYSTORE_B64 and ANDROID_KEYSTORE_PASSWORD are not both set in the android-signing environment, so the Android app is not signed and not published. See android/README.md."
             echo "signed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-          # A pipeline's status is its last command's, so a missing SDK would
-          # otherwise surface as "/zipalign: No such file".
-          if [ ! -x "$tools/apksigner" ] || [ ! -x "$tools/zipalign" ]; then
-            echo "::error::no Android build-tools under ANDROID_HOME=${ANDROID_HOME:-<unset>}"
-            exit 1
-          fi
           keystore="$RUNNER_TEMP/smylte-release.p12"
           trap 'rm -f "$keystore"' EXIT
           (umask 077 && printf '%s' "$ANDROID_KEYSTORE_B64" | base64 -d > "$keystore")
@@ -272,8 +319,22 @@ jobs:
             --ks "$keystore" --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
             --v4-signing-enabled false \
             --out Smylte-android.apk Smylte-android-unsigned.apk
-          "$tools/apksigner" verify --print-certs Smylte-android.apk
+
+          certs=$("$tools/apksigner" verify --print-certs Smylte-android.apk)
+          printf '%s\n' "$certs"
+          if printf '%s\n' "$certs" | grep -q '^Signer #2'; then
+            echo "::error::the APK has more than one signer"
+            exit 1
+          fi
+          cert=$(printf '%s\n' "$certs" | sed -n 's/^Signer #1 certificate SHA-256 digest: \([0-9a-f]\{64\}\)$/\1/p')
+          expected=$(printf '%s' "${EXPECTED_CERT:-}" | tr 'A-F' 'a-f' | tr -d ': ')
+          if [ -n "$expected" ] && [ "$cert" != "$expected" ]; then
+            echo "::error::signed with certificate ${cert:-<none>}, but ANDROID_SIGNING_CERT_SHA256 is ${expected}"
+            exit 1
+          fi
+
           echo "signed=true" >> "$GITHUB_OUTPUT"
+          echo "version_code=$code" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         if: steps.sign.outputs.signed == 'true'
@@ -283,7 +344,11 @@ jobs:
           retention-days: 7
 
   release:
-    needs: [web, client, client-linux, client-android, sign-android]
+    needs: [web, client, client-linux, sign-android]
+    # Only `main` publishes. A dispatch from any other ref would put code that
+    # never went through review (main is merged on GitLab) in front of every
+    # installed client, and for the APK under the permanent key.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # The one job that publishes, and the only one that needs to write. It runs
     # no dependency install code at all — its steps are `gh` calls over the
@@ -303,8 +368,8 @@ jobs:
           CLIENT_PUBLISH: ${{ inputs.client }}
           # "true" only when `sign-android` produced a signed APK.
           ANDROID_SIGNED: ${{ needs.sign-android.outputs.signed }}
-          # The version code that APK was built with.
-          ANDROID_VERSION_CODE: ${{ needs.client-android.outputs.version_code }}
+          # The version code that APK carries, as sign-android read it.
+          ANDROID_VERSION_CODE: ${{ needs.sign-android.outputs.version_code }}
         # Upload --clobber onto the existing release rather than delete-and-recreate,
         # so there is never a window where a client checking for updates finds no
         # release at all.
@@ -404,7 +469,7 @@ jobs:
           # being republished.
           ANDROID_KEY=$(set -o pipefail
             git ls-tree -r HEAD -- android \
-              | grep -vE "$(printf '\t')android/(README\.md|\.gitignore|check-gradle-wrapper\.sh|src/test/)" \
+              | grep -vE "$(printf '\t')android/((README\.md|\.gitignore|check-gradle-wrapper\.sh)\$|src/test/)" \
               | git hash-object --stdin)
 
           # Why an asset is being published this run, or empty for "it is not".
@@ -482,7 +547,7 @@ jobs:
           ANDROID_REASON=""
           if [ "${ANDROID_SIGNED:-}" != true ]; then
             echo "::warning::No signed Android build this run; Smylte-android.apk is not published" >&2
-          elif ! printf '%s' "${ANDROID_VERSION_CODE:-}" | grep -qE '^[0-9]{1,10}$'; then
+          elif ! [[ "${ANDROID_VERSION_CODE:-}" =~ ^[0-9]{1,10}$ ]]; then
             echo "::error::client-android reported no usable version code (${ANDROID_VERSION_CODE:-<empty>})" >&2
             exit 1
           elif [ -n "$ANDROID_RECORDED_CODE" ] && [ "$ANDROID_VERSION_CODE" -lt "$ANDROID_RECORDED_CODE" ]; then

@@ -645,9 +645,11 @@ build must never change under a running page, so downloading and swapping are
 separate steps. A new build is unpacked into `web.next` and swapped in only
 before a load: at start-up, or when the user picks **Reload**. Each build
 records its release asset id and `updated_at` inside its own directory, so the
-record moves with the build in the same rename. The release check is
-conditional on its ETag, because a 304 doesn't count against GitHub's anonymous
-limit, which a phone on a carrier's shared address can exhaust.
+record moves with the build in the same rename. GitHub's anonymous API limit
+is 60 requests an hour per address, and a phone on a carrier's shared address
+shares it with strangers. So a start within ten minutes of the last check
+reuses that answer, and the in-app check waits six hours. (A 304 is free only
+for a request with a token.)
 
 **The APK update.** As on the desktop, the client compares the published
 digest with the installed APK, which Android keeps byte for byte, and CI
@@ -665,11 +667,18 @@ installer can't restart an app that updates itself, while the system installer
 ends with **Open**.
 
 **The signing key stays out of the build.** Android accepts an update only when
-it is signed with the installed app's key, so the key is permanent and worth
-protecting. Gradle runs the Android Gradle Plugin and whatever it resolves from
+it is signed with the installed app's key, so the key is permanent and can't be
+revoked. Gradle runs the Android Gradle Plugin and whatever it resolves from
 Maven, so the build job produces an unsigned APK and a separate job signs it
-using only the SDK's `apksigner`. Without the secrets that job signs nothing, so
-the web build and the desktop binaries keep publishing.
+using only the SDK's tools. The key lives in a GitHub environment that only
+`main` may use, because a repository secret is readable from any pushed branch,
+and only `main` signs or publishes. Keeping the key out of the build keeps it
+secret, but the key still vouches for whatever the build produced. So Gradle
+checks every artifact against `verification-metadata.xml`, and the signing job
+reads the APK before signing it: it refuses a wrong package, a debuggable
+build, or a version code ahead of the clock. That last would make every later
+update a downgrade that phones refuse. Without the secrets the job signs
+nothing, so the web build and the desktop binaries keep publishing.
 
 ## Panel firmware
 

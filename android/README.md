@@ -60,10 +60,13 @@ for changes to the web app or the server. Smylte compares the published APK's
 digest with the installed APK, which Android keeps byte for byte.
 
 GitHub allows 60 anonymous API requests an hour per address, and a phone on
-mobile data often shares its address with many others. Smylte sends each check
-as a conditional request, which doesn't count against the limit when nothing
-changed. If checks still fail, a GitHub token in **Server settings** raises the
-limit. A token with no scopes is enough.
+mobile data often shares its address with many others. Smylte keeps its checks
+rare: a start within ten minutes of the last check reuses that check's answer,
+and while the app is open it checks again only after six hours. A failed check
+never stops the app from opening. If checks keep failing, add a GitHub token in
+**Server settings**: it raises the limit, and with a token an unchanged release
+(a 304 answer) doesn't count against it at all. A token with no scopes is
+enough.
 
 ## Settings
 
@@ -75,13 +78,16 @@ on first run and from the error screen if the app can't start.
   by itself when the session runs out (the server's sessions last seven days).
   It checks the existing session first, so it doesn't sign in again on every
   start. Leave the password empty to sign in on the app's own screen, where
-  password managers can fill it.
+  password managers can fill it. A saved password is tied to the server address
+  it was saved with: change the address and Smylte asks for the password again
+  rather than sending the old one to the new server.
 - **GitHub token**: optional; see above.
 
 The password and the token are encrypted with AES-GCM under a key that the
 Android keystore generates and never releases, so a copy of the app's files is
-useless without the phone. As on the desktop, this doesn't stop code running as
-the app from reading them.
+useless without the phone. The password is encrypted for its server address, so
+it can't be decrypted for any other. As on the desktop, this doesn't stop code
+running as the app from reading them.
 
 ## What it stores
 
@@ -129,40 +135,94 @@ unsigned APK, and an APK signed with any other key can't update the published
 app.
 
 The project has no runtime dependencies: everything comes from the Android
-framework. `check-gradle-wrapper.sh` checks that `gradle-wrapper.jar` is the jar
-Gradle publishes for the pinned version, and CI runs it before `./gradlew`.
+framework.
+
+The build tooling is checked in three places:
+
+- `check-gradle-wrapper.sh` checks that `gradle-wrapper.jar` is the jar Gradle
+  publishes for the pinned version. CI runs it before `./gradlew`.
+- The Gradle distribution is pinned by checksum in `gradle-wrapper.properties`.
+- Every plugin and library Gradle downloads is checked against
+  `gradle/verification-metadata.xml`.
+
+After changing a plugin or dependency version, regenerate that file on an empty
+Gradle cache and review the diff:
+
+```bash
+GRADLE_USER_HOME=$(mktemp -d) ./gradlew --write-verification-metadata sha256 test lint assembleRelease assembleDebug
+```
+
+`aapt2` ships a separate jar for each operating system. The generated file
+covers only the one you built on, so add the other two by hand, as the existing
+entries show.
 
 ## The signing key (once, for the maintainer)
 
 Android installs an update only if it's signed with the same key as the app
-already installed, so this key is permanent. If it's lost, every installed copy
-has to be uninstalled and installed again. Until both secrets below exist, the
-release workflow builds and tests the APK but doesn't publish it, and says so
-in a warning. The web build and the desktop clients publish as usual.
+already installed, so this key is permanent, and there is no revoking it. If
+it's lost, every installed copy has to be uninstalled and installed again; if
+it leaks, whoever has it can sign an update that every phone accepts. Until it
+is set up, the release workflow builds and tests the APK but doesn't publish
+it, and says so in a warning. The web build and the desktop clients publish as
+usual.
 
-Create the key on your own machine. `keytool` comes with any JDK.
+**1. Create a GitHub environment that only `main` can use.** The key goes in
+this environment, not in the repository's secrets: a repository secret can be
+read by a workflow on any branch that anyone with push access creates.
+
+```bash
+gh api -X PUT repos/nicholaskmitchell/smylte/environments/android-signing -F 'deployment_branch_policy[protected_branches]=false' -F 'deployment_branch_policy[custom_branch_policies]=true'
+```
+
+```bash
+gh api -X POST repos/nicholaskmitchell/smylte/environments/android-signing/deployment-branch-policies -f name=main -f type=branch
+```
+
+You can do the same in the repository's settings under **Environments**: add
+`android-signing` and set **Deployment branches and tags** to `main` only.
+
+**2. Create the key** on your own machine. `keytool` comes with any JDK.
 
 ```bash
 keytool -genkeypair -keystore smylte-release.p12 -storetype PKCS12 -alias smylte -keyalg RSA -keysize 4096 -validity 36500 -dname "CN=Smylte"
 ```
 
-Store it in the repository's Actions secrets on GitHub, where the release
-workflow runs. Use `base64 -i smylte-release.p12` on macOS.
+**3. Store it in the environment.** Use `base64 -i smylte-release.p12` on
+macOS.
 
 ```bash
-base64 -w0 smylte-release.p12 | gh secret set ANDROID_KEYSTORE_B64 -R nicholaskmitchell/smylte
+base64 -w0 smylte-release.p12 | gh secret set ANDROID_KEYSTORE_B64 --env android-signing -R nicholaskmitchell/smylte
 ```
 
 ```bash
-gh secret set ANDROID_KEYSTORE_PASSWORD -R nicholaskmitchell/smylte
+gh secret set ANDROID_KEYSTORE_PASSWORD --env android-signing -R nicholaskmitchell/smylte
+```
+
+**4. Optional, recommended: pin the certificate.** With this set, a release
+signed by any other key fails in CI, so a swapped or mistyped secret can't
+reach phones that would refuse it. Print the fingerprint:
+
+```bash
+keytool -list -v -keystore smylte-release.p12 -alias smylte | grep SHA256
+```
+
+Then store it as a repository variable. Colons are fine.
+
+```bash
+gh variable set ANDROID_SIGNING_CERT_SHA256 -R nicholaskmitchell/smylte
 ```
 
 Keep `smylte-release.p12` and its password somewhere safe outside the
 repository, such as a password manager. `.gitignore` refuses keystore files.
 
-Only the `sign-android` job can read the key. It runs no Gradle and no
-dependency code, only `zipalign` and `apksigner` from the runner's Android SDK.
-The job that builds the APK never has the key.
+Only the `sign-android` job uses the key, and it runs only for `main`. It runs
+no Gradle and no dependency code: `aapt2`, `zipalign` and `apksigner` from the
+runner's Android SDK, between the two GitHub artifact actions, with a token
+that has no permissions. Before signing it reads the APK and refuses one that
+isn't `com.nicholaskmitchell.smylte`, is debuggable, or has a version code
+ahead of the clock. Keeping the key out of the build keeps it secret, but it
+doesn't make the build trustworthy. That is what the checksums above and these
+checks are for.
 
 ## Tests
 

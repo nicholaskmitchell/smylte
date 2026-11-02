@@ -16,7 +16,9 @@
     <string name="client_outdated">A newer Smylte app is available. This updates the app around Smylte; the app itself is already current.</string>
     <string name="web_staged">A newer version of Smylte is ready.</string>
     <string name="allow_installs">To update itself, Smylte needs permission to install apps. Allow it, then come back.</string>
-    <string name="installer_opened">Confirm the update in the installer. Smylte closes while it installs; tap Open when it is done.</string>
+    <string name="installer_opened">The installer is open. Smylte closes while it installs; tap Open when it is done. If you cancelled, tap Update again.</string>
+    <string name="downloading">Downloading the new app…</string>
+    <string name="no_installer">Android\'s own installer could not be found, so the update was not opened. Download it from the release page instead.</string>
     <string name="export_unavailable">Saving files is not available in the Android app yet.</string>
     <string name="no_app_for_link">No app on this device can open that link.</string>
 
@@ -31,4 +33,6 @@
     <string name="setup_save">Check and save</string>
     <string name="setup_checking">Checking…</string>
     <string name="setup_version">Smylte for Android %1$s</string>
+    <string name="setup_password_dropped">The saved password belongs to the old address, so it is not sent to this one. Type it again to use it here, or leave it empty, then save.</string>
+    <string name="setup_not_saved">Could not save the settings: %1$s</string>
 </resources>

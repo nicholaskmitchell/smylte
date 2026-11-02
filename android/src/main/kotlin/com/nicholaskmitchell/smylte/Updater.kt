@@ -31,8 +31,8 @@ class Updater(private val context: Context, private val settings: Settings) {
     data class Outcome(
         /// The published APK, when it is not the one installed.
         val clientUpdate: ReleaseAsset?,
-        /// Whether a newer web build is unpacked and waiting for a reload.
-        val webStaged: Boolean,
+        /// A newer web build unpacked and waiting for a reload, if there is one.
+        val staged: BuildIdentity?,
     )
 
     /// The start-up pass: check the release, fetch a newer web build if there
@@ -43,10 +43,24 @@ class Updater(private val context: Context, private val settings: Settings) {
     /// tightly when there is a build to fall back to, because a slow network
     /// should cost a moment rather than hold the app shut. Whatever this
     /// misses, the next check (MainActivity.onStart) catches.
+    ///
+    /// Android ends an app's process whenever it likes, so a phone can "start"
+    /// Smylte many times an hour. With a build on disk and a check within the
+    /// last RECENT_MS, the release is read from the copy that check saved
+    /// instead: GitHub allows an anonymous client 60 requests an hour, and a
+    /// phone on a carrier's shared address shares them with strangers.
     fun startUp(progress: (String) -> Unit): Outcome {
         val fallback = web.haveLocal() || web.staged() != null
         var assets: List<ReleaseAsset>? = null
-        try {
+        val recent = System.currentTimeMillis() - settings.lastCheck in 0 until RECENT_MS
+        if (fallback && recent) {
+            assets = try {
+                parseAssets(releaseCache.readText())
+            } catch (_: Exception) {
+                null
+            }
+        }
+        if (assets == null) try {
             progress("Checking for updates…")
             assets = fetchAssets(if (fallback) GitHub.QUICK else GitHub.NORMAL)
         } catch (e: Exception) {
@@ -83,7 +97,7 @@ class Updater(private val context: Context, private val settings: Settings) {
             // The installed build is still in place; promote rolled back.
         }
         if (!web.haveLocal()) throw StartupFailure("The app could not be unpacked on this phone.")
-        return Outcome(assets?.let { outdatedClient(it) }, web.staged() != null)
+        return Outcome(assets?.let { outdatedClient(it) }, web.staged())
     }
 
     /// The check made while the app is open. Stages a newer web build for the
@@ -91,14 +105,16 @@ class Updater(private val context: Context, private val settings: Settings) {
     fun check(): Outcome {
         val assets = fetchAssets(GitHub.NORMAL)
         assets.find { it.name == Release.WEB_ASSET }?.let { stageWeb(it) {} }
-        return Outcome(outdatedClient(assets), web.staged() != null)
+        return Outcome(outdatedClient(assets), web.staged())
     }
 
     /// The release's assets.
     ///
-    /// Conditional on the last ETag: GitHub does not count a 304 against the
-    /// anonymous limit of 60 an hour, which a phone on a carrier's shared
-    /// address can otherwise run out of through no fault of its own.
+    /// Conditional on the last ETag. GitHub does not count a 304 against the
+    /// rate limit only when the request carries a token, so this saves quota
+    /// for someone who set one; for everyone it saves the transfer. Without a
+    /// token, what keeps a phone inside the anonymous 60 an hour is checking
+    /// rarely: startUp's RECENT_MS and MainActivity's six hours.
     fun fetchAssets(timeouts: GitHub.Timeouts): List<ReleaseAsset> {
         val etag = settings.releaseEtag.takeIf { it.isNotEmpty() && releaseCache.isFile }
         val conn = GitHub.open(
@@ -161,9 +177,13 @@ class Updater(private val context: Context, private val settings: Settings) {
     }
 
     /// The published APK when it differs from the installed one, else null.
+    /// An APK left over from an update that has since been installed is
+    /// deleted here, since it can no longer be wanted.
     fun outdatedClient(assets: List<ReleaseAsset>): ReleaseAsset? {
-        val asset = assets.find { it.name == Release.CLIENT_ASSET } ?: return null
-        return if (UpdatePolicy.isClientOutdated(asset.digest, installedDigest())) asset else null
+        val asset = assets.find { it.name == Release.CLIENT_ASSET }
+        val outdated = asset != null && UpdatePolicy.isClientOutdated(asset.digest, installedDigest())
+        if (!outdated) ApkProvider.file(context).delete()
+        return if (outdated) asset else null
     }
 
     /// The SHA-256 of the installed APK, which Android keeps byte for byte as it
@@ -176,22 +196,32 @@ class Updater(private val context: Context, private val settings: Settings) {
 
     /// Download the published APK and check it every way that can be checked
     /// here, so that what reaches the installer is the file CI signed and
-    /// one Android will accept. Throws with a sentence for the strip.
+    /// one Android will accept. Returns null when the installed APK turns out
+    /// to be the published one. Throws with a sentence for the strip.
+    ///
+    /// The release is read again first, because the offer may be hours old and
+    /// CI may have replaced the APK since, under a new asset id. An APK
+    /// already downloaded and matching the current digest is not fetched again.
     ///
     /// The digest is required, not optional as it is for the web build: an
     /// unverifiable app is not handed to the installer. Android itself then
     /// refuses anything not signed with this app's key; the signer and
     /// version checks below only turn that refusal into a sentence someone can
     /// act on, before the installer has opened.
-    fun downloadClient(asset: ReleaseAsset, progress: (String) -> Unit): File {
+    fun downloadClient(progress: (String) -> Unit): File? {
+        progress("Checking the release…")
+        val asset = outdatedClient(fetchAssets(GitHub.NORMAL)) ?: return null
         val digest = UpdatePolicy.publishedDigest(asset.digest)
             ?: throw IOException("The release states no digest for the app, so a download could not be checked.")
         val apk = ApkProvider.file(context)
-        apk.delete()
         try {
-            GitHub.downloadAsset(asset.id, settings.githubToken, apk, "Downloading the new app…", progress)
-            if (UpdatePolicy.sha256(apk) != digest) {
-                throw IOException("The downloaded app did not match the digest the release publishes; nothing was changed.")
+            val have = apk.isFile && UpdatePolicy.sha256(apk) == digest
+            if (!have) {
+                apk.delete()
+                GitHub.downloadAsset(asset.id, settings.githubToken, apk, "Downloading the new app…", progress)
+                if (UpdatePolicy.sha256(apk) != digest) {
+                    throw IOException("The downloaded app did not match the digest the release publishes; nothing was changed.")
+                }
             }
             checkArchive(apk)
             return apk
@@ -245,6 +275,9 @@ class Updater(private val context: Context, private val settings: Settings) {
     }.toSet()
 
     companion object {
+        /// How long a release check counts as current for a start-up.
+        const val RECENT_MS = 10 * 60 * 1000L
+
         fun parseAssets(body: String): List<ReleaseAsset> = try {
             val array = JSONObject(body).optJSONArray("assets")
             if (array == null) {

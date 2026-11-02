@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -14,6 +15,8 @@ import android.view.View
 import android.view.WindowInsetsController
 import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
+import android.webkit.ServiceWorkerClient
+import android.webkit.ServiceWorkerController
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -51,16 +54,11 @@ class MainActivity : Activity() {
 
     private var booting = false
     private var loaded = false
+    private var resumed = false
     /// Set by a reload into a new build, so Back cannot return to a page of
     /// the build it replaced.
     private var clearHistoryOnLoad = false
     private var restorePath: String? = null
-
-    private var clientUpdate: ReleaseAsset? = null
-    private var webStaged = false
-    private var stripDismissed = false
-    /// Set while the strip is in the middle of something and must not be redrawn.
-    private var stripBusy = false
     private var lastBackgroundCheck = 0L
 
     private var backCallback: Any? = null
@@ -97,10 +95,6 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.open_settings).setOnClickListener {
             startActivity(Intent(this, SetupActivity::class.java))
         }
-        stripDismiss.setOnClickListener {
-            stripDismissed = true
-            strip.visibility = View.GONE
-        }
 
         // The cookie store is initialised here, on the main thread, because
         // the start-up thread reads and writes it before any WebView loads.
@@ -130,10 +124,8 @@ class MainActivity : Activity() {
                 if (isDestroyed) return@post
                 outcome.fold(
                     onSuccess = {
-                        clientUpdate = it.clientUpdate
-                        webStaged = it.webStaged
                         open()
-                        refreshStrip()
+                        offer(it)
                     },
                     onFailure = { showSplash(it.message ?: getString(R.string.starting), failed = true) },
                 )
@@ -190,6 +182,13 @@ class MainActivity : Activity() {
             // The focus timer's chime plays when a phase ends, not on a tap.
             mediaPlaybackRequiresUserGesture = false
         }
+        // The app registers no service worker, and a service worker's requests
+        // would bypass shouldInterceptRequest, and with it the files from disk
+        // and their CSP. So none can fetch anything.
+        ServiceWorkerController.getInstance().setServiceWorkerClient(object : ServiceWorkerClient() {
+            override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse =
+                LocalAssets.refused()
+        })
         web.addJavascriptInterface(
             ThemeBridge { colour ->
                 main.post {
@@ -240,9 +239,9 @@ class MainActivity : Activity() {
         }
 
         /// A renderer that died takes the WebView with it, and by default the
-        /// app too. Start the window again instead.
+        /// app too. Start the window again instead; onSaveInstanceState
+        /// carries the page's path to the new one.
         override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-            // onSaveInstanceState carries the page's path to the new window.
             if (!isDestroyed) recreate()
             return true
         }
@@ -331,82 +330,192 @@ class MainActivity : Activity() {
     }
 
     // ── the update strip ────────────────────────────────────────────────────
+    //
+    // Two offers can be open at once: a newer web build waiting for a reload,
+    // and a newer APK. Each is dismissed on its own and by identity, so "Not
+    // now" hides THAT offer, and a newer one is offered again. The APK offer
+    // also moves through steps (permission, download, installer, failure) that
+    // must outlive the screen turning off, so they are state here, not just
+    // text on a view.
+
+    private sealed interface ClientStep {
+        data object Offered : ClientStep
+        data object NeedsPermission : ClientStep
+        data class Downloading(val progress: String?) : ClientStep
+        data object InstallerOpened : ClientStep
+        data class Failed(val message: String) : ClientStep
+    }
+
+    /// The published APK, while it differs from the installed one.
+    private var clientUpdate: ReleaseAsset? = null
+    private var clientStep: ClientStep = ClientStep.Offered
+    /// A verified APK waiting for the window to be in front, because Android
+    /// may drop an activity start from an app in the background.
+    private var pendingInstall = false
+    /// The staged web build, while there is one.
+    private var staged: BuildIdentity? = null
+    private var dismissedClient: String? = null
+    private var dismissedBuild: BuildIdentity? = null
+
+    /// Take a check's answer. A different APK starts its offer afresh.
+    private fun offer(outcome: Updater.Outcome) {
+        val next = outcome.clientUpdate
+        if (next?.digest != clientUpdate?.digest && clientStep !is ClientStep.Downloading) {
+            clientStep = ClientStep.Offered
+        }
+        clientUpdate = next
+        staged = outcome.staged
+        refreshStrip()
+    }
 
     private fun refreshStrip() {
-        if (stripBusy) return
+        val client = clientUpdate
+        val build = staged
+        val clientBusy = clientStep !is ClientStep.Offered && clientStep !is ClientStep.NeedsPermission
         when {
-            stripDismissed -> strip.visibility = View.GONE
-            clientUpdate != null -> showStrip(getString(R.string.client_outdated), getString(R.string.update)) {
-                startClientUpdate()
-            }
-            webStaged -> showStrip(getString(R.string.web_staged), getString(R.string.reload)) { reloadIntoStaged() }
+            // An APK step under way is shown whatever else is pending.
+            client != null && clientBusy -> showClient(client)
+            // A reload takes a second and asks nothing of the user, so it
+            // comes before offering a new APK.
+            build != null && build != dismissedBuild ->
+                showStrip(getString(R.string.web_staged), getString(R.string.reload), { dismissedBuild = build }) {
+                    reloadIntoStaged()
+                }
+            client != null && client.digest != dismissedClient -> showClient(client)
             else -> strip.visibility = View.GONE
         }
     }
 
-    private fun showStrip(text: String, action: String, onAction: () -> Unit) {
+    private fun showClient(client: ReleaseAsset) {
+        val dismiss = { dismissedClient = client.digest }
+        when (val step = clientStep) {
+            ClientStep.Offered ->
+                showStrip(getString(R.string.client_outdated), getString(R.string.update), dismiss) { startClientUpdate() }
+            ClientStep.NeedsPermission ->
+                if (packageManager.canRequestPackageInstalls()) {
+                    // Back from the settings screen with the permission given.
+                    clientStep = ClientStep.Offered
+                    showClient(client)
+                } else {
+                    showStrip(getString(R.string.allow_installs), getString(R.string.allow), dismiss) {
+                        openInstallSettings()
+                    }
+                }
+            is ClientStep.Downloading -> {
+                showStrip(step.progress ?: getString(R.string.downloading), getString(R.string.update), dismiss) {}
+                stripAction.isEnabled = false
+                stripDismiss.isEnabled = false
+            }
+            ClientStep.InstallerOpened ->
+                showStrip(getString(R.string.installer_opened), getString(R.string.update), dismiss) {
+                    startClientUpdate()
+                }
+            is ClientStep.Failed ->
+                // The release page, in the browser, where the APK can be
+                // downloaded and installed by hand. Kept until a check finds a
+                // different APK, so the reason does not vanish with the screen.
+                showStrip(step.message, getString(R.string.download), dismiss) {
+                    openExternally(Uri.parse(Release.PAGE))
+                }
+        }
+    }
+
+    private fun showStrip(text: String, action: String, onDismiss: () -> Unit, onAction: () -> Unit) {
         stripText.text = text
         stripAction.text = action
         stripAction.isEnabled = true
         stripDismiss.isEnabled = true
         stripAction.setOnClickListener { onAction() }
+        stripDismiss.setOnClickListener {
+            onDismiss()
+            refreshStrip()
+        }
         strip.visibility = View.VISIBLE
     }
 
-    /// Download, verify, then hand the APK to the system installer, which asks
-    /// for confirmation and offers to open the new version when it is done.
-    /// Smylte is closed while it installs; nothing here can restart it.
+    private fun openInstallSettings() {
+        try {
+            startActivity(
+                Intent(
+                    android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:$packageName"),
+                ),
+            )
+        } catch (_: ActivityNotFoundException) {
+            clientStep = ClientStep.Failed(getString(R.string.allow_installs))
+            refreshStrip()
+        }
+    }
+
+    /// Download and verify the APK, then hand it to the system installer, which
+    /// asks for confirmation and offers to open the new version when it is
+    /// done. Smylte is closed while it installs; nothing here can restart it.
     private fun startClientUpdate() {
-        val asset = clientUpdate ?: return
         if (!packageManager.canRequestPackageInstalls()) {
-            showStrip(getString(R.string.allow_installs), getString(R.string.allow)) {
-                try {
-                    startActivity(
-                        Intent(
-                            android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                            Uri.parse("package:$packageName"),
-                        ),
-                    )
-                } catch (_: ActivityNotFoundException) {
-                    offerDownloadPage(getString(R.string.allow_installs))
-                }
-            }
+            clientStep = ClientStep.NeedsPermission
+            refreshStrip()
             return
         }
-        stripBusy = true
-        stripAction.isEnabled = false
-        stripDismiss.isEnabled = false
+        clientStep = ClientStep.Downloading(null)
+        refreshStrip()
         Background.updates.execute {
             val result = runCatching {
-                updater.downloadClient(asset) { text -> main.post { if (!isDestroyed) stripText.text = text } }
+                updater.downloadClient { text ->
+                    main.post {
+                        if (isDestroyed || clientStep !is ClientStep.Downloading) return@post
+                        clientStep = ClientStep.Downloading(text)
+                        refreshStrip()
+                    }
+                }
             }
             main.post {
-                stripBusy = false
                 if (isDestroyed) return@post
                 result.fold(
-                    onSuccess = { launchInstaller() },
-                    onFailure = { offerDownloadPage(Updater.describe(it)) },
+                    onSuccess = { apk ->
+                        if (apk == null) {
+                            // Checked again just now: the installed APK is the
+                            // published one after all.
+                            clientUpdate = null
+                            clientStep = ClientStep.Offered
+                            refreshStrip()
+                        } else {
+                            pendingInstall = true
+                            if (resumed) launchInstaller()
+                        }
+                    },
+                    onFailure = {
+                        clientStep = ClientStep.Failed(Updater.describe(it))
+                        refreshStrip()
+                    },
                 )
             }
         }
     }
 
+    /// Open the SYSTEM package installer on the downloaded APK. Resolved to
+    /// the system's own installer explicitly, so no other app that claims APK
+    /// files can intercept the intent and pretend to install.
     private fun launchInstaller() {
+        pendingInstall = false
         val intent = Intent(Intent.ACTION_VIEW)
             .setDataAndType(ApkProvider.uri(this), ApkProvider.MIME)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        try {
-            startActivity(intent)
-            showStrip(getString(R.string.installer_opened), getString(R.string.update)) { startClientUpdate() }
-        } catch (_: ActivityNotFoundException) {
-            offerDownloadPage("No installer on this phone would open the update.")
+        @Suppress("DEPRECATION")   // the ResolveInfoFlags overload is API 33
+        val installer = packageManager
+            .queryIntentActivities(intent, PackageManager.MATCH_SYSTEM_ONLY)
+            .firstOrNull()?.activityInfo?.packageName
+        if (installer == null) {
+            clientStep = ClientStep.Failed(getString(R.string.no_installer))
+            refreshStrip()
+            return
         }
-    }
-
-    /// The fallback when the in-app update cannot finish: the release page, in
-    /// the browser, where the APK can be downloaded and installed by hand.
-    private fun offerDownloadPage(message: String) {
-        showStrip(message, getString(R.string.download)) { openExternally(Uri.parse(Release.PAGE)) }
+        try {
+            startActivity(intent.setPackage(installer))
+            clientStep = ClientStep.InstallerOpened
+        } catch (_: ActivityNotFoundException) {
+            clientStep = ClientStep.Failed(getString(R.string.no_installer))
+        }
+        refreshStrip()
     }
 
     /// Swap the staged build in and load the page again from it. The page is
@@ -415,8 +524,8 @@ class MainActivity : Activity() {
     /// to be replaced.
     private fun reloadIntoStaged() {
         val path = currentPath()
-        webStaged = false
-        strip.visibility = View.GONE
+        staged = null
+        refreshStrip()
         web.stopLoading()
         clearHistoryOnLoad = true
         showSplash(getString(R.string.starting), failed = false)
@@ -426,10 +535,15 @@ class MainActivity : Activity() {
             } catch (_: Exception) {
                 // Rolled back; the installed build loads again.
             }
+            // Read after the swap, on the same thread as every check, so a
+            // check that ran just before this cannot leave a stale offer.
+            val left = updater.web.staged()
             main.post {
                 if (isDestroyed) return@post
+                staged = left
                 restorePath = path
                 open()
+                refreshStrip()
             }
         }
     }
@@ -453,9 +567,7 @@ class MainActivity : Activity() {
                 }
                 main.post {
                     if (isDestroyed || outcome == null) return@post
-                    clientUpdate = outcome.clientUpdate
-                    webStaged = outcome.webStaged
-                    refreshStrip()
+                    offer(outcome)
                 }
             }
         }
@@ -463,12 +575,15 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        resumed = true
         web.onResume()
-        // Back from the "install unknown apps" screen: offer Update again.
+        if (pendingInstall) launchInstaller()
+        // Back from the "install unknown apps" screen, or the installer.
         if (loaded) refreshStrip()
     }
 
     override fun onPause() {
+        resumed = false
         CookieManager.getInstance().flush()
         web.onPause()
         super.onPause()

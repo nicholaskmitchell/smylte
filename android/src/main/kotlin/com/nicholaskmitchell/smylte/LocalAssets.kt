@@ -16,8 +16,11 @@ class LocalAssets(private val root: File, private val origin: String) {
     /// The policy of the document most recently served, attached to every
     /// other response too, as CSPMiddleware does on the server: one header on
     /// an asset costs nothing and leaves no path that escapes the policy.
+    /// A document's OWN response carries the policy computed from its own
+    /// bytes, passed down rather than read back from here: two documents
+    /// served at once on different threads must not trade policies.
     @Volatile
-    private var policy = Csp.policyFor(null)
+    private var lastPolicy = Csp.policyFor(null)
 
     fun answer(request: WebResourceRequest): WebResourceResponse? {
         val url = request.url
@@ -25,7 +28,7 @@ class LocalAssets(private val root: File, private val origin: String) {
         val path = url.path?.takeIf { it.isNotEmpty() } ?: "/"
         return when (AssetRoutes.classify(same, request.method ?: "GET", path)) {
             AssetRoutes.Kind.NETWORK -> null
-            AssetRoutes.Kind.NOT_FOUND -> respond(404, "Not Found", JSON, ByteArrayInputStream(EMPTY_JSON), "no-store")
+            AssetRoutes.Kind.NOT_FOUND -> respond(404, "Not Found", JSON, ByteArrayInputStream(EMPTY_JSON), "no-store", lastPolicy)
             AssetRoutes.Kind.STATIC -> serve(path)
         }
     }
@@ -33,7 +36,7 @@ class LocalAssets(private val root: File, private val origin: String) {
     private fun serve(path: String): WebResourceResponse {
         val index = File(root, "index.html")
         val file = AssetRoutes.resolve(root, path) ?: index
-        if (!file.isFile) return respond(404, "Not Found", TEXT, ByteArrayInputStream(ByteArray(0)), "no-store")
+        if (!file.isFile) return respond(404, "Not Found", TEXT, ByteArrayInputStream(ByteArray(0)), "no-store", lastPolicy)
         val mime = AssetRoutes.mimeFor(file)
         return try {
             if (mime.type == "text/html") {
@@ -41,18 +44,19 @@ class LocalAssets(private val root: File, private val origin: String) {
                 // so the hash always matches the script the page runs, even
                 // across a build swap between two loads.
                 val bytes = file.readBytes()
-                policy = Csp.policyFor(String(bytes, Charsets.UTF_8))
+                val policy = Csp.policyFor(String(bytes, Charsets.UTF_8))
+                lastPolicy = policy
                 // Re-read on every load, or an updated build would keep
                 // pointing at the previous bundle.
-                respond(200, "OK", mime, ByteArrayInputStream(bytes), "no-cache")
+                respond(200, "OK", mime, ByteArrayInputStream(bytes), "no-cache", policy)
             } else {
                 // Content-hashed by Vite, or carrying a ?v= query.
-                respond(200, "OK", mime, FileInputStream(file), "public, max-age=31536000, immutable")
+                respond(200, "OK", mime, FileInputStream(file), "public, max-age=31536000, immutable", lastPolicy)
             }
         } catch (_: IOException) {
             // Not a silent fall through to the network: that would mix files
             // from two different builds into one page.
-            respond(500, "Internal Server Error", TEXT, ByteArrayInputStream(ByteArray(0)), "no-store")
+            respond(500, "Internal Server Error", TEXT, ByteArrayInputStream(ByteArray(0)), "no-store", lastPolicy)
         }
     }
 
@@ -62,6 +66,7 @@ class LocalAssets(private val root: File, private val origin: String) {
         mime: AssetRoutes.Mime,
         body: InputStream,
         cacheControl: String,
+        policy: String,
     ): WebResourceResponse = WebResourceResponse(
         mime.type,
         if (mime.text) "utf-8" else null,
@@ -75,10 +80,20 @@ class LocalAssets(private val root: File, private val origin: String) {
         body,
     )
 
-    private companion object {
-        val JSON = AssetRoutes.Mime("application/json", true)
-        val TEXT = AssetRoutes.Mime("text/plain", true)
-        val EMPTY_JSON = "{}".toByteArray()
+    companion object {
+        private val JSON = AssetRoutes.Mime("application/json", true)
+        private val TEXT = AssetRoutes.Mime("text/plain", true)
+        private val EMPTY_JSON = "{}".toByteArray()
+
+        /// What every service-worker request gets: nothing (MainActivity).
+        fun refused(): WebResourceResponse = WebResourceResponse(
+            "text/plain",
+            "utf-8",
+            404,
+            "Not Found",
+            mapOf("Content-Security-Policy" to "default-src 'none'", "X-Content-Type-Options" to "nosniff"),
+            ByteArrayInputStream(ByteArray(0)),
+        )
     }
 }
 

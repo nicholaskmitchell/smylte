@@ -13,27 +13,40 @@ class Settings(context: Context) {
         context.applicationContext.getSharedPreferences("smylte", Context.MODE_PRIVATE)
 
     /// The server's https origin, "" until setup has run.
-    var origin: String
+    val origin: String
         get() = prefs.getString(ORIGIN, "") ?: ""
-        set(v) = prefs.edit().putString(ORIGIN, v).apply()
 
-    var username: String
+    val username: String
         get() = prefs.getString(USERNAME, "") ?: ""
-        set(v) = prefs.edit().putString(USERNAME, v).apply()
 
-    /// The password, or "" when none is stored or it cannot be unsealed (a
-    /// keystore reset, say). Either way the app's own sign-in screen takes
-    /// over, so a lost key never locks anyone out.
-    var password: String
-        get() = PasswordVault.open(prefs.getString(PASSWORD, null)) ?: ""
-        set(v) = prefs.edit().putString(PASSWORD, if (v.isEmpty()) null else PasswordVault.seal(v)).apply()
+    /// The password for the CURRENT server, or "" when none is stored or it
+    /// cannot be unsealed. It is sealed for the address it was saved with
+    /// (PasswordVault), so after the address changes it reads as "" until it
+    /// is saved again. Either way the app's own sign-in screen takes over, so
+    /// a lost key never locks anyone out.
+    val password: String
+        get() = PasswordVault.open(prefs.getString(PASSWORD, null), passwordPurpose(origin)) ?: ""
 
-    var githubToken: String
-        get() = PasswordVault.open(prefs.getString(TOKEN, null)) ?: ""
-        set(v) = prefs.edit().putString(TOKEN, if (v.isBlank()) null else PasswordVault.seal(v.trim())).apply()
+    val githubToken: String
+        get() = PasswordVault.open(prefs.getString(TOKEN, null), TOKEN_PURPOSE) ?: ""
 
-    /// The ETag of the last release body fetched. GitHub does not count a 304
-    /// against the rate limit, which matters on a shared mobile address.
+    /// Save what setup collected, in one write. Sealing happens first, so a
+    /// keystore that refuses leaves the old settings exactly as they were;
+    /// the exception is the caller's to report.
+    fun save(origin: String, username: String, password: String, githubToken: String) {
+        val sealedPassword = if (password.isEmpty()) null else PasswordVault.seal(password, passwordPurpose(origin))
+        val token = githubToken.trim()
+        val sealedToken = if (token.isEmpty()) null else PasswordVault.seal(token, TOKEN_PURPOSE)
+        prefs.edit()
+            .putString(ORIGIN, origin)
+            .putString(USERNAME, username)
+            .putString(PASSWORD, sealedPassword)
+            .putString(TOKEN, sealedToken)
+            .apply()
+    }
+
+    /// The ETag of the last release body fetched, for conditional checks
+    /// (Updater.fetchAssets says what they do and do not save).
     var releaseEtag: String
         get() = prefs.getString(RELEASE_ETAG, "") ?: ""
         set(v) = prefs.edit().putString(RELEASE_ETAG, v).apply()
@@ -59,5 +72,8 @@ class Settings(context: Context) {
         const val RELEASE_ETAG = "release_etag"
         const val LAST_CHECK = "last_check"
         const val THEME_COLOUR = "theme_colour"
+
+        const val TOKEN_PURPOSE = "github-token"
+        fun passwordPurpose(origin: String) = "password for $origin"
     }
 }

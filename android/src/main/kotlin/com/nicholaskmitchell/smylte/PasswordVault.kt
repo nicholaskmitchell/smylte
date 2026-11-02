@@ -16,23 +16,42 @@ import javax.crypto.spec.GCMParameterSpec
 /// inside the keystore (hardware-backed on most phones) and cannot be exported,
 /// so a copy of the app's files is useless without the device. As on the
 /// desktop, it does not stop code running as this app from reading the secret.
+///
+/// Every value is sealed for a PURPOSE, which GCM authenticates as associated
+/// data. The password's purpose names the server it was saved for, so a
+/// password can only ever be opened for, and sent to, that server: changing
+/// the address in setup without typing the password again leaves nothing that
+/// opens (Settings.password).
 object PasswordVault {
     private const val ALIAS = "smylte-secrets"
     private const val KEYSTORE = "AndroidKeyStore"
     private const val TRANSFORM = "AES/GCM/NoPadding"
     private const val PREFIX = "v1:"
 
-    fun seal(plain: String): String {
+    /// Seal `plain` for `purpose`. Throws when the keystore will not work at
+    /// all. A key entry the keystore can no longer use (seen after some OEM
+    /// updates) is deleted and generated again, once; anything sealed under
+    /// the old key was unreadable already.
+    fun seal(plain: String, purpose: String): String = try {
+        sealWith(key(), plain, purpose)
+    } catch (_: Exception) {
+        deleteKey()
+        sealWith(key(), plain, purpose)
+    }
+
+    private fun sealWith(key: SecretKey, plain: String, purpose: String): String {
         val cipher = Cipher.getInstance(TRANSFORM)
-        cipher.init(Cipher.ENCRYPT_MODE, key())
+        cipher.init(Cipher.ENCRYPT_MODE, key)
+        cipher.updateAAD(purpose.toByteArray(Charsets.UTF_8))
         val sealed = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
         val b64 = Base64.getEncoder()
         return PREFIX + b64.encodeToString(cipher.iv) + ":" + b64.encodeToString(sealed)
     }
 
     /// The plain text, or null when there is nothing stored or it cannot be
-    /// opened: a corrupt value, or a key the keystore no longer has.
-    fun open(stored: String?): String? {
+    /// opened for `purpose`: a corrupt value, a different purpose, or a key the
+    /// keystore no longer has.
+    fun open(stored: String?, purpose: String): String? {
         if (stored == null || !stored.startsWith(PREFIX)) return null
         return try {
             val parts = stored.substring(PREFIX.length).split(':')
@@ -40,15 +59,24 @@ object PasswordVault {
             val b64 = Base64.getDecoder()
             val cipher = Cipher.getInstance(TRANSFORM)
             cipher.init(Cipher.DECRYPT_MODE, existingKey() ?: return null, GCMParameterSpec(128, b64.decode(parts[0])))
+            cipher.updateAAD(purpose.toByteArray(Charsets.UTF_8))
             String(cipher.doFinal(b64.decode(parts[1])), Charsets.UTF_8)
         } catch (_: Exception) {
             null
         }
     }
 
-    private fun existingKey(): SecretKey? {
-        val store = KeyStore.getInstance(KEYSTORE).apply { load(null) }
-        return (store.getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey
+    private fun store(): KeyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
+
+    private fun existingKey(): SecretKey? =
+        (store().getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey
+
+    private fun deleteKey() {
+        try {
+            store().deleteEntry(ALIAS)
+        } catch (_: Exception) {
+            // Nothing to delete, or it cannot be; generating says which.
+        }
     }
 
     private fun key(): SecretKey {

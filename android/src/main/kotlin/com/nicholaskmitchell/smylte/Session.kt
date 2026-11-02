@@ -17,13 +17,19 @@ import java.net.URL
 object Session {
     private const val COOKIE = "smylte_session"
 
-    private fun connect(origin: String, path: String, method: String = "GET"): HttpURLConnection {
+    private fun connect(
+        origin: String,
+        path: String,
+        method: String = "GET",
+        connectMs: Int = 8_000,
+        readMs: Int = 15_000,
+    ): HttpURLConnection {
         val conn = URL("$origin$path").openConnection() as HttpURLConnection
         conn.requestMethod = method
         conn.instanceFollowRedirects = false
         conn.useCaches = false
-        conn.connectTimeout = 8_000
-        conn.readTimeout = 15_000
+        conn.connectTimeout = connectMs
+        conn.readTimeout = readMs
         return conn
     }
 
@@ -48,6 +54,8 @@ object Session {
         false to "Something answered, but it does not look like Smylte."
     } catch (e: IOException) {
         false to "Could not reach it: ${e.message ?: e.javaClass.simpleName}"
+    } catch (e: Exception) {
+        false to "Could not check it: ${e.message ?: e.javaClass.simpleName}"
     }
 
     /// Make sure the WebView holds a live session, signing in with the stored
@@ -58,12 +66,18 @@ object Session {
     /// The existing session is checked first. The desktop signs in on every
     /// launch, which on a phone, where Android ends the process whenever it
     /// likes, would mean a fresh scrypt on the server for most openings.
+    ///
+    /// Nothing at all happens without stored credentials: there would be
+    /// nothing to do with the answer, and this runs before the app opens.
+    /// With them, the waits are short for the same reason; a server that is
+    /// unreachable from here is the page's to report, not the splash's.
     fun ensureSignedIn(origin: String, username: String, password: String) {
+        if (username.isEmpty() || password.isEmpty()) return
         val cookies = CookieManager.getInstance()
         try {
             val held = cookies.getCookie(origin)
             if (held != null && held.split(';').any { it.trim().startsWith("$COOKIE=") }) {
-                val conn = connect(origin, "/api/me")
+                val conn = connect(origin, "/api/me", connectMs = 4_000, readMs = 6_000)
                 try {
                     conn.setRequestProperty("Cookie", held)
                     if (conn.responseCode in 200..299) return
@@ -71,9 +85,7 @@ object Session {
                     conn.disconnect()
                 }
             }
-            if (username.isEmpty() || password.isEmpty()) return
-
-            val conn = connect(origin, "/api/login", "POST")
+            val conn = connect(origin, "/api/login", "POST", connectMs = 4_000, readMs = 10_000)
             try {
                 conn.doOutput = true
                 conn.setRequestProperty("Content-Type", "application/json")
@@ -88,9 +100,11 @@ object Session {
             } finally {
                 conn.disconnect()
             }
-        } catch (_: IOException) {
-            // Offline or refused: the page's own sign-in handles it.
-        } catch (_: JSONException) {
+        } catch (_: Exception) {
+            // Offline, refused, or a cookie store that would not take it: the
+            // page's own sign-in handles every one of them. Caught broadly
+            // because this runs on the update thread, where anything uncaught
+            // ends the process.
         }
     }
 }

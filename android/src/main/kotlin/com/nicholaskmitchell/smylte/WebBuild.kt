@@ -43,9 +43,14 @@ class WebBuild(base: File) {
     }
 
     /// `promote` moves `web` aside and then `web.next` into place. A process
-    /// killed between the two leaves the only working copy in web.old.
+    /// killed between the two leaves the only working copy in web.old; one
+    /// killed after both leaves a web.old nothing needs.
     fun recoverStranded() {
-        if (root.exists() || !previous.isDirectory) return
+        if (!previous.exists()) return
+        if (root.exists()) {
+            previous.deleteRecursively()
+            return
+        }
         try {
             move(previous, root)
         } catch (_: IOException) {

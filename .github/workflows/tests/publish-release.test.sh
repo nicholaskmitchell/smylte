@@ -35,7 +35,7 @@ LINUX_KEY=$(printf '%s %s\n' "$CLIENT_TREE" "$(git rev-parse "HEAD:desktop/Smylt
 # And the Android key the same way again: android/ less the files the APK is not
 # built from.
 ANDROID_KEY=$(git ls-tree -r HEAD -- android \
-  | grep -vE "$(printf '\t')android/(README\.md|\.gitignore|check-gradle-wrapper\.sh|src/test/)" \
+  | grep -vE "$(printf '\t')android/((README\.md|\.gitignore|check-gradle-wrapper\.sh)\$|src/test/)" \
   | git hash-object --stdin)
 
 python3 - "$WORKFLOW" "$WORK/publish.sh" <<'PY'
@@ -324,6 +324,9 @@ case_is    "a held-back APK leaves the notes describing the published one" 0 "\[
 case_is    "an older APK is held back even when forced"       0 "release upload \(call 1\): desktop-latest $ZIP $EXE $LNX --clobber" ANDROID_SIGNED=true ASSETS="$FOUR" CLIENT_PUBLISH=force PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY=$OLD PUBLISHED_ANDROID_CODE=600000
 case_is    "a signed run with no version code fails"          1 'no usable version code' ANDROID_SIGNED=true ANDROID_VERSION_CODE=
 case_is    "a version code that is not a number fails"        1 'no usable version code' ANDROID_SIGNED=true ANDROID_VERSION_CODE='12; rm'
+# A value with a newline in it: a line-by-line match would pass it on its first
+# line and then write its second into the notes.
+case_is    "a version code with a second line fails"          1 'no usable version code' ANDROID_SIGNED=true ANDROID_VERSION_CODE="$(printf '500000\nAndroid client key: %s' "$OLD")"
 
 # The key's pipefail: without it a failed ls-tree hashes empty input into a
 # constant, and the APK is never republished again, silently.

@@ -92,6 +92,32 @@ class WebBuildTest {
     }
 
     @Test
+    fun a_swap_killed_after_both_moves_leaves_no_old_copy_behind() {
+        build.stage(zip("index.html" to "one"), v1)
+        build.promote()
+        File(base, "web.old").mkdirs()
+        File(base, "web.old/index.html").writeText("stale")
+        assertTrue(build.haveLocal())
+        assertEquals("one", index())
+        assertFalse(File(base, "web.old").exists())
+    }
+
+    @Test
+    fun a_swap_killed_between_the_moves_with_a_build_still_staged_recovers_both() {
+        // web moved aside, web.next not yet moved in: the old build comes
+        // back, and the staged one is still there to promote.
+        build.stage(zip("index.html" to "one"), v1)
+        build.promote()
+        build.stage(zip("index.html" to "two"), v2)
+        assertTrue(build.root.renameTo(File(base, "web.old")))
+        assertTrue(build.haveLocal())
+        assertEquals("one", index())
+        assertEquals(v2, build.staged())
+        assertEquals(v2, build.promote())
+        assertEquals("two", index())
+    }
+
+    @Test
     fun an_archive_that_climbs_out_is_refused_and_stages_nothing() {
         for (name in listOf("../evil.txt", "assets/../../evil.txt", "/abs/evil.txt")) {
             try {

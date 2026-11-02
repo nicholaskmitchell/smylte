@@ -67,6 +67,11 @@ object GitHub {
         }
     }
 
+    /// The most any one download may be. The web build is a few megabytes and
+    /// the APK a fraction of one; this exists so a wrong or hostile asset
+    /// fails rather than filling the phone.
+    const val MAX_DOWNLOAD = 128L * 1024 * 1024
+
     /// Download release asset `assetId` to `dest`, reporting progress. Throws
     /// on any failure; `dest` may then hold a partial file.
     fun downloadAsset(
@@ -82,6 +87,7 @@ object GitHub {
         try {
             if (conn.responseCode !in 200..299) throw IOException("GitHub answered ${conn.responseCode}.")
             val total = conn.contentLengthLong
+            if (total > MAX_DOWNLOAD) throw IOException("The download is too large ($total bytes).")
             dest.parentFile?.mkdirs()
             conn.inputStream.use { input ->
                 FileOutputStream(dest).use { out ->
@@ -92,8 +98,9 @@ object GitHub {
                     while (true) {
                         val n = input.read(buffer)
                         if (n < 0) break
-                        out.write(buffer, 0, n)
                         done += n
+                        if (done > MAX_DOWNLOAD) throw IOException("The download is too large.")
+                        out.write(buffer, 0, n)
                         if (done - shown >= 256 * 1024) {
                             shown = done
                             progress(UpdatePolicy.progressText(what, done, total))

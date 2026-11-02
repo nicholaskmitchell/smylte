@@ -7,6 +7,17 @@
          still refuses any APK not signed with this app's own key. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- Lets MainActivity find the SYSTEM installer by name and send the
+         update to it explicitly, rather than to whichever app claims APKs. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data
+                android:mimeType="application/vnd.android.package-archive"
+                android:scheme="content" />
+        </intent>
+    </queries>
+
     <!-- No backup, cloud or device-to-device. The password and token are sealed
          with a keystore key that does not travel, so a restored copy could not
          read them anyway, and the WebView's session cookie should not move to
@@ -37,7 +48,7 @@
              whatever was open in it. The window handles each of these itself. -->
         <activity
             android:name=".MainActivity"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|layoutDirection|locale"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|fontWeightAdjustment|layoutDirection|locale|colorMode|touchscreen|mcc|mnc|grammaticalGender"
             android:exported="true"
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">
