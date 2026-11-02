@@ -183,6 +183,72 @@ describe('every overlay is a layer Back can close', () => {
   })
 })
 
+// ── Focus: every dialog takes it and gives it back ──────────────────────────
+//
+// `useLayer` moves focus into the dialog's own element and returns it to the
+// opener (layers.ts), but only for a layer that is handed that element, and an
+// element that can take focus without being a tab stop has `tabIndex={-1}`.
+// Like the halves above, these are counts: they cannot say which element a ref
+// is on, only that a dialog was not added without one.
+
+/** The argument text of every `useLayer(` call in `src`, to its matching `)`. */
+function layerCalls(src: string): string[] {
+  const out: string[] = []
+  for (const m of src.matchAll(/\buseLayer\s*\(/g)) {
+    const from = m.index! + m[0].length
+    let depth = 1
+    let at = from
+    for (; at < src.length && depth > 0; at++) {
+      if (src[at] === '(') depth++
+      else if (src[at] === ')') depth--
+    }
+    out.push(src.slice(from, at - 1))
+  }
+  return out
+}
+
+describe('every dialog takes focus and gives it back', () => {
+  it('gives every dialog element a tabIndex of -1', async () => {
+    const all = await componentCode()
+    // Not vacuous: a renamed role would leave nothing to check.
+    const withDialog = all.filter(([, src]) => /role="(alert)?dialog"/.test(src))
+    expect(withDialog.length).toBeGreaterThan(10)
+    const short: string[] = []
+    for (const [name, src] of withDialog) {
+      const roles = count(src, /role="(alert)?dialog"/g)
+      const tabs = count(src, /tabIndex=\{-1\}/g)
+      if (tabs < roles) short.push(`${name} (${roles} dialog role(s), ${tabs} tabIndex={-1})`)
+    }
+    expect(short, `${short.join(', ')} declare(s) a dialog focus cannot move to`).toEqual([])
+  })
+
+  // The "···" popover is a disclosure. Its button carries `aria-expanded` and
+  // keeps focus, and its markup comment says why it is not `role="menu"`.
+  const NOT_DIALOG_LAYERS: Record<string, number> = { TodayView: 1 }
+
+  it('hands every layer its dialog element', async () => {
+    const all = await componentCode()
+    for (const name of Object.keys(NOT_DIALOG_LAYERS)) {
+      const found = all.find(([n]) => n === name)
+      expect(found, `${name} is not in the sweep`).toBeDefined()
+      const calls = layerCalls(found![1])
+      expect(calls.filter((c) => !/\bdialog\s*:/.test(c)).length,
+        `${name} no longer has exactly the layer that is not a dialog`)
+        .toBe(NOT_DIALOG_LAYERS[name])
+    }
+    const short: string[] = []
+    for (const [name, src] of all) {
+      const calls = layerCalls(src)
+      const withDialog = calls.filter((c) => /\bdialog\s*:/.test(c)).length
+      if (withDialog < calls.length - (NOT_DIALOG_LAYERS[name] ?? 0)) {
+        short.push(`${name} (${calls.length} useLayer, ${withDialog} with a dialog element)`)
+      }
+    }
+    expect(short, `${short.join(', ')} register(s) a layer with no dialog element to focus`)
+      .toEqual([])
+  })
+})
+
 // ── and the behaviour, for the one that is the only route on a phone ────────
 
 const list = (id: string, name: string): List => ({

@@ -678,6 +678,8 @@ export const en = {
   'cal.partial': 'Couldn’t load {cals}. Some events may be missing.',
   'cal.grid': 'Month',
   'cal.newEvent': 'New event',
+  'cal.prevMonth': 'Previous month',
+  'cal.nextMonth': 'Next month',
   'cal.repeatingTitle': '{summary} (repeating)',
   'cal.dragEndDay': 'Drag to change the last day',
   'cal.moreOnDay': '+{count} more',

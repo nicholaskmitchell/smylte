@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { StrictMode, useState, type ReactNode } from 'react'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { StrictMode, useRef, useState, type ReactNode } from 'react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { useEscape } from './hooks'
 import { backTopLayer, layerDepth, onLayerDepth, useLayer } from './layers'
 import { pressBack, withPrompt } from './test/back'
@@ -210,5 +210,243 @@ describe('layers: unsaved input', () => {
     rerender(withPrompt(<></>))
     expect(screen.queryByRole('alertdialog')).toBeNull()
     expect(layerDepth()).toBe(0)
+  })
+})
+
+// ── focus: a dialog takes it, and gives it back ─────────────────────────────
+
+/** A dialog like the app's: its own element with `tabIndex={-1}`, a close button
+ *  and, when asked, a field with `autoFocus`. */
+function Dialog({ onClose, name = 'dialog', autoFocusChild = false, unsaved = false, children }: {
+  onClose: () => void
+  name?: string
+  autoFocusChild?: boolean
+  unsaved?: boolean
+  children?: ReactNode
+}) {
+  const dialog = useRef<HTMLDivElement>(null)
+  useLayer(onClose, { unsaved, dialog })
+  return (
+    <div ref={dialog} role="dialog" aria-label={name} tabIndex={-1}>
+      {autoFocusChild && <input aria-label="field" autoFocus />}
+      {children}
+      <button onClick={onClose}>close</button>
+    </div>
+  )
+}
+
+/** A trigger button, or a text field that opens on Enter, and the dialog it opens. */
+function Opener({ trigger = 'button', beforeClose, ...props }: {
+  trigger?: 'button' | 'input'
+  beforeClose?: () => void
+  autoFocusChild?: boolean
+  unsaved?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      {trigger === 'button'
+        ? <button onClick={() => setOpen(true)}>open</button>
+        : <input aria-label="open" onKeyDown={(e) => { if (e.key === 'Enter') setOpen(true) }} />}
+      {open && <Dialog {...props} onClose={() => { beforeClose?.(); setOpen(false) }} />}
+    </>
+  )
+}
+
+/** Open from the trigger the way a user does: focus it, then activate it. */
+function openFrom(trigger: HTMLElement) {
+  trigger.focus()
+  fireEvent.click(trigger)
+}
+
+const closeButton = () => screen.getByRole('button', { name: 'close' })
+
+describe('layers: focus', () => {
+  it('returns focus to the trigger of a dialog whose child takes autoFocus', () => {
+    render(<Opener autoFocusChild />)
+    const trigger = screen.getByRole('button', { name: 'open' })
+    openFrom(trigger)
+    expect(screen.getByLabelText('field')).toHaveFocus()
+    fireEvent.click(closeButton())
+    // Captured in an effect, the opener would have been the dialog's own field.
+    expect(trigger).toHaveFocus()
+  })
+
+  it('moves focus into a dialog that takes none, and back on close', () => {
+    render(<Opener />)
+    const trigger = screen.getByRole('button', { name: 'open' })
+    openFrom(trigger)
+    expect(screen.getByRole('dialog')).toHaveFocus()
+    fireEvent.click(closeButton())
+    expect(trigger).toHaveFocus()
+  })
+
+  it('gives focus back after Back', () => {
+    render(<Opener />)
+    const trigger = screen.getByRole('button', { name: 'open' })
+    openFrom(trigger)
+    pressBack()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(trigger).toHaveFocus()
+  })
+
+  it('never gives focus back to a text field', () => {
+    render(<Opener trigger="input" />)
+    const trigger = screen.getByLabelText('open')
+    trigger.focus()
+    fireEvent.keyDown(trigger, { key: 'Enter' })
+    expect(screen.getByRole('dialog')).toHaveFocus()
+    fireEvent.click(closeButton())
+    // On a phone, focusing a field opens the keyboard.
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('leaves focus where closing put it', () => {
+    render(<>
+      <button>other</button>
+      <Opener beforeClose={() => screen.getByRole('button', { name: 'other' }).focus()} />
+    </>)
+    openFrom(screen.getByRole('button', { name: 'open' }))
+    fireEvent.click(closeButton())
+    expect(screen.getByRole('button', { name: 'other' })).toHaveFocus()
+  })
+
+  it('returns focus inside the dialog below when a nested one closes', () => {
+    function Stack() {
+      const [parent, setParent] = useState(false)
+      const [child, setChild] = useState(false)
+      return (
+        <>
+          <button onClick={() => setParent(true)}>open</button>
+          {parent && (
+            <Dialog onClose={() => setParent(false)}>
+              <button onClick={() => setChild(true)}>more</button>
+            </Dialog>
+          )}
+          {child && <Dialog name="child" onClose={() => setChild(false)} />}
+        </>
+      )
+    }
+    render(<Stack />)
+    openFrom(screen.getByRole('button', { name: 'open' }))
+    const more = screen.getByRole('button', { name: 'more' })
+    openFrom(more)
+    expect(screen.getByRole('dialog', { name: 'child' })).toHaveFocus()
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'child' }))
+      .getByRole('button', { name: 'close' }))
+    expect(screen.queryByRole('dialog', { name: 'child' })).toBeNull()
+    expect(more).toHaveFocus()
+    expect(screen.getByRole('dialog', { name: 'dialog' })).toBeInTheDocument()
+  })
+
+  it('returns focus into the layer below when nothing had focus', () => {
+    function Stack() {
+      const [child, setChild] = useState(false)
+      const dialog = useRef<HTMLDivElement>(null)
+      const childRef = useRef<HTMLDivElement>(null)
+      useLayer(() => {}, { dialog })
+      useLayer(() => setChild(false), { open: child, dialog: childRef })
+      return (
+        <>
+          <div ref={dialog} role="dialog" aria-label="parent" tabIndex={-1}>
+            <button onClick={() => setChild(true)}>more</button>
+          </div>
+          {child && (
+            <div ref={childRef} role="dialog" aria-label="child" tabIndex={-1}>
+              <button onClick={() => setChild(false)}>close child</button>
+            </div>
+          )}
+        </>
+      )
+    }
+    render(<Stack />)
+    const parent = screen.getByRole('dialog', { name: 'parent' })
+    screen.getByRole('button', { name: 'more' }).focus()
+    ;(document.activeElement as HTMLElement).blur()
+    // Opened with nothing focused, as a script or an assistive click does.
+    fireEvent.click(screen.getByRole('button', { name: 'more' }))
+    expect(screen.getByRole('dialog', { name: 'child' })).toHaveFocus()
+    fireEvent.click(screen.getByRole('button', { name: 'close child' }))
+    expect(parent).toHaveFocus()
+  })
+
+  it('follows the chain when the opening layer closed as this one opened', () => {
+    function Handover() {
+      const [which, setWhich] = useState<'a' | 'b' | null>(null)
+      return (
+        <>
+          <button onClick={() => setWhich('a')}>open</button>
+          {which === 'a' && (
+            <Dialog onClose={() => setWhich(null)}>
+              <button onClick={() => setWhich('b')}>hand over</button>
+            </Dialog>
+          )}
+          {which === 'b' && <Dialog autoFocusChild onClose={() => setWhich(null)} />}
+        </>
+      )
+    }
+    render(<Handover />)
+    const trigger = screen.getByRole('button', { name: 'open' })
+    openFrom(trigger)
+    fireEvent.click(screen.getByRole('button', { name: 'hand over' }))
+    expect(screen.getByLabelText('field')).toHaveFocus()
+    fireEvent.click(closeButton())
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(trigger).toHaveFocus()
+  })
+
+  it('a flag-opened layer gives focus back, and takes it again on reopening', () => {
+    function Flag() {
+      const [open, setOpen] = useState(false)
+      const dialog = useRef<HTMLDivElement>(null)
+      useLayer(() => setOpen(false), { open, dialog })
+      return (
+        <>
+          <button onClick={() => setOpen(true)}>open</button>
+          {open && (
+            <div ref={dialog} role="dialog" aria-label="dialog" tabIndex={-1}>
+              <button onClick={() => setOpen(false)}>close</button>
+            </div>
+          )}
+        </>
+      )
+    }
+    render(<Flag />)
+    const trigger = screen.getByRole('button', { name: 'open' })
+    openFrom(trigger)
+    expect(screen.getByRole('dialog')).toHaveFocus()
+    fireEvent.click(closeButton())
+    expect(trigger).toHaveFocus()
+    openFrom(trigger)
+    expect(screen.getByRole('dialog')).toHaveFocus()
+    fireEvent.click(closeButton())
+    expect(trigger).toHaveFocus()
+  })
+
+  it("Discard returns focus to the editor's trigger", () => {
+    render(withPrompt(<Opener unsaved autoFocusChild />))
+    const trigger = screen.getByRole('button', { name: 'open' })
+    openFrom(trigger)
+    pressBack()
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(trigger).toHaveFocus()
+  })
+
+  it('keeps autoFocus, and returns focus, under StrictMode', () => {
+    const { unmount } = render(<StrictMode><Opener autoFocusChild /></StrictMode>)
+    const trigger = screen.getByRole('button', { name: 'open' })
+    openFrom(trigger)
+    expect(screen.getByLabelText('field')).toHaveFocus()
+    fireEvent.click(closeButton())
+    expect(trigger).toHaveFocus()
+    unmount()
+
+    render(<StrictMode><Opener /></StrictMode>)
+    const plain = screen.getByRole('button', { name: 'open' })
+    openFrom(plain)
+    expect(screen.getByRole('dialog')).toHaveFocus()
+    fireEvent.click(closeButton())
+    expect(plain).toHaveFocus()
   })
 })

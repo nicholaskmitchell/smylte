@@ -231,7 +231,8 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
     || notes !== (task?.notes || '')
     || changed(...(Object.keys(start) as (keyof RowValues)[]))
     || reminder !== (task?.notify_minutes_before ?? null)
-  useLayer(onClose, { unsaved })
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useLayer(onClose, { unsaved, dialog: dialogRef })
 
   return (
     // Closes on a press AND release that both land on the scrim. A bare onClick
@@ -243,8 +244,8 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
         if (e.target === e.currentTarget && scrimPress.current) onClose()
         scrimPress.current = false
       }}>
-      <div className="modal task-modal" role="dialog" aria-modal="true"
-        aria-label={creating ? tr('taskModal.add') : tr('taskModal.edit')}
+      <div className="modal task-modal" ref={dialogRef} tabIndex={-1} role="dialog"
+        aria-modal="true" aria-label={creating ? tr('taskModal.add') : tr('taskModal.edit')}
         onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <span className="modal-title">{creating ? tr('taskModal.add') : tr('taskModal.edit')}</span>

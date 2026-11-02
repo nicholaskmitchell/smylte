@@ -548,6 +548,17 @@ follow the element's `lang` in Chrome, Edge and the Windows client. Firefox and
 WebKit (including the Linux client) follow the OS instead. The public booking
 page always uses the visitor's locale.
 
+Dialogs take focus and give it back. Every dialog, sheet and popover is a layer
+(`layers.ts`). A layer notes what had focus while it renders open, because React
+focuses an `autoFocus` field during the commit, before any effect could look. A
+dialog with nothing focused inside takes focus on its own element
+(`tabIndex={-1}`, drawn with no ring), so a screen reader starts inside it. When
+a layer closes and focus went with it, focus returns to what opened it. If that
+has gone too (Settings handing over to Appearance), it returns to what opened
+the layer before. A text field is never refocused, because that opens a phone's
+keyboard, and focus the closing action put elsewhere is left there. This applies
+in browsers and the desktop clients as well.
+
 ## Desktop client
 
 **A host, not a rewrite.** Each client hosts the engine its OS already has

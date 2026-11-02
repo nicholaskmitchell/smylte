@@ -523,8 +523,10 @@ describe('mini calendar', () => {
     await userEvent.click(dayButton(busyDay))
     const pop = screen.getByRole('dialog')
     expect(within(pop).getByText('Standup')).toBeInTheDocument()
-    // Home shows the day; the Calendar tab is where it gets edited.
-    expect(within(pop).queryByRole('button')).toBeNull()
+    // Home shows the day; the Calendar tab is where it gets edited. Close is
+    // the one control, so a screen reader can leave the modal popover.
+    expect(within(pop).getAllByRole('button').map((b) => b.getAttribute('aria-label')))
+      .toEqual(['Close'])
   })
 
   it('closes the popover on Escape and returns focus to the day', async () => {

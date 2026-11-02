@@ -19,7 +19,7 @@
  */
 import { useState } from 'react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { isValidValue } from './appearance'
@@ -237,6 +237,8 @@ describe('stage 4 — booking-link editor', () => {
 
     const dialog = await screen.findByRole('dialog')
     expect(dialog).toHaveAttribute('aria-modal', 'true')
+    // The ✕ is named by its label, not by the symbol it draws.
+    within(dialog).getByRole('button', { name: 'Close' })
 
     await user.type(screen.getByPlaceholderText('30-minute intro call'), 'Intro call')
     const create = screen.getByRole('button', { name: /create link/i })

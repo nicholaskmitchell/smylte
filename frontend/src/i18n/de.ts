@@ -722,6 +722,8 @@ export const de: Catalogue = {
   'cal.partial': '{cals} konnte nicht geladen werden. Es fehlen vielleicht Termine.',
   'cal.grid': 'Monat',
   'cal.newEvent': 'Neuer Termin',
+  'cal.prevMonth': 'Vorheriger Monat',
+  'cal.nextMonth': 'Nächster Monat',
   'cal.repeatingTitle': '{summary} (wiederkehrend)',
   'cal.dragEndDay': 'Ziehen, um den letzten Tag zu ändern',
   'cal.moreOnDay': '+{count} weitere',

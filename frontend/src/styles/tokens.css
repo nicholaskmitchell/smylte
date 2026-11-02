@@ -518,6 +518,11 @@ input, select, textarea { font-family: inherit; }
   outline: 2px solid var(--focus-color, var(--accent));
   outline-offset: var(--focus-offset, 2px);
 }
+/* A dialog takes focus itself when nothing in it did (useLayer, layers.ts), so a
+   screen reader starts reading inside it and Tab starts from it. It is not a
+   control, so it draws no ring; the first control Tab reaches does. This
+   outranks the rule above and Classic's revert. */
+:is([role="dialog"], [role="alertdialog"])[tabindex="-1"]:focus-visible { outline: none; }
 
 /* ---- primitives ---- */
 .label {

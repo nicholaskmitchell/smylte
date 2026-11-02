@@ -821,7 +821,9 @@ button.menu-toggle:active { scale: var(--press-scale); }
 .day-pop-head {
   font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
   letter-spacing: calc(0.08em * var(--tracking)); color: var(--fg-faint); padding: 10px 14px 4px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
+.day-pop-head .icon-btn { padding: 4px 6px; font-size: calc(10px * var(--fs-scale)); }
 .day-pop .agenda-ev { padding: 8px 14px; font-size: calc(13px * var(--fs-scale)); }
 /* C3 · the popover's rows and the phone's day list are menus of things to
    open, so they lose their dividers and take the inset, rounded hover fill.

@@ -2587,3 +2587,30 @@ describe('<TasksView> asked to show the Suggested pane', () => {
     expect(onAskHandled).not.toHaveBeenCalled()
   })
 })
+
+// ── the check button ────────────────────────────────────────────────────────
+// A button's content names it before its title does, so the ✓ was read as "✓"
+// until it carried a label, and nothing told TalkBack whether the task was done.
+
+describe('<TasksView> the check button', () => {
+  beforeEach(() => m.lists.mockResolvedValue([list]))
+
+  it('is named, and not pressed, on an open task', async () => {
+    m.tasks.mockResolvedValue([task({ uid: 'open', summary: 'Ship it' })])
+    setup('list')
+    const row = (await screen.findByText('Ship it')).closest('.task')! as HTMLElement
+    expect(within(row).getByRole('button', { name: 'Toggle complete', pressed: false }))
+      .toBeInTheDocument()
+  })
+
+  it('is pressed on a completed task', async () => {
+    m.tasks.mockResolvedValue([
+      task({ uid: 'done', summary: 'Trip', completed: true, status: 'COMPLETED' }),
+    ])
+    const { user } = setup()
+    await user.click(await screen.findByRole('button', { name: /view completed/i }))
+    const row = (await screen.findByText('Trip')).closest('.task')! as HTMLElement
+    expect(within(row).getByRole('button', { name: 'Toggle complete', pressed: true }))
+      .toBeInTheDocument()
+  })
+})

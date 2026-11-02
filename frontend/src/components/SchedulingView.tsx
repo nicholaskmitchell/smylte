@@ -425,7 +425,8 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
   // Back closes it too, but asks first when that would throw away an edit.
   // While a save is in flight the write is already sent, so closing throws
   // nothing away.
-  useLayer(onClose, { unsaved: !saving && fields !== opened })
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useLayer(onClose, { unsaved: !saving && fields !== opened, dialog: dialogRef })
 
   return (
     /* Escape and role="dialog" landed when this was last fixed; the SCRIM did
@@ -437,12 +438,13 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
         if (e.target === e.currentTarget && scrimPress.current) onClose()
         scrimPress.current = false
       }}>
-      <div className="modal sched-modal" role="dialog" aria-modal="true"
-        aria-label={modalTitle}
+      <div className="modal sched-modal" ref={dialogRef} tabIndex={-1} role="dialog"
+        aria-modal="true" aria-label={modalTitle}
         onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <span className="modal-title">{modalTitle}</span>
-          <button className="icon-btn" onClick={onClose}>✕</button>
+          <button className="icon-btn" onClick={onClose}
+            aria-label={tr('common.close')}>✕</button>
         </div>
         <div className="field">
           <label className="label" htmlFor="sched-title">{tr('sched.titleField')}</label>
@@ -515,6 +517,7 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
                           onChange={(e) => patchRange(i, k, 1, e.target.value)} />
                         {days[i].ranges.length > 1 && (
                           <button className="icon-btn" title={tr('sched.removeRange')}
+                            aria-label={tr('sched.removeRange')}
                             onClick={() => patchDay(i, { ranges: days[i].ranges.filter((_, j) => j !== k) })}>
                             ✕
                           </button>

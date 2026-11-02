@@ -223,8 +223,8 @@ describe('2026-08-19 — the calendar grid', () => {
     await screen.findByText(/^Today$/)
     await waitFor(() => expect(m.events).toHaveBeenCalledTimes(1))
 
-    const next = () => screen.getByRole('button', { name: '›' })
-    const prev = () => screen.getByRole('button', { name: '‹' })
+    const next = () => screen.getByRole('button', { name: 'Next month' })
+    const prev = () => screen.getByRole('button', { name: 'Previous month' })
 
     await user.click(next())                                    // April
     await waitFor(() => expect(m.events).toHaveBeenCalledTimes(2))

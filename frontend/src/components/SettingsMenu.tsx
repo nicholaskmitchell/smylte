@@ -226,7 +226,7 @@ export function SettingsMenu({
   // Back takes the same step. The inline fields in the sections are not layers:
   // they stop Escape at the field and commit on blur, and Back blurs them first
   // (layers.ts), so they commit as a tap on the section's ‹ would.
-  useLayer(back)
+  useLayer(back, { dialog: panelRef })
   const sheetPress = useRef(false)
 
   const tr = useT()
@@ -602,7 +602,7 @@ export function SettingsMenu({
           if (e.target === e.currentTarget && sheetPress.current) onClose()
           sheetPress.current = false
         }}>
-        <div ref={panelRef} className="settings-menu set-sheet" data-view={view}
+        <div ref={panelRef} tabIndex={-1} className="settings-menu set-sheet" data-view={view}
           role="dialog" aria-modal="true" aria-label={tr('app.settings')}
           onClick={(e) => e.stopPropagation()}>
           {body}
@@ -612,7 +612,7 @@ export function SettingsMenu({
   }
 
   return (
-    <div ref={panelRef} className="menu settings-menu" data-view="panel"
+    <div ref={panelRef} tabIndex={-1} className="menu settings-menu" data-view="panel"
       role="dialog" aria-label={tr('app.settings')}>
       {body}
     </div>

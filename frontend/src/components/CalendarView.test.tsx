@@ -441,7 +441,7 @@ describe('month navigation', () => {
 
     const user = setup()
     await screen.findByText(/^Today$/)
-    await user.click(screen.getByRole('button', { name: '›' }))
+    await user.click(screen.getByRole('button', { name: 'Next month' }))
     await waitFor(() => expect(m.events).toHaveBeenCalledTimes(2))
 
     // April's batch settles first, so April is what the user is looking at.

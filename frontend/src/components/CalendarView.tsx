@@ -134,6 +134,7 @@ function CalendarTasksSection({ lists, shown, onShownChange, showDone, onShowDon
         <span className="group-name">{tr('cal.tasksGroup')}</span>
         <button className="group-eye" aria-pressed={anyShown}
           title={anyShown ? tr('cal.takeTasksOff') : tr('cal.putTasksOn')}
+          aria-label={anyShown ? tr('cal.takeTasksOff') : tr('cal.putTasksOn')}
           onClick={() => onShownChange(anyShown ? [] : lists.map((l) => l.id))}>
           {anyShown ? '◉' : '◌'}
         </button>
@@ -565,7 +566,8 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   useEscape(useCallback(() => setMoveAsk((a) => (a ? null : a)), []))
   // Back closes the prompt as Escape does. Nothing is written until a scope is
   // picked, so there is nothing to ask about.
-  useLayer(() => setMoveAsk(null), { open: moveAsk !== null })
+  const moveRef = useRef<HTMLDivElement>(null)
+  useLayer(() => setMoveAsk(null), { open: moveAsk !== null, dialog: moveRef })
 
   const pickMoveScope = (scope: EventScope) => {
     if (!moveAsk) return
@@ -660,9 +662,11 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
 
       <div className="content">
         <div className="cal-head">
-          <button className="icon-btn" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}>‹</button>
+          <button className="icon-btn" title={tr('cal.prevMonth')} aria-label={tr('cal.prevMonth')}
+            onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}>‹</button>
           <button className="btn ghost" onClick={() => { const n = new Date(); setCursor(new Date(n.getFullYear(), n.getMonth(), 1)) }}>{tr('tasks.today')}</button>
-          <button className="icon-btn" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}>›</button>
+          <button className="icon-btn" title={tr('cal.nextMonth')} aria-label={tr('cal.nextMonth')}
+            onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}>›</button>
           <span className="cal-title">{months[cursor.getMonth()]} {cursor.getFullYear()}</span>
           <span className="spacer" />
           {visibleCals.length > 0 && !isMobile && (
@@ -989,7 +993,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
             if (ev.target === ev.currentTarget && movePress.current) setMoveAsk(null)
             movePress.current = false
           }}>
-          <div className="modal" role="dialog" aria-modal="true"
+          <div className="modal" ref={moveRef} tabIndex={-1} role="dialog" aria-modal="true"
             aria-label={tr('cal.repeatingEvent')}
             onClick={(ev) => ev.stopPropagation()}>
             <div className="modal-head">
@@ -1315,7 +1319,8 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete,
     || !sameValue(tags, e?.tags || []) || busy !== (e?.busy ?? true)
     || reminder !== (e?.notify_minutes_before ?? null)
     || repeat !== (recurring ? 'keep' : 'none') || repeatUntil !== '' || calPick !== initialCal
-  useLayer(dismiss, { unsaved: scopeAsk === null && edited })
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useLayer(dismiss, { unsaved: scopeAsk === null && edited, dialog: dialogRef })
 
   return (
     <div className="overlay"
@@ -1324,7 +1329,7 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete,
         if (ev.target === ev.currentTarget && scrimPress.current) onClose()
         scrimPress.current = false
       }}>
-      <div className="modal" role="dialog" aria-modal="true"
+      <div className="modal" ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true"
         aria-label={modalTitle}
         onClick={(ev) => ev.stopPropagation()}>
         <div className="modal-head">

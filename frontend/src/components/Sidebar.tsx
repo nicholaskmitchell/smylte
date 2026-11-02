@@ -187,7 +187,8 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
   useEffect(() => { if (!addingGroup) setGroupDraft('') }, [addingGroup])
   const drawerDraft = (adding && addDraft.trim() !== '')
     || (addingGroup && groupDraft.trim() !== '')
-  useLayer(closeDrawer, { open: drawerOpen, unsaved: drawerDraft })
+  const drawerRef = useRef<HTMLDivElement>(null)
+  useLayer(closeDrawer, { open: drawerOpen, unsaved: drawerDraft, dialog: drawerRef })
   const drawerPress = useRef(false)
 
   // What `items` holds NOW, for the rollbacks below. `onItems` is the
@@ -554,17 +555,23 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
             <button className={`side-mobile-completed ${completedActive ? 'active' : ''}`}
               title={completedActive
                 ? tr('side.backToTasksShort') : tr('side.viewCompletedShort')}
+              aria-label={completedActive
+                ? tr('side.backToTasksShort') : tr('side.viewCompletedShort')}
               aria-pressed={completedActive} onClick={onToggleCompleted}>✓</button>
           )}
           {onToggleParked && (
             <button className={`side-mobile-completed ${parkedActive ? 'active' : ''}`}
               title={parkedActive
                 ? tr('side.backToTasksShort') : tr('side.viewParkedShort')}
+              aria-label={parkedActive
+                ? tr('side.backToTasksShort') : tr('side.viewParkedShort')}
               aria-pressed={parkedActive} onClick={onToggleParked}>⏸</button>
           )}
           {onToggleSuggested && (
             <button className={`side-mobile-completed ${suggestedActive ? 'active' : ''}`}
               title={suggestedActive
+                ? tr('side.backToTasksShort') : tr('side.viewSuggestedShort')}
+              aria-label={suggestedActive
                 ? tr('side.backToTasksShort') : tr('side.viewSuggestedShort')}
               aria-pressed={suggestedActive} onClick={onToggleSuggested}>
               ✉
@@ -583,8 +590,8 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
               if (e.target === e.currentTarget && drawerPress.current) closeDrawer()
               drawerPress.current = false
             }}>
-            <div className="side drawer" role="dialog" aria-modal="true" aria-label={tr(words.manage)}
-              onClick={(e) => e.stopPropagation()}>
+            <div className="side drawer" ref={drawerRef} tabIndex={-1} role="dialog" aria-modal="true"
+              aria-label={tr(words.manage)} onClick={(e) => e.stopPropagation()}>
               <div className="side-head">
                 <span className="label">{tr(words.heading)}</span>
                 <span className="side-head-actions">
@@ -664,11 +671,15 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
           <button className={`icon-btn side-completed-rail ${completedActive ? 'active' : ''}`}
             title={completedActive
               ? tr('side.backToTasksShort') : tr('side.viewCompletedShort')}
+            aria-label={completedActive
+              ? tr('side.backToTasksShort') : tr('side.viewCompletedShort')}
             aria-pressed={completedActive} onClick={onToggleCompleted}>✓</button>
         )}
         {onToggleParked && (
           <button className={`icon-btn side-completed-rail ${parkedActive ? 'active' : ''}`}
             title={parkedActive
+              ? tr('side.backToTasksShort') : tr('side.viewParkedShort')}
+            aria-label={parkedActive
               ? tr('side.backToTasksShort') : tr('side.viewParkedShort')}
             aria-pressed={parkedActive} onClick={onToggleParked}>⏸</button>
         )}
@@ -748,6 +759,7 @@ function GroupHeader({ group, count, collapsed, canToggle, anyVisible,
     <div className="group-head">
       <button className="group-caret"
         title={collapsed ? tr('side.groupExpand') : tr('side.groupCollapse')}
+        aria-label={collapsed ? tr('side.groupExpand') : tr('side.groupCollapse')}
         aria-expanded={!collapsed} onClick={onToggleCollapse}>
         <span className={`caret ${collapsed ? '' : 'open'}`}>▸</span>
       </button>
@@ -825,7 +837,7 @@ function ColorRow({ color, onPick }: { color: string | null; onPick: (c: string 
           moving focus is the fix in every engine; Tab still reaches the
           buttons, and in EditModal keeping focus in the name field is harmless. */}
       <button className={`color-dot none ${color === null ? 'on' : ''}`}
-        title={tr('side.noColor')}
+        title={tr('side.noColor')} aria-label={tr('side.noColor')}
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => onPick(null)}>✕</button>
       {SWATCHES.map((c) => (
@@ -939,7 +951,11 @@ function EditModal({ item, placeholder, groups, groupId, onSetGroup, onClose, on
   // click-to-close scrim over a form.
   useEscape(onClose)
   // Back closes it too, but asks first when a rename or a recolour would go.
-  useLayer(onClose, { unsaved: (name.trim() || item.name) !== item.name || !colorSame })
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useLayer(onClose, {
+    unsaved: (name.trim() || item.name) !== item.name || !colorSame,
+    dialog: dialogRef,
+  })
   const scrimPress = useRef(false)
 
   return (
@@ -949,8 +965,8 @@ function EditModal({ item, placeholder, groups, groupId, onSetGroup, onClose, on
         if (e.target === e.currentTarget && scrimPress.current) onClose()
         scrimPress.current = false
       }}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label={placeholder}
-        onClick={(e) => e.stopPropagation()}>
+      <div className="modal" ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true"
+        aria-label={placeholder} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <span className="modal-title">{placeholder}</span>
           <button className="icon-btn" onClick={onClose} aria-label={tr('common.close')}>✕</button>

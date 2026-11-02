@@ -64,8 +64,10 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
   useEscape(onClose)
   // Back closes the panel too, but asks first when the rename row holds a name
   // that was not saved. Everything else here applies as it is picked.
+  const dialogRef = useRef<HTMLDivElement>(null)
   useLayer(onClose, {
     unsaved: renaming && active !== null && !isPreset && name !== active.name,
+    dialog: dialogRef,
   })
 
   // Close the rename row whenever the theme it was opened for stops being the
@@ -234,7 +236,7 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
 
   return (
     <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="modal appearance-modal" role="dialog"
+      <div className="modal appearance-modal" ref={dialogRef} tabIndex={-1} role="dialog"
         aria-label={tr('appear.title')} aria-modal="true">
         <div className="modal-head">
           <span className="modal-title">{tr('appear.title')}</span>

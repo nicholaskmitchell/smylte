@@ -20,7 +20,8 @@ function DiscardDialog({ ask }: { ask: DiscardAsk }) {
   const scrimPress = useRef(false)
   // A layer of its own, above the one it asks about: Back here keeps editing,
   // so a second Back can never be the one that discards.
-  useLayer(ask.keep)
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useLayer(ask.keep, { dialog: dialogRef })
   // Capture phase, stopped there: the editor underneath answers Escape at the
   // window by closing, which would throw away the very input this asks about.
   useEscape(ask.keep, { capture: true })
@@ -32,8 +33,8 @@ function DiscardDialog({ ask }: { ask: DiscardAsk }) {
         if (e.target === e.currentTarget && scrimPress.current) ask.keep()
         scrimPress.current = false
       }}>
-      <div className="modal" role="alertdialog" aria-modal="true" aria-labelledby={title}
-        aria-describedby={body} onClick={(e) => e.stopPropagation()}>
+      <div className="modal" ref={dialogRef} tabIndex={-1} role="alertdialog" aria-modal="true"
+        aria-labelledby={title} aria-describedby={body} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <span className="modal-title" id={title}>{tr('discard.title')}</span>
         </div>

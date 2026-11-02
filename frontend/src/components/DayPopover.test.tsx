@@ -29,11 +29,26 @@ describe('<DayPopover>', () => {
     expect(within(pop).getByText(/Mon, Aug 3/)).toBeInTheDocument()
   })
 
+  it('is a modal dialog that takes focus as it opens', () => {
+    show([ev()])
+    const pop = screen.getByRole('dialog')
+    expect(pop).toHaveAttribute('aria-modal', 'true')
+    expect(pop).toHaveFocus()
+  })
+
   it('is read-only when no onOpen is given', () => {
     show([ev()])
-    // The whole read-only contract: nothing inside is actionable, so the Home
-    // dashboard never becomes an event editor.
-    expect(within(screen.getByRole('dialog')).queryByRole('button')).toBeNull()
+    // The whole read-only contract: nothing inside opens anything, so the Home
+    // dashboard never becomes an event editor. Close is the one control.
+    const buttons = within(screen.getByRole('dialog')).queryAllByRole('button')
+    expect(buttons.map((b) => b.getAttribute('aria-label'))).toEqual(['Close'])
+  })
+
+  it('has a close button, so a screen reader can leave without Escape', async () => {
+    const { onClose } = show([ev()])
+    await userEvent.click(within(screen.getByRole('dialog'))
+      .getByRole('button', { name: 'Close' }))
+    expect(onClose).toHaveBeenCalledOnce()
   })
 
   it('opens an event when onOpen is given', async () => {

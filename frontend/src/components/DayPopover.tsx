@@ -3,7 +3,7 @@
 // mini calendar (where a day click opens a read-only list) — passing no `onOpen`
 // is what makes it read-only, so the dashboard never grows an event editor.
 
-import { type CSSProperties } from 'react'
+import { useRef, type CSSProperties } from 'react'
 import type { CalEvent, Task } from '../api'
 import { eventKey, type DayEv } from '../calendar'
 import { taskKey } from '../order'
@@ -87,9 +87,10 @@ export function DayPopover({ day, x, y, events, tasks = [], styleOf, taskStyleOf
   onOpenTask?: (t: Task) => void
   onClose: () => void
 }) {
-  const { locale } = useI18n()
+  const { locale, t: tr } = useI18n()
   useEscape(onClose)
-  useLayer(onClose)
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useLayer(onClose, { dialog: dialogRef })
   const long = new Date(`${day}T00:00`).toLocaleDateString(locale,
     { weekday: 'long', month: 'long', day: 'numeric' })
   // Clamp to the viewport so edge cells don't push the popover off-screen.
@@ -97,11 +98,21 @@ export function DayPopover({ day, x, y, events, tasks = [], styleOf, taskStyleOf
   const top = Math.max(8, Math.min(y, window.innerHeight - 328))
   return (
     <div className="pop-backdrop" onClick={onClose}>
-      <div className="day-pop" style={{ left, top }} onClick={(ev) => ev.stopPropagation()}
-        role="dialog" aria-label={long}>
+      {/* The backdrop takes every press outside, so a screen reader is told the
+          page behind is out of reach too. */}
+      <div className="day-pop" ref={dialogRef} tabIndex={-1} style={{ left, top }}
+        onClick={(ev) => ev.stopPropagation()} role="dialog" aria-modal="true"
+        aria-label={long}>
+        {/* The read-only list has nothing else to focus, and a screen reader
+            has no Escape key and no backdrop to press, so the close button is
+            what lets it leave a modal dialog. */}
         <div className="day-pop-head">
-          {new Date(`${day}T00:00`).toLocaleDateString(locale,
-            { weekday: 'short', month: 'short', day: 'numeric' })}
+          <span>
+            {new Date(`${day}T00:00`).toLocaleDateString(locale,
+              { weekday: 'short', month: 'short', day: 'numeric' })}
+          </span>
+          <button className="icon-btn" title={tr('common.close')}
+            aria-label={tr('common.close')} onClick={onClose}>✕</button>
         </div>
         {events.map((e) => (
           <AgendaEvent key={eventKey(e)} ev={e} day={day} style={styleOf(e)} onOpen={onOpen} />

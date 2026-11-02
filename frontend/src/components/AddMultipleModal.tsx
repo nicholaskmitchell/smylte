@@ -314,7 +314,8 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
   const unsaved = !busy
     && (rows.some((r) => r.summary.trim() !== '' || keys.some((k) => !sameValue(r[k], blank[k])))
       || keys.some((k) => !sameValue(shared[k], blank[k])))
-  useLayer(dismiss, { unsaved })
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useLayer(dismiss, { unsaved, dialog: dialogRef })
 
   // Focus moves by row key, not index, so it survives inserts and removals.
   useEffect(() => {
@@ -448,8 +449,8 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
     // close it and lose everything typed.
     <div className="overlay"
       onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose() }}>
-      <div className="modal task-modal" role="dialog" aria-modal="true"
-        aria-label={tr('bulk.aria')}>
+      <div className="modal task-modal" ref={dialogRef} tabIndex={-1} role="dialog"
+        aria-modal="true" aria-label={tr('bulk.aria')}>
         <div className="modal-head">
           <span className="modal-title">{tr('bulk.title')}</span>
           <button className="icon-btn" onClick={onClose} disabled={busy}

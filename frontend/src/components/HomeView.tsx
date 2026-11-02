@@ -75,7 +75,8 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   const [picking, setPicking] = useState(false)
   // Back closes the picker. It has no Escape, and gets none here: that would
   // change the key on desktops.
-  useLayer(() => setPicking(false), { open: picking })
+  const pickerRef = useRef<HTMLDivElement>(null)
+  useLayer(() => setPicking(false), { open: picking, dialog: pickerRef })
   // The layout as it looks mid-drag. Null when nothing is being dragged, so the
   // committed prop is what renders.
   const [preview, setPreview] = useState<DashboardModule[] | null>(null)
@@ -371,7 +372,8 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
       </div>
 
       {picking && (
-        <div className="dash-picker" role="dialog" aria-label={tr('home.picker')}>
+        <div className="dash-picker" ref={pickerRef} tabIndex={-1} role="dialog"
+          aria-label={tr('home.picker')}>
           {available.map((k) => (
             <button key={k} className="dash-pick" onClick={() => add(k)}>
               <span className="dash-pick-name">{tr(MODULE_SPECS[k].label)}</span>

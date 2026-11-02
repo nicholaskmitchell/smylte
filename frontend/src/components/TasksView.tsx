@@ -1166,6 +1166,7 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
       onDragEnd={() => onDrag(null)}>
       <div className={`pri-bar ${priClass}`} />
       <button className={`check ${task.completed ? 'on' : ''}`} title={tr('tasks.toggleComplete')}
+        aria-label={tr('tasks.toggleComplete')} aria-pressed={task.completed}
         onClick={() => onToggle(task)}>✓</button>
       {/* The role/tabIndex/keydown trio the calendar's task chip has: this is
           the card's only route to the editor, and a plain div with onClick
@@ -1252,6 +1253,7 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
           onClick={() => onCollapse?.(!collapsed)}>›</button>
       )}
       <button className={`check ${task.completed ? 'on' : ''}`} title={tr('tasks.toggleComplete')}
+        aria-label={tr('tasks.toggleComplete')} aria-pressed={task.completed}
         onClick={() => onToggle(task)}>✓</button>
       {/* Keyboard-openable, like the calendar's chips and DayPopover's rows.
           Tabbing through a row reached the twisty, the checkbox, "+ sub" and

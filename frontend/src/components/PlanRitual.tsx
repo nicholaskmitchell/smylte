@@ -86,7 +86,8 @@ export function PlanRitual({
   useEscape(onClose)
   // Back closes it as ✕ does. The note commits on blur and again on unmount, so
   // closing keeps it, and there is nothing to ask about.
-  useLayer(onClose)
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useLayer(onClose, { dialog: dialogRef })
 
   const over = capacity != null && planned > capacity
   const last = step === STEPS.length - 1
@@ -102,8 +103,8 @@ export function PlanRitual({
         if (e.target === e.currentTarget && scrimPress.current) onClose()
         scrimPress.current = false
       }}>
-      <div className="modal plan-ritual" role="dialog" aria-modal="true"
-        aria-label={tr('plan.aria')} onClick={(e) => e.stopPropagation()}>
+      <div className="modal plan-ritual" ref={dialogRef} tabIndex={-1} role="dialog"
+        aria-modal="true" aria-label={tr('plan.aria')} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <span className="modal-title">{tr(STEPS[step])}</span>
           <span className="plan-step mono">

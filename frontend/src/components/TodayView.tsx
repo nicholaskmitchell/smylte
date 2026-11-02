@@ -4214,7 +4214,8 @@ function HabitsSheet({ rev, guard, onClose }: {
   useEscape(onClose)
   // Back closes the sheet as Escape does, but asks first when a habit's title
   // has been typed and not yet added.
-  useLayer(onClose, { unsaved: title.trim() !== '' })
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useLayer(onClose, { unsaved: title.trim() !== '', dialog: dialogRef })
 
   /** Replace one habit in the list in hand, or take it out (`next` null). */
   const put = useCallback((id: string, next: Habit | null) => {
@@ -4329,8 +4330,8 @@ function HabitsSheet({ rev, guard, onClose }: {
         if (e.target === e.currentTarget && scrimPress.current) onClose()
         scrimPress.current = false
       }}>
-      <div className="modal habit-sheet" role="dialog" aria-modal="true"
-        aria-label={tr('today.habits')}
+      <div className="modal habit-sheet" ref={dialogRef} tabIndex={-1} role="dialog"
+        aria-modal="true" aria-label={tr('today.habits')}
         onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <span className="modal-title">{tr('today.habits')}</span>
