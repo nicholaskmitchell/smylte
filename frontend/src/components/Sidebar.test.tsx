@@ -506,6 +506,33 @@ describe('<Sidebar> edit modal colors', () => {
   })
 })
 
+describe('<Sidebar> folding while the editor is open', () => {
+  it('keeps the same editor, with the typed name, when the rail folds', async () => {
+    const api = {
+      create: vi.fn(async () => undefined),
+      update: vi.fn(async () => list('work', 'Work')),
+      remove: vi.fn(async () => undefined),
+      reorder: vi.fn(async () => undefined),
+    }
+    const drawn = (collapsed: boolean) => (
+      <Sidebar kind="list" items={[list('work', 'Work')]} collapsed={collapsed}
+        countOf={(l) => l.open_count} onItems={() => {}} api={api}
+        hiddenIds={new Set()} onHiddenChange={() => {}} />
+    )
+    const { rerender } = render(drawn(false))
+    await userEvent.click(screen.getByRole('button', { name: 'Edit Work' }))
+    const name = screen.getByDisplayValue('Work')
+    await userEvent.clear(name)
+    await userEvent.type(name, 'Work stuff')
+
+    rerender(drawn(true))
+    expect(document.querySelector('.side.collapsed')).toBeInTheDocument()
+    // The same element, not a remounted one that merely shows the same text.
+    expect(screen.getByDisplayValue('Work stuff')).toBe(name)
+    expect(name).toBeInTheDocument()
+  })
+})
+
 describe('<Sidebar> color on a new collection', () => {
   const addApi = () => ({
     create: vi.fn(async (name: string) => list('new', name)),
