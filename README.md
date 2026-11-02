@@ -72,6 +72,9 @@ The reasoning behind most of the design is in [`docs/DESIGN.md`](docs/DESIGN.md)
   and it can't open, back-date or write your notes about a day.
 - **Desktop client.** Windows and Linux windows that load the app from local
   disk and update themselves. See [`desktop/README.md`](desktop/README.md).
+- **Android app.** The same idea on a phone, installed from the release rather
+  than a store, and it updates itself. See
+  [`android/README.md`](android/README.md).
 - **Panel firmware.** A MicroPython example for a Pico 2 W and a Waveshare 7.5"
   e-paper panel. See [`firmware/README.md`](firmware/README.md).
 
@@ -110,6 +113,7 @@ frontend/
     styles/       design tokens, app.css, layout.css, display.css
 firmware/         MicroPython example for a Pico 2 W + Waveshare 7.5"
 desktop/          Windows (WinForms, WebView2) and Linux (GTK 4, WebKitGTK) clients
+android/          Android client (Kotlin, Android System WebView)
 scratch/          disposable Radicale for development on :5233
 deploy/           systemd unit, Caddy snippet, cloudflared, setup and autopull scripts
 docs/             DEPLOY.md, DESIGN.md, findings

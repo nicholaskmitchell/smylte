@@ -8,6 +8,9 @@
 #   desktop-windows Windows client build + the same unit tests; only when desktop/
 #                   changes (or from "Run pipeline" in the UI), because Windows
 #                   minutes cost more than Linux ones
+#   android         Android client unit tests, lint and an unsigned build; only
+#                   when android/ or a file its tests read changes, because the
+#                   SDK is a large download
 #   workflows       desktop-release.yml's publish step against a stubbed `gh`
 #   security-*      pip-audit + bandit, and npm audit
 #
@@ -150,6 +153,46 @@ desktop-windows:
     # (windows-latest), which runs as a real user. Everything else runs.
     - |
       dotnet test desktop/Smylte.Desktop.Tests/Smylte.Desktop.Tests.csproj --filter "FullyQualifiedName!~A_password_survives_a_round_trip&FullyQualifiedName!~A_password_with_non_ascii_survives_a_round_trip&FullyQualifiedName!~Two_passwords_encrypted_in_a_row_produce_different_blobs&FullyQualifiedName!~The_stored_blob_does_not_contain_the_password"
+
+android:
+  # The Android client is compiled by CI and never on a phone. Unsigned here:
+  # signing happens only in GitHub's desktop-release.yml.
+  image: eclipse-temurin:21-jdk
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - changes:
+        - android/**/*
+        # Read by the Android unit tests (CspTest, IconDriftTest).
+        - frontend/index.html
+        - frontend/public/favicon.svg
+        - .gitlab-ci.yml
+  variables:
+    ANDROID_HOME: $CI_PROJECT_DIR/.cache/android-sdk
+    GRADLE_USER_HOME: $CI_PROJECT_DIR/.cache/gradle
+    # Google's command-line tools, pinned by version and checksum (the SHA-1
+    # Google publishes in repository2-3.xml agrees with this SHA-256).
+    CMDLINE_TOOLS: commandlinetools-linux-16111833_latest.zip
+    CMDLINE_TOOLS_SHA256: 0877a1d048fe4a24efe2eff536ca4223f7adeb58648bb81909d33c446918cfa8
+  cache:
+    key: android-sdk-16111833
+    paths: [.cache/android-sdk, .cache/gradle]
+  script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends unzip curl > /dev/null
+    - |
+      if [ ! -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+        curl -fsSL -o /tmp/cmdline.zip "https://dl.google.com/android/repository/$CMDLINE_TOOLS"
+        echo "$CMDLINE_TOOLS_SHA256  /tmp/cmdline.zip" | sha256sum -c -
+        mkdir -p "$ANDROID_HOME/cmdline-tools"
+        unzip -q /tmp/cmdline.zip -d /tmp/cmdline
+        mv /tmp/cmdline/cmdline-tools "$ANDROID_HOME/cmdline-tools/latest"
+      fi
+    # AGP installs the platform and build-tools it needs, once the licences
+    # are accepted.
+    - yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+    - cd android
+    # ./gradlew runs gradle-wrapper.jar before anything else does.
+    - ./check-gradle-wrapper.sh
+    - ./gradlew --no-daemon test lint assembleRelease
 
 workflows:
   # desktop-release.yml's publish step is shell that never runs on a PR, and a

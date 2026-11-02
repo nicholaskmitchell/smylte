@@ -32,6 +32,11 @@ CLIENT_TREE=$(git rev-parse "HEAD:desktop/Smylte.Desktop")
 # Linux binary on every push forever.
 LINUX_KEY=$(printf '%s %s\n' "$CLIENT_TREE" "$(git rev-parse "HEAD:desktop/Smylte.Desktop.Linux")" \
   | git hash-object --stdin)
+# And the Android key the same way again: android/ less the files the APK is not
+# built from.
+ANDROID_KEY=$(git ls-tree -r HEAD -- android \
+  | grep -vE "$(printf '\t')android/(README\.md|\.gitignore|check-gradle-wrapper\.sh|src/test/)" \
+  | git hash-object --stdin)
 
 python3 - "$WORKFLOW" "$WORK/publish.sh" <<'PY'
 import sys, yaml, pathlib
@@ -61,12 +66,14 @@ run_case() {
     # tree its notes record (empty = a release from before that line existed).
     : "${ASSETS:=smylte-web.zip Smylte.exe Smylte-linux-x86_64}" "${PUBLISHED_TREE:=}"
     : "${PUBLISHED_LINUX_KEY:=}" "${EDIT_DROPS_LINUX_KEY:=0}"
+    : "${PUBLISHED_ANDROID_KEY:=}" "${EDIT_DROPS_ANDROID_KEY:=0}"
 
     # Starts stale, the way the real release did after the 503.
     {
       echo "Rolling desktop build from 0000000000000000."
       [ -n "$PUBLISHED_TREE" ] && echo "Client source tree: $PUBLISHED_TREE"
       [ -n "$PUBLISHED_LINUX_KEY" ] && echo "Linux client key: $PUBLISHED_LINUX_KEY"
+      [ -n "$PUBLISHED_ANDROID_KEY" ] && echo "Android client key: $PUBLISHED_ANDROID_KEY"
     } > "$_STUB/body"
 
     # The notes the step passes to `gh release edit/create --notes`, so the
@@ -133,6 +140,7 @@ run_case() {
             _notes_arg "$@" \
               | { [ "$EDIT_DROPS_TREE" = 1 ] && grep -v 'Client source tree' || cat; } \
               | { [ "$EDIT_DROPS_LINUX_KEY" = 1 ] && grep -v 'Linux client key' || cat; } \
+              | { [ "$EDIT_DROPS_ANDROID_KEY" = 1 ] && grep -v 'Android client key' || cat; } \
               > "$_STUB/body"
           fi
           return 0 ;;
@@ -236,6 +244,27 @@ case_is "notes that lose the Linux key fail the job"     1 'do not record the li
 # pattern matched the other'"'"'s value — which is what a label like "Linux client
 # source tree" would have done to the exe'"'"'s `.*Client source tree` pattern.
 case_is "neither scrape reads the other label"           0 "release upload \(call 1\): desktop-latest $ZIP --clobber" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY"
+
+# ── and for the APK, which exists only when the release had a key to sign it ─
+# `sign-android` publishes nothing without the signing secrets, and that must
+# not hold back the web build or the desktop binaries. Every case above runs
+# unsigned (ANDROID_SIGNED unset), which is how they double as the proof that
+# an unsigned run behaves exactly as the step did before Android existed.
+APK='artifacts/client-android/Smylte-android\.apk'
+FOUR='smylte-web.zip Smylte.exe Smylte-linux-x86_64 Smylte-android.apk'
+
+case_is "an unsigned run says so and publishes no APK"   0 "No signed Android build" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY"
+case_is "an unsigned run uploads only the web build"     0 "release upload \(call 1\): desktop-latest $ZIP --clobber" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY=0123456789abcdef0123456789abcdef01234567
+case_is "a changed APK is published alone"               0 "release upload \(call 1\): desktop-latest $ZIP $APK --clobber" ANDROID_SIGNED=true ASSETS="$FOUR" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY=0123456789abcdef0123456789abcdef01234567
+case_is "an unchanged APK is not re-published"           0 "release upload \(call 1\): desktop-latest $ZIP --clobber" ANDROID_SIGNED=true ASSETS="$FOUR" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY="$ANDROID_KEY"
+case_is "a release missing the APK gets it"              0 "release upload \(call 1\): desktop-latest $ZIP $APK --clobber" ANDROID_SIGNED=true PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY="$ANDROID_KEY"
+case_is "a release from before the Android key gets it once" 0 "release upload \(call 1\): desktop-latest $ZIP $APK --clobber" ANDROID_SIGNED=true ASSETS="$FOUR" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY"
+case_is "notes that lose the Android key fail the job"   1 'do not record the android client key' ANDROID_SIGNED=true EDIT_DROPS_ANDROID_KEY=1
+case_is "a forced dispatch publishes every client"       0 "release upload \(call 1\): desktop-latest $ZIP $EXE $LNX $APK --clobber" ANDROID_SIGNED=true ASSETS="$FOUR" CLIENT_PUBLISH=force PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY="$ANDROID_KEY"
+case_is "a first signed release carries all four"        0 "release create \(call 1\): desktop-latest $ZIP $EXE $LNX $APK" ANDROID_SIGNED=true API_ANSWER=absent
+# Three labels in one body now, every key correct: the only way this run
+# uploads a binary is if one pattern read another's line.
+case_is "no scrape reads another label"                  0 "release upload \(call 1\): desktop-latest $ZIP --clobber" ANDROID_SIGNED=true ASSETS="$FOUR" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY="$ANDROID_KEY"
 
 echo
 echo "$pass passed, $fail failed"

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The favicon's own plate, letter and period (build_app_icon.py's CREAM,
+         INK and ACCENT): the launcher icon is the "paper" variant. -->
+    <color name="icon_plate">#F3EDE2</color>
+    <!-- The two shipped backgrounds, as index.html's pre-paint script carries
+         them, so the window is the right colour before the page has painted. -->
+    <color name="window_light">#FBFAF7</color>
+    <color name="window_dark">#0C0C10</color>
+    <!-- The update strip: the desktop clients' notice colours. -->
+    <color name="strip_background">#FFF4D6</color>
+    <color name="strip_text">#5A3C00</color>
+</resources>

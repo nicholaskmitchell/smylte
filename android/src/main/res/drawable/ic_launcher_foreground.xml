@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The S and the period of frontend/public/favicon.svg, in the favicon's
+     own 64-unit space, scaled so the mark is 44dp tall and centred on
+     MARK_CENTRE (backend/dev/build_app_icon.py) inside the 108dp adaptive-icon
+     canvas. 44dp keeps the whole mark inside the 66dp circle that every
+     launcher mask leaves visible. IconDriftTest fails if the favicon's mark
+     changes and this does not. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="1.3313"
+        android:scaleY="1.3313"
+        android:translateX="11.3912"
+        android:translateY="14.187">
+        <path
+            android:fillColor="#1A1814"
+            android:pathData="M37.18 18Q36.37 17.49 35.55 17.17 34.14 16.64 32.12 16.64 29.96 16.64 28.49 17.28 27.02 17.93 26.29 19.13 25.55 20.34 25.55 22.08 25.55 23.74 26.42 24.74 27.28 25.74 28.72 26.47 30.17 27.21 31.89 28.06 33.62 28.86 34.96 29.91 36.3 30.95 37.08 32.45 37.87 33.96 37.87 36.19 37.87 39.26 36.27 41.57 34.67 43.88 31.74 45.16 28.82 46.43 24.8 46.43 22.39 46.43 20.62 46.09 18.85 45.74 17.08 44.96L16.9 36.62 18.32 36.62 21.35 43.63Q21.88 43.77 22.39 43.86 23.53 44.06 24.89 44.06 27.74 44.06 29.68 43.28 31.62 42.5 32.61 41.07 33.59 39.63 33.59 37.7 33.59 36.12 32.98 35.07 32.38 34.03 31.37 33.32 30.35 32.6 29.13 32.04 27.9 31.48 26.66 30.88 25.03 30.05 23.84 29.12 22.66 28.19 22.03 26.88 21.4 25.58 21.4 23.69 21.4 20.94 22.78 18.83 24.15 16.73 26.74 15.55 29.32 14.37 32.95 14.37 34.7 14.37 36.21 14.62 37.22 14.8 38.26 15.15L40.97 13.38 41.86 13.38 39.91 24.31 38.46 24.31Z" />
+        <path
+            android:fillColor="#C75A26"
+            android:pathData="M40.71,43.16a3.2,3.2 0 1,0 6.4,0a3.2,3.2 0 1,0 -6.4,0Z" />
+    </group>
+</vector>

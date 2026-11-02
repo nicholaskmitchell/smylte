@@ -620,6 +620,54 @@ be newer than the client.
 live update, so `LocalServer.cs` sends chunked and flushes after every read. A
 buffering proxy doesn't error. It leaves the stream silently connected.
 
+## Android client
+
+**The server's origin, not a local server.** The desktop clients serve the app
+from a loopback HTTP server and proxy `/api`. On a phone any app can connect to
+a loopback port, so the Android client opens none. The WebView loads the app at
+the server's own address, and `shouldInterceptRequest` answers requests for the
+app's files from the downloaded build. `/api` is left to the WebView's network
+stack, so the session cookie, same-origin API calls and the SSE stream work
+exactly as in a browser, and nothing is rewritten. The split between local
+files and the network is `LocalServer.HandleAsync`'s, so the web build can't
+tell the hosts apart. Interception can't read request bodies, and every desktop
+bridge verb is a POST with one, so `/desktop/*` answers 404 and the desktop
+settings don't render. The status and navigation bars follow the page's
+`theme-color` meta tag instead, which `appearance.ts` already keeps on the live
+`--bg` for mobile browsers. A watcher injected after each load reports it through
+a JavaScript interface that takes only a colour. The document served from disk
+gets a port of `csp.py`'s policy (`Csp.kt`), which `test_csp.py` checks as it
+checks the desktop's copy.
+
+**Stage, then swap.** Android keeps processes alive for days, so the client also
+checks for updates when it returns to the foreground after six hours or more. A
+build must never change under a running page, so downloading and swapping are
+separate steps. A new build is unpacked into `web.next` and swapped in only
+before a load: at start-up, or when the user picks **Reload**. Each build
+records its release asset id and `updated_at` inside its own directory, so the
+record moves with the build in the same rename. The release check is
+conditional on its ETag, because a 304 doesn't count against GitHub's anonymous
+limit, which a phone on a carrier's shared address can exhaust.
+
+**The APK update.** As on the desktop, the client compares the published
+digest with the installed APK, which Android keeps byte for byte, and CI
+republishes only when the client changed. The key is `android/` minus the
+README, tests and helper files. It is an exclusion list on purpose: forgetting
+to exclude a file costs one needless update, while forgetting to include one
+would ship a change nobody is told about. Android needs a version code that
+rises, so CI uses minutes since 2026-01-01, which nobody has to bump. The
+download is checked against GitHub's digest, then for package name, signer and
+version, and handed to the system installer with `ACTION_VIEW`. The session
+installer can't restart an app that updates itself, while the system installer
+ends with **Open**.
+
+**The signing key stays out of the build.** Android accepts an update only when
+it is signed with the installed app's key, so the key is permanent and worth
+protecting. Gradle runs the Android Gradle Plugin and whatever it resolves from
+Maven, so the build job produces an unsigned APK and a separate job signs it
+using only the SDK's `apksigner`. Without the secrets that job signs nothing, so
+the web build and the desktop binaries keep publishing.
+
 ## Panel firmware
 
 `firmware/` is about sixty lines because the server does the hard part: `.bin`

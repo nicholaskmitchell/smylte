@@ -1,6 +1,8 @@
-# Builds what the Windows client installs, so nothing is ever compiled on a
-# user's PC. The client reads the rolling `desktop-latest` release rather than
-# the repository, which is what makes the exe a thing you install once.
+# Builds what the Windows, Linux and Android clients install, so nothing is ever
+# compiled on a user's machine. The clients read the rolling `desktop-latest`
+# release rather than the repository, which is what makes each of them a thing
+# you install once. (The tag predates the Android client and keeps its name:
+# every installed client looks it up by that name.)
 #
 # The web job repeats ci.yml's frontend gates on purpose: this workflow can be
 # dispatched by hand, and a release that skipped the tests would be a release
@@ -17,8 +19,8 @@ on:
           Whether to re-publish the client binaries. `auto` (the default, and
           what a push does) publishes each only when the sources it is built
           from changed since the copy on the release was built; `force`
-          publishes both regardless — for a change that lives outside those
-          trees, such as the .NET version below.
+          publishes every client regardless — for a change that lives outside
+          those trees, such as the .NET or JDK version below.
         type: choice
         options: [auto, force]
         default: auto
@@ -160,8 +162,116 @@ jobs:
           path: publish-linux/Smylte-linux-x86_64
           retention-days: 7
 
+  client-android:
+    # Builds the APK UNSIGNED. The signing key never reaches this job: Gradle
+    # runs the Android Gradle Plugin and everything it resolves from Maven,
+    # which is third-party build code in exactly the sense `npm ci` is above,
+    # and a key that build code could read is a key that could sign anything.
+    # `sign-android` applies it with the SDK's own apksigner and nothing else.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      # Same reasoning as the jobs above: nothing after checkout uses git.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      # ./gradlew runs gradle-wrapper.jar before anything else does.
+      - name: The Gradle wrapper is Gradle's
+        run: ./check-gradle-wrapper.sh
+
+      # The same gate the desktop clients have, for the same reason: `release`
+      # needs this job, so failing here is what holds the APK back.
+      - name: Unit tests and lint
+        run: ./gradlew --no-daemon test lint
+
+      - name: Build
+        # The version code has to rise with every published APK, or Android
+        # refuses the update as a downgrade. Minutes since 2026-01-01 UTC rises
+        # on its own, needs nobody to remember a bump, and stays under
+        # Android's ceiling of 2,100,000,000 for about four thousand years.
+        # Runs never overlap (the concurrency group above), so two builds can
+        # share a minute only by being re-runs of one commit; Android accepts
+        # an equal code as an update anyway.
+        run: |
+          code=$(( ($(date -u +%s) - 1767225600) / 60 ))
+          name="$(date -u +%Y.%m.%d)-${GITHUB_SHA::7}"
+          ./gradlew --no-daemon assembleRelease \
+            -PsmylteVersionCode="$code" -PsmylteVersionName="$name"
+          cp build/outputs/apk/release/smylte-android-release-unsigned.apk \
+            "$GITHUB_WORKSPACE/Smylte-android-unsigned.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-android-unsigned
+          path: Smylte-android-unsigned.apk
+          retention-days: 7
+
+  sign-android:
+    # The only job that sees the signing key, and it runs no dependency code at
+    # all: zipalign and apksigner from the runner's Android SDK, over the APK
+    # `client-android` built.
+    #
+    # Without the two secrets it signs nothing and says so, rather than
+    # failing: the web build and the desktop binaries must not stop publishing
+    # because the Android key has not been set up yet. android/README.md says
+    # how to create them. The key is permanent: Android installs an update only
+    # when it is signed with the same key as the installed app.
+    needs: client-android
+    runs-on: ubuntu-latest
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: client-android-unsigned
+
+      - name: Sign
+        id: sign
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_B64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ]; then
+            echo "::warning::ANDROID_KEYSTORE_B64 and ANDROID_KEYSTORE_PASSWORD are not both set, so the Android app is not signed and not published. See android/README.md."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          keystore="$RUNNER_TEMP/smylte-release.p12"
+          trap 'rm -f "$keystore"' EXIT
+          (umask 077 && printf '%s' "$ANDROID_KEYSTORE_B64" | base64 -d > "$keystore")
+
+          # AGP aligns what it packages; a signature over an unaligned APK
+          # would be refused by the installer, so check rather than assume.
+          "$tools/zipalign" -c -P 16 4 Smylte-android-unsigned.apk
+          # No --ks-key-alias: the keystore holds one key and apksigner takes
+          # it. No v4 signature: that is a sidecar file for streaming installs
+          # over adb, and nothing here would publish it.
+          "$tools/apksigner" sign \
+            --ks "$keystore" --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
+            --v4-signing-enabled false \
+            --out Smylte-android.apk Smylte-android-unsigned.apk
+          "$tools/apksigner" verify --print-certs Smylte-android.apk
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.sign.outputs.signed == 'true'
+        with:
+          name: client-android
+          path: Smylte-android.apk
+          retention-days: 7
+
   release:
-    needs: [web, client, client-linux]
+    needs: [web, client, client-linux, sign-android]
     runs-on: ubuntu-latest
     # The one job that publishes, and the only one that needs to write. It runs
     # no dependency install code at all — its steps are `gh` calls over the
@@ -179,6 +289,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Empty on a push (no inputs), which the step reads as `auto`.
           CLIENT_PUBLISH: ${{ inputs.client }}
+          # "true" only when `sign-android` produced a signed APK.
+          ANDROID_SIGNED: ${{ needs.sign-android.outputs.signed }}
         # Upload --clobber onto the existing release rather than delete-and-recreate,
         # so there is never a window where a client checking for updates finds no
         # release at all.
@@ -265,6 +377,22 @@ jobs:
           LINUX_TREE=$(git rev-parse "HEAD:desktop/Smylte.Desktop.Linux")
           LINUX_KEY=$(printf '%s %s\n' "$CLIENT_TREE" "$LINUX_TREE" | git hash-object --stdin)
 
+          # The Android client shares no source with the other two, so its key
+          # is android/ alone, MINUS the files the APK is not built from: the
+          # README, the tests, the wrapper check and .gitignore. Without the
+          # exclusions a README typo would tell every phone to update. It is an
+          # exclusion list rather than a list of inputs on purpose: forgetting to
+          # exclude a file costs one needless update, while forgetting to
+          # include one would ship a changed app nobody is told about.
+          #
+          # pipefail for this one assignment: a failed ls-tree would otherwise
+          # hash empty input into a constant and silently stop the APK ever
+          # being republished.
+          ANDROID_KEY=$(set -o pipefail
+            git ls-tree -r HEAD -- android \
+              | grep -vE "$(printf '\t')android/(README\.md|\.gitignore|check-gradle-wrapper\.sh|src/test/)" \
+              | git hash-object --stdin)
+
           # Why an asset is being published this run, or empty for "it is not".
           #   $1  the asset's name on the release
           #   $2  the key this run's build was made from
@@ -311,6 +439,17 @@ jobs:
           CLIENT_REASON=$(publish_reason "Smylte.exe" "$CLIENT_TREE" "Client source tree")
           LINUX_REASON=$(publish_reason "Smylte-linux-x86_64" "$LINUX_KEY" "Linux client key")
 
+          # The APK only exists when `sign-android` had the key. Without it
+          # nothing is published and the notes carry no Android line, so the
+          # first signed run afterwards reads the key as unrecorded and
+          # publishes: once, and harmlessly, if the app had not changed.
+          ANDROID_REASON=""
+          if [ "${ANDROID_SIGNED:-}" = true ]; then
+            ANDROID_REASON=$(publish_reason "Smylte-android.apk" "$ANDROID_KEY" "Android client key")
+          else
+            echo "::warning::No signed Android build this run; Smylte-android.apk is not published" >&2
+          fi
+
           FILES="artifacts/web/smylte-web.zip"
           if [ -n "$CLIENT_REASON" ]; then
             echo "Publishing Smylte.exe: ${CLIENT_REASON}"
@@ -324,21 +463,37 @@ jobs:
           else
             echo "Smylte-linux-x86_64 is unchanged (linux client key ${LINUX_KEY}); not re-published"
           fi
+          if [ -n "$ANDROID_REASON" ]; then
+            echo "Publishing Smylte-android.apk: ${ANDROID_REASON}"
+            FILES="$FILES artifacts/client-android/Smylte-android.apk"
+          elif [ "${ANDROID_SIGNED:-}" = true ]; then
+            echo "Smylte-android.apk is unchanged (android client key ${ANDROID_KEY}); not re-published"
+          fi
 
-          NOTES="Rolling desktop build from ${GITHUB_SHA}.
+          ANDROID_NOTE=""
+          if [ "${ANDROID_SIGNED:-}" = true ]; then
+            ANDROID_NOTE="
+          Android client key: ${ANDROID_KEY}"
+          fi
 
-          \`Smylte.exe\` is the Windows client and \`Smylte-linux-x86_64\` the Linux
-          one — download one once; it keeps its own copy of the web build up to
-          date from this release on each launch, and the binary here is replaced
-          only when that client itself changed.
-          \`smylte-web.zip\` is that web build, and is what both clients download.
+          NOTES="Rolling client build from ${GITHUB_SHA}.
+
+          \`Smylte.exe\` is the Windows client, \`Smylte-linux-x86_64\` the Linux
+          one and \`Smylte-android.apk\` the Android one — download one once; it
+          keeps its own copy of the web build up to date from this release, and
+          the binary here is replaced only when that client itself changed.
+          \`smylte-web.zip\` is that web build, and is what every client downloads.
 
           The Linux client needs GTK 4 and WebKitGTK 6 from your distribution
           (\`sudo dnf install gtk4 webkitgtk6.0\` on Fedora) and \`chmod +x\` after
           a manual download; it says so itself if either is missing.
 
+          The Android app is installed by opening the APK on the phone and
+          allowing your browser or file manager to install apps; after that it
+          updates itself. It is not in any app store.
+
           Client source tree: ${CLIENT_TREE}
-          Linux client key: ${LINUX_KEY}"
+          Linux client key: ${LINUX_KEY}${ANDROID_NOTE}"
 
           if [ "$RELEASE_STATE" = present ]; then
             # Assets first, notes second, and the order matters. If this step dies
@@ -377,5 +532,10 @@ jobs:
           fi
           if ! printf '%s' "$BODY" | grep -q "Linux client key: ${LINUX_KEY}"; then
             echo "::error::desktop-latest notes do not record the linux client key ${LINUX_KEY}"
+            exit 1
+          fi
+          if [ "${ANDROID_SIGNED:-}" = true ] \
+            && ! printf '%s' "$BODY" | grep -q "Android client key: ${ANDROID_KEY}"; then
+            echo "::error::desktop-latest notes do not record the android client key ${ANDROID_KEY}"
             exit 1
           fi

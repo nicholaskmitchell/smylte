@@ -1,10 +1,10 @@
-# Gate for the autopull deploy: main only ever receives commits that passed all
-# five jobs below — the full backend suite (against a real scratch Radicale, and
+# Gate for the autopull deploy: main only ever receives commits that passed the
+# jobs below — the full backend suite (against a real scratch Radicale, and
 # `SCRATCH_REQUIRED` is what makes that clause enforceable rather than
 # aspirational); the frontend unit + rendering tests, a typecheck and a build;
-# the Windows client's build and unit tests; the release workflow's publish step
-# against a stubbed `gh`; and the security checks (dependency audits on both
-# stacks and bandit static analysis on the backend).
+# the Windows, Linux and Android clients' builds and unit tests; the release
+# workflow's publish step against a stubbed `gh`; and the security checks
+# (dependency audits on both stacks and bandit static analysis on the backend).
 name: CI
 
 on:
@@ -180,6 +180,33 @@ jobs:
         # it is the only leg on a CASE-SENSITIVE filesystem — which is where
         # LocalServer's traversal guard can actually be wrong.
         run: dotnet test desktop/Smylte.Desktop.Tests/Smylte.Desktop.Tests.csproj
+
+  android:
+    # The Android client, for the same reason as the two jobs above: it is
+    # compiled by CI and never on a phone. Builds unsigned — signing happens
+    # only in desktop-release.yml, which never runs on a pull request.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      # ./gradlew runs gradle-wrapper.jar before anything else does.
+      - name: The Gradle wrapper is Gradle's
+        run: ./check-gradle-wrapper.sh
+      - name: Unit tests, lint and the release build
+        # The unit tests cover the request split and traversal guard, the CSP
+        # port's hashing, the web build's staging and swap, the update
+        # decisions, and the launcher icon against the favicon. Lint fails on
+        # errors, which is where a missing permission or a wrong API level shows.
+        run: ./gradlew --no-daemon test lint assembleRelease
 
   workflows:
     # desktop-release.yml's publish step is the only code here that hands

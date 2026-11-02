@@ -266,3 +266,30 @@ def test_the_desktop_client_builds_the_same_policy():
         f"  only in csp.py:       {sorted(ours - theirs)}\n"
         f"  only in LocalServer:  {sorted(theirs - ours)}"
     )
+
+
+def test_the_android_client_builds_the_same_policy():
+    """The same guard, for the Android client's copy.
+
+    `Csp.policyFor` in the Android client attaches the policy to the document it
+    answers from disk inside the WebView (`LocalAssets`), for the same reason
+    LocalServer does: that document never passes through `CSPMiddleware`. Its
+    JVM tests pin the hashing against vectors taken from this module; this pins
+    the directive list, read the same way as above.
+    """
+    source = (Path(__file__).resolve().parents[2]
+              / "android" / "src" / "main" / "kotlin" / "com" / "nicholaskmitchell"
+              / "smylte" / "Csp.kt").read_text(encoding="utf-8")
+    body = source.split("fun policyFor(", 1)[1]
+    body = body[:body.index("\n    }")]
+
+    theirs = {m.group(1).rstrip() for m in re.finditer(
+        r'"([a-z-]+-(?:src|uri|ancestors|action) [^"]*)"', body)}
+    assert theirs, "no directives were found in Csp.kt — has policyFor moved?"
+
+    ours = set(build_policy([]).split("; "))
+    assert theirs == ours, (
+        "the Android client's Content-Security-Policy has drifted from this one.\n"
+        f"  only in csp.py:  {sorted(ours - theirs)}\n"
+        f"  only in Csp.kt:  {sorted(theirs - ours)}"
+    )

@@ -1,0 +1,15 @@
+# Gradle and Android build outputs (built by CI, never committed).
+.gradle/
+build/
+.kotlin/
+local.properties
+*.apk
+*.idsig
+# A signing key must never land in the repository. CI reads it from secrets.
+*.p12
+*.jks
+*.keystore
+# Android Studio
+.idea/
+*.iml
+captures/
