@@ -67,6 +67,9 @@ run_case() {
     : "${ASSETS:=smylte-web.zip Smylte.exe Smylte-linux-x86_64}" "${PUBLISHED_TREE:=}"
     : "${PUBLISHED_LINUX_KEY:=}" "${EDIT_DROPS_LINUX_KEY:=0}"
     : "${PUBLISHED_ANDROID_KEY:=}" "${EDIT_DROPS_ANDROID_KEY:=0}"
+    : "${PUBLISHED_ANDROID_CODE:=}" "${EDIT_DROPS_ANDROID_CODE:=0}" "${FAIL_LS_TREE:=0}"
+    # `=` rather than `:=`: an EMPTY version code is a case of its own.
+    : "${ANDROID_VERSION_CODE=500000}"
 
     # Starts stale, the way the real release did after the 503.
     {
@@ -74,7 +77,19 @@ run_case() {
       [ -n "$PUBLISHED_TREE" ] && echo "Client source tree: $PUBLISHED_TREE"
       [ -n "$PUBLISHED_LINUX_KEY" ] && echo "Linux client key: $PUBLISHED_LINUX_KEY"
       [ -n "$PUBLISHED_ANDROID_KEY" ] && echo "Android client key: $PUBLISHED_ANDROID_KEY"
+      [ -n "$PUBLISHED_ANDROID_CODE" ] && echo "Android version code: $PUBLISHED_ANDROID_CODE"
     } > "$_STUB/body"
+
+    # Only `git ls-tree` can be made to fail, and only for the Android key: a
+    # failure there must stop the run rather than hash empty input into a key
+    # that never changes again.
+    git() {
+      if [ "$FAIL_LS_TREE" = 1 ] && [ "${1:-}" = ls-tree ]; then
+        echo "fatal: not a tree object (simulated)" >&2
+        return 128
+      fi
+      command git "$@"
+    }
 
     # The notes the step passes to `gh release edit/create --notes`, so the
     # stub's release carries what the step wrote and the post-conditions read
@@ -141,6 +156,7 @@ run_case() {
               | { [ "$EDIT_DROPS_TREE" = 1 ] && grep -v 'Client source tree' || cat; } \
               | { [ "$EDIT_DROPS_LINUX_KEY" = 1 ] && grep -v 'Linux client key' || cat; } \
               | { [ "$EDIT_DROPS_ANDROID_KEY" = 1 ] && grep -v 'Android client key' || cat; } \
+              | { [ "$EDIT_DROPS_ANDROID_CODE" = 1 ] && grep -v 'Android version code' || cat; } \
               > "$_STUB/body"
           fi
           return 0 ;;
@@ -163,6 +179,11 @@ run_case() {
     # production — it is an empty string that reads as "unrecorded". That is a
     # difference between red and green-and-wrong, and it hid exactly that bug.
     ( set +u +o pipefail; set -e; source "$WORK/publish.sh" )
+    rc=$?
+    # What the release's notes say once the step is done, for the cases that
+    # are about what gets RECORDED rather than what gets uploaded.
+    sed 's/^/  [body] /' "$_STUB/body" >&2
+    exit "$rc"
   )
 }
 
@@ -177,6 +198,19 @@ case_is() {
     echo "ok   $name"; pass=$((pass + 1))
   else
     echo "FAIL $name — exit $code (wanted $want_exit), trace /$want_trace/"
+    sed 's/^/       /' <<<"$out"; fail=$((fail + 1))
+  fi
+}
+
+# The same, but the trace must NOT match: for what a run must not do.
+case_lacks() {
+  local name="$1" want_exit="$2" unwanted="$3"; shift 3
+  local out code
+  out=$(env "$@" bash -c "$(declare -f run_case); WORK=$WORK; run_case" 2>&1); code=$?
+  if [ "$code" = "$want_exit" ] && ! grep -qE "$unwanted" <<<"$out"; then
+    echo "ok   $name"; pass=$((pass + 1))
+  else
+    echo "FAIL $name — exit $code (wanted $want_exit), trace must not match /$unwanted/"
     sed 's/^/       /' <<<"$out"; fail=$((fail + 1))
   fi
 }
@@ -253,7 +287,7 @@ case_is "neither scrape reads the other label"           0 "release upload \(cal
 APK='artifacts/client-android/Smylte-android\.apk'
 FOUR='smylte-web.zip Smylte.exe Smylte-linux-x86_64 Smylte-android.apk'
 
-case_is "an unsigned run says so and publishes no APK"   0 "No signed Android build" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY"
+case_is "an unsigned run warns that it publishes no APK"  0 "No signed Android build" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY"
 case_is "an unsigned run uploads only the web build"     0 "release upload \(call 1\): desktop-latest $ZIP --clobber" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY=0123456789abcdef0123456789abcdef01234567
 case_is "a changed APK is published alone"               0 "release upload \(call 1\): desktop-latest $ZIP $APK --clobber" ANDROID_SIGNED=true ASSETS="$FOUR" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY=0123456789abcdef0123456789abcdef01234567
 case_is "an unchanged APK is not re-published"           0 "release upload \(call 1\): desktop-latest $ZIP --clobber" ANDROID_SIGNED=true ASSETS="$FOUR" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY="$ANDROID_KEY"
@@ -265,6 +299,35 @@ case_is "a first signed release carries all four"        0 "release create \(cal
 # Three labels in one body now, every key correct: the only way this run
 # uploads a binary is if one pattern read another's line.
 case_is "no scrape reads another label"                  0 "release upload \(call 1\): desktop-latest $ZIP --clobber" ANDROID_SIGNED=true ASSETS="$FOUR" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY="$ANDROID_KEY"
+
+# ── what the notes record about the APK ─────────────────────────────────────
+# The Android lines describe the APK ON the release. A run that publishes none
+# writes back what was there; recording its own key instead would make the next
+# signed run believe the changed app was already published, and never publish it.
+OLD=0123456789abcdef0123456789abcdef01234567
+case_is    "an unsigned run keeps the published Android key"  0 "\[body\] Android client key: $OLD" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY=$OLD PUBLISHED_ANDROID_CODE=400000
+case_is    "an unsigned run keeps the published version code" 0 "\[body\] Android version code: 400000" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY=$OLD PUBLISHED_ANDROID_CODE=400000
+case_lacks "an unsigned run never records its own key"        0 "\[body\] Android client key: $ANDROID_KEY" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY=$OLD PUBLISHED_ANDROID_CODE=400000
+case_lacks "an unsigned run before any APK records nothing"   0 "\[body\] Android" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY"
+case_is    "a published APK records its key"                  0 "\[body\] Android client key: $ANDROID_KEY" ANDROID_SIGNED=true ASSETS="$FOUR" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY=$OLD PUBLISHED_ANDROID_CODE=400000
+case_is    "a published APK records its version code"         0 "\[body\] Android version code: 500000" ANDROID_SIGNED=true ASSETS="$FOUR" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY=$OLD PUBLISHED_ANDROID_CODE=400000
+case_is    "an unchanged APK keeps the recorded version code" 0 "\[body\] Android version code: 400000" ANDROID_SIGNED=true ASSETS="$FOUR" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY="$ANDROID_KEY" PUBLISHED_ANDROID_CODE=400000
+case_is    "notes that lose the version code fail the job"    1 'do not record the android version code' ANDROID_SIGNED=true EDIT_DROPS_ANDROID_CODE=1
+
+# A re-run of an old run's jobs can hand `release` an APK built before the one
+# already published. Android refuses a lower version code as a downgrade, so
+# publishing it would tell every phone to update and then fail. Not even a
+# forced dispatch publishes one.
+case_is    "an APK older than the published one is held back" 0 "release upload \(call 1\): desktop-latest $ZIP --clobber" ANDROID_SIGNED=true ASSETS="$FOUR" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY=$OLD PUBLISHED_ANDROID_CODE=600000
+case_is    "a held-back APK says why"                         0 "lower than the published 600000" ANDROID_SIGNED=true ASSETS="$FOUR" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY=$OLD PUBLISHED_ANDROID_CODE=600000
+case_is    "a held-back APK leaves the notes describing the published one" 0 "\[body\] Android client key: $OLD" ANDROID_SIGNED=true ASSETS="$FOUR" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY=$OLD PUBLISHED_ANDROID_CODE=600000
+case_is    "an older APK is held back even when forced"       0 "release upload \(call 1\): desktop-latest $ZIP $EXE $LNX --clobber" ANDROID_SIGNED=true ASSETS="$FOUR" CLIENT_PUBLISH=force PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY=$OLD PUBLISHED_ANDROID_CODE=600000
+case_is    "a signed run with no version code fails"          1 'no usable version code' ANDROID_SIGNED=true ANDROID_VERSION_CODE=
+case_is    "a version code that is not a number fails"        1 'no usable version code' ANDROID_SIGNED=true ANDROID_VERSION_CODE='12; rm'
+
+# The key's pipefail: without it a failed ls-tree hashes empty input into a
+# constant, and the APK is never republished again, silently.
+case_lacks "a failed ls-tree stops the run before any upload" 1 'release (upload|create)' FAIL_LS_TREE=1
 
 echo
 echo "$pass passed, $fail failed"

@@ -186,9 +186,12 @@ android:
         unzip -q /tmp/cmdline.zip -d /tmp/cmdline
         mv /tmp/cmdline/cmdline-tools "$ANDROID_HOME/cmdline-tools/latest"
       fi
-    # AGP installs the platform and build-tools it needs, once the licences
-    # are accepted.
-    - yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+    # Installed by name, which also records the licences. `--licenses` alone
+    # no longer does: since cmdline-tools 23 it prints "no longer needed" and
+    # exits 0 having accepted nothing, and AGP then refuses to install these
+    # itself. The versions are the ones android/build.gradle.kts resolves to
+    # (compileSdk 36; AGP 9.4.1's default build-tools).
+    - '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"'
     - cd android
     # ./gradlew runs gradle-wrapper.jar before anything else does.
     - ./check-gradle-wrapper.sh

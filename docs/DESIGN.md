@@ -655,7 +655,10 @@ republishes only when the client changed. The key is `android/` minus the
 README, tests and helper files. It is an exclusion list on purpose: forgetting
 to exclude a file costs one needless update, while forgetting to include one
 would ship a change nobody is told about. Android needs a version code that
-rises, so CI uses minutes since 2026-01-01, which nobody has to bump. The
+rises, so CI uses minutes since 2026-01-01, which nobody has to bump. The notes
+record the published APK's key and version code, a run that publishes no APK
+writes them back unchanged, and a lower code is never published, because only a
+re-run of an old run can produce one and every phone would refuse it. The
 download is checked against GitHub's digest, then for package name, signer and
 version, and handed to the system installer with `ACTION_VIEW`. The session
 installer can't restart an app that updates itself, while the system installer

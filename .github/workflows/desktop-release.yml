@@ -169,6 +169,10 @@ jobs:
     # and a key that build code could read is a key that could sign anything.
     # `sign-android` applies it with the SDK's own apksigner and nothing else.
     runs-on: ubuntu-latest
+    outputs:
+      # Kept by GitHub when only a later job is re-run, so `release` always
+      # sees the code the APK it publishes was built with.
+      version_code: ${{ steps.build.outputs.version_code }}
     defaults:
       run:
         working-directory: android
@@ -193,6 +197,7 @@ jobs:
         run: ./gradlew --no-daemon test lint
 
       - name: Build
+        id: build
         # The version code has to rise with every published APK, or Android
         # refuses the update as a downgrade. Minutes since 2026-01-01 UTC rises
         # on its own, needs nobody to remember a bump, and stays under
@@ -207,6 +212,7 @@ jobs:
             -PsmylteVersionCode="$code" -PsmylteVersionName="$name"
           cp build/outputs/apk/release/smylte-android-release-unsigned.apk \
             "$GITHUB_WORKSPACE/Smylte-android-unsigned.apk"
+          echo "version_code=$code" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -246,6 +252,12 @@ jobs:
           fi
 
           tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          # A pipeline's status is its last command's, so a missing SDK would
+          # otherwise surface as "/zipalign: No such file".
+          if [ ! -x "$tools/apksigner" ] || [ ! -x "$tools/zipalign" ]; then
+            echo "::error::no Android build-tools under ANDROID_HOME=${ANDROID_HOME:-<unset>}"
+            exit 1
+          fi
           keystore="$RUNNER_TEMP/smylte-release.p12"
           trap 'rm -f "$keystore"' EXIT
           (umask 077 && printf '%s' "$ANDROID_KEYSTORE_B64" | base64 -d > "$keystore")
@@ -271,7 +283,7 @@ jobs:
           retention-days: 7
 
   release:
-    needs: [web, client, client-linux, sign-android]
+    needs: [web, client, client-linux, client-android, sign-android]
     runs-on: ubuntu-latest
     # The one job that publishes, and the only one that needs to write. It runs
     # no dependency install code at all — its steps are `gh` calls over the
@@ -291,6 +303,8 @@ jobs:
           CLIENT_PUBLISH: ${{ inputs.client }}
           # "true" only when `sign-android` produced a signed APK.
           ANDROID_SIGNED: ${{ needs.sign-android.outputs.signed }}
+          # The version code that APK was built with.
+          ANDROID_VERSION_CODE: ${{ needs.client-android.outputs.version_code }}
         # Upload --clobber onto the existing release rather than delete-and-recreate,
         # so there is never a window where a client checking for updates finds no
         # release at all.
@@ -439,15 +453,46 @@ jobs:
           CLIENT_REASON=$(publish_reason "Smylte.exe" "$CLIENT_TREE" "Client source tree")
           LINUX_REASON=$(publish_reason "Smylte-linux-x86_64" "$LINUX_KEY" "Linux client key")
 
-          # The APK only exists when `sign-android` had the key. Without it
-          # nothing is published and the notes carry no Android line, so the
-          # first signed run afterwards reads the key as unrecorded and
-          # publishes: once, and harmlessly, if the app had not changed.
+          # The Android lines in the notes always describe the APK that is ON
+          # the release, which is not always the one this run built:
+          #
+          #   * Without the signing secrets there is no APK this run. The lines
+          #     the release already carries are written back unchanged. Writing
+          #     this run's key instead would be the expensive mistake: the next
+          #     signed run would see it match and never publish the changed
+          #     app. Dropping the lines would cost one needless update.
+          #   * An APK with a LOWER version code than the published one is not
+          #     published, forced or not. Android refuses it as a downgrade, so
+          #     every phone would be told to update and then be refused. Only a
+          #     re-run of an old run's jobs can produce one, because a fresh
+          #     build's code is taken from the clock.
+          ANDROID_RECORDED_KEY=""
+          ANDROID_RECORDED_CODE=""
+          if [ "$RELEASE_STATE" = present ]; then
+            # Fetched, then scraped, so a dead fetch fails here (see
+            # publish_reason) rather than reading as "nothing recorded".
+            ANDROID_BODY=$(retry gh release view desktop-latest --json body --jq .body)
+            ANDROID_RECORDED_KEY=$(printf '%s\n' "$ANDROID_BODY" \
+              | sed -n 's/.*Android client key: \([0-9a-f]\{40\}\).*/\1/p' | head -1)
+            ANDROID_RECORDED_CODE=$(printf '%s\n' "$ANDROID_BODY" \
+              | sed -n 's/.*Android version code: \([0-9]\{1,10\}\).*/\1/p' | head -1)
+          fi
+          ANDROID_NOTE_KEY="$ANDROID_RECORDED_KEY"
+          ANDROID_NOTE_CODE="$ANDROID_RECORDED_CODE"
           ANDROID_REASON=""
-          if [ "${ANDROID_SIGNED:-}" = true ]; then
-            ANDROID_REASON=$(publish_reason "Smylte-android.apk" "$ANDROID_KEY" "Android client key")
-          else
+          if [ "${ANDROID_SIGNED:-}" != true ]; then
             echo "::warning::No signed Android build this run; Smylte-android.apk is not published" >&2
+          elif ! printf '%s' "${ANDROID_VERSION_CODE:-}" | grep -qE '^[0-9]{1,10}$'; then
+            echo "::error::client-android reported no usable version code (${ANDROID_VERSION_CODE:-<empty>})" >&2
+            exit 1
+          elif [ -n "$ANDROID_RECORDED_CODE" ] && [ "$ANDROID_VERSION_CODE" -lt "$ANDROID_RECORDED_CODE" ]; then
+            echo "::warning::This APK's version code ${ANDROID_VERSION_CODE} is lower than the published ${ANDROID_RECORDED_CODE} (a re-run of an old run?); Smylte-android.apk is not published" >&2
+          else
+            ANDROID_REASON=$(publish_reason "Smylte-android.apk" "$ANDROID_KEY" "Android client key")
+            if [ -n "$ANDROID_REASON" ]; then
+              ANDROID_NOTE_KEY="$ANDROID_KEY"
+              ANDROID_NOTE_CODE="$ANDROID_VERSION_CODE"
+            fi
           fi
 
           FILES="artifacts/web/smylte-web.zip"
@@ -471,9 +516,13 @@ jobs:
           fi
 
           ANDROID_NOTE=""
-          if [ "${ANDROID_SIGNED:-}" = true ]; then
+          if [ -n "$ANDROID_NOTE_KEY" ]; then
             ANDROID_NOTE="
-          Android client key: ${ANDROID_KEY}"
+          Android client key: ${ANDROID_NOTE_KEY}"
+          fi
+          if [ -n "$ANDROID_NOTE_CODE" ]; then
+            ANDROID_NOTE="${ANDROID_NOTE}
+          Android version code: ${ANDROID_NOTE_CODE}"
           fi
 
           NOTES="Rolling client build from ${GITHUB_SHA}.
@@ -534,8 +583,13 @@ jobs:
             echo "::error::desktop-latest notes do not record the linux client key ${LINUX_KEY}"
             exit 1
           fi
-          if [ "${ANDROID_SIGNED:-}" = true ] \
-            && ! printf '%s' "$BODY" | grep -q "Android client key: ${ANDROID_KEY}"; then
-            echo "::error::desktop-latest notes do not record the android client key ${ANDROID_KEY}"
+          if [ -n "$ANDROID_NOTE_KEY" ] \
+            && ! printf '%s' "$BODY" | grep -q "Android client key: ${ANDROID_NOTE_KEY}"; then
+            echo "::error::desktop-latest notes do not record the android client key ${ANDROID_NOTE_KEY}"
+            exit 1
+          fi
+          if [ -n "$ANDROID_NOTE_CODE" ] \
+            && ! printf '%s' "$BODY" | grep -q "Android version code: ${ANDROID_NOTE_CODE}"; then
+            echo "::error::desktop-latest notes do not record the android version code ${ANDROID_NOTE_CODE}"
             exit 1
           fi
