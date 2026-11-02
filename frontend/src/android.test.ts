@@ -47,9 +47,13 @@ describe('android: an older client', () => {
 })
 
 describe('android: starting', () => {
-  it('does not ask the host anything on import', () => {
+  it('does not ask the host anything on import', async () => {
+    // The bridge is in place BEFORE a fresh import, so a module-scope call to
+    // the host would show up here; installed after, it would pass vacuously.
     const hello = vi.fn(() => '{"v":1}')
+    vi.resetModules()
     bridge({ hello })
+    a = await import('./android')
     expect(hello).not.toHaveBeenCalled()
     a.startAndroidHost()
     a.startAndroidHost()

@@ -273,9 +273,13 @@ The JVM unit tests run without a device. They cover:
 - the update decisions and digest checks;
 - the server address rules;
 - the bar colours;
-- the page bridge: exactly which methods the page can call, that release builds keep them, and what each accepts;
-- the bridge's rules: capabilities, the env and its events, a saved file's type, name and size, the wait between save dialogs, where a save's result is shown, and touch tracking;
-- that the page and the window agree on the event, its outcomes and the env version (against `frontend/src/android.ts`);
+- the page bridge: exactly which methods the page can call, that release builds
+  keep them, and what each accepts;
+- the bridge's rules: capabilities, the env and its events, a saved file's type,
+  name and size, the wait between save dialogs, where a save's result is shown,
+  and touch tracking;
+- that the page and the window agree on the event, its outcomes and the env
+  version (against `frontend/src/android.ts`);
 - the text zoom, and the body size it is measured at, against the stylesheet;
 - the launcher icon against `frontend/public/favicon.svg`.
 

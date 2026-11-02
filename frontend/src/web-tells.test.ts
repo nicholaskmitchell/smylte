@@ -34,6 +34,24 @@ const topLevelSplit = (sel: string) => {
   return items.map((s) => s.trim())
 }
 
+// Every selector a rule really lists, with `:where(…)` and `:is(…)` unwrapped,
+// so an item added inside one is checked like any other. Splitting on the top
+// level alone saw the whole `:where(…)` as one opaque item.
+const flatten = (sel: string): string[] =>
+  topLevelSplit(sel).flatMap((item) => {
+    const m = /^:(?:where|is)\(([\s\S]*)\)$/.exec(item)
+    return m ? flatten(m[1]) : [item]
+  })
+
+// What the declaration lands on: the last compound of a selector, without its
+// `:not(…)` exceptions, as simple selectors (`.a.b` gives `.a` and `.b`). The
+// subject rather than every compound, because `.modal button` is about buttons.
+const subjectOf = (sel: string): string[] => {
+  const noNot = sel.replace(/:not\((?:[^()]|\([^()]*\))*\)/g, '')
+  const last = noNot.trim().split(/\s*[\s>+~]\s*/).pop() ?? ''
+  return last.match(/:root|\*|[.#]?[A-Za-z_][\w-]*|\[[^\]]*\]/g) ?? []
+}
+
 const UNSELECTABLE = /(^|[\s;])user-select:\s*none/
 const SELECTABLE = /(^|[\s;])user-select:\s*text/
 
@@ -77,7 +95,9 @@ describe('a long press selects content, never a control\'s label', () => {
       for (const r of rulesOf(strip(read(`src/styles/${file}.css`)))) {
         if (!/user-select:\s*none/.test(r.body)) continue
         seen++
-        for (const item of topLevelSplit(r.sel)) expect(never, `${file}.css: ${r.sel}`).not.toContain(item)
+        for (const sel of flatten(r.sel)) {
+          for (const simple of subjectOf(sel)) expect(never, `${file}.css: ${sel}`).not.toContain(simple)
+        }
       }
     }
     // The new rule, `.brand`, `.focus[data-float]` and `.display`.

@@ -348,6 +348,11 @@ case_is    "a version code with a second line fails"          1 'no usable versi
 # constant, and the APK is never republished again, silently.
 case_lacks "a failed ls-tree stops the run before any upload" 1 'release (upload|create)' FAIL_LS_TREE=1
 
+# ── the notes name the APK only when the release carries one ────────────────
+case_lacks "notes without an APK do not mention one"         0 '\[body\].*Smylte-android\.apk' PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY"
+case_is    "notes with an APK name it"                       0 '\[body\].*Smylte-android\.apk' ANDROID_SIGNED=true ASSETS="$FOUR" PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY"
+case_is    "notes keep naming an APK an unsigned run left"   0 '\[body\].*Smylte-android\.apk' PUBLISHED_TREE="$CLIENT_TREE" PUBLISHED_LINUX_KEY="$LINUX_KEY" PUBLISHED_ANDROID_KEY=$OLD PUBLISHED_ANDROID_CODE=400000
+
 # ── only main's newest commit publishes ─────────────────────────────────────
 # "Re-run all jobs" on an older main run passes every `if:`, rebuilds the old
 # commit with a fresh version code, and would roll every client back. It must

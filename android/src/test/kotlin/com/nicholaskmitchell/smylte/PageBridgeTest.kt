@@ -36,7 +36,9 @@ class PageBridgeTest {
         }
     }
 
-    @Test fun the_page_can_call_exactly_these_methods() {
+    @Test
+
+    fun the_page_can_call_exactly_these_methods() {
         val methods = PageBridge::class.java.declaredMethods
             .filter { Modifier.isPublic(it.modifiers) && !it.isSynthetic }
         assertEquals(setOf("themeColour", "hello", "saveFile"), methods.map { it.name }.toSet())
@@ -45,13 +47,17 @@ class PageBridgeTest {
         }
     }
 
-    @Test fun release_builds_keep_the_bridge_by_its_name() {
+    @Test
+
+    fun release_builds_keep_the_bridge_by_its_name() {
         val rules = File("proguard-rules.pro").readText()
         assertTrue(rules.contains("-keepclassmembers class com.nicholaskmitchell.smylte.PageBridge"))
         assertFalse(rules.contains("ThemeBridge"))
     }
 
-    @Test fun only_a_colour_reaches_the_host() {
+    @Test
+
+    fun only_a_colour_reaches_the_host() {
         val host = FakeHost()
         val bridge = PageBridge(host)
         bridge.themeColour("#112233")
@@ -62,20 +68,26 @@ class PageBridgeTest {
         assertEquals(1, host.colours.size)
     }
 
-    @Test fun hello_answers_the_hosts_env_with_parsed_caps() {
+    @Test
+
+    fun hello_answers_the_hosts_env_with_parsed_caps() {
         val host = FakeHost()
         assertEquals("""{"v":1,"clock24":true}""", PageBridge(host).hello("save,ready,BAD"))
         assertEquals(listOf(setOf("save", "ready")), host.caps)
     }
 
-    @Test fun a_failing_host_fails_quietly() {
+    @Test
+
+    fun a_failing_host_fails_quietly() {
         val bridge = PageBridge(FakeHost(fail = true))
         assertEquals("{}", bridge.hello("save"))
         bridge.themeColour("#112233")
         assertFalse(bridge.saveFile("a", "application/json", "{}"))
     }
 
-    @Test fun an_invalid_save_never_reaches_the_host() {
+    @Test
+
+    fun an_invalid_save_never_reaches_the_host() {
         val host = FakeHost()
         val bridge = PageBridge(host)
         assertFalse(bridge.saveFile("a", "application/json", "x".repeat(SaveRequest.MAX_TEXT_CHARS + 1)))
@@ -85,13 +97,17 @@ class PageBridgeTest {
         assertTrue(host.saves.isEmpty())
     }
 
-    @Test fun a_valid_save_reaches_the_host_sanitised() {
+    @Test
+
+    fun a_valid_save_reaches_the_host_sanitised() {
         val host = FakeHost()
         assertTrue(PageBridge(host).saveFile("../Mine.txt", "application/json", "{}"))
         assertEquals("Mine.txt.json", host.saves[0].name)
     }
 
-    @Test fun the_hosts_refusal_is_the_pages_answer() {
+    @Test
+
+    fun the_hosts_refusal_is_the_pages_answer() {
         assertFalse(PageBridge(FakeHost(accept = false)).saveFile("a", "application/json", "{}"))
     }
 }

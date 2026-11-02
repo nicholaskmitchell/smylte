@@ -677,21 +677,32 @@ jobs:
           Android version code: ${ANDROID_NOTE_CODE}"
           fi
 
+          # The APK is named only when the release carries one, which is
+          # exactly when the notes record its key: before the signing key is set
+          # up, a sentence about a file that is not there sends people looking.
+          CLIENTS="\`Smylte.exe\` is the Windows client and \`Smylte-linux-x86_64\` the Linux
+          one"
+          ANDROID_ABOUT=""
+          if [ -n "$ANDROID_NOTE_KEY" ]; then
+            CLIENTS="\`Smylte.exe\` is the Windows client, \`Smylte-linux-x86_64\` the Linux
+          one and \`Smylte-android.apk\` the Android one"
+            ANDROID_ABOUT="
+
+          The Android app is installed by opening the APK on the phone and
+          allowing your browser or file manager to install apps; after that it
+          updates itself. It is not in any app store."
+          fi
+
           NOTES="Rolling client build from ${GITHUB_SHA}.
 
-          \`Smylte.exe\` is the Windows client, \`Smylte-linux-x86_64\` the Linux
-          one and \`Smylte-android.apk\` the Android one — download one once; it
+          ${CLIENTS} — download one once; it
           keeps its own copy of the web build up to date from this release, and
           the binary here is replaced only when that client itself changed.
           \`smylte-web.zip\` is that web build, and is what every client downloads.
 
           The Linux client needs GTK 4 and WebKitGTK 6 from your distribution
           (\`sudo dnf install gtk4 webkitgtk6.0\` on Fedora) and \`chmod +x\` after
-          a manual download; it says so itself if either is missing.
-
-          The Android app is installed by opening the APK on the phone and
-          allowing your browser or file manager to install apps; after that it
-          updates itself. It is not in any app store.
+          a manual download; it says so itself if either is missing.${ANDROID_ABOUT}
 
           Client source tree: ${CLIENT_TREE}
           Linux client key: ${LINUX_KEY}${ANDROID_NOTE}"

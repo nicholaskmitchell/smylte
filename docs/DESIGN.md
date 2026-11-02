@@ -640,21 +640,56 @@ tell the hosts apart. Interception can't read request bodies, and every desktop
 bridge verb is a POST with one, so `/desktop/*` answers 404 and the desktop
 settings don't render. The status and navigation bars follow the page's
 `theme-color` meta tag instead, which `appearance.ts` already keeps on the live
-`--bg` for mobile browsers. A watcher injected after each load reports it through
-the page bridge (below), whose colour method takes only a colour. The document served from disk
+`--bg` for mobile browsers. A watcher injected after each load reports it
+through
+the page bridge (below), whose colour method takes only a colour. The document
+served from disk
 gets a port of `csp.py`'s policy (`Csp.kt`), which `test_csp.py` checks as it
 checks the desktop's copy.
 
-**An app, not a page in a browser.** A WebView's defaults give the page away in a few places, and the client changes the ones that are WebView settings.
-- Its edge effect is off. WebView draws the stretch (a glow on Android 11) over the whole view, header and tab bar included, while what actually scrolls is a list inside a fixed shell.
-- Page zoom stays off, as it already was by default, and is stated so nobody turns it on. The shell is a fixed `100dvh` box that clips, so a zoom could only pan a cropped layout, and the system's magnification works over any app.
-- Text size is set by the client. WebView takes the system font scale only once, when it is created, while this activity handles font-size changes itself instead of being recreated. So the client sets the text zoom at creation and on every configuration change.
-  - The zoom is the ratio of the body size converted as sp to the same size converted as dp, not `fontScale`. Android 14 scales text non-linearly, and the converted size follows that curve.
-  - Its bounds (50% to 300%) lie outside anything Android offers, so they cap nothing. A layout that breaks at the largest sizes is fixed in the page.
+**An app, not a page in a browser.** A WebView's defaults give the page away in
+a few places, and the client changes the ones that are WebView settings.
+- Its edge effect is off. WebView draws the stretch (a glow on Android 11) over
+  the whole view, header and tab bar included, while what actually scrolls is a
+  list inside a fixed shell.
+- Page zoom stays off, as it already was by default, and is stated so nobody
+  turns it on. The shell is a fixed `100dvh` box that clips, so a zoom could
+  only pan a cropped layout, and the system's magnification works over any app.
+- Text size is set by the client. WebView takes the system font scale only once,
+  when it is created, while this activity handles font-size changes itself
+  instead of being recreated. So the client sets the text zoom at creation and
+  on every configuration change.
+  - The zoom is the ratio of the body size converted as sp to the same size
+    converted as dp, not `fontScale`. Android 14 scales text non-linearly, and
+    the converted size follows that curve.
+  - Its bounds (50% to 300%) lie outside anything Android offers, so they cap
+    nothing. A layout that breaks at the largest sizes is fixed in the page.
 
-The rest belongs to the SPA and applies in every client: a long press selects content, including a pressable row's title, but never a control's label; and a refusal is shown in the app's toast rather than in `window.alert`.
+The rest belongs to the SPA and applies in every client: a long press selects
+content, including a pressable row's title, but never a control's label; and a
+refusal is shown in the app's toast rather than in `window.alert`.
 
-**One bridge, and every method optional.** The page reaches the host through one JavaScript interface, `window.SmylteAndroid` (`PageBridge`), and the host answers through one DOM event, `smylte-android`. The web build updates on every start and the APK rarely, so a page routinely runs in an older client and an old page in a newer one. The page checks each method with `typeof` before calling it, as `desktop.ts` checks its routes, and the host acts on a capability only when the page announces it in `hello`. `hello` returns what the page may want to know about the device, as JSON. The page reads each field on its own, so adding one breaks nothing, and `v` changes only when a field changes meaning. Any script on the page can call the bridge, so every method is harmless or needs the user, and the host validates every argument (`HostProtocol`, covered by the JVM tests). Only primitives and strings cross, and the host never writes CSS or opens anything the page names. Theme export calls `saveFile`, which opens Android's own save dialog. A blob download can't work, because the page revokes the blob URL as soon as it has clicked it, and native code can't fetch `blob:` URLs. The dialog is the user's consent, so it isn't tied to a touch, which a TalkBack or keyboard activation doesn't produce. Instead only one save is pending at a time, the window must be in front with the app's own page loaded, and a new dialog waits two seconds after the last one closed, so a script can't hold the user in a loop of them. A save whose window was recreated while the dialog was open reports in a native toast, because the page that asked is gone.
+**One bridge, and every method optional.** The page reaches the host through one
+JavaScript interface, `window.SmylteAndroid` (`PageBridge`), and the host
+answers through one DOM event, `smylte-android`. The web build updates on every
+start and the APK rarely, so a page routinely runs in an older client and an old
+page in a newer one. The page checks each method with `typeof` before calling
+it, as `desktop.ts` checks its routes, and the host acts on a capability only
+when the page announces it in `hello`. `hello` returns what the page may want to
+know about the device, as JSON. The page reads each field on its own, so adding
+one breaks nothing, and `v` changes only when a field changes meaning. Any
+script on the page can call the bridge, so every method is harmless or needs the
+user, and the host validates every argument (`HostProtocol`, covered by the JVM
+tests). Only primitives and strings cross, and the host never writes CSS or
+opens anything the page names. Theme export calls `saveFile`, which opens
+Android's own save dialog. A blob download can't work, because the page revokes
+the blob URL as soon as it has clicked it, and native code can't fetch `blob:`
+URLs. The dialog is the user's consent, so it isn't tied to a touch, which a
+TalkBack or keyboard activation doesn't produce. Instead only one save is
+pending at a time, the window must be in front with the app's own page loaded,
+and a new dialog waits two seconds after the last one closed, so a script can't
+hold the user in a loop of them. A save whose window was recreated while the
+dialog was open reports in a native toast, because the page that asked is gone.
 
 **Stage, then swap.** Android keeps processes alive for days, so the client also
 checks for updates when it returns to the foreground after six hours or more. A
