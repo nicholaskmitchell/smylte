@@ -17,7 +17,7 @@ import {
   api, AuthError, type Share, type ShareInput, type ShareView, type List,
 } from '../api'
 import { makeGuard } from '../util'
-import { useUnsent } from '../layers'
+import { usePending, useUnsent } from '../layers'
 import { isOn, seenText } from '../shares'
 import { useTimeFormat } from '../timeformat'
 import { useI18n } from '../i18n'
@@ -123,8 +123,10 @@ export function SharesSection(
   const [adding, setAdding] = useState(false)
   // Added only by Enter or the button, so Back asks before Settings drops it.
   // Not while it is being added: that name is on its way whatever Back does,
-  // so a "Discard" would promise what it cannot do.
+  // so a "Discard" would promise what it cannot do. Back waits for the answer
+  // instead, because a failure leaves the name here for a retry.
   useUnsent(name.trim() !== '' && !adding)
+  usePending(adding)
   const add = async () => {
     const trimmed = name.trim()
     if (!trimmed || adding) return

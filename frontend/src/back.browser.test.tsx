@@ -9,7 +9,9 @@
 import { StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { describe, expect, it, vi, afterEach } from 'vitest'
+import { userEvent } from 'vitest/browser'
 import { DiscardPrompt } from './components/DiscardPrompt'
+import { Sidebar } from './components/Sidebar'
 import { TaskModal } from './components/TaskModal'
 import { I18nProvider } from './i18n'
 import { backTopLayer, layerDepth } from './layers'
@@ -42,6 +44,7 @@ const button = (name: string) =>
 async function mountEditor() {
   await viewport(390, 844)
   const onClose = vi.fn()
+  const onCreate = vi.fn()
   host = document.createElement('div')
   host.className = 'shell'
   document.body.appendChild(host)
@@ -53,7 +56,7 @@ async function mountEditor() {
             z-index, and not source order, can put the prompt on top. */}
         <DiscardPrompt />
         <TaskModal task={null} lists={lists} defaultList="l1" initialTitle="Buy milk"
-          onClose={onClose} onCreate={vi.fn()} onSave={vi.fn()}
+          onClose={onClose} onCreate={onCreate} onSave={vi.fn()}
           onDelete={vi.fn()} onMultiple={vi.fn()} />
       </I18nProvider>
     </StrictMode>)
@@ -61,7 +64,29 @@ async function mountEditor() {
   // Layers register in an effect, which can land a frame after the markup.
   await until('the editor registers its layer', () => layerDepth() === 1)
   await document.fonts.ready
-  return { onClose }
+  return { onClose, onCreate }
+}
+
+/** The lists Sidebar in its phone form (a trigger bar and a drawer), with
+ *  DiscardPrompt beside it as App mounts it. `update` is the spy. */
+async function mountSidebar() {
+  await viewport(390, 844)
+  const update = vi.fn(async (id: string, body: { name?: string }) => ({ ...lists[0], id, ...body }))
+  const api = { create: vi.fn(), update, remove: vi.fn(), reorder: vi.fn() }
+  host = document.createElement('div')
+  host.className = 'shell'
+  document.body.appendChild(host)
+  root = createRoot(host)
+  root.render(
+    <StrictMode>
+      <I18nProvider value="en">
+        <DiscardPrompt />
+        <Sidebar kind="list" items={lists} countOf={() => 0} onItems={vi.fn()} api={api} />
+      </I18nProvider>
+    </StrictMode>)
+  await until('the trigger bar mounts', () => !!document.querySelector('.side-mobiletrigger'))
+  await document.fonts.ready
+  return { update }
 }
 
 const centre = (el: Element) => {
@@ -116,5 +141,59 @@ describe('"Discard changes?" over the editor, at 390x844', () => {
     button('Keep editing').click()
     await until('the prompt closes', () => !prompt())
     expect(layerDepth()).toBe(1)
+  })
+
+  // On a phone "Keep editing" is a bottom sheet's button exactly over the
+  // editor's own Save or Add, and the question unmounts on the first tap. The
+  // second tap of a double tap then landed on the editor's primary button.
+  // `.discard-shield` takes taps for SHIELD_MS after the question closes; only
+  // real input at one screen point, in the real cascade, can tell.
+  it('does not save the list editor when "Keep editing" is double-tapped', async () => {
+    const { update } = await mountSidebar()
+    ;(document.querySelector('.side-mobiletrigger') as HTMLElement).click()
+    await until('the drawer opens', () => !!document.querySelector('.drawer'))
+    ;(document.querySelector('[aria-label="Edit Work"]') as HTMLElement).click()
+    const dialog = () => document.querySelector('[role="dialog"][aria-label="List"]')
+    await until('the editor opens', () => !!dialog())
+    const name = dialog()!.querySelector('input.input') as HTMLInputElement
+    await userEvent.fill(name, 'Workflow')
+    expect(name.value).toBe('Workflow')
+    await until('the editor registers its layer', () => layerDepth() === 2)
+
+    backTopLayer()
+    await until('the prompt opens', () => !!prompt())
+    // Let the modal's entrance animation settle before the pointer lands.
+    await new Promise(requestAnimationFrame)
+    await sleep(300)
+
+    await userEvent.dblClick(button('Keep editing'))
+    await until('the prompt closes', () => !prompt())
+
+    expect(update).not.toHaveBeenCalled()
+    expect(dialog(), 'the editor closed').not.toBeNull()
+    expect((dialog()!.querySelector('input.input') as HTMLInputElement).value).toBe('Workflow')
+    expect(document.activeElement).toBe(dialog()!.querySelector('input.input'))
+
+    // The shield is for a moment, not for good: a deliberate tap still saves.
+    await new Promise((r) => setTimeout(r, 500))
+    const save = [...dialog()!.querySelectorAll('button')].find((b) => b.textContent === 'Save')!
+    await userEvent.click(save)
+    await until('the editor saves', () => update.mock.calls.length > 0)
+    expect(update).toHaveBeenCalledWith('l1', { name: 'Workflow' })
+  })
+
+  it('does not create the task when "Keep editing" is double-tapped', async () => {
+    const { onClose, onCreate } = await mountEditor()
+    backTopLayer()
+    await until('the prompt opens', () => !!prompt())
+    await new Promise(requestAnimationFrame)
+    await sleep(300)
+
+    await userEvent.dblClick(button('Keep editing'))
+    await until('the prompt closes', () => !prompt())
+
+    expect(onCreate).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(document.querySelector('#task-title')).not.toBeNull()
   })
 })

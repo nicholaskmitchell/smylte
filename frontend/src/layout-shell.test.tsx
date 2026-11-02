@@ -198,7 +198,9 @@ describe('the sidebar layout, further', () => {
     const menu = document.querySelector('.settings-menu')!
     expect(menu).not.toBeNull()
     expect(views()!.contains(menu), 'the menu is part of the Views landmark').toBe(false)
-    expect(menu.parentElement).toBe(document.querySelector('.frame'))
+    // Through SettingsMenu's own wrapper, which draws no box (`display: contents`).
+    expect(menu.parentElement).toHaveClass('set-frame')
+    expect(menu.parentElement!.parentElement).toBe(document.querySelector('.frame'))
   })
 
   it('keeps settings where they were when the window crosses to a phone', async () => {

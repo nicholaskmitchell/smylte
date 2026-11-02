@@ -103,7 +103,8 @@ describe('on a desktop', () => {
 })
 
 describe('the settings menu', () => {
-  const MENU = '<div class="menu settings-menu" data-view="panel" style="height: 400px"><button class="btn ghost">x</button></div>'
+  // As SettingsMenu draws it on a wide screen: inside its box-less wrapper.
+  const MENU = '<div class="set-frame"><div class="menu settings-menu" data-view="panel" style="height: 400px"><button class="btn ghost">x</button></div></div>'
 
   it.each([false, true])('opens beside the column, inside the window (folded: %s)', async (folded) => {
     await viewport(1024, 768)

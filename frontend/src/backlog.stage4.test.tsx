@@ -19,7 +19,7 @@
  */
 import { useState } from 'react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { isValidValue } from './appearance'
@@ -289,18 +289,63 @@ describe('stage 4 — booking-link editor', () => {
     expect(m.createSchedulingLink).not.toHaveBeenCalled()
   })
 
-  it('closes without a question while a save is in flight', async () => {
-    // The write is already sent, so closing throws nothing away.
+  it('waits on Back while a save is in flight, and keeps the form when it fails', async () => {
+    // Discard could not recall a write already sent, and closing left a failed
+    // save nowhere to keep the form for a retry: the title, the description and
+    // the whole seven-day grid went with the editor, leaving only a toast.
     const user = userEvent.setup()
     openEditor()
     await user.click(await screen.findByRole('button', { name: 'New link' }))
     await user.type(await screen.findByPlaceholderText('30-minute intro call'), 'Intro call')
-    m.createSchedulingLink.mockReturnValue(new Promise(() => {}))
+    let fail: (e: Error) => void = () => {}
+    m.createSchedulingLink.mockReturnValue(new Promise((_, reject) => { fail = reject }))
     await user.click(screen.getByRole('button', { name: /create link/i }))
     expect(m.createSchedulingLink).toHaveBeenCalledTimes(1)
 
-    pressBack()
+    expect(pressBack()).toBe(true)
     expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(screen.getByRole('dialog', { name: 'New booking link' })).toBeInTheDocument()
+
+    await act(async () => { fail(new Error('502 Bad Gateway')) })
+    expect(screen.getByRole('dialog', { name: 'New booking link' })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('30-minute intro call')).toHaveValue('Intro call')
+    await waitFor(() => expect(screen.getByRole('button', { name: /create link/i })).toBeEnabled())
+
+    // Retry is possible, so the form is unsaved input again.
+    pressBack()
+    expect(screen.getByRole('alertdialog', { name: 'Discard changes?' })).toBeInTheDocument()
+  })
+
+  it('a save that lands after its editor closed leaves the next editor open', async () => {
+    const user = userEvent.setup()
+    openEditor()
+    await user.click(await screen.findByRole('button', { name: 'New link' }))
+    await user.type(await screen.findByPlaceholderText('30-minute intro call'), 'Intro call')
+    let resolve: () => void = () => {}
+    m.createSchedulingLink.mockReturnValue(
+      new Promise((r) => { resolve = () => r(CREATED as never) }))
+    await user.click(screen.getByRole('button', { name: /create link/i }))
+    // ✕ still closes mid-save, as it always has.
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }))
     expect(screen.queryByRole('dialog')).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'New link' }))
+    await user.type(await screen.findByPlaceholderText('30-minute intro call'), 'Second, half typed')
+    await act(async () => { resolve() })
+
+    expect(await screen.findByText('https://x/book/tok-new')).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'New booking link' })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('30-minute intro call')).toHaveValue('Second, half typed')
+  })
+
+  it('a save that lands with its editor open closes it', async () => {
+    const user = userEvent.setup()
+    openEditor()
+    await user.click(await screen.findByRole('button', { name: 'New link' }))
+    await user.type(await screen.findByPlaceholderText('30-minute intro call'), 'Intro call')
+    m.createSchedulingLink.mockResolvedValue(CREATED as never)
+    await user.click(screen.getByRole('button', { name: /create link/i }))
+    expect(await screen.findByText('https://x/book/tok-new')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 })

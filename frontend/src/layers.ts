@@ -10,6 +10,10 @@
 // keyboard and a second that would close the form. A layer that says it holds
 // unsaved input gets "Discard changes?" (DiscardPrompt) instead.
 //
+// Back waits while a layer's write is in flight. Discard cannot recall a write
+// that has gone, and a write that then fails puts its input back for a retry,
+// which it can only do into a layer that is still open.
+//
 // Only android.ts calls backTopLayer, on the host's `back` event. Back never
 // arrives in a browser or in the desktop clients, so Escape is exactly what it
 // was there.
@@ -24,7 +28,7 @@ import {
 } from 'react'
 import { flushSync } from 'react-dom'
 
-type Handlers = { onBack: () => void; unsaved: boolean }
+type Handlers = { onBack: () => void; unsaved: boolean; busy: boolean }
 /** What had focus when a layer opened, and the layer that was on top then. */
 type Origin = { from: HTMLElement | null; under: Entry | null }
 type Entry = Origin & {
@@ -136,7 +140,10 @@ function giveBack(closed: Entry): void {
  *
  * `open` is for an overlay whose owner stays mounted and shows it with a flag;
  * one that mounts only while open leaves it out. `unsaved` says that closing
- * would throw away input, so Back asks first.
+ * would throw away input, so Back asks first. `busy` says that a write the
+ * layer sent has not been answered, so Back does nothing until it has: a
+ * success clears the input or closes the layer itself, and a failure leaves
+ * the input where it was, for a retry. Escape and ✕ keep their own gating.
  *
  * `dialog` is the overlay's own element, the one with the dialog role and
  * `tabIndex={-1}`. Focus moves to it when nothing inside took focus as the
@@ -145,13 +152,16 @@ function giveBack(closed: Entry): void {
  */
 export function useLayer(
   onBack: () => void,
-  options: { open?: boolean; unsaved?: boolean; dialog?: RefObject<HTMLElement> } = {},
+  options: {
+    open?: boolean; unsaved?: boolean; busy?: boolean; dialog?: RefObject<HTMLElement>
+  } = {},
 ): void {
   const open = options.open ?? true
+  const unsaved = options.unsaved ?? false
   // The latest handlers, read when Back arrives rather than when this layer
   // registered, so a layer never closes over a stale render.
-  const handlers = useRef<Handlers>({ onBack, unsaved: false })
-  handlers.current = { onBack, unsaved: options.unsaved ?? false }
+  const handlers = useRef<Handlers>({ onBack, unsaved: false, busy: false })
+  handlers.current = { onBack, unsaved, busy: options.busy ?? false }
   // The order is taken during render, never in an effect: a parent renders
   // before its child, so a nested layer mounted in the same commit sorts above
   // its parent, whereas effects run child-first and would get this backwards.
@@ -190,6 +200,12 @@ export function useLayer(
       giveBack(entry)
     }
   }, [id])
+  // The input the question is about has gone (a remount dropped it, a reload
+  // replaced it), so the question has too: its Discard would otherwise run
+  // whatever this layer's Back does now, which need not be the close it offered.
+  useEffect(() => {
+    if (!unsaved && id !== 0 && ask?.layer === id) setAsk(null)
+  }, [unsaved, id])
 }
 
 /**
@@ -203,8 +219,15 @@ export function useLayer(
  */
 export const UnsentInput = createContext<(() => () => void) | null>(null)
 
-/** How many fields below hold unsent text, and the `report` to provide for them. */
-export function useUnsentCount(): [number, () => () => void] {
+/**
+ * Writes sent from inside a layer that the layer's own state cannot see: a
+ * settings section's add that has not been answered. The layer counts them
+ * with `usePendingCount`, provides `report` through `PendingWrite`, and passes
+ * a non-zero count to `useLayer` as `busy`; a section calls `usePending`.
+ */
+export const PendingWrite = createContext<(() => () => void) | null>(null)
+
+function useReportCount(): [number, () => () => void] {
   const [count, setCount] = useState(0)
   const report = useCallback(() => {
     setCount((n) => n + 1)
@@ -213,10 +236,29 @@ export function useUnsentCount(): [number, () => () => void] {
   return [count, report]
 }
 
+function useReport(context: typeof UnsentInput, on: boolean): void {
+  const report = useContext(context)
+  useEffect(() => (on && report ? report() : undefined), [on, report])
+}
+
+/** How many fields below hold unsent text, and the `report` to provide for them. */
+export function useUnsentCount(): [number, () => () => void] {
+  return useReportCount()
+}
+
 /** Count this field in the enclosing layer's unsent input while `unsent` holds. */
 export function useUnsent(unsent: boolean): void {
-  const report = useContext(UnsentInput)
-  useEffect(() => (unsent && report ? report() : undefined), [unsent, report])
+  useReport(UnsentInput, unsent)
+}
+
+/** How many writes below are in flight, and the `report` to provide for them. */
+export function usePendingCount(): [number, () => () => void] {
+  return useReportCount()
+}
+
+/** Count a write in the enclosing layer's pending writes while `pending` holds. */
+export function usePending(pending: boolean): void {
+  useReport(PendingWrite, pending)
 }
 
 /** How many layers are open. */
@@ -254,6 +296,8 @@ function askFor(entry: Entry, focused: Element | null): DiscardAsk & { layer: nu
  */
 export function backTopLayer(): boolean {
   if (stack.length === 0) return false
+  // Before the blur, so a layer that is waiting is left exactly as it is.
+  if (stack[stack.length - 1]!.handlers.current.busy) return true
   const focused = document.activeElement
   // Leave the field as a tap elsewhere would, and let what that commits render,
   // so a blur-committed setting is kept and `unsaved` is read after the commit.

@@ -1322,7 +1322,10 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete,
     || location !== (e?.location || '') || description !== (e?.description || '')
     || !sameValue(tags, e?.tags || []) || busy !== (e?.busy ?? true)
     || reminder !== (e?.notify_minutes_before ?? null)
-    || repeat !== (recurring ? 'keep' : 'none') || repeatUntil !== '' || calPick !== openedCal
+    || repeat !== (recurring ? 'keep' : 'none')
+    // An end date counts only while it would be sent: set Repeat and back, and
+    // the hidden date is never written.
+    || (repeat !== 'keep' && repeat !== 'none' && repeatUntil !== '') || calPick !== openedCal
   const dialogRef = useRef<HTMLDivElement>(null)
   useLayer(dismiss, { unsaved: scopeAsk === null && edited, dialog: dialogRef })
 

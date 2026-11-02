@@ -4213,9 +4213,12 @@ function HabitsSheet({ rev, guard, onClose }: {
 
   useEscape(onClose)
   // Back closes the sheet as Escape does, but asks first when a habit's title
-  // has been typed and not yet added.
+  // has been typed and not yet added. While an add is in flight Back waits: a
+  // failure puts the title back in the box, which needs the sheet still open.
   const dialogRef = useRef<HTMLDivElement>(null)
-  useLayer(onClose, { unsaved: title.trim() !== '', dialog: dialogRef })
+  useLayer(onClose, {
+    unsaved: title.trim() !== '', busy: pending.length > 0, dialog: dialogRef,
+  })
 
   /** Replace one habit in the list in hand, or take it out (`next` null). */
   const put = useCallback((id: string, next: Habit | null) => {

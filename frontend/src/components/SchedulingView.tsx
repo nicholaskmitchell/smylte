@@ -151,7 +151,9 @@ export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () =>
       : api.createSchedulingLink(body))
     if (!saved) return false
     setLinks((ls) => token ? ls.map((x) => (x.token === token ? saved : x)) : [...ls, saved])
-    setEditing(null)
+    // The editor closes itself on `true`, and only if it is still open: closing
+    // `editing` here closed whichever editor was open when the reply landed,
+    // which after ✕ or Escape mid-save was a new one, with what was typed in it.
     return true
   }
 
@@ -388,12 +390,17 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
   // second Enter in any field, which also calls save() — published TWO live
   // booking links with two public URLs, one of which nobody knows exists.
   const [saving, setSaving] = useState(false)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
 
   const save = async () => {
     if (!valid || saving) return
     setSaving(true)
     // Cleared on FAILURE only. A `finally` would set state on a modal the
-    // success path has already unmounted, and — worse — it invites `save` to
+    // success path is closing, and — worse — it invites `save` to
     // return true unconditionally, which puts the button back while leaving the
     // editor exactly as broken as before.
     const ok = await onSave({
@@ -410,7 +417,9 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
       min_notice_hours: clamp(notice, 0, 720, 0),
       horizon_days: clamp(horizon, 1, 180, 30),
     }, link?.token)
-    if (!ok) setSaving(false)
+    if (!mounted.current) return
+    if (ok) onClose()
+    else setSaving(false)
   }
 
   // Every field the form holds, as it was when the editor opened and as it is
@@ -423,10 +432,11 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
   // closes it, and a screen reader is told it is a dialog rather than a div.
   useEscape(onClose)
   // Back closes it too, but asks first when that would throw away an edit.
-  // While a save is in flight the write is already sent, so closing throws
-  // nothing away.
+  // While a save is in flight Back waits: Discard could not recall the write,
+  // and closing would leave a failure nowhere to keep the form for a retry.
+  // A success closes the editor; after a failure Back asks again.
   const dialogRef = useRef<HTMLDivElement>(null)
-  useLayer(onClose, { unsaved: !saving && fields !== opened, dialog: dialogRef })
+  useLayer(onClose, { unsaved: !saving && fields !== opened, busy: saving, dialog: dialogRef })
 
   return (
     /* Escape and role="dialog" landed when this was last fixed; the SCRIM did

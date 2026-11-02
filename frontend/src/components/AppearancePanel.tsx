@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { canSaveFiles, saveTextFile } from '../android'
 import { clientId } from '../api'
 import { useEscape, useSegmentThumb } from '../hooks'
-import { useLayer } from '../layers'
+import { UnsentInput, useLayer, useUnsent, useUnsentCount } from '../layers'
 import { useT } from '../i18n'
 import { showNotice } from '../util'
 import {
@@ -63,10 +63,14 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
   // `window` — one of the three bindings this hook exists to collapse.
   useEscape(onClose)
   // Back closes the panel too, but asks first when the rename row holds a name
-  // that was not saved. Everything else here applies as it is picked.
+  // that was not saved, or a colour field holds text that was not applied (a
+  // value half typed, so not yet valid). Everything else applies as it is
+  // picked.
   const dialogRef = useRef<HTMLDivElement>(null)
+  const [unapplied, reportUnapplied] = useUnsentCount()
   useLayer(onClose, {
-    unsaved: renaming && active !== null && !isPreset && name !== active.name,
+    unsaved: unapplied > 0
+      || (renaming && active !== null && !isPreset && name !== active.name),
     dialog: dialogRef,
   })
 
@@ -235,146 +239,148 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
   const overridden = isPreset ? {} : (active ? themeTokens(active, mode) : {})
 
   return (
-    <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="modal appearance-modal" ref={dialogRef} tabIndex={-1} role="dialog"
-        aria-label={tr('appear.title')} aria-modal="true">
-        <div className="modal-head">
-          <span className="modal-title">{tr('appear.title')}</span>
-          <button className="icon-btn" aria-label={tr('common.close')} onClick={onClose}>✕</button>
-        </div>
+    <UnsentInput.Provider value={reportUnapplied}>
+      <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
+        <div className="modal appearance-modal" ref={dialogRef} tabIndex={-1} role="dialog"
+          aria-label={tr('appear.title')} aria-modal="true">
+          <div className="modal-head">
+            <span className="modal-title">{tr('appear.title')}</span>
+            <button className="icon-btn" aria-label={tr('common.close')} onClick={onClose}>✕</button>
+          </div>
 
-        {/* ---- theme ---- */}
-        <div className="appear-bar">
-          <select className="input" value={active?.id ?? ''} aria-label={tr('appear.theme')}
-            onChange={(e) => selectTheme(e.target.value)}>
-            {/* Outside every group, and first: the way back is never buried. */}
-            <option value="">{tr('appear.smylteDefault')}</option>
-            <optgroup label={tr('appear.builtIn')}>
-              {PRESETS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </optgroup>
-            {themes.length > 0 && (
-              <optgroup label={tr('appear.yourThemes')}>
-                {themes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </optgroup>
-            )}
-          </select>
-          <button className="btn ghost" onClick={saveAs} disabled={!active}>
-            {tr('appear.duplicate')}
-          </button>
-          <button className="btn ghost" onClick={() => { setName(active?.name ?? ''); setRenaming(true) }}
-            disabled={!active || isPreset}>{tr('appear.rename')}</button>
-          <button className="btn ghost" onClick={exportTheme} disabled={!active}>
-            {tr('appear.export')}
-          </button>
-          <button className="btn ghost" onClick={() => fileRef.current?.click()}>
-            {tr('appear.import')}
-          </button>
-          <input ref={fileRef} type="file" accept="application/json,.json" hidden
-            onChange={(e) => {
-              const f = e.target.files?.[0]
-              if (f) importTheme(f)
-              e.target.value = ''
-            }} />
-        </div>
-
-        {renaming && active && !isPreset && (
+          {/* ---- theme ---- */}
           <div className="appear-bar">
-            <input className="input" value={name} autoFocus maxLength={MAX_NAME_LEN}
-              aria-label={tr('appear.themeName')} onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { rename(name); setRenaming(false) } }} />
-            <button className="btn" onClick={() => { rename(name); setRenaming(false) }}>
-              {tr('common.save')}
+            <select className="input" value={active?.id ?? ''} aria-label={tr('appear.theme')}
+              onChange={(e) => selectTheme(e.target.value)}>
+              {/* Outside every group, and first: the way back is never buried. */}
+              <option value="">{tr('appear.smylteDefault')}</option>
+              <optgroup label={tr('appear.builtIn')}>
+                {PRESETS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </optgroup>
+              {themes.length > 0 && (
+                <optgroup label={tr('appear.yourThemes')}>
+                  {themes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </optgroup>
+              )}
+            </select>
+            <button className="btn ghost" onClick={saveAs} disabled={!active}>
+              {tr('appear.duplicate')}
             </button>
-            <button className="btn ghost" onClick={() => setRenaming(false)}>
-              {tr('common.cancel')}
+            <button className="btn ghost" onClick={() => { setName(active?.name ?? ''); setRenaming(true) }}
+              disabled={!active || isPreset}>{tr('appear.rename')}</button>
+            <button className="btn ghost" onClick={exportTheme} disabled={!active}>
+              {tr('appear.export')}
             </button>
+            <button className="btn ghost" onClick={() => fileRef.current?.click()}>
+              {tr('appear.import')}
+            </button>
+            <input ref={fileRef} type="file" accept="application/json,.json" hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) importTheme(f)
+                e.target.value = ''
+              }} />
           </div>
-        )}
 
-        <p className="hintline">
-          {isPreset
-            ? tr('appear.presetHint', { name: active!.name })
-            : active
-              ? tr('appear.editingHint')
-              : tr('appear.shippedHint')}
-        </p>
-        {/* Classic is more than its 23 tokens — the rest is classic.css, keyed
-            on the preset attribute a fork does not carry — so a fork of it is
-            not a copy of it, and the panel says so before anyone finds out. */}
-        {active?.id === 'preset:classic' && <p className="hintline">{tr('appear.classicHint')}</p>}
-
-        {/* ---- which mode am I editing ---- */}
-        <div className="appear-modes" role="group" aria-label={tr('appear.editingMode')}>
-          {/* A segmented pair; --n and --i place its sliding thumb. */}
-          <div className="view-tabs" ref={modesRef}
-            style={{ '--n': 2, '--i': mode === 'light' ? 0 : 1 } as CSSProperties}>
-            {(['light', 'dark'] as Mode[]).map((m) => (
-              <button key={m} className={`view-tab ${mode === m ? 'active' : ''}`}
-                aria-pressed={mode === m} onClick={() => onMode(m)}>
-                {m === 'light' ? tr('appear.light') : tr('appear.dark')}
+          {renaming && active && !isPreset && (
+            <div className="appear-bar">
+              <input className="input" value={name} autoFocus maxLength={MAX_NAME_LEN}
+                aria-label={tr('appear.themeName')} onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { rename(name); setRenaming(false) } }} />
+              <button className="btn" onClick={() => { rename(name); setRenaming(false) }}>
+                {tr('common.save')}
               </button>
-            ))}
-          </div>
-          <span className="spacer" />
-          <span className="hintline">
+              <button className="btn ghost" onClick={() => setRenaming(false)}>
+                {tr('common.cancel')}
+              </button>
+            </div>
+          )}
+
+          <p className="hintline">
             {isPreset
-              ? tr('appear.builtInTheme')
-              : tr('appear.overrides', {
-                count: Object.keys(overridden).length, mode: tr(modeWord),
-              })}
-          </span>
-        </div>
+              ? tr('appear.presetHint', { name: active!.name })
+              : active
+                ? tr('appear.editingHint')
+                : tr('appear.shippedHint')}
+          </p>
+          {/* Classic is more than its 23 tokens — the rest is classic.css, keyed
+              on the preset attribute a fork does not carry — so a fork of it is
+              not a copy of it, and the panel says so before anyone finds out. */}
+          {active?.id === 'preset:classic' && <p className="hintline">{tr('appear.classicHint')}</p>}
 
-        {/* ---- the tokens ---- */}
-        <div className="appear-groups">
-          {GROUPS.map((group) => {
-            const entries = Object.entries(TOKENS).filter(([, s]) => s.group === group)
-            if (!entries.length) return null
-            return (
-              <section key={group} className="appear-group">
-                <div className="menu-head">{tr(GROUP_LABEL[group] ?? group)}</div>
-                {entries.map(([token, spec]) => (
-                  <TokenRow key={token} token={token} spec={spec}
-                    value={current[token]} isOverride={token in overridden}
-                    onChange={(v) => edit({ [token]: v })}
-                    onClear={() => {
-                      if (!active || isPreset) return
-                      // Symmetric with `edit`: a shared token was written to
-                      // both maps, so clearing it from one alone would leave the
-                      // reset arrow visibly inert — the value would go on
-                      // resolving from the other mode.
-                      const other: Mode = mode === 'dark' ? 'light' : 'dark'
-                      const next = { ...active[mode] }
-                      delete next[token]
-                      const nextOther = { ...active[other] }
-                      if (isSharedToken(token)) delete nextOther[token]
-                      onChange({
-                        active: active.id,
-                        themes: themes.map((t) => (t.id === active.id
-                          ? { ...t, [mode]: next, [other]: nextOther } : t)),
-                      })
-                    }} />
-                ))}
-              </section>
-            )
-          })}
-        </div>
+          {/* ---- which mode am I editing ---- */}
+          <div className="appear-modes" role="group" aria-label={tr('appear.editingMode')}>
+            {/* A segmented pair; --n and --i place its sliding thumb. */}
+            <div className="view-tabs" ref={modesRef}
+              style={{ '--n': 2, '--i': mode === 'light' ? 0 : 1 } as CSSProperties}>
+              {(['light', 'dark'] as Mode[]).map((m) => (
+                <button key={m} className={`view-tab ${mode === m ? 'active' : ''}`}
+                  aria-pressed={mode === m} onClick={() => onMode(m)}>
+                  {m === 'light' ? tr('appear.light') : tr('appear.dark')}
+                </button>
+              ))}
+            </div>
+            <span className="spacer" />
+            <span className="hintline">
+              {isPreset
+                ? tr('appear.builtInTheme')
+                : tr('appear.overrides', {
+                  count: Object.keys(overridden).length, mode: tr(modeWord),
+                })}
+            </span>
+          </div>
 
-        <div className="modal-actions">
-          {/* Neither applies to a preset: there is nothing of the user's to
-              clear, and leaving one is just selecting something else. */}
-          {active && !isPreset && (
-            <button className="btn ghost" onClick={resetMode}>
-              {tr('appear.resetMode', { mode: tr(modeWord) })}
-            </button>
-          )}
-          {active && !isPreset && (
-            <button className="btn ghost danger" onClick={remove}>{tr('appear.deleteTheme')}</button>
-          )}
-          <button className="btn" onClick={onClose}>{tr('appear.done')}</button>
+          {/* ---- the tokens ---- */}
+          <div className="appear-groups">
+            {GROUPS.map((group) => {
+              const entries = Object.entries(TOKENS).filter(([, s]) => s.group === group)
+              if (!entries.length) return null
+              return (
+                <section key={group} className="appear-group">
+                  <div className="menu-head">{tr(GROUP_LABEL[group] ?? group)}</div>
+                  {entries.map(([token, spec]) => (
+                    <TokenRow key={token} token={token} spec={spec}
+                      value={current[token]} isOverride={token in overridden}
+                      onChange={(v) => edit({ [token]: v })}
+                      onClear={() => {
+                        if (!active || isPreset) return
+                        // Symmetric with `edit`: a shared token was written to
+                        // both maps, so clearing it from one alone would leave the
+                        // reset arrow visibly inert — the value would go on
+                        // resolving from the other mode.
+                        const other: Mode = mode === 'dark' ? 'light' : 'dark'
+                        const next = { ...active[mode] }
+                        delete next[token]
+                        const nextOther = { ...active[other] }
+                        if (isSharedToken(token)) delete nextOther[token]
+                        onChange({
+                          active: active.id,
+                          themes: themes.map((t) => (t.id === active.id
+                            ? { ...t, [mode]: next, [other]: nextOther } : t)),
+                        })
+                      }} />
+                  ))}
+                </section>
+              )
+            })}
+          </div>
+
+          <div className="modal-actions">
+            {/* Neither applies to a preset: there is nothing of the user's to
+                clear, and leaving one is just selecting something else. */}
+            {active && !isPreset && (
+              <button className="btn ghost" onClick={resetMode}>
+                {tr('appear.resetMode', { mode: tr(modeWord) })}
+              </button>
+            )}
+            {active && !isPreset && (
+              <button className="btn ghost danger" onClick={remove}>{tr('appear.deleteTheme')}</button>
+            )}
+            <button className="btn" onClick={onClose}>{tr('appear.done')}</button>
+          </div>
         </div>
       </div>
-    </div>
+    </UnsentInput.Provider>
   )
 }
 
@@ -423,6 +429,9 @@ function ColorControl({ id, label, value, onChange }: {
   useEffect(() => { setText(value) }, [value])
   const valid = isValidToken(id, text)
   const swatch = toSwatchHex(value)
+  // Text that is not the applied value lives only here, so the panel's Back
+  // asks before it goes.
+  useUnsent(text.trim() !== value)
 
   return (
     <>

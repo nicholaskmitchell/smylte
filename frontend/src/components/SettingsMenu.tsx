@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { calendarFitKey, type CalendarFit } from '../calendar'
 import { useIsMobile, useEscape } from '../hooks'
-import { UnsentInput, useLayer, useUnsentCount } from '../layers'
+import { PendingWrite, UnsentInput, useLayer, usePendingCount, useUnsentCount } from '../layers'
 import { sessionKey } from '../session'
 import { timeFormatKey, type TimeFormat } from '../time'
 import { LANGUAGES, languageLabel, type Language } from '../lang'
@@ -229,11 +229,16 @@ export function SettingsMenu({
   //
   // A name typed into an add field, or a password not yet saved, goes only by
   // Enter or its button, and closing Settings throws it away, so Back asks
-  // first. Only on the step that closes: stepping back to the phone's index
-  // keeps the section, and its text, mounted underneath.
+  // first. While such a name is being added, Back waits, so that a failure
+  // still has the section to put it back in. Only on the step that closes:
+  // stepping back to the phone's index keeps the section, and its text,
+  // mounted underneath.
   const [unsent, reportUnsent] = useUnsentCount()
+  const [pending, reportPending] = usePendingCount()
   const closes = !viewingCal && !(isMobile && view === 'panel')
-  useLayer(back, { dialog: panelRef, unsaved: unsent > 0 && closes })
+  useLayer(back, {
+    dialog: panelRef, unsaved: unsent > 0 && closes, busy: pending > 0 && closes,
+  })
   const sheetPress = useRef(false)
 
   const tr = useT()
@@ -588,7 +593,9 @@ export function SettingsMenu({
       </div>
       <div className="set-body">
         {nav}
-        <UnsentInput.Provider value={reportUnsent}>{panel}</UnsentInput.Provider>
+        <PendingWrite.Provider value={reportPending}>
+          <UnsentInput.Provider value={reportUnsent}>{panel}</UnsentInput.Provider>
+        </PendingWrite.Provider>
       </div>
     </>
   )
@@ -598,30 +605,30 @@ export function SettingsMenu({
   // top-anchored geometry, which exists to clear a masthead Smylte does not
   // have. The scrim is also the only "tap outside" left once the sheet spans
   // the width.
-  if (isMobile) {
-    return (
-      <div className="overlay set-overlay"
-        // The press/release pair every other scrim carries (TaskModal's comment
-        // has the mechanism): a drag-select that began in a field and let go on
-        // the scrim used to close the sheet over a half-typed token or size.
-        onMouseDown={(e) => { sheetPress.current = e.target === e.currentTarget }}
-        onClick={(e) => {
+  //
+  // One tree at both widths, with only classes and attributes changing, so a
+  // rotation across the breakpoint keeps every section mounted with what was
+  // typed in it. Two trees remounted them and dropped the text. On a wide
+  // screen the outer element is `.set-frame`, which draws no box of its own.
+  return (
+    <div className={isMobile ? 'overlay set-overlay' : 'set-frame'}
+      // The press/release pair every other scrim carries (TaskModal's comment
+      // has the mechanism): a drag-select that began in a field and let go on
+      // the scrim used to close the sheet over a half-typed token or size.
+      onMouseDown={isMobile ? (e) => { sheetPress.current = e.target === e.currentTarget } : undefined}
+      onClick={isMobile
+        ? (e) => {
           if (e.target === e.currentTarget && sheetPress.current) onClose()
           sheetPress.current = false
-        }}>
-        <div ref={panelRef} tabIndex={-1} className="settings-menu set-sheet" data-view={view}
-          role="dialog" aria-modal="true" aria-label={tr('app.settings')}
-          onClick={(e) => e.stopPropagation()}>
-          {body}
-        </div>
+        }
+        : undefined}>
+      <div ref={panelRef} tabIndex={-1}
+        className={isMobile ? 'settings-menu set-sheet' : 'menu settings-menu'}
+        data-view={isMobile ? view : 'panel'}
+        role="dialog" aria-modal={isMobile ? 'true' : undefined} aria-label={tr('app.settings')}
+        onClick={isMobile ? (e) => e.stopPropagation() : undefined}>
+        {body}
       </div>
-    )
-  }
-
-  return (
-    <div ref={panelRef} tabIndex={-1} className="menu settings-menu" data-view="panel"
-      role="dialog" aria-label={tr('app.settings')}>
-      {body}
     </div>
   )
 }

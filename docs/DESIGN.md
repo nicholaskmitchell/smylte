@@ -741,7 +741,15 @@ saved) is counted as unsaved input in Settings (`useUnsent`), so the Back that
 would close Settings asks first; stepping back to the phone's index keeps the
 section mounted, so that step does not. The two rituals keep their notes
 the same way, because they commit on blur and on close, as the ✕ and Escape
-already do, so there is nothing to discard. A count left stale by a document
+already do, so there is nothing to discard. While a layer's write is in flight
+(a booking link being saved, a display, share or habit being added) Back does
+nothing: "Discard" could not recall it, and a write that fails puts its input
+back for a retry, which needs the layer still open; after a failure Back asks
+as before. The question goes by itself when the input it asked about does (a
+reload replaced it), so its "Discard" never runs a step it did not offer. Tab
+stays on its two answers, and for a moment after it closes a tap lands
+nowhere: on a phone "Keep editing" sits over the editor's own Save, and the
+second tap of a double tap saved the form. A count left stale by a document
 change costs one Back press: the host drops a report that belongs to a replaced
 document, and a Back that finds no layer makes the page report zero. Browsers
 and the desktop clients never hear `back`, so Escape is exactly what it was

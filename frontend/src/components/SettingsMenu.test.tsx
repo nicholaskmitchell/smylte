@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { DEFAULT_FOCUS } from '../focus'
-import { render, screen, within } from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createRef } from 'react'
 import { SettingsMenu } from './SettingsMenu'
@@ -161,35 +161,59 @@ describe('<SettingsMenu> on a desktop', () => {
     expect(name).toHaveValue('Hallway')
   })
 
-  it('does not ask about a display name that is already being added', async () => {
+  // A name being added is on its way whatever Back does, so "Discard" would
+  // promise what it cannot do; and closing Settings left a failed add nowhere
+  // to put the name back. So Back waits, then asks if the name is still there.
+  it.each([
+    ['display', 'Displays', 'Name', 'Hallway', 'Add', 'createDisplay', 'displays'],
+    ['share', 'Shares', 'Who is it for?', 'Sam', 'Create link', 'createShare', 'shares'],
+  ] as const)('waits on Back while a %s name is being added, and asks after it fails',
+    async (_kind, section, label, typed, button, create, listing) => {
+      m[listing].mockResolvedValue([])
+      m.lists.mockResolvedValue([])
+      let fail: (e: Error) => void = () => {}
+      m[create].mockReturnValue(new Promise((_, reject) => { fail = reject }) as never)
+      const { onClose } = show()
+      render(<DiscardPrompt />)
+      await userEvent.click(nav(section))
+      const field = await within(panel()).findByLabelText(label)
+      await userEvent.type(field, typed)
+      await userEvent.click(within(panel()).getByRole('button', { name: button }))
+      expect(m[create]).toHaveBeenCalledOnce()
+
+      expect(pressBack()).toBe(true)
+      expect(screen.queryByRole('alertdialog')).toBeNull()
+      expect(onClose).not.toHaveBeenCalled()
+
+      await act(async () => { fail(new Error('offline')) })
+      expect(field).toHaveValue(typed)
+      pressBack()
+      expect(screen.getByRole('alertdialog', { name: 'Discard changes?' })).toBeInTheDocument()
+      expect(onClose).not.toHaveBeenCalled()
+    })
+
+  it('closes on Back once an add has landed', async () => {
     m.displays.mockResolvedValue([])
     m.lists.mockResolvedValue([])
-    m.createDisplay.mockReturnValue(new Promise(() => {}))
+    let land: () => void = () => {}
+    m.createDisplay.mockReturnValue(new Promise((r) => {
+      land = () => r({
+        token: 'tok-hallway', name: 'Hallway', mode: 'calendar', palette: 'color',
+        calendars: [], lists: [], hide_done_habits: true, hide_done_tasks: true,
+        refresh_seconds: 300, panel_width: null, panel_height: null, rotation: 0,
+        panel_too_small: null, enabled: true, last_seen_at: null,
+        created_at: '2026-08-01T10:00:00Z', updated_at: '2026-08-01T10:00:00Z',
+      } as never)
+    }))
     const { onClose } = show()
     render(<DiscardPrompt />)
     await userEvent.click(nav('Displays'))
     await userEvent.type(await within(panel()).findByLabelText('Name'), 'Hallway')
     await userEvent.click(within(panel()).getByRole('button', { name: 'Add' }))
-    expect(m.createDisplay).toHaveBeenCalledOnce()
-
     pressBack()
-    expect(screen.queryByRole('alertdialog')).toBeNull()
-    expect(onClose).toHaveBeenCalledOnce()
-  })
+    expect(onClose).not.toHaveBeenCalled()
 
-  it('does not ask about a share name that is already being added', async () => {
-    // It reaches the server whatever Back does, so "Discard" would promise
-    // what it cannot do.
-    m.shares.mockResolvedValue([])
-    m.lists.mockResolvedValue([])
-    m.createShare.mockReturnValue(new Promise(() => {}))
-    const { onClose } = show()
-    render(<DiscardPrompt />)
-    await userEvent.click(nav('Shares'))
-    await userEvent.type(await within(panel()).findByLabelText('Who is it for?'), 'Sam')
-    await userEvent.click(within(panel()).getByRole('button', { name: 'Create link' }))
-    expect(m.createShare).toHaveBeenCalledOnce()
-
+    await act(async () => { land() })
     pressBack()
     expect(screen.queryByRole('alertdialog')).toBeNull()
     expect(onClose).toHaveBeenCalledOnce()

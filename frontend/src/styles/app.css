@@ -58,6 +58,11 @@
   width: 600px; max-width: calc(100vw - 36px); max-height: 82dvh;
   overflow: hidden; gap: 12px;
 }
+/* SettingsMenu's wrapper on a wide screen, where the menu needs none. It draws
+   no box, so the menu still positions from the top bar or the frame; it is
+   there so a rotation across the phone breakpoint, where the wrapper is the
+   sheet's scrim, keeps the same tree and every section's typed text. */
+.set-frame { display: contents; }
 .set-head { display: flex; align-items: center; gap: 8px; }
 .set-title { flex: 1; min-width: 0; }
 /* Only the sheet has a title bar with controls in it; on a desktop the heading
@@ -912,6 +917,9 @@ button.menu-toggle:active { scale: var(--press-scale); }
    above every other overlay (100) and under the toast (120), which stays the
    app's one error channel. */
 .discard-overlay { z-index: 110; }
+/* Taps for a moment after "Discard changes?" closes (DiscardPrompt), so a double
+   tap on "Keep editing" never lands on the Save that was under it. */
+.discard-shield { position: fixed; inset: 0; z-index: 110; background: transparent; }
 /* A line under one field, explaining what its current value will do. Inside a
    `.field`, which already supplies the 5px gap, so this carries no margin of
    its own — the same weight and colour as `.scope-hint` above and `.plan-hint`,

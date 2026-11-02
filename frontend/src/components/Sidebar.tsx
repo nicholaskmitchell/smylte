@@ -5,7 +5,7 @@ import {
 import { clientId, type List, type TaskGroup } from '../api'
 import { cssColor } from '../util'
 import { useEscape, useIsMobile } from '../hooks'
-import { useLayer } from '../layers'
+import { UnsentInput, useLayer, useUnsent, useUnsentCount } from '../layers'
 import { useT } from '../i18n'
 
 // Preset collection colors — muted, editorial, distinct from the accent.
@@ -180,13 +180,19 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
   // renders no drawer, does not answer the key on EditModal's behalf.
   useEscape(useCallback(() => { if (drawerOpen) closeDrawer() }, [drawerOpen, closeDrawer]))
   // Back closes the drawer as Escape does. Its add fields keep their text
-  // through a blur, and `closeDrawer` would drop it, so Back asks first.
+  // through a blur, and `closeDrawer` would drop it, so Back asks first. So does
+  // a group's changed name (GroupHeader reports it through `UnsentInput`). A
+  // name already sent is not unsent: Discard could not stop the create, so Back
+  // closes the drawer as ✕ does and the list arrives as it was sent.
   const [addDraft, setAddDraft] = useState('')
   const [groupDraft, setGroupDraft] = useState('')
+  const [sending, setSending] = useState(false)
+  const [renameUnsent, reportRename] = useUnsentCount()
   useEffect(() => { if (!adding) setAddDraft('') }, [adding])
   useEffect(() => { if (!addingGroup) setGroupDraft('') }, [addingGroup])
-  const drawerDraft = (adding && addDraft.trim() !== '')
+  const drawerDraft = (adding && !sending && addDraft.trim() !== '')
     || (addingGroup && groupDraft.trim() !== '')
+    || renameUnsent > 0
   const drawerRef = useRef<HTMLDivElement>(null)
   useLayer(closeDrawer, { open: drawerOpen, unsaved: drawerDraft, dialog: drawerRef })
   const drawerPress = useRef(false)
@@ -206,16 +212,24 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
   // and Thunderbird all see too, and deleting the right one is its own
   // destructive step.
   const creating = useRef(false)
+  // Which add form a reply belongs to. The drawer can close while a create is
+  // out, and the form opened after it is a new one: the reply closed it, and
+  // the name being typed in it, without a word.
+  const addForm = useRef(0)
+  useEffect(() => { if (adding) addForm.current++ }, [adding])
   const create = async (name: string, color: string | null) => {
     if (creating.current) return
     creating.current = true
+    setSending(true)
+    const form = addForm.current
     let l
     try {
       l = await api.create(name, color)
     } finally {
       creating.current = false
+      setSending(false)
     }
-    setAdding(false)
+    if (addForm.current === form) setAdding(false)
     // A new item is simply not hidden, so it shows by default. In select mode we
     // also focus it; in pure-visibility mode there is no selection to move.
     if (l) { onItems([...items, l]); if (canSelect) onSelect?.(l.id) }
@@ -531,13 +545,14 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
   // delete, or group anything (the edit affordance was hover-only and unreachable
   // on touch). Instead we surface a single bar; tapping it opens a bottom-sheet
   // drawer that reuses the desktop vertical layout, where every action lives.
+  let body: ReactNode
   if (isMobile) {
     const total = shown.length
     const shownCount = canToggle ? shown.filter((l) => !hidden.has(l.id)).length : total
     const summary = total === 0
       ? tr('side.noneYet')
       : canToggle ? tr('side.shownOf', { shown: shownCount, total }) : `${total}`
-    return (
+    body = (
       <>
         <div className="side-mobilebar">
           <button className="side-mobiletrigger" onClick={() => setDrawerOpen(true)}
@@ -621,23 +636,22 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
                     { archive: onArchive ? tr('side.archiveClause') : '' })}
                 </p>
               )}
-              <div className="side-list">{collectionsBody}{extra}</div>
+              <UnsentInput.Provider value={reportRename}>
+                <div className="side-list">{collectionsBody}{extra}</div>
+              </UnsentInput.Provider>
               {addInputs}
               {completedFooter}
             </div>
           </div>
         )}
-        {editModal}
       </>
     )
-  }
-
-  // Collapsed: a thin rail of color dots — collections stay one click away. The
-  // mobile layout is already a compact strip, so collapse is a desktop-only
-  // affordance. Groups don't render here (the rail is too thin); every list dot
-  // still shows so nothing becomes unreachable.
-  if (collapsed) {
-    return (
+  } else if (collapsed) {
+    // Collapsed: a thin rail of color dots — collections stay one click away. The
+    // mobile layout is already a compact strip, so collapse is a desktop-only
+    // affordance. Groups don't render here (the rail is too thin); every list dot
+    // still shows so nothing becomes unreachable.
+    body = (
       <div className="side collapsed">
         {/* Only when this sidebar owns its fold. In the app sidebar the rail's
             unfold is the app's own (AppNav), and a second one here would be a
@@ -685,42 +699,47 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
         )}
       </div>
     )
+  } else {
+    body = (
+      <div className="side">
+        <div className="side-head">
+          <span className="label">{tr(words.heading)}</span>
+          <span className="side-head-actions">
+            {groupsOn && (
+              <button className="icon-btn" title={tr('side.newGroup')}
+                aria-label={tr('side.newGroup')} onClick={() => setAddingGroup(true)}>
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+                  strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v3" />
+                  <path d="M3 7v11a2 2 0 0 0 2 2h6" />
+                  <path d="M16 16h6M19 13v6" />
+                </svg>
+              </button>
+            )}
+            {/* aria-label as well as title, matching the drawer's copy of this
+                button. Its text content is "+", and `title` is only the
+                last-resort step of the accessible-name algorithm. */}
+            <button className="icon-btn" title={tr(words.new)}
+              aria-label={tr(words.new)}
+              onClick={() => setAdding(true)}>+</button>
+            {onToggle && (
+              <button className="icon-btn side-toggle" title={tr('side.collapse')}
+                aria-label={tr('side.collapse')} onClick={onToggle}>«</button>
+            )}
+          </span>
+        </div>
+        <div className="side-list">{collectionsBody}{extra}</div>
+        {completedFooter}
+        {addInputs}
+      </div>
+    )
   }
 
-  return (
-    <div className="side">
-      <div className="side-head">
-        <span className="label">{tr(words.heading)}</span>
-        <span className="side-head-actions">
-          {groupsOn && (
-            <button className="icon-btn" title={tr('side.newGroup')}
-              aria-label={tr('side.newGroup')} onClick={() => setAddingGroup(true)}>
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
-                strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v3" />
-                <path d="M3 7v11a2 2 0 0 0 2 2h6" />
-                <path d="M16 16h6M19 13v6" />
-              </svg>
-            </button>
-          )}
-          {/* aria-label as well as title, matching the drawer's copy of this
-              button. Its text content is "+", and `title` is only the
-              last-resort step of the accessible-name algorithm. */}
-          <button className="icon-btn" title={tr(words.new)}
-            aria-label={tr(words.new)}
-            onClick={() => setAdding(true)}>+</button>
-          {onToggle && (
-            <button className="icon-btn side-toggle" title={tr('side.collapse')}
-              aria-label={tr('side.collapse')} onClick={onToggle}>«</button>
-          )}
-        </span>
-      </div>
-      <div className="side-list">{collectionsBody}{extra}</div>
-      {completedFooter}
-      {addInputs}
-      {editModal}
-    </div>
-  )
+  // The editor keeps one place in the tree whichever way the sidebar is drawn.
+  // It used to render only in the phone and expanded branches, so a fold made
+  // on another device (it arrives as a settings refresh) unmounted it, and the
+  // rename in it, and "Discard changes?" over it, without a word.
+  return <>{body}{editModal}</>
 }
 
 // A collapsible group header. Rename edits inline; delete asks once. All actions
@@ -741,13 +760,19 @@ function GroupHeader({ group, count, collapsed, canToggle, anyVisible,
   // state — collapsing, renaming, or the group itself changing.
   useEscape(() => setConfirming(false))
   useEffect(() => { setConfirming(false) }, [group.id, collapsed, renaming])
+  // A changed name is kept through a blur, as the add-group field keeps its
+  // text, and counted as unsent in the phone drawer: Back blurs the field
+  // before it reads what is unsaved, and cancelling here on the blur threw the
+  // new name away and closed the drawer without asking. Escape still cancels.
+  const changed = name.trim() !== '' && name.trim() !== group.name
+  useUnsent(renaming && changed)
 
   if (renaming) {
     return (
       <div className="side-add group-rename">
         <input className="input" autoFocus value={name}
           onChange={(e) => setName(e.target.value)}
-          onBlur={() => setRenaming(false)}
+          onBlur={() => { if (!changed) setRenaming(false) }}
           onKeyDown={(e: KeyboardEvent) => {
             if (e.key === 'Enter') { if (name.trim()) onRename(name.trim()); setRenaming(false) }
             if (e.key === 'Escape') { setName(group.name); setRenaming(false) }
@@ -952,8 +977,12 @@ function EditModal({ item, placeholder, groups, groupId, onSetGroup, onClose, on
   useEscape(onClose)
   // Back closes it too, but asks first when a rename or a recolour would go.
   const dialogRef = useRef<HTMLDivElement>(null)
+  // The name counts only when it was changed AND Save would write a different
+  // one: a name stored with a trailing space (another client, the MCP tools)
+  // is not an edit until it is touched, and a cleared or padded field saves
+  // nothing new.
   useLayer(onClose, {
-    unsaved: (name.trim() || item.name) !== item.name || !colorSame,
+    unsaved: (name !== item.name && (name.trim() || item.name) !== item.name) || !colorSame,
     dialog: dialogRef,
   })
   const scrimPress = useRef(false)

@@ -18,7 +18,7 @@
    in its own faces without a rule of its own. */
 
 /* ---- the frame -------------------------------------------------------- */
-/* The frame is what the settings menu hangs from (see `.frame > .menu`), so it
+/* The frame is what the settings menu hangs from (see `.set-frame > .menu`), so it
    is positioned, and it carries the column's width for the menu to clear:
    236px, or the rail's 52px when folded (`data-nav`, set by App). */
 .frame { flex: 1; min-height: 0; display: flex; position: relative; --nav-w: 236px; }
@@ -137,8 +137,9 @@
    than dropping from a top bar there no longer is. It is the frame's child,
    not the column's, so it inherits none of the column's custom properties
    (the paper hover, the inset focus) and is not part of the Views landmark.
-   Its cap is the room left of the viewport once the column has its share. */
-.frame > .menu {
+   Its cap is the room left of the viewport once the column has its share.
+   `.set-frame` is SettingsMenu's own wrapper, which draws no box. */
+.frame > .set-frame > .menu {
   top: auto; right: auto; bottom: 10px; left: calc(var(--nav-w) + 8px);
   max-width: calc(100vw - var(--nav-w) - 24px);
   transform-origin: bottom left;
