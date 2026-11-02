@@ -1044,6 +1044,10 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete,
   // Where the event goes: a new event is created here, an existing one is
   // moved here (whole resource — a series always changes calendar as one).
   const [calPick, setCalPick] = useState(initialCal)
+  // The calendar the form opened on. A new event's `initialCal` is the default
+  // calendar, worked out again on every render, so it moves when the calendar
+  // list loads or changes underneath an untouched form.
+  const [openedCal] = useState(initialCal)
   const [summary, setSummary] = useState(e?.summary || '')
   const [allDay, setAllDay] = useState(e ? e.all_day : false)
   const baseDate = draft.date || (e?.start ? dayKey(e.start) : ymd(new Date()))
@@ -1318,7 +1322,7 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete,
     || location !== (e?.location || '') || description !== (e?.description || '')
     || !sameValue(tags, e?.tags || []) || busy !== (e?.busy ?? true)
     || reminder !== (e?.notify_minutes_before ?? null)
-    || repeat !== (recurring ? 'keep' : 'none') || repeatUntil !== '' || calPick !== initialCal
+    || repeat !== (recurring ? 'keep' : 'none') || repeatUntil !== '' || calPick !== openedCal
   const dialogRef = useRef<HTMLDivElement>(null)
   useLayer(dismiss, { unsaved: scopeAsk === null && edited, dialog: dialogRef })
 

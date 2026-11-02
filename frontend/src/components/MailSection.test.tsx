@@ -5,6 +5,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MailSection } from './MailSection'
+import { UnsentInput } from '../layers'
 import {
   api, HttpError, type MailImapTest, type MailSecretStatus, type MailSettingsPayload,
 } from '../api'
@@ -101,6 +102,27 @@ describe('a stored credential', () => {
     expect(m.putMailSettings).toHaveBeenCalledWith({ anthropic_api_key: 'new' })
     // And it is gone from the box the moment it is saved.
     await waitFor(() => expect((el('mail-api-key') as HTMLInputElement).value).toBe(''))
+  })
+
+  it('counts as unsent input while a key is typed and not saved', async () => {
+    // Saved only by Enter or Save, so Back asks before Settings closes over it.
+    const release = vi.fn()
+    const report = vi.fn(() => release)
+    m.mailSettings.mockResolvedValue(stored_())
+    const user = userEvent.setup()
+    render(
+      <UnsentInput.Provider value={report}><MailSection onExpire={vi.fn()} /></UnsentInput.Provider>,
+    )
+    await screen.findByText('Anthropic')
+    await user.click(screen.getByRole('button', { name: 'Replace' }))
+    expect(report).not.toHaveBeenCalled()
+
+    await user.type(el('mail-api-key'), 'new')
+    expect(report).toHaveBeenCalledOnce()
+    expect(release).not.toHaveBeenCalled()
+
+    await user.click(screen.getAllByRole('button', { name: 'Save' })[0])
+    await waitFor(() => expect(release).toHaveBeenCalledOnce())
   })
 
   it('Clear sends an empty string', async () => {

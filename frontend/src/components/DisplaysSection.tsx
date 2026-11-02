@@ -17,6 +17,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, type Display, type DisplayInput, type DisplayMode, type List } from '../api'
 import { makeGuard } from '../util'
+import { useUnsent } from '../layers'
 import { fmtWhen } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { useI18n } from '../i18n'
@@ -71,6 +72,8 @@ export function DisplaysSection(
   const [open, setOpen] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<string | null>(null)
   const [name, setName] = useState('')
+  // Added only by Enter or the button, so Back asks before Settings drops it.
+  useUnsent(name.trim() !== '')
 
   // Archived calendars are NOT offered as display sources. `api.calendars()`
   // returns them — the backend never filters, which is what

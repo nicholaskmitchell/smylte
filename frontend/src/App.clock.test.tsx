@@ -16,6 +16,21 @@ vi.mock('./api', async (importOriginal) => {
 })
 const m = vi.mocked(api)
 
+// Every value App hands the clock's provider, in render order, so a test can
+// read the very first frame's. The env listener's first `follow()` runs in an
+// effect after mount and would cover a wrong seed before any query could see it.
+const provided = vi.hoisted(() => [] as string[])
+vi.mock('./timeformat', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('./timeformat')>()
+  return {
+    ...mod,
+    TimeFormatProvider: (p: Parameters<typeof mod.TimeFormatProvider>[0]) => {
+      provided.push(p.value)
+      return mod.TimeFormatProvider(p)
+    },
+  }
+})
+
 vi.mock('./desktop', async (importOriginal) => {
   const mod = await importOriginal<typeof import('./desktop')>()
   return {
@@ -86,10 +101,13 @@ beforeEach(() => {
 
 describe('<App> in the Android client: the clock', () => {
   it('shows the phone\'s clock before the account has answered', async () => {
-    // No event fires after mount, so this is the `useState` seed.
     const read = deferred<Record<string, unknown>>()
     m.getSettings.mockReturnValue(read.promise)
+    provided.length = 0
     render(<App />)
+    // The first frame, from the `useState` seed: no 12-hour flash before the
+    // phone's setting arrives.
+    expect(provided[0]).toBe('24h')
     await screen.findByRole('button', { name: 'Tasks' })
     await waitFor(() => expect(m.getSettings).toHaveBeenCalled())
     await openSettings('General')

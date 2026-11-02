@@ -17,6 +17,7 @@ import {
   api, AuthError, type Share, type ShareInput, type ShareView, type List,
 } from '../api'
 import { makeGuard } from '../util'
+import { useUnsent } from '../layers'
 import { isOn, seenText } from '../shares'
 import { useTimeFormat } from '../timeformat'
 import { useI18n } from '../i18n'
@@ -61,6 +62,8 @@ export function SharesSection(
   const [open, setOpen] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<string | null>(null)
   const [name, setName] = useState('')
+  // Added only by Enter or the button, so Back asks before Settings drops it.
+  useUnsent(name.trim() !== '')
   const [copied, setCopied] = useState<string | null>(null)
   // A preview is the server's own answer for one share, so it is never built
   // here. `'failed'` is kept apart from absent so the button can say what happened.

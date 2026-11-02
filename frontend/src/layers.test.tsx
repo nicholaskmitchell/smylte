@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { StrictMode, useRef, useState, type ReactNode } from 'react'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { useEscape } from './hooks'
-import { backTopLayer, layerDepth, onLayerDepth, useLayer } from './layers'
+import {
+  backTopLayer, layerDepth, onLayerDepth, UnsentInput, useLayer, useUnsent, useUnsentCount,
+} from './layers'
 import { pressBack, withPrompt } from './test/back'
 
 afterEach(cleanup)
@@ -448,5 +450,50 @@ describe('layers: focus', () => {
     expect(screen.getByRole('dialog')).toHaveFocus()
     fireEvent.click(closeButton())
     expect(plain).toHaveFocus()
+  })
+})
+
+describe('unsent input in fields the layer cannot see', () => {
+  function Field({ label }: { label: string }) {
+    const [text, setText] = useState('')
+    useUnsent(text !== '')
+    return <input aria-label={label} value={text} onChange={(e) => setText(e.target.value)} />
+  }
+  function Sheet({ onBack, children }: { onBack: () => void; children: ReactNode }) {
+    const [unsent, report] = useUnsentCount()
+    useLayer(onBack, { unsaved: unsent > 0 })
+    return <UnsentInput.Provider value={report}>{children}</UnsentInput.Provider>
+  }
+
+  it('asks while any field holds text, and stops once all are empty, in StrictMode too', () => {
+    // StrictMode runs each effect, its cleanup, and the effect again, so a
+    // count that only ever went up would stay unsaved forever.
+    const onBack = vi.fn()
+    render(withPrompt(
+      <StrictMode>
+        <Sheet onBack={onBack}><Field label="a" /><Field label="b" /></Sheet>
+      </StrictMode>,
+    ))
+    const a = screen.getByLabelText('a')
+    const b = screen.getByLabelText('b')
+    fireEvent.change(a, { target: { value: 'x' } })
+    fireEvent.change(b, { target: { value: 'y' } })
+    fireEvent.change(a, { target: { value: '' } })
+
+    pressBack()
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
+    expect(onBack).not.toHaveBeenCalled()
+
+    fireEvent.change(b, { target: { value: '' } })
+    pressBack()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(onBack).toHaveBeenCalledOnce()
+  })
+
+  it('is inert outside a layer that provides it', () => {
+    render(<Field label="loose" />)
+    fireEvent.change(screen.getByLabelText('loose'), { target: { value: 'x' } })
+    expect(layerDepth()).toBe(0)
   })
 })

@@ -18,7 +18,10 @@
 // behaviour and not Android's: a dialog takes focus when it opens and gives it
 // back to what opened it when it closes.
 
-import { useEffect, useLayoutEffect, useRef, useSyncExternalStore, type RefObject } from 'react'
+import {
+  createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState,
+  useSyncExternalStore, type RefObject,
+} from 'react'
 import { flushSync } from 'react-dom'
 
 type Handlers = { onBack: () => void; unsaved: boolean }
@@ -187,6 +190,33 @@ export function useLayer(
       giveBack(entry)
     }
   }, [id])
+}
+
+/**
+ * Input held by fields inside a layer that the layer's own state cannot see: a
+ * name typed into a settings section's add field, a password not yet saved.
+ * Both are sent only by Enter or a button, so closing the layer loses them.
+ *
+ * The layer takes a count and `report` from `useUnsentCount`, provides `report`
+ * through `UnsentInput`, and counts the input in what it passes `useLayer` as
+ * `unsaved`. A field calls `useUnsent` with whether it holds such text.
+ */
+export const UnsentInput = createContext<(() => () => void) | null>(null)
+
+/** How many fields below hold unsent text, and the `report` to provide for them. */
+export function useUnsentCount(): [number, () => () => void] {
+  const [count, setCount] = useState(0)
+  const report = useCallback(() => {
+    setCount((n) => n + 1)
+    return () => setCount((n) => n - 1)
+  }, [])
+  return [count, report]
+}
+
+/** Count this field in the enclosing layer's unsent input while `unsent` holds. */
+export function useUnsent(unsent: boolean): void {
+  const report = useContext(UnsentInput)
+  useEffect(() => (unsent && report ? report() : undefined), [unsent, report])
 }
 
 /** How many layers are open. */

@@ -74,9 +74,10 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   const [arranging, setArranging] = useState(false)
   const [picking, setPicking] = useState(false)
   // Back closes the picker. It has no Escape, and gets none here: that would
-  // change the key on desktops.
+  // change the key on desktops. The phone layout draws no picker, so a picker
+  // left open when the width drops (a tablet turned, split screen) is no layer.
   const pickerRef = useRef<HTMLDivElement>(null)
-  useLayer(() => setPicking(false), { open: picking, dialog: pickerRef })
+  useLayer(() => setPicking(false), { open: picking && !isMobile, dialog: pickerRef })
   // The layout as it looks mid-drag. Null when nothing is being dragged, so the
   // committed prop is what renders.
   const [preview, setPreview] = useState<DashboardModule[] | null>(null)

@@ -26,6 +26,7 @@ import { useI18n } from '../i18n'
 import { fmtWhen } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { makeGuard } from '../util'
+import { useUnsent } from '../layers'
 
 type Check = { ok: boolean; detail: string }
 type ImapCheck = Check & { data: MailImapTest | null }
@@ -632,6 +633,8 @@ function SecretField({ id, label, status, envVar, onSave, onClear }: {
   const [replacing, setReplacing] = useState(false)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
+  // Saved only by Enter or Save, so Back asks before Settings drops it.
+  useUnsent(draft.trim() !== '')
 
   // The environment wins over the store on the server, so there is nothing
   // here that could change the value: say who holds it and stop.

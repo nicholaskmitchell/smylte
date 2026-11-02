@@ -850,6 +850,26 @@ describe('Back unwinds one step', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 
+  it('closes an untouched new event at once, though its default calendar moved', async () => {
+    // A new event's calendar is the first one shown, worked out again on every
+    // render. Hiding that calendar under the open form moves the default; the
+    // form itself was never touched, so there is nothing to ask about.
+    const other: List = { ...cal, id: 'c2', href: '/c2/', name: 'Personal' }
+    m.calendars.mockResolvedValue([cal, other])
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const { rerender } = render(withPrompt(<Harness />))
+    // Both calendars listed, so the form opens on the loaded default.
+    await screen.findAllByText('Personal')
+    await user.click(await screen.findByRole('button', { name: 'New event' }))
+    await screen.findByRole('dialog', { name: 'New event' })
+    await waitFor(() => expect(screen.getByLabelText('Calendar')).toHaveValue('c1'))
+
+    rerender(withPrompt(<Harness hiddenCalendars={['c1']} />))
+    pressBack()
+    expect(discardPrompt()).toBeNull()
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'New event' })).toBeNull())
+  })
+
   it('closes the move-scope prompt, and saves nothing', async () => {
     setup([occurrence()])
     await waitFor(() => expect(screen.getAllByTitle(/^Standup/)[0]).toBeInTheDocument())

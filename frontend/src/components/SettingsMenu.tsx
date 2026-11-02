@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { calendarFitKey, type CalendarFit } from '../calendar'
 import { useIsMobile, useEscape } from '../hooks'
-import { useLayer } from '../layers'
+import { UnsentInput, useLayer, useUnsentCount } from '../layers'
 import { sessionKey } from '../session'
 import { timeFormatKey, type TimeFormat } from '../time'
 import { LANGUAGES, languageLabel, type Language } from '../lang'
@@ -226,7 +226,14 @@ export function SettingsMenu({
   // Back takes the same step. The inline fields in the sections are not layers:
   // they stop Escape at the field and commit on blur, and Back blurs them first
   // (layers.ts), so they commit as a tap on the section's ‹ would.
-  useLayer(back, { dialog: panelRef })
+  //
+  // A name typed into an add field, or a password not yet saved, goes only by
+  // Enter or its button, and closing Settings throws it away, so Back asks
+  // first. Only on the step that closes: stepping back to the phone's index
+  // keeps the section, and its text, mounted underneath.
+  const [unsent, reportUnsent] = useUnsentCount()
+  const closes = !viewingCal && !(isMobile && view === 'panel')
+  useLayer(back, { dialog: panelRef, unsaved: unsent > 0 && closes })
   const sheetPress = useRef(false)
 
   const tr = useT()
@@ -581,7 +588,7 @@ export function SettingsMenu({
       </div>
       <div className="set-body">
         {nav}
-        {panel}
+        <UnsentInput.Provider value={reportUnsent}>{panel}</UnsentInput.Provider>
       </div>
     </>
   )

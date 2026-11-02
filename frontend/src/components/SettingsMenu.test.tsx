@@ -7,6 +7,7 @@ import { SettingsMenu } from './SettingsMenu'
 import { api } from '../api'
 import { DEFAULT_TAB_ORDER } from '../tabs'
 import { pressBack } from '../test/back'
+import { DiscardPrompt } from './DiscardPrompt'
 
 vi.mock('../api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../api')>()
@@ -139,6 +140,26 @@ describe('<SettingsMenu> on a desktop', () => {
     await userEvent.keyboard('{Escape}')
     expect(onClose).toHaveBeenCalledOnce()
   })
+
+  it('asks before Back drops a display name typed but not added, and Keep leaves it', async () => {
+    // The name goes only by Enter or Add, so closing Settings would lose it.
+    m.displays.mockResolvedValue([])
+    m.lists.mockResolvedValue([])
+    const { onClose } = show()
+    render(<DiscardPrompt />)
+    await userEvent.click(nav('Displays'))
+    const name = await within(panel()).findByLabelText('Name')
+    await userEvent.type(name, 'Hallway')
+
+    pressBack()
+    expect(screen.getByRole('alertdialog', { name: 'Discard changes?' })).toBeInTheDocument()
+    expect(onClose).not.toHaveBeenCalled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(name).toHaveValue('Hallway')
+  })
 })
 
 // ── about: the licence's own requirement, rendered ──────────────────────────
@@ -240,6 +261,44 @@ describe('<SettingsMenu> on a phone', () => {
     pressBack()
     expect(sheet()).toHaveAttribute('data-view', 'index')
     expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('asks before the Back that closes Settings drops a share name not yet added', async () => {
+    // Stepping back to the index keeps the section, and the typed name, mounted
+    // underneath, so that step asks nothing; the step that closes does.
+    m.shares.mockResolvedValue([])
+    m.lists.mockResolvedValue([])
+    const { onClose } = show()
+    render(<DiscardPrompt />)
+    await userEvent.click(nav('Shares'))
+    await userEvent.type(await within(panel()).findByLabelText('Who is it for?'), 'Sam')
+
+    pressBack()
+    expect(sheet()).toHaveAttribute('data-view', 'index')
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+
+    pressBack()
+    expect(screen.getByRole('alertdialog', { name: 'Discard changes?' })).toBeInTheDocument()
+    expect(onClose).not.toHaveBeenCalled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Discard' }))
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it('closes without asking once a typed share name is cleared again', async () => {
+    m.shares.mockResolvedValue([])
+    m.lists.mockResolvedValue([])
+    const { onClose } = show()
+    render(<DiscardPrompt />)
+    await userEvent.click(nav('Shares'))
+    const name = await within(panel()).findByLabelText('Who is it for?')
+    await userEvent.type(name, 'Sam')
+    await userEvent.clear(name)
+
+    pressBack()
+    pressBack()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(onClose).toHaveBeenCalledOnce()
   })
 
   it('commits a half-typed field before it steps back, as the section\'s ‹ would', async () => {

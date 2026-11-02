@@ -9,6 +9,7 @@ import { monthGrid } from '../calendar'
 import { DEFAULT_LAYOUT, type DashboardModule } from '../dashboard'
 import type { SettingsSection } from './SettingsMenu'
 import { pressBack } from '../test/back'
+import { setBreakpoint } from '../test/setup'
 
 vi.mock('../api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../api')>()
@@ -155,6 +156,20 @@ describe('<HomeView>', () => {
     pressBack()
     expect(screen.queryByRole('dialog', { name: /add a module/i })).not.toBeInTheDocument()
     expect(onLayoutChange).not.toHaveBeenCalled()
+  })
+
+  it('is no layer once the phone layout has hidden the picker', async () => {
+    // A tablet turned, or split screen: the phone layout draws no picker, so
+    // Back must not be spent closing one nobody can see.
+    setup([{ id: 'only', kind: 'today', x: 0, y: 0, w: 4, h: 6 }])
+    await screen.findByText('Today')
+    await userEvent.click(screen.getByRole('button', { name: 'Arrange' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Add module' }))
+    expect(screen.getByRole('dialog', { name: /add a module/i })).toBeInTheDocument()
+
+    act(() => setBreakpoint(true))
+    expect(screen.queryByRole('dialog', { name: /add a module/i })).not.toBeInTheDocument()
+    expect(pressBack()).toBe(false)
   })
 
   it('adds a picked module and saves the result', async () => {

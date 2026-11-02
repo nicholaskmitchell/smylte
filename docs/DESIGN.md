@@ -735,7 +735,11 @@ that holds unsaved input gets an in-app "Discard changes?" first, whose own Back
 keeps editing, so a second Back can never be the one that discards. Back never
 saves. It leaves the focused field first, as a tap elsewhere would, so the
 settings fields, which are not layers and commit on blur, keep what was typed,
-which is what Back does in a settings section. The two rituals keep their notes
+which is what Back does in a settings section. Text that goes only by Enter or a
+button (a share's or a display's name in its add field, a mail password not yet
+saved) is counted as unsaved input in Settings (`useUnsent`), so the Back that
+would close Settings asks first; stepping back to the phone's index keeps the
+section mounted, so that step does not. The two rituals keep their notes
 the same way, because they commit on blur and on close, as the ✕ and Escape
 already do, so there is nothing to discard. A count left stale by a document
 change costs one Back press: the host drops a report that belongs to a replaced

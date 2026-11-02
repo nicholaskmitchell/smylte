@@ -40,7 +40,9 @@ beforeEach(() => {
   history.replaceState(null, '', '/')
   localStorage.clear()
   m.me.mockResolvedValue({ authenticated: true, user: 'alice' })
-  m.getSettings.mockResolvedValue({})
+  // The account has its own clock, so nothing is written at startup and the
+  // only save in a test is the toggle's.
+  m.getSettings.mockResolvedValue({ time_format: '12h' })
   m.putSettings.mockResolvedValue({})
   m.logout.mockResolvedValue({})
   m.lists.mockResolvedValue([])
@@ -57,6 +59,8 @@ const flipToggle = async () => {
   await screen.findByRole('button', { name: 'Tasks' })
   await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
   await userEvent.click(screen.getByRole('tab', { name: 'Tasks' }))
+  expect(m.putSettings).not.toHaveBeenCalled()
+  expect(screen.queryByRole('alert')).toBeNull()
   haptic.mockClear()
   // Pressed by default.
   await userEvent.click(
@@ -66,13 +70,14 @@ const flipToggle = async () => {
 describe('<App> in the Android client: haptics', () => {
   it('plays a toggle\'s haptic and nothing more when its save lands', async () => {
     await flipToggle()
-    await waitFor(() => expect(m.putSettings).toHaveBeenCalled())
+    await waitFor(() => expect(m.putSettings).toHaveBeenCalledWith({ auto_close_parents: false }))
     expect(haptic.mock.calls).toEqual([['toggleOff']])
   })
 
   it('plays reject with the toast when the save fails', async () => {
     m.putSettings.mockRejectedValue(new HttpError(500, 'boom'))
     await flipToggle()
+    await waitFor(() => expect(m.putSettings).toHaveBeenCalledWith({ auto_close_parents: false }))
     await screen.findByRole('alert')
     expect(haptic.mock.calls).toEqual([['toggleOff'], ['reject']])
   })
