@@ -138,6 +138,35 @@ describe('android: env events', () => {
   })
 })
 
+describe('android: the phone\'s clock', () => {
+  it('is null outside the client and in a client without hello', () => {
+    expect(a.hostClock()).toBeNull()
+    bridge({ themeColour: vi.fn() })
+    a.startAndroidHost()
+    expect(a.hostClock()).toBeNull()
+  })
+
+  it.each([
+    ['{"v":1,"clock24":true}', '24h'],
+    ['{"v":1,"clock24":false}', '12h'],
+    ['{"v":1}', null],
+    ['{"v":1,"clock24":"yes"}', null],
+    ['{"v":2,"clock24":true}', null],
+  ])('reads %s as %s', (raw, expected) => {
+    bridge({ hello: () => raw })
+    a.startAndroidHost()
+    expect(a.hostClock()).toBe(expected)
+  })
+
+  it('follows an env event', () => {
+    bridge({ hello: () => '{"v":1,"clock24":false}' })
+    a.startAndroidHost()
+    expect(a.hostClock()).toBe('12h')
+    fire({ type: 'env', env: { v: 1, clock24: true } })
+    expect(a.hostClock()).toBe('24h')
+  })
+})
+
 describe('android: saving a file', () => {
   const save = (saveFile: unknown) => bridge({ saveFile })
 

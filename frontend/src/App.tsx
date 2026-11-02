@@ -32,6 +32,7 @@ import {
   sanitizeTriggers, type Trigger,
 } from './notifications'
 import { TimeFormatProvider } from './timeformat'
+import { hostClock, onHostEnv } from './android'
 import {
   DEFAULT_TAB_ORDER, DEFAULT_TAB_START, TAB_LABELS, cacheTab, isTab, readCachedTab,
   resolveStartTab, sanitizeTabOrder, sanitizeTabStart, type Tab, type TabStart,
@@ -148,7 +149,20 @@ export function App() {
   // Today tab falls back to the same constant, so the shipped default is one
   // value rather than two that can drift apart.
   const [planOnDueToday, setPlanOnDueToday] = useState(PLAN_ON_DUE_TODAY)
-  const [timeFormat, setTimeFormat] = useState<TimeFormat>(DEFAULT_TIME_FORMAT)
+  // Inside the Android client the seed is the phone's setting, so the first
+  // frame already shows times the way the phone does. That works because
+  // `hello` is synchronous and main.tsx calls it before the first render. The
+  // account's choice replaces the seed when the settings read lands, and an
+  // account with none is given the phone's value (see the read), so on the
+  // common path nothing flips. Everywhere else `hostClock()` is null and the
+  // seed is the default it always was.
+  const [timeFormat, setTimeFormat] = useState<TimeFormat>(() => hostClock() ?? DEFAULT_TIME_FORMAT)
+  // Set when the account holds a choice or this session made one: the toggle,
+  // or the one write of the phone's value. Until then the Android display
+  // follows the phone. It is a ref because the read's callback and the env
+  // listener are closures made once. It is reset on sign-out, because the next
+  // account answers for itself.
+  const timeFormatChosen = useRef(false)
   const [language, setLanguage] = useState<Language>(DEFAULT_LANGUAGE)
   // App's own translator rather than `useT()`, because App is what RENDERS the
   // provider: a hook read here would see the default context, not the value one
@@ -416,6 +430,9 @@ export function App() {
       settingsSession.current += 1
       setFoldsLoaded(false)
       setCollapsedTasks([])
+      // The next account's clock is its own: one with none gets the phone's
+      // value again, and one with a choice replaces this one's.
+      timeFormatChosen.current = false
       // OFFLINE is a read that was never issued, and it has to arm the same
       // guard a read that failed does. The shell renders in full here — the
       // gear, every view, the Home board — over shipped defaults, and the
@@ -544,7 +561,47 @@ export function App() {
         if (keep('show_completed_tasks') && typeof s.show_completed_tasks === 'boolean') {
           setShowCompleted(s.show_completed_tasks)
         }
-        if (keep('time_format') && isTimeFormat(s.time_format)) setTimeFormat(s.time_format)
+        // An account that has chosen gets its choice. One that never has (the
+        // key is absent or junk) gets the phone's setting inside the Android
+        // client, and that setting is saved, once, so that what the server
+        // formats agrees with the app: the server writes reminders, the digest
+        // and the wall displays, and falls back to 12-hour for an account with
+        // none.
+        //
+        // Only under `keep`: a toggle made while this read was in flight is an
+        // explicit choice that this payload predates, and reading its "none" as
+        // an invitation would put the phone's value over it.
+        //
+        // Not after a failed read: `saveSettings` would hold the write back and
+        // tell the user a change of theirs was not saved, when they made none.
+        // A later read that succeeds tries again.
+        //
+        // The settings API has no "only if absent" write, so a toggle made on
+        // another device during this one round trip, on an account that has
+        // never chosen, would be overwritten. That can happen once per account,
+        // and a toggle puts it right.
+        //
+        // `saveSettings` is declared further down. This callback runs long
+        // after the render that declares it, and it stays out of this effect's
+        // dependency list, where reading it during render would come before its
+        // declaration.
+        //
+        // Outside Android `hostClock()` is null, so this does nothing there.
+        if (keep('time_format')) {
+          if (isTimeFormat(s.time_format)) {
+            timeFormatChosen.current = true
+            setTimeFormat(s.time_format)
+          } else if (!timeFormatChosen.current) {
+            const device = hostClock()
+            if (device) {
+              setTimeFormat(device)
+              if (!settingsFailed.current) {
+                timeFormatChosen.current = true
+                saveSettings({ time_format: device })
+              }
+            }
+          }
+        }
         if (keep('language') && isLanguage(s.language)) setLanguage(s.language)
         // Treated as hand-edited, like every other settings value here. A
         // non-number default is dropped to null rather than coerced: a capacity
@@ -1087,9 +1144,29 @@ export function App() {
 
   const toggleTimeFormat = useCallback(() => {
     const next = nextTimeFormat(timeFormat)
+    // An explicit choice. From here the phone's setting no longer applies, and
+    // no read that predates it may replace it.
+    timeFormatChosen.current = true
     setTimeFormat(next)
     saveSettings({ time_format: next })
   }, [timeFormat])
+
+  // The phone's setting can change while Smylte is in the background. The host
+  // re-reads it on resume and on a configuration change, such as the locale.
+  // It applies only while nothing is settled: before the account has answered,
+  // or after a read that failed. Nothing is written here; the read does that,
+  // once. The immediate `follow()` catches an env event that arrived between
+  // the first render and this effect. Outside the Android client this is a
+  // no-op, because no env arrives and `hostClock()` is null.
+  useEffect(() => {
+    const follow = () => {
+      if (timeFormatChosen.current) return
+      const device = hostClock()
+      if (device) setTimeFormat(device)
+    }
+    follow()
+    return onHostEnv(follow)
+  }, [])
 
   /** Chosen from a picker rather than cycled, unlike the toggles around it: the
    *  list will grow past two, and a control you press repeatedly to find the

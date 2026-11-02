@@ -463,6 +463,18 @@ describe('<App> clock setting', () => {
     expect(clock).toHaveTextContent('12-hour')
   })
 
+  it('writes nothing about the clock on boot outside the Android client', async () => {
+    // Pins that the browser and desktop path is unchanged: only the Android
+    // client has a phone setting to offer an account that has none.
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await waitFor(() => expect(m.getSettings).toHaveBeenCalled())
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+    expect(m.putSettings.mock.calls.map((c) => c[0]).filter((b) => 'time_format' in b)).toEqual([])
+    await openSettings('General')
+    expect(screen.getByRole('button', { name: '12- or 24-hour clock' })).toHaveTextContent('12-hour')
+  })
+
   it('restores a stored 24-hour choice', async () => {
     m.getSettings.mockResolvedValue({ time_format: '24h' })
     render(<App />)

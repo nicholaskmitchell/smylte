@@ -15,6 +15,8 @@
 // The module has no side effects on import: `startAndroidHost` is called from
 // main.tsx, and everything else reads the bridge when it is called.
 
+import type { TimeFormat } from './time'
+
 export const ANDROID_EVENT = 'smylte-android'
 
 // The host bumps this only when a field of the env changes meaning. A field it
@@ -33,7 +35,8 @@ interface AndroidBridge {
 }
 
 /// What the host reports about the device. Every field is optional: the host
-/// may be older than the page or newer.
+/// may be older than the page or newer. `clock24` is the phone's 12/24-hour
+/// setting; App shows it while the account has none and saves it once.
 export type HostEnv = { clock24?: boolean }
 
 /** 'busy' is page-only: a save is already waiting for the picker (a second tap).
@@ -135,6 +138,14 @@ export function startAndroidHost(): void {
  *  browser, an older client, or an env this page cannot read). */
 export function hostEnv(): HostEnv | null {
   return env
+}
+
+/** The phone's clock as the app's setting, or null when the host has not
+ *  said (a browser, a desktop client, a client older than `hello`, or an env
+ *  this page cannot read). */
+export function hostClock(): TimeFormat | null {
+  const c = env?.clock24
+  return c === undefined ? null : c ? '24h' : '12h'
 }
 
 /** Call `fn` whenever the host sends a new env. Returns the unsubscribe. */

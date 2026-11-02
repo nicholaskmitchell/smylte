@@ -143,6 +143,11 @@ can't be read there anyway.
 - **Saving a file asks where.** Theme export opens Android's own save dialog,
   where you choose the folder (or a cloud drive) and the name. Theme import
   works as in a browser.
+- **The clock starts from the phone's.** If your account has never been set to
+  a 12- or 24-hour clock, Smylte uses the phone's setting and saves it to your
+  account the first time it opens, so reminders, the daily digest and wall
+  displays match. After that, Smylte's own clock setting decides on every
+  device, and changing the phone's setting doesn't change it.
 
 ## Building
 
@@ -278,8 +283,8 @@ The JVM unit tests run without a device. They cover:
 - the bridge's rules: capabilities, the env and its events, a saved file's type,
   name and size, the wait between save dialogs, where a save's result is shown,
   and touch tracking;
-- that the page and the window agree on the event, its outcomes and the env
-  version (against `frontend/src/android.ts`);
+- that the page and the window agree on the event, its outcomes, the env
+  version and the env's fields (against `frontend/src/android.ts`);
 - the text zoom, and the body size it is measured at, against the stylesheet;
 - the launcher icon against `frontend/public/favicon.svg`.
 

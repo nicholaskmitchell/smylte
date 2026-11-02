@@ -691,6 +691,20 @@ and a new dialog waits two seconds after the last one closed, so a script can't
 hold the user in a loop of them. A save whose window was recreated while the
 dialog was open reports in a native toast, because the page that asked is gone.
 
+**The clock starts from the phone's.** `hello` reports the phone's 12/24-hour
+setting (`DateFormat.is24HourFormat`, which follows the locale until the user
+picks one), and the env event repeats it when it changes. While the account has
+no `time_format`, the page shows the phone's setting from the first frame, and
+the first settings read that finds none saves it to the account. The server
+formats reminders, the digest and the wall displays, and falls back to 12-hour
+for an account with no clock, so a default kept only in the page would show
+24-hour in the app and 12-hour in everything the server writes. A choice the
+account holds is never replaced, and neither is a toggle made while the read was
+in flight. Once the account has a clock, the phone's setting no longer applies.
+The settings API has no "only if absent" write, so a choice made on another
+device during that one round trip would be overwritten; that can happen once per
+account.
+
 **Stage, then swap.** Android keeps processes alive for days, so the client also
 checks for updates when it returns to the foreground after six hours or more. A
 build must never change under a running page, so downloading and swapping are

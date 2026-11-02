@@ -239,6 +239,21 @@ class HostProtocolTest {
 
     @Test
 
+    fun the_page_reads_every_env_field() {
+        // The page acts on env fields now: it writes `clock24` to the account.
+        // A field renamed on one side alone would leave the page silently
+        // reading nothing. The version is pinned by the test above.
+        val ts = File("../frontend/src/android.ts").readText()
+        val fields = Regex(""""([A-Za-z0-9_]+)":""").findAll(HostProtocol.envJson(true))
+            .map { it.groupValues[1] }.filter { it != "v" }.toList()
+        assertTrue("the env carries no fields", fields.isNotEmpty())
+        for (field in fields) {
+            assertTrue(field, Regex("""\.$field\b""").containsMatchIn(ts))
+        }
+    }
+
+    @Test
+
     fun the_protocol_takes_no_android_classes() {
         val source = File("src/main/kotlin/com/nicholaskmitchell/smylte/HostProtocol.kt").readLines()
         assertTrue(source.none { it.trimStart().startsWith("import android.") })
