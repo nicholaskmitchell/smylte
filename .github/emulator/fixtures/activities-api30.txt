@@ -1,0 +1,60 @@
+ACTIVITY MANAGER ACTIVITIES (dumpsys activity activities)
+Display #0 (activities from top to bottom):
+
+  Stack #1: type=home mode=fullscreen
+  isSleeping=false
+  mBounds=Rect(0, 0 - 0, 0)
+    Task id #2
+    mBounds=Rect(0, 0 - 0, 0)
+    mMinWidth=-1
+    mMinHeight=-1
+    mLastNonFullscreenBounds=null
+    * Task{3a4b5c6 #2 visible=true type=home mode=fullscreen translucent=false A=10140:com.google.android.apps.nexuslauncher U=0 StackId=1 sz=1}
+      userId=0 effectiveUid=u0a140 mCallingUid=0 mUserSetupComplete=true mCallingPackage=null
+      affinity=10140:com.google.android.apps.nexuslauncher
+      intent={act=android.intent.action.MAIN cat=[android.intent.category.HOME] flg=0x10000100 cmp=com.google.android.apps.nexuslauncher/.NexusLauncherActivity}
+      * Hist #0: ActivityRecord{1e5f3a2 u0 com.google.android.apps.nexuslauncher/.NexusLauncherActivity t2}
+          packageName=com.google.android.apps.nexuslauncher processName=com.google.android.apps.nexuslauncher
+          launchedFromUid=0 launchedFromPackage=null userId=0
+    Running activities (most recent first):
+      TaskRecord{3a4b5c6 #2 A=com.google.android.apps.nexuslauncher U=0 StackId=1 sz=1}
+        Run #0: ActivityRecord{1e5f3a2 u0 com.google.android.apps.nexuslauncher/.NexusLauncherActivity t2}
+    mResumedActivity: ActivityRecord{1e5f3a2 u0 com.google.android.apps.nexuslauncher/.NexusLauncherActivity t2}
+
+  Stack #14: type=standard mode=fullscreen
+  isSleeping=false
+  mBounds=Rect(0, 0 - 0, 0)
+    Task id #14
+    mBounds=Rect(0, 0 - 0, 0)
+    mMinWidth=-1
+    mMinHeight=-1
+    mLastNonFullscreenBounds=null
+    * Task{6c8e3d1 #14 visible=false type=standard mode=fullscreen translucent=true A=10153:com.nicholaskmitchell.smylte U=0 StackId=14 sz=2}
+      userId=0 effectiveUid=u0a153 mCallingUid=2000 mUserSetupComplete=true mCallingPackage=com.android.shell
+      affinity=10153:com.nicholaskmitchell.smylte
+      intent={act=android.intent.action.MAIN cat=[android.intent.category.LAUNCHER] flg=0x10000000 cmp=com.nicholaskmitchell.smylte/.MainActivity}
+      * Hist #1: ActivityRecord{5d1f0a7 u0 com.nicholaskmitchell.smylte/.SetupActivity t14}
+          packageName=com.nicholaskmitchell.smylte processName=com.nicholaskmitchell.smylte
+          launchedFromUid=10153 launchedFromPackage=com.nicholaskmitchell.smylte userId=0
+      * Hist #0: ActivityRecord{c2a9e10 u0 com.nicholaskmitchell.smylte/.SetupActivity t14}
+          packageName=com.nicholaskmitchell.smylte processName=com.nicholaskmitchell.smylte
+          launchedFromUid=10153 launchedFromPackage=com.nicholaskmitchell.smylte userId=0
+    Running activities (most recent first):
+      TaskRecord{6c8e3d1 #14 A=com.nicholaskmitchell.smylte U=0 StackId=14 sz=2}
+        Run #1: ActivityRecord{5d1f0a7 u0 com.nicholaskmitchell.smylte/.SetupActivity t14}
+        Run #0: ActivityRecord{c2a9e10 u0 com.nicholaskmitchell.smylte/.SetupActivity t14}
+    mLastPausedActivity: ActivityRecord{5d1f0a7 u0 com.nicholaskmitchell.smylte/.SetupActivity t14}
+
+  ResumedActivity: ActivityRecord{1e5f3a2 u0 com.google.android.apps.nexuslauncher/.NexusLauncherActivity t2}
+
+  mFocusedStack=ActivityStack{2e3f4a5 stackId=1 type=home mode=fullscreen visible=true translucent=false, 1 tasks}
+  mCurTaskIdForUser={0=14}
+  mUserStackInFront={}
+  KeyguardController:
+    mKeyguardShowing=false
+    mAodShowing=false
+    mKeyguardGoingAway=false
+    Occluded=false DismissingKeyguardActivity=null at display=0
+    mDismissalRequested=false
+  LockTaskController
+    mLockTaskModeState=NONE

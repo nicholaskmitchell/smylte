@@ -1,0 +1,5 @@
+NetworkProviders for: PhoneSwitcherNetworkRequstListener TelephonyNetworkProvider WifiNetworkProvider
+
+Active default network: none
+
+Current Networks:

@@ -417,9 +417,36 @@ The JVM unit tests run without a device. They cover:
 `backend/tests/test_csp.py` fails if `Csp.kt`'s directives drift from the
 server's.
 
+### On an emulator
+
+`.github/workflows/android-emulator.yml` installs the debug build on an
+emulator, once on Android 11 (API 30) and once on Android 15 (API 35), and
+drives it with adb (`.github/emulator/smoke.py`). It checks the first launch
+into Server settings; the lock switch, absent until the emulator has a PIN; a
+cold start with the lock on (the prompt opens by itself, the window is secure,
+and the settings are out of the accessibility tree); Back while locked;
+unlocking with the PIN; no lock after 30 seconds away and a lock after 5
+minutes and 30 seconds; and a locked start with a server set and GitHub cut
+off, which unlocks onto the start-up failure screen. On Android 11 that screen
+is the outdated WebView one, since the emulator's WebView is 83. Any crash or
+ANR of the app fails it.
+
+It runs on pull requests and pushes to `main` that change `android/`,
+`.github/emulator/` or the workflow, and by hand from the Actions tab (Android
+emulator, Run workflow). It is not part of `ci.yml`, the deploy gate, so a
+flaky emulator never holds a deploy back. When a check fails, the run's
+artifacts (`android-emulator-api30-…` and `android-emulator-api35-…`, kept 5
+days) hold every screen dump, screenshot and dumpsys output it took, the whole
+logcat and the emulator's own log; the job summary lists which checks passed.
+Its parsers have unit tests that need no emulator; from the repository root:
+
+```bash
+python3 -m unittest discover -s .github/emulator -p 'test_*.py'
+```
+
 ## Checks on a phone
 
-The tests above run without a device. What only a phone can show is checked
+The tests above run without a phone. What only a phone can show is checked
 by hand, on Android 12 or later and on Android 11 where a check names it,
 before a release that changes it.
 

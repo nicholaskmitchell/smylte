@@ -1,0 +1,25 @@
+WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)
+  Display: mDisplayId=0 stacks=3
+    init=1080x2400 420dpi cur=1080x2400 app=1080x2274 rng=1080x1017-2274x2274
+    deferred=false mLayoutNeeded=false mTouchExcludeRegion=SkRegion((0,0,1080,2400))
+
+  mLayoutSeq=418
+  mCurrentFocus=Window{9c41b2e u0 BiometricPrompt}
+  mFocusedApp=ActivityRecord{5d1f0a7 u0 com.nicholaskmitchell.smylte/.SetupActivity t14}
+  mLastStatusBarVisibility=0x8008
+WINDOW MANAGER WINDOWS (dumpsys window windows)
+  Window #0 Window{3f2a1c4 u0 com.nicholaskmitchell.smylte/com.nicholaskmitchell.smylte.SetupActivity}:
+    mDisplayId=0 rootTaskId=14 mSession=Session{8d3e0f1 4321:u0a10153} mClient=android.os.BinderProxy@6a7b8c9
+    mOwnerUid=10153 showForAllUsers=false package=com.nicholaskmitchell.smylte appop=NONE
+    mAttrs={(0,0)(fillxfill) sim={adjust=resize forwardNavigation} ty=BASE_APPLICATION wanim=0x10302fe
+      fl=LAYOUT_IN_SCREEN LAYOUT_INSET_DECOR SECURE SPLIT_TOUCH HARDWARE_ACCELERATED DRAWS_SYSTEM_BAR_BACKGROUNDS
+      pfl=FORCE_DRAW_STATUS_BAR_BACKGROUND
+      vsysui=LAYOUT_STABLE LAYOUT_HIDE_NAVIGATION LAYOUT_FULLSCREEN
+      fitTypes=STATUS_BARS NAVIGATION_BARS CAPTION_BAR}
+    Requested w=1080 h=2400 mLayoutSeq=418
+    mBaseLayer=21000 mSubLayer=0    mToken=ActivityRecord{5d1f0a7 u0 com.nicholaskmitchell.smylte/.SetupActivity t14}
+    mActivityRecord=ActivityRecord{5d1f0a7 u0 com.nicholaskmitchell.smylte/.SetupActivity t14}
+    mAppDied=false    drawnStateEvaluated=true    mightAffectAllDrawn=true
+    mViewVisibility=0x0 mHaveFrame=true mObscured=false
+    isOnScreen=true
+    isVisible=true

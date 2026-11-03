@@ -1,0 +1,9 @@
+--------- beginning of main
+11-03 14:05:00.090   512   540 I am_anr  : [0,4321,com.nicholaskmitchell.smylte,952680006,Input dispatching timed out (Waiting to send non-key event because the touched window has not finished processing certain input events that were delivered to it over 500.0ms ago.)]
+11-03 14:05:00.100   512   540 E ActivityManager: ANR in com.nicholaskmitchell.smylte (com.nicholaskmitchell.smylte/.SetupActivity)
+11-03 14:05:00.100   512   540 E ActivityManager: PID: 4321
+11-03 14:05:00.100   512   540 E ActivityManager: Reason: Input dispatching timed out
+11-03 14:07:10.400   512   541 E ActivityManager: ANR in com.android.systemui
+11-03 14:07:10.390   512   541 I am_anr  : [0,890,com.android.systemui,818462221,Broadcast of Intent { act=android.intent.action.TIME_TICK }]
+11-03 14:08:00.000   512   541 E ActivityManager: ANR in com.nicholaskmitchell.smylte.example (com.nicholaskmitchell.smylte.example/.Main)
+11-03 14:08:30.000  4321  4321 I SetupActivity: no ANR in com.nicholaskmitchell.smylte here, just a log line that mentions one

@@ -1,0 +1,8 @@
+WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)
+  Display: mDisplayId=0 stacks=2
+    init=1080x2400 420dpi cur=1080x2400 app=1080x2274 rng=1080x1017-2274x2274
+    deferred=false mLayoutNeeded=false mTouchExcludeRegion=SkRegion((0,0,1080,2400))
+
+  mLayoutSeq=501
+  mCurrentFocus=null
+  mFocusedApp=ActivityRecord{1e5f3a2 u0 com.google.android.apps.nexuslauncher/.NexusLauncherActivity t2}

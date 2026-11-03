@@ -1,0 +1,12 @@
+--------- beginning of crash
+11-03 14:02:11.532  4321  4321 E AndroidRuntime: FATAL EXCEPTION: main
+11-03 14:02:11.532  4321  4321 E AndroidRuntime: Process: com.nicholaskmitchell.smylte, PID: 4321
+11-03 14:02:11.532  4321  4321 E AndroidRuntime: java.lang.IllegalStateException: example
+11-03 14:02:11.532  4321  4321 E AndroidRuntime: 	at com.nicholaskmitchell.smylte.SetupActivity.onResume(SetupActivity.kt:97)
+11-03 14:03:40.101  5120  5144 E AndroidRuntime: FATAL EXCEPTION: pool-1-thread-1
+11-03 14:03:40.101  5120  5144 E AndroidRuntime: Process: com.example.other, PID: 5120
+11-03 14:03:40.101  5120  5144 E AndroidRuntime: java.lang.RuntimeException: not ours
+11-03 14:04:02.870  5301  5301 E AndroidRuntime: FATAL EXCEPTION: main
+11-03 14:04:02.870  5301  5301 E AndroidRuntime: Process: com.nicholaskmitchell.smylte.example, PID: 5301
+11-03 14:06:00.012  4400  4420 F libc    : Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0 in tid 4420 (RenderThread), pid 4400 (ckmitchell.smylte)
+11-03 14:06:00.301  4455  4455 F DEBUG   : pid: 4400, tid: 4420, name: RenderThread  >>> com.nicholaskmitchell.smylte <<<

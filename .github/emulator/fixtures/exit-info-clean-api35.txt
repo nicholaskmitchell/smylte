@@ -1,0 +1,7 @@
+ACTIVITY MANAGER PROCESS EXIT INFO (dumpsys activity exit-info)
+  package: com.nicholaskmitchell.smylte
+    Historical Process Exit for uid=10204
+        ApplicationExitInfo #0:
+          timestamp=2026-11-03 14:20:02.118 pid=6990 realUid=10204 packageUid=10204 definingUid=10204 user=0
+          process=com.nicholaskmitchell.smylte reason=10 (USER REQUESTED) subreason=23 (FORCE STOP) status=0
+          importance=100 pss=66MB rss=133MB description=stop com.nicholaskmitchell.smylte due to from pid 7001 state=empty trace=null

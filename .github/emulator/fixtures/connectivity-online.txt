@@ -1,0 +1,6 @@
+NetworkProviders for: PhoneSwitcherNetworkRequstListener TelephonyNetworkProvider WifiNetworkProvider
+
+Active default network: 101
+
+Current Networks:
+  NetworkAgentInfo{network{101}  handle{437197393933}  ni{WIFI CONNECTED extra: } }

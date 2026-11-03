@@ -1,0 +1,35 @@
+ACTIVITY MANAGER PROCESS EXIT INFO (dumpsys activity exit-info)
+  package: com.nicholaskmitchell.smylte
+    Historical Process Exit for uid=10153
+        ApplicationExitInfo #0:
+          timestamp=2026-11-03 14:09:12.004
+          pid=4980
+          realUid=10153
+          packageUid=10153
+          definingUid=10153
+          user=0
+          process=com.nicholaskmitchell.smylte
+          reason=10 (USER REQUESTED)
+          status=0
+          importance=100
+          pss=61MB
+          rss=128MB
+          description=stop com.nicholaskmitchell.smylte due to from pid 6020
+          state=empty
+          trace=null
+        ApplicationExitInfo #1:
+          timestamp=2026-11-03 14:02:11.540
+          pid=4321
+          realUid=10153
+          packageUid=10153
+          definingUid=10153
+          user=0
+          process=com.nicholaskmitchell.smylte
+          reason=4 (APP CRASH(EXCEPTION))
+          status=0
+          importance=100
+          pss=58MB
+          rss=120MB
+          description=crash
+          state=empty
+          trace=null

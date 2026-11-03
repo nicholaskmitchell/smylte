@@ -1,0 +1,11 @@
+Current WebView Update Service state
+  Current WebView package (name, version): (com.google.android.webview, 124.0.6367.219)
+  Minimum targetSdkVersion: 35
+  Minimum WebView version code: 636721900
+  Number of relros started: 2
+  Number of relros finished: 2
+  WebView package dirty: false
+  Any WebView package installed: true
+  Preferred WebView package (name, version): (com.google.android.webview, 124.0.6367.219)
+  WebView packages:
+    Valid package com.google.android.webview (versionName: 124.0.6367.219, versionCode: 636721900, targetSdkVersion: 35) is  installed/enabled for all users

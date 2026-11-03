@@ -1,0 +1,51 @@
+WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)
+  Display: mDisplayId=0 (organized) rootTasks=4
+    init=1080x2400 420dpi base=1080x2400 420dpi cur=1080x2400 app=1080x2337 rng=1080x1017-2337x2337
+    deferred=false mLayoutNeeded=false mTouchExcludeRegion=SkRegion((0,0,1080,2400))
+
+  mLayoutSeq=1207
+  mCurrentFocus=Window{c0ffee1 u0 com.nicholaskmitchell.smylte/com.nicholaskmitchell.smylte.MainActivity}
+  mFocusedApp=ActivityRecord{4e7a2b1 u0 com.nicholaskmitchell.smylte/.MainActivity t12}
+WINDOW MANAGER WINDOWS (dumpsys window windows)
+  Window #0 Window{51a2b3c u0 Splash Screen com.nicholaskmitchell.smylte}:
+    mDisplayId=0 rootTaskId=12 mSession=Session{77aa001 6012:u0a10204} mClient=android.os.BinderProxy@1f2e3d4
+    mOwnerUid=10204 showForAllUsers=false package=com.nicholaskmitchell.smylte appop=NONE
+    mAttrs={(0,0)(fillxfill) sim={adjust=pan} ty=APPLICATION_STARTING fmt=TRANSLUCENT wanim=0x10302fe
+      fl=LAYOUT_IN_SCREEN LAYOUT_INSET_DECOR ALT_FOCUSABLE_IM SECURE HARDWARE_ACCELERATED DRAWS_SYSTEM_BAR_BACKGROUNDS
+      pfl=NO_MOVE_ANIMATION USE_BLAST FIT_INSETS_CONTROLLED
+      bhv=DEFAULT
+      fitTypes=STATUS_BARS NAVIGATION_BARS CAPTION_BAR}
+    Requested w=1080 h=2400 mLayoutSeq=1201
+  Window #1 Window{9d8c7b6 u0 com.nicholaskmitchell.smylte/com.nicholaskmitchell.smylte.SetupActivity EXITING}:
+    mDisplayId=0 rootTaskId=12 mSession=Session{77aa001 6012:u0a10204} mClient=android.os.BinderProxy@2a3b4c5
+    mOwnerUid=10204 showForAllUsers=false package=com.nicholaskmitchell.smylte appop=NONE
+    mAttrs={(0,0)(fillxfill) sim={adjust=resize forwardNavigation} ty=BASE_APPLICATION wanim=0x10302fe
+      fl=LAYOUT_IN_SCREEN LAYOUT_INSET_DECOR SECURE SPLIT_TOUCH HARDWARE_ACCELERATED DRAWS_SYSTEM_BAR_BACKGROUNDS
+      pfl=USE_BLAST FIT_INSETS_CONTROLLED
+      bhv=DEFAULT
+      fitTypes=STATUS_BARS NAVIGATION_BARS CAPTION_BAR}
+    Requested w=1080 h=2400 mLayoutSeq=1198
+  Window #2 Window{c0ffee1 u0 com.nicholaskmitchell.smylte/com.nicholaskmitchell.smylte.MainActivity}:
+    mDisplayId=0 rootTaskId=12 mSession=Session{77aa001 6012:u0a10204} mClient=android.os.BinderProxy@3b4c5d6
+    mOwnerUid=10204 showForAllUsers=false package=com.nicholaskmitchell.smylte appop=NONE
+    mAttrs={(0,0)(fillxfill) sim={adjust=resize forwardNavigation} ty=BASE_APPLICATION wanim=0x10302fe
+      fl=LAYOUT_IN_SCREEN LAYOUT_INSET_DECOR SPLIT_TOUCH HARDWARE_ACCELERATED DRAWS_SYSTEM_BAR_BACKGROUNDS
+      pfl=USE_BLAST FIT_INSETS_CONTROLLED
+      bhv=DEFAULT
+      fitTypes=STATUS_BARS NAVIGATION_BARS CAPTION_BAR}
+    Requested w=1080 h=2400 mLayoutSeq=1207
+    mBaseLayer=21000 mSubLayer=0    mToken=ActivityRecord{4e7a2b1 u0 com.nicholaskmitchell.smylte/.MainActivity t12}
+    mActivityRecord=ActivityRecord{4e7a2b1 u0 com.nicholaskmitchell.smylte/.MainActivity t12}
+    isOnScreen=true
+    isVisible=true
+  Window #3 Window{7e1b2c4 u0 com.google.android.apps.nexuslauncher/com.google.android.apps.nexuslauncher.NexusLauncherActivity}:
+    mDisplayId=0 rootTaskId=1 mSession=Session{1b2c3d4 1900:u0a10140} mClient=android.os.BinderProxy@4c5d6e7
+    mOwnerUid=10140 showForAllUsers=false package=com.google.android.apps.nexuslauncher appop=NONE
+    mAttrs={(0,0)(fillxfill) sim={adjust=nothing forwardNavigation} ty=BASE_APPLICATION wanim=0x10302fe
+      fl=LAYOUT_IN_SCREEN LAYOUT_INSET_DECOR SHOW_WALLPAPER SPLIT_TOUCH HARDWARE_ACCELERATED DRAWS_SYSTEM_BAR_BACKGROUNDS
+      pfl=USE_BLAST FIT_INSETS_CONTROLLED
+      fitTypes=STATUS_BARS NAVIGATION_BARS CAPTION_BAR}
+    Requested w=1080 h=2400 mLayoutSeq=1199
+
+  Hiding System Alert Windows:
+    #0 Window{2b3c4d5 u0 com.example.overlay}

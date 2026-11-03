@@ -1,0 +1,33 @@
+ACTIVITY MANAGER ACTIVITIES (dumpsys activity activities)
+Display #0 (activities from top to bottom):
+  * Task{8b0e1f2 #12 type=standard A=10204:com.nicholaskmitchell.smylte U=0 visible=true visibleRequested=true mode=fullscreen translucent=false sz=2}
+    mLastPausedActivity: ActivityRecord{4e7a2b1 u0 com.nicholaskmitchell.smylte/.MainActivity t12 f}}
+    isSleeping=false
+    affinity=10204:com.nicholaskmitchell.smylte
+    intent={act=android.intent.action.MAIN cat=[android.intent.category.LAUNCHER] flg=0x10000000 cmp=com.nicholaskmitchell.smylte/.MainActivity}
+    * Hist  #1: ActivityRecord{a3c4d5e u0 com.nicholaskmitchell.smylte/.SetupActivity t12}
+      packageName=com.nicholaskmitchell.smylte processName=com.nicholaskmitchell.smylte
+      launchedFromUid=10204 launchedFromPackage=com.nicholaskmitchell.smylte launchedFromFeature=null userId=0
+    * Hist  #0: ActivityRecord{4e7a2b1 u0 com.nicholaskmitchell.smylte/.MainActivity t12 f}}
+      packageName=com.nicholaskmitchell.smylte processName=com.nicholaskmitchell.smylte
+      launchedFromUid=2000 launchedFromPackage=com.android.shell launchedFromFeature=null userId=0
+  * Task{1c2d3e4 #1 type=home U=0 visible=false visibleRequested=false mode=fullscreen translucent=false sz=1}
+    * Task{0a1b2c3 #2 type=home I=com.google.android.apps.nexuslauncher/.NexusLauncherActivity U=0 rootTaskId=1 visible=false visibleRequested=false mode=fullscreen translucent=false sz=1}
+      * Hist  #0: ActivityRecord{1e5f3a2 u0 com.google.android.apps.nexuslauncher/.NexusLauncherActivity t2}
+        packageName=com.google.android.apps.nexuslauncher processName=com.google.android.apps.nexuslauncher
+
+  Resumed activities in task display areas (from top to bottom):
+    Resumed: ActivityRecord{a3c4d5e u0 com.nicholaskmitchell.smylte/.SetupActivity t12}
+
+  ResumedActivity: ActivityRecord{a3c4d5e u0 com.nicholaskmitchell.smylte/.SetupActivity t12}
+
+ActivityTaskSupervisor state:
+  topDisplayFocusedRootTask=Task{8b0e1f2 #12 type=standard A=10204:com.nicholaskmitchell.smylte}
+  mCurTaskIdForUser={0=12}
+  mUserRootTaskInFront={}
+  mVisibilityTransactionDepth=0
+  KeyguardController:
+    mKeyguardShowing=true
+    mAodShowing=false
+    mKeyguardGoingAway=false
+    mDismissalRequested=false
