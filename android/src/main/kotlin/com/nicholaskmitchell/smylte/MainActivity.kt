@@ -233,16 +233,20 @@ class MainActivity : Activity() {
     }
 
     /// The failure screen's text when the phone's WebView is too old to run the
-    /// page, or null. It names the WebView as the phone lists it (Android
-    /// System WebView, or a replacement such as Vanadium), falling back to the
-    /// usual name when the label can't be read.
+    /// page, or null. The version is the engine's, from its default user agent
+    /// (the window never changes its own). The WebView is named as the phone
+    /// lists it (Android System WebView, or a replacement such as Vanadium),
+    /// or by its usual name when that label can't be read, which Android then
+    /// stands in for with the package's or the application class's name.
     private fun outdatedWebView(): String? {
-        val provider = WebView.getCurrentWebViewPackage() ?: return null
-        if (!HostProtocol.webViewTooOld(provider.versionName)) return null
-        val name = provider.applicationInfo?.loadLabel(packageManager)?.toString()
-            ?.takeIf { it.isNotBlank() && it != provider.packageName }
-            ?: getString(R.string.webview_name)
-        return getString(R.string.webview_outdated, name, provider.versionName, HostProtocol.MIN_WEBVIEW_MAJOR)
+        val engine = HostProtocol.chromiumVersion(WebSettings.getDefaultUserAgent(this))
+        if (!HostProtocol.webViewTooOld(engine)) return null
+        val provider = WebView.getCurrentWebViewPackage()
+        val name = provider?.applicationInfo?.let { info ->
+            info.loadLabel(packageManager).toString()
+                .takeIf { it.isNotBlank() && it != provider.packageName && it != info.name }
+        } ?: getString(R.string.webview_name)
+        return getString(R.string.webview_outdated, name, engine, HostProtocol.MIN_WEBVIEW_MAJOR)
     }
 
     private fun open() {

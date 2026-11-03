@@ -279,23 +279,36 @@ object HostProtocol {
 
     // ── the WebView ─────────────────────────────────────────────────────────
 
-    /// The oldest WebView that runs the web build: Chrome 107, the Chrome in
-    /// Vite 7's default build target ("baseline-widely-available"), which the
-    /// frontend keeps by setting no build.target of its own. An older WebView
-    /// fails to parse the page's script and shows nothing at all, not even an
-    /// error, so the host checks first and says what to update.
-    const val MIN_WEBVIEW_MAJOR = 107
+    /// The oldest WebView that runs the page, as the Chromium version it is
+    /// built on. The page's script needs only Chrome 107 (Vite 7's default build
+    /// target, which the frontend keeps), but its stylesheet needs 111: its
+    /// palette is written in oklch() and its tints in color-mix(), and a
+    /// WebView without them drops every colour that uses them, so a done task's
+    /// check and today's date in the calendar vanish. Below 107 the script
+    /// doesn't even parse, and the page is blank. Either way nothing says why,
+    /// so the host checks first and says what to update.
+    const val MIN_WEBVIEW_MAJOR = 111
 
-    /// The major version in a WebView package's versionName ("133.0.6943.137"
-    /// is 133), or null when there is none to read.
-    fun webViewMajor(versionName: String?): Int? =
-        versionName?.trim()?.substringBefore('.')?.toIntOrNull()?.takeIf { it > 0 }
+    private val CHROME_TOKEN = Regex("""\bChrome/(\d+(?:\.\d+)*)""")
+
+    /// The engine's version in a WebView's user agent ("… Chrome/133.0.6943.137
+    /// Mobile Safari/537.36" gives "133.0.6943.137"), or null when it has
+    /// none. The user agent, not the WebView package's versionName: every
+    /// provider's engine writes its own Chromium version there, while a
+    /// provider can number its package its own way.
+    fun chromiumVersion(userAgent: String?): String? =
+        userAgent?.let { CHROME_TOKEN.find(it)?.groupValues?.get(1) }
+
+    /// The major version in a Chromium version ("133.0.6943.137" is 133), or
+    /// null when there is none to read.
+    fun webViewMajor(version: String?): Int? =
+        version?.trim()?.substringBefore('.')?.toIntOrNull()?.takeIf { it > 0 }
 
     /// Whether the WebView is too old to run the page. A version that can't be
     /// read is let through: the page may well run, and a refusal would leave no
     /// way in.
-    fun webViewTooOld(versionName: String?): Boolean =
-        webViewMajor(versionName)?.let { it < MIN_WEBVIEW_MAJOR } == true
+    fun webViewTooOld(version: String?): Boolean =
+        webViewMajor(version)?.let { it < MIN_WEBVIEW_MAJOR } == true
 }
 
 /// A file the page asked to save, after the host has checked it. Only `of`

@@ -24,9 +24,10 @@ You need Android 11 or later and an `https://` server address: the address you
 open Smylte at in a browser, with no path. The server's sign-in cookie is
 `Secure`, so plain `http://` can't work.
 
-The phone's WebView must be version 107 or later. A phone that gets updates from
-Google Play or its maker has a newer one. On an older one Smylte names the
-version it found and asks for an update, rather than showing a blank page.
+The phone's WebView must be built on Chromium 111 or later. A phone that gets
+updates from Google Play or its maker has a newer one. On an older one Smylte
+names the version it found and asks for an update, rather than showing a blank
+or broken page.
 
 [rel]: https://github.com/nicholaskmitchell/smylte/releases/tag/desktop-latest
 
@@ -408,8 +409,9 @@ The JVM unit tests run without a device. They cover:
 - that the palette is read by its named ids, in tone order, wherever the clock
   is read;
 - the text zoom, and the body size it is measured at, against the stylesheet;
-- the oldest WebView that runs the page, that the frontend still builds for it
-  (Vite 7's default target), and that start-up checks it first;
+- the oldest WebView that runs the page, read from the user agent's `Chrome/`
+  version; that the frontend keeps Vite 7's default target, and that start-up
+  checks the WebView first;
 - the launcher icon against `frontend/public/favicon.svg`.
 
 `backend/tests/test_csp.py` fails if `Csp.kt`'s directives drift from the
@@ -451,7 +453,7 @@ adb shell am start -W -S -a android.intent.action.MAIN -c android.intent.categor
   Smylte's storage, set it up again (setup needs only the server), force-stop it
   and start it from the launcher. The failure screen, with Try again and
   Settings, shows as soon as the check fails, not after 3 s.
-- **An outdated WebView:** on an emulator whose WebView is older than 107 (the
+- **An outdated WebView:** on an emulator whose WebView is older than 111 (the
   Android 11 `google_apis` image ships 83), set Smylte up and start it. The
   failure screen names the WebView and its version and asks for an update,
   instead of a blank page, and Try again shows it again. The page-side checks

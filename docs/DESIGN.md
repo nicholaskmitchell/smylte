@@ -663,14 +663,18 @@ served from disk
 gets a port of `csp.py`'s policy (`Csp.kt`), which `test_csp.py` checks as it
 checks the desktop's copy.
 
-**An outdated WebView says so.** The web build keeps Vite 7's default target,
-Chrome 107, and an older WebView fails to parse its script and shows a blank
-page with no error. Android 11 images without Google Play ship WebView 83. So
-before start-up the client reads the WebView provider's version
-(`WebView.getCurrentWebViewPackage()`) and, below 107, shows the failure screen,
-naming the WebView and asking for an update, without downloading anything. A
-version it can't read is let through. A test fails if the frontend sets a build
-target of its own or moves off Vite 7, since either can change the minimum.
+**An outdated WebView says so.** The page needs Chromium 111. Its script keeps
+Vite 7's default target, Chrome 107, and an older WebView fails to parse it and
+shows a blank page with no error. Its stylesheet writes the palette in `oklch()`
+and the tints in `color-mix()`, both 111, and a WebView without them drops every
+colour that uses them: a done task's check and today's date vanish. Android 11
+images without Google Play ship WebView 83. So before start-up the client reads
+the engine's version from the `Chrome/` token of its default user agent and,
+below 111, shows the failure screen, naming the WebView and asking for an
+update, without downloading anything. The user agent rather than the provider
+package's `versionName`, because a provider such as Huawei's numbers its package
+its own way. A version it can't read is let through. A test fails if the
+frontend sets a build target of its own or moves off Vite 7.
 
 **An app, not a page in a browser.** A WebView's defaults give the page away in
 a few places, and the client changes the ones that are WebView settings.

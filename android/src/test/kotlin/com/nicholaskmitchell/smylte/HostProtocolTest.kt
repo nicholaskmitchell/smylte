@@ -762,11 +762,30 @@ class HostProtocolTest {
 
     // ── the WebView ─────────────────────────────────────────────────────────
 
+    // Default user agents as WebView sends them: Android 11's emulator image,
+    // and a current one.
+    private val UA_83 = "Mozilla/5.0 (Linux; Android 11; sdk_gphone_x86_64 Build/RSR1.201013.001; wv) " +
+        "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/83.0.4103.106 Mobile Safari/537.36"
+    private val UA_133 = "Mozilla/5.0 (Linux; Android 16; Pixel 8 Build/BP2A.250605.031; wv) " +
+        "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/133.0.6943.137 Mobile Safari/537.36"
+
     @Test
-    fun the_webview_major_version_is_read_from_its_version_name() {
+    fun the_engine_version_is_read_from_the_user_agents_chrome_token() {
+        assertEquals("83.0.4103.106", HostProtocol.chromiumVersion(UA_83))
+        assertEquals("133.0.6943.137", HostProtocol.chromiumVersion(UA_133))
+        assertEquals("120", HostProtocol.chromiumVersion("X Chrome/120 Y"))
+        assertNull(HostProtocol.chromiumVersion("Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36"))
+        assertNull(HostProtocol.chromiumVersion("HeadlessChrome/120.0.0.0"))
+        assertNull(HostProtocol.chromiumVersion("Chrome/"))
+        assertNull(HostProtocol.chromiumVersion(""))
+        assertNull(HostProtocol.chromiumVersion(null))
+    }
+
+    @Test
+    fun the_major_version_is_the_first_number() {
         assertEquals(133, HostProtocol.webViewMajor("133.0.6943.137"))
         assertEquals(83, HostProtocol.webViewMajor("83.0.4103.106"))
-        assertEquals(107, HostProtocol.webViewMajor(" 107.0.5304.105 "))
+        assertEquals(111, HostProtocol.webViewMajor(" 111.0.5563.116 "))
         assertEquals(140, HostProtocol.webViewMajor("140"))
         assertNull(HostProtocol.webViewMajor(null))
         assertNull(HostProtocol.webViewMajor(""))
@@ -776,38 +795,45 @@ class HostProtocolTest {
     }
 
     @Test
-    fun a_webview_older_than_107_is_too_old_and_an_unreadable_one_is_not() {
-        assertEquals(107, HostProtocol.MIN_WEBVIEW_MAJOR)
-        assertTrue(HostProtocol.webViewTooOld("83.0.4103.106"))
-        assertTrue(HostProtocol.webViewTooOld("106.0.5249.126"))
-        assertFalse(HostProtocol.webViewTooOld("107.0.5304.105"))
-        assertFalse(HostProtocol.webViewTooOld("133.0.6943.137"))
+    fun a_webview_older_than_111_is_too_old_and_an_unreadable_one_is_not() {
+        assertEquals(111, HostProtocol.MIN_WEBVIEW_MAJOR)
+        assertTrue(HostProtocol.webViewTooOld(HostProtocol.chromiumVersion(UA_83)))
+        assertTrue(HostProtocol.webViewTooOld("107.0.5304.105"))
+        assertTrue(HostProtocol.webViewTooOld("110.0.5481.153"))
+        assertFalse(HostProtocol.webViewTooOld("111.0.5563.116"))
+        assertFalse(HostProtocol.webViewTooOld(HostProtocol.chromiumVersion(UA_133)))
         assertFalse(HostProtocol.webViewTooOld(null))
         assertFalse(HostProtocol.webViewTooOld("unknown"))
     }
 
     @Test
-    fun the_minimum_webview_follows_the_frontends_build_target() {
-        // MIN_WEBVIEW_MAJOR is Chrome 107 because the frontend builds with
-        // Vite 7's default target. A build.target of its own, or another major
-        // of Vite, can change what the page needs: update the minimum with it.
+    fun the_frontend_keeps_vites_default_target() {
+        // The script's own floor is Vite 7's default target, Chrome 107, below
+        // MIN_WEBVIEW_MAJOR. A target of the frontend's own, or another major
+        // of Vite, can raise it: check the minimum again if this fails.
         val config = File("../frontend/vite.config.ts").readText()
-        assertFalse(Regex("""\btarget\s*:""").containsMatchIn(config))
+        val build = Regex("""\bbuild\s*:\s*\{[^}]*\}""").find(config)?.value
+        assertNotNull(build)
+        assertFalse(Regex("""\b(target|cssTarget)\s*:""").containsMatchIn(build!!))
+        assertFalse(config.contains("cssTarget"))
         val pkg = File("../frontend/package.json").readText()
         assertTrue(Regex(""""vite"\s*:\s*"\^7\.""").containsMatchIn(pkg))
+        assertFalse(pkg.contains("--target"))
     }
 
     @Test
     fun boot_checks_the_webview_before_start_up() {
         val source = File("src/main/kotlin/com/nicholaskmitchell/smylte/MainActivity.kt").readText()
         val boot = source.substringAfter("private fun boot() {").substringBefore("\n    }\n")
-        val check = boot.indexOf("outdatedWebView()?.let {")
+        val check = boot.indexOf("outdatedWebView()?.let {\n            showSplash(it, failed = true)\n            return\n        }")
         assertTrue(check >= 0)
         assertTrue(check < boot.indexOf("booting = true"))
         assertTrue(check < boot.indexOf("Background.updates.execute"))
-        assertTrue(boot.contains("showSplash(it, failed = true)"))
         val outdated = source.substringAfter("private fun outdatedWebView(): String? {").substringBefore("\n    }\n")
-        assertTrue(outdated.contains("WebView.getCurrentWebViewPackage() ?: return null"))
-        assertTrue(outdated.contains("if (!HostProtocol.webViewTooOld(provider.versionName)) return null"))
+        assertTrue(outdated.contains("HostProtocol.chromiumVersion(WebSettings.getDefaultUserAgent(this))"))
+        assertTrue(outdated.contains("if (!HostProtocol.webViewTooOld(engine)) return null"))
+        assertTrue(outdated.contains("it != provider.packageName && it != info.name"))
+        // The window's own user agent is the default one: nothing sets it.
+        assertFalse(source.contains("userAgentString ="))
     }
 }
