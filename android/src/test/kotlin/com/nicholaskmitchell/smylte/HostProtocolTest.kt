@@ -213,6 +213,15 @@ class HostProtocolTest {
 
     @Test
 
+    fun the_page_is_out_of_sight_when_stopped_or_locked() {
+        assertFalse(HostProtocol.pageOutOfSight(started = true, locked = false))
+        assertTrue(HostProtocol.pageOutOfSight(started = true, locked = true))
+        assertTrue(HostProtocol.pageOutOfSight(started = false, locked = false))
+        assertTrue(HostProtocol.pageOutOfSight(started = false, locked = true))
+    }
+
+    @Test
+
     fun a_pickers_answer_waits_for_a_started_unlocked_window() {
         assertFalse(HostProtocol.holdsResult(started = true, locked = false))
         assertTrue(HostProtocol.holdsResult(started = true, locked = true))

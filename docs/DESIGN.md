@@ -871,6 +871,13 @@ preferences rather than the account, because it concerns this phone.
 - The state is one object for the process (`AppLock`, tested on the JVM). The
   settings window, which the launcher's shortcut opens on its own, therefore
   locks with the app.
+- A visit counts only once one of its windows has drawn a frame (an
+  `OnDrawListener` on the decor view). Android can take a window from `onStart`
+  to `onStop` unseen: `recreate()` of a stopped activity, which the host does
+  when the renderer dies in the background, runs the new instance through start,
+  resume, pause and stop in one go. Such a pass leaves the time away as it was,
+  and the prompt it would have opened by itself is dropped, since that waits for
+  a window still started. A stop with no window started changes nothing.
 
 **While locked.**
 - Each window hides everything but a lock view. The container is `INVISIBLE`
@@ -880,6 +887,8 @@ preferences rather than the account, because it concerns this phone.
 - The hold on the platform splash ends at once, and the app goes on starting
   behind the lock.
 - Only the prompt's success unlocks.
+- Locking cancels autofill's session, so fields that vanish behind the lock
+  don't bring up its save dialog over it.
 - Back, in either window, moves the task to the back rather than reaching the
   page or finishing the window, which would drop whatever was open in it.
   Closing the settings would also show the window under them, whose last picture
@@ -891,11 +900,14 @@ preferences rather than the account, because it concerns this phone.
   (`HostProtocol.holdsResult`). A held save goes into the saved state with its
   payload.
 - A dialog is a window of its own, outside the lock view and its `FLAG_SECURE`.
-  WebView's dialogs for `alert`, `confirm`, `prompt` and `beforeunload`, which
-  the app never uses, are answered as dismissed while locked. A date or time
-  picker left open closes as the window locks, by blurring its field
-  (`HostProtocol.CLOSE_PICKER_SCRIPT`); a select's list closes by itself when
-  the WebView is hidden.
+  WebView's dialogs for `alert`, `confirm` and `prompt`, which the app never
+  uses, are always answered as dismissed, because one raised while the app is
+  away, or left open, would stand over the lock. The `beforeunload` question,
+  and a download handed to the browser, are refused while the window is stopped
+  or locked (`HostProtocol.pageOutOfSight`). With the lock on, a date or time
+  picker left open is closed as the window stops, and again as it locks, by
+  blurring its field (`HostProtocol.CLOSE_PICKER_SCRIPT`); a select's list
+  closes by itself when the WebView is hidden.
 
 **Recents.** The preview is taken when a window leaves, so it stays blank for as
 long as the lock is on: `setRecentsScreenshotEnabled(false)` on Android 13 and

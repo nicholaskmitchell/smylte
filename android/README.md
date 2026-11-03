@@ -126,14 +126,16 @@ face or screen lock (PIN, pattern or password) through Android's own prompt:
 
 It doesn't ask when the window is rebuilt (a rotation, a fold, a new wallpaper),
 or when you come back within 5 minutes from a screen Smylte opened, such as the
-save or open dialog. A dialog left open longer comes back locked, and what you
+save or open dialog. Android sometimes rebuilds the window while you're away,
+after ending the page's process to free memory; that doesn't restart the 5
+minutes. A dialog left open longer comes back locked, and what you
 chose in it (a file saved or opened) goes ahead once you unlock.
 
 While Smylte is locked it shows only a lock screen with **Unlock**. The app, its
 update strip and Server settings stay hidden, from TalkBack too, and the
 launcher's Server settings shortcut opens the lock screen as well. Smylte goes
-on starting and signing in behind it, so the app is ready when you unlock. A
-date or time picker left open closes when Smylte locks.
+on starting and signing in behind it, so the app is ready when you unlock. With
+the lock on, a date or time picker left open closes as you leave.
 
 Cancelling the prompt, too many wrong attempts, or a sensor that isn't available
 leave Smylte locked, and **Unlock** asks again. Back moves Smylte to the
@@ -378,17 +380,18 @@ The JVM unit tests run without a device. They cover:
   and what ends it;
 - the app lock: a process start and 5 minutes away lock, while a rebuilt window
   or a shorter trip away doesn't; the time counts from the last window to stop,
-  and a clock that went backwards locks; a lock that is off, or a phone without
-  a screen lock, never locks, and turning the lock on locks nothing at once; the
-  prompt opens by itself once a visit, and only its success unlocks; which
-  errors show their message; how Recents is kept blank on each Android version,
-  and that a locked window is secure on all of them; that Back and saves are
-  held while locked, a picker's answer waits for a window that has started and
-  is unlocked, and a locked start ends the splash at once; that both windows
-  report their lifecycle on the clock that counts sleep; and, by reading the
-  source, the wiring each of these rests on (the secure flag, the hidden page
-  and views, the setting's default, Back in both windows, the page's own
-  dialogs, and a date picker left open);
+  a window that starts and stops without drawing leaves it alone, and a clock
+  that went backwards locks; a lock that is off, or a phone without a screen
+  lock, never locks, and turning the lock on locks nothing at once; the prompt
+  opens by itself once a visit, and only its success unlocks; which errors show
+  their message; how Recents is kept blank on each Android version, and that a
+  locked window is secure on all of them; that Back and saves are held while
+  locked, a picker's answer waits for a window that has started and is unlocked,
+  and a locked start ends the splash at once; that both windows report their
+  lifecycle on the clock that counts sleep; and, by reading the source, the
+  wiring each of these rests on (the secure flag, the hidden page and views, the
+  setting's default, Back in both windows, the first frame after a start,
+  autofill, the page's own dialogs and downloads, and a date picker left open);
 - that the page and the window agree on the event, its outcomes, the env
   version and the env's fields, the accent's tones, every event type, the
   haptic names and the `ready` capability (against `frontend/src/android.ts`),
@@ -559,15 +562,30 @@ fingerprint enrolled and a PIN set.
   Server settings. The lock view shows, not the fields. Unlock, then press Back:
   the app opens with no second prompt. Repeat after 5 minutes away with Smylte
   in the background.
-- **A date picker.** Open a task's date field so that its picker shows, leave
-  for 5 minutes, and return: the picker has closed and only the lock view shows.
-  Within 5 minutes it is still open.
+- **A date picker.** With the lock on, open a task's date field so that its
+  picker shows, leave with Home, and return within a minute: the picker has
+  closed. Open it again, leave for 5 minutes, and film the return: only the lock
+  view shows, with no picker even for a frame.
+- **The page's process ends while you're away.** On an emulator or a phone with
+  root, leave Smylte with Home, and 4 minutes later kill the WebView's renderer
+  process (`adb shell ps -A | grep sandboxed_process` for its id, then
+  `adb shell su -c kill <id>`). Return at 9 minutes: locked, with the prompt. In
+  a second run, kill it 1 minute after leaving and return at 3 minutes: not
+  locked, and the app has rebuilt its page.
+- **Autofill.** With a password manager set as the autofill service, open Server
+  settings, type a username and password without saving, leave for 5 minutes,
+  and return: no "Save password?" shows over the lock. Unlock: the fields still
+  hold what was typed.
 - **Recents.**
   - With the lock on, open Recents from the app and from Server settings: no
     preview of Smylte (on 13 or later the app's colour or icon, on Android 11
     and 12 a blank card).
-  - Turn the lock off, open and leave the app, and check Recents again: the
-    preview is back.
+    - Turn the lock off, open and leave the app, and check Recents again: the
+      preview is back.
+  - The same after a restart: with the lock on, leave the app, run
+    `adb shell am kill com.nicholaskmitchell.smylte`, open Server settings from
+    the shortcut, unlock, turn the lock off, press Back to the app, and leave
+    it: the preview is back.
 - **Screenshots.** With the lock on, a screenshot of the app works on 13 or
   later and is refused on Android 11 and 12. With the lock off it works on both.
   On the lock view a screenshot is refused on every version.

@@ -154,7 +154,12 @@ object HostProtocol {
     /// lock takes hold again after a long stay in the picker, so `locked` may
     /// not yet say what it will. A held answer is delivered at the resume or the
     /// unlock, whichever comes later (MainActivity.runHeld).
-    fun holdsResult(started: Boolean, locked: Boolean): Boolean = !started || locked
+    fun holdsResult(started: Boolean, locked: Boolean): Boolean = pageOutOfSight(started, locked)
+
+    /// Whether the user cannot see the page: its window is stopped, or locked.
+    /// Nothing the page asks for then (a browser opened on a download, a
+    /// leave-this-page question) can be the user's own doing.
+    fun pageOutOfSight(started: Boolean, locked: Boolean): Boolean = !started || locked
 
     /// Run in the page as the window locks. A date or time field's picker is a
     /// dialog of its own, above the lock view and outside its FLAG_SECURE, and

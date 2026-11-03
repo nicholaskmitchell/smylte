@@ -411,6 +411,9 @@ class MainActivity : Activity() {
         // A page from before saveFile still exports through a blob download,
         // which the WebView cannot hand to Android, so it is told so.
         web.setDownloadListener { url, _, _, _, _ ->
+            // A download needs no tap, so one from a page nobody can see is
+            // never handed to the browser, which would open over the lock.
+            if (HostProtocol.pageOutOfSight(started, lock.locked)) return@setDownloadListener
             if (url.startsWith("https://") || url.startsWith("http://")) openExternally(Uri.parse(url))
             else Toast.makeText(this, R.string.export_unavailable, Toast.LENGTH_LONG).show()
         }
@@ -698,16 +701,18 @@ class MainActivity : Activity() {
             }
         }
 
-        // alert, confirm, prompt and beforeunload. WebView's own dialog for one
-        // would stand over the lock view, in a window FLAG_SECURE does not
-        // cover, with whatever text the script chose. The app never uses them,
-        // so while it is locked they are answered as if dismissed.
+        // alert, confirm and prompt. WebView's own dialog for one is a window
+        // of its own, with whatever text the script chose and the server's
+        // address for a title, and one raised while the app is away or left
+        // open would stand over the lock view, where FLAG_SECURE does not
+        // cover it. The app never uses them, so they are always answered as if
+        // dismissed: alert returns, confirm is false, prompt is null.
 
         override fun onJsAlert(view: WebView, url: String?, message: String?, result: JsResult): Boolean =
-            refusedWhileLocked(result) || super.onJsAlert(view, url, message, result)
+            refused(result)
 
         override fun onJsConfirm(view: WebView, url: String?, message: String?, result: JsResult): Boolean =
-            refusedWhileLocked(result) || super.onJsConfirm(view, url, message, result)
+            refused(result)
 
         override fun onJsPrompt(
             view: WebView,
@@ -715,13 +720,16 @@ class MainActivity : Activity() {
             message: String?,
             defaultValue: String?,
             result: JsPromptResult,
-        ): Boolean = refusedWhileLocked(result) || super.onJsPrompt(view, url, message, defaultValue, result)
+        ): Boolean = refused(result)
 
+        /// The leave-this-page question, from a page with a beforeunload
+        /// handler. Kept for a visible, unlocked page, where the user is the one
+        /// leaving it; refused otherwise, which keeps the page.
         override fun onJsBeforeUnload(view: WebView, url: String?, message: String?, result: JsResult): Boolean =
-            refusedWhileLocked(result) || super.onJsBeforeUnload(view, url, message, result)
+            if (HostProtocol.pageOutOfSight(started, lock.locked)) refused(result)
+            else super.onJsBeforeUnload(view, url, message, result)
 
-        private fun refusedWhileLocked(result: JsResult): Boolean {
-            if (!lock.locked) return false
+        private fun refused(result: JsResult): Boolean {
             result.cancel()
             return true
         }
@@ -1135,6 +1143,10 @@ class MainActivity : Activity() {
 
     override fun onStop() {
         started = false
+        // With the lock on, a date picker left open is closed as the window
+        // goes, so it is gone before anyone returns, locked or not
+        // (HostProtocol.CLOSE_PICKER_SCRIPT).
+        if (lock.isOn() && showingOurPage()) web.evaluateJavascript(HostProtocol.CLOSE_PICKER_SCRIPT, null)
         lock.onStop()
         super.onStop()
     }

@@ -14,8 +14,14 @@ class AppLockTest {
 
     /// A lock whose prompt has succeeded, with one window visible since `at`.
     private fun unlocked(at: Long = 0) = AppLock().apply {
-        started(at)
+        visit(at)
         authenticated()
+    }
+
+    /// A window starts at `at` and draws: a visit someone may have seen.
+    private fun AppLock.visit(at: Long) {
+        started(at)
+        shown()
     }
 
     private fun AppLock.isLocked() = locked(on = true)
@@ -135,7 +141,7 @@ class AppLockTest {
         val lock = unlocked()
         val t = 10_000L
         lock.stopped(t)
-        lock.started(t + 60_000)
+        lock.visit(t + 60_000)
         assertFalse(lock.isLocked())
         val t2 = t + 61_000
         lock.stopped(t2)
@@ -161,15 +167,67 @@ class AppLockTest {
 
     @Test
 
-    fun a_stray_stop_does_not_break_the_count() {
+    fun a_stray_stop_changes_nothing() {
         val lock = unlocked()
         lock.stopped(10)
-        lock.stopped(20)
-        lock.started(30)
+        // A stop with no window started neither restarts the time away...
+        lock.stopped(10 + away / 2)
+        lock.started(10 + away)
+        assertTrue(lock.isLocked())
+        // ...nor leaves the count at -1, which would never lock again.
+        lock.authenticated()
+        lock.shown()
+        lock.stopped(20 * away)
+        lock.started(21 * away)
+        assertTrue(lock.isLocked())
+    }
+
+    // ── a window nobody saw ─────────────────────────────────────────────────
+
+    @Test
+
+    fun a_window_that_never_draws_leaves_the_time_away_alone() {
+        // Left at 0. At 4:30 the page's process dies in the background and
+        // Android rebuilds the window there: it starts and stops, unseen. At 9:00
+        // the app has been away 9 minutes, not 4:30.
+        val lock = unlocked()
+        lock.stopped(0)
+        lock.started(270_000)
+        lock.stopped(270_000)
+        lock.started(540_000)
+        assertTrue(lock.isLocked())
+    }
+
+    @Test
+
+    fun an_unseen_window_relocks_when_it_is_due_and_stays_locked() {
+        val lock = unlocked()
+        lock.stopped(0)
+        lock.started(away)
+        assertTrue(lock.isLocked())
+        lock.stopped(away)
+        lock.started(away + 10)
+        assertTrue(lock.isLocked())
+    }
+
+    @Test
+
+    fun a_window_that_draws_restarts_the_time_away() {
+        val lock = unlocked()
+        lock.stopped(0)
+        lock.visit(270_000)
+        lock.stopped(280_000)
+        lock.started(540_000)
         assertFalse(lock.isLocked())
-        // A count left at -1 would never lock again.
-        lock.stopped(40)
-        lock.started(40 + away)
+    }
+
+    @Test
+
+    fun an_unseen_window_at_the_process_start_leaves_it_locked() {
+        val lock = AppLock()
+        lock.started(0)
+        lock.stopped(0)
+        lock.started(10)
         assertTrue(lock.isLocked())
     }
 
@@ -191,11 +249,11 @@ class AppLockTest {
 
     fun turning_the_lock_on_locks_nothing_until_the_next_start_or_return() {
         val lock = AppLock()
-        lock.started(0)
+        lock.visit(0)
         assertFalse(lock.locked(on = false))
         assertFalse(lock.locked(on = true))
         lock.stopped(1_000)
-        lock.started(1_000 + away - 1)
+        lock.visit(1_000 + away - 1)
         assertFalse(lock.locked(on = true))
         lock.stopped(2_000_000)
         lock.started(2_000_000 + away)
@@ -219,14 +277,14 @@ class AppLockTest {
 
     fun removing_the_screen_lock_unlocks_until_the_next_start_or_return() {
         val lock = AppLock()
-        lock.started(0)
+        lock.visit(0)
         assertTrue(lock.locked(on = true))
         lock.stopped(1_000)
-        lock.started(61_000)
+        lock.visit(61_000)
         assertFalse(lock.locked(on = false))
         // The screen lock is back, and the app stays open until the next return.
         lock.stopped(62_000)
-        lock.started(122_000)
+        lock.visit(122_000)
         assertFalse(lock.locked(on = true))
         lock.stopped(123_000)
         lock.started(123_000 + away)
@@ -310,7 +368,7 @@ class AppLockTest {
         // sync() must pass the state it has just read, not the window's old
         // one, or the first frame of a locked start would not be secure.
         val source = File("$sources/LockScreen.kt").readText()
-        val sync = source.substringAfter("fun sync()").substringBefore("private fun isOn()")
+        val sync = source.substringAfter("fun sync()").substringBefore("fun isOn()")
         val lockedAt = sync.indexOf("val now = AppLock.shared.locked(on)")
         val guardAt = sync.indexOf("guardWindow(on, now)")
         assertTrue(lockedAt >= 0)
@@ -405,7 +463,7 @@ class AppLockTest {
     @Test
 
     fun the_lock_is_on_only_with_the_setting_and_a_screen_lock() {
-        assertTrue(flat("LockScreen.kt").contains("private fun isOn(): Boolean = settings.appLock && deviceSecure(activity)"))
+        assertTrue(flat("LockScreen.kt").contains("fun isOn(): Boolean = settings.appLock && deviceSecure(activity)"))
     }
 
     @Test
@@ -428,7 +486,7 @@ class AppLockTest {
     @Test
 
     fun while_locked_the_content_is_hidden_from_sight_and_talkback() {
-        val sync = between(flat("LockScreen.kt"), "fun sync()", "private fun isOn()")
+        val sync = between(flat("LockScreen.kt"), "fun sync()", "fun isOn()")
         val changed = sync.indexOf("locked = now")
         for (line in listOf(
             "content.visibility = if (now) View.INVISIBLE else View.VISIBLE",
@@ -466,13 +524,16 @@ class AppLockTest {
             "HostProtocol.backAction" to 1,
             "HostProtocol.wantsBackCallback" to 1,
             "HostProtocol.holdsResult" to 2,
+            "HostProtocol.pageOutOfSight" to 2,
         )
         for ((fn, count) in expected) {
             val calls = callArgs(code, fn)
             assertEquals(fn, count, calls.size)
             calls.forEach { assertTrue("$fn($it)", it.endsWith("lock.locked")) }
         }
-        callArgs(code, "HostProtocol.holdsResult").forEach { assertEquals("started, lock.locked", it) }
+        for (fn in listOf("HostProtocol.holdsResult", "HostProtocol.pageOutOfSight")) {
+            callArgs(code, fn).forEach { assertEquals(fn, "started, lock.locked", it) }
+        }
     }
 
     @Test
@@ -510,14 +571,84 @@ class AppLockTest {
 
     @Test
 
-    fun the_pages_own_dialogs_are_refused_while_locked() {
+    fun the_pages_own_dialogs_never_stand_over_the_lock() {
         val chrome = between(flat("MainActivity.kt"), "private inner class Chrome", "override fun onActivityResult(")
-        for (fn in listOf("onJsAlert", "onJsConfirm", "onJsPrompt", "onJsBeforeUnload")) {
-            assertTrue(fn, Regex("""= refusedWhileLocked\(result\) \|\| super\.$fn\(""").containsMatchIn(chrome))
+        // alert, confirm and prompt: always refused.
+        for (fn in listOf("onJsAlert", "onJsConfirm", "onJsPrompt")) {
+            assertTrue(fn, Regex("""override fun $fn\([^)]*\): Boolean = refused\(result\)""").containsMatchIn(chrome))
         }
+        assertFalse(chrome.contains("super.onJsAlert"))
+        assertFalse(chrome.contains("super.onJsConfirm"))
+        assertFalse(chrome.contains("super.onJsPrompt"))
+        // The leave-this-page question: only for a page the user can see.
         assertTrue(
-            chrome.contains("private fun refusedWhileLocked(result: JsResult): Boolean { if (!lock.locked) return false result.cancel() return true }"),
+            chrome.contains(
+                "if (HostProtocol.pageOutOfSight(started, lock.locked)) refused(result) " +
+                    "else super.onJsBeforeUnload(view, url, message, result)",
+            ),
         )
+        assertTrue(chrome.contains("private fun refused(result: JsResult): Boolean { result.cancel() return true }"))
+    }
+
+    @Test
+
+    fun a_download_from_a_page_nobody_sees_opens_nothing() {
+        val listener = between(flat("MainActivity.kt"), "web.setDownloadListener {", "private fun ")
+        val gate = listener.indexOf("if (HostProtocol.pageOutOfSight(started, lock.locked)) return@setDownloadListener")
+        assertTrue(gate >= 0)
+        assertTrue(listener.indexOf("openExternally(") > gate)
+    }
+
+    @Test
+
+    fun the_window_reports_its_first_frame_after_each_start() {
+        val code = flat("LockScreen.kt")
+        assertTrue(
+            code.contains(
+                "activity.window.decorView.viewTreeObserver.addOnDrawListener( ViewTreeObserver.OnDrawListener { " +
+                    "if (started && !drawn) { drawn = true AppLock.shared.shown() } }, )",
+            ),
+        )
+        assertTrue(code.contains("fun onStart() { AppLock.shared.started(SystemClock.elapsedRealtime()) started = true drawn = false sync() }"))
+        val stop = between(code, "fun onStop()", "fun onDestroy()")
+        assertTrue(stop.indexOf("started = false") in 0 until stop.indexOf("AppLock.shared.stopped("))
+        // Only a frame reports one.
+        val callers = mainSources().filter { it.name != "AppLock.kt" && it.readText().contains(".shown()") }
+        assertEquals(listOf("LockScreen.kt"), callers.map { it.name })
+        assertEquals(1, code.windowed(".shown()".length).count { it == ".shown()" })
+    }
+
+    @Test
+
+    fun the_prompt_opens_by_itself_only_over_a_started_window() {
+        assertTrue(flat("LockScreen.kt").contains("main.post { if (!activity.isDestroyed && started && locked) ask() }"))
+    }
+
+    @Test
+
+    fun locking_cancels_autofill() {
+        val sync = between(flat("LockScreen.kt"), "fun sync()", "fun isOn()")
+        val branch = between(sync, "if (now) {", "} else {")
+        assertTrue(branch.contains("activity.getSystemService(AutofillManager::class.java)?.cancel()"))
+    }
+
+    @Test
+
+    fun the_recents_preview_is_set_at_the_first_sync() {
+        // The platform keeps the last value for the activity, so it is never
+        // assumed to be the starting one.
+        val code = flat("LockScreen.kt")
+        assertTrue(code.contains("private var screenshots: Boolean? = null"))
+        assertTrue(code.contains("if (enabled != screenshots) { activity.setRecentsScreenshotEnabled(enabled) screenshots = enabled }"))
+    }
+
+    @Test
+
+    fun with_the_lock_on_a_date_picker_closes_as_the_window_goes() {
+        val stop = between(flat("MainActivity.kt"), "override fun onStop()", "override fun onDestroy()")
+        val close = stop.indexOf("if (lock.isOn() && showingOurPage()) web.evaluateJavascript(HostProtocol.CLOSE_PICKER_SCRIPT, null)")
+        assertTrue(close >= 0)
+        assertTrue(close < stop.indexOf("lock.onStop()"))
     }
 
     @Test

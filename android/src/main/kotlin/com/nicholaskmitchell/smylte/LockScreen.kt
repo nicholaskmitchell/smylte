@@ -14,7 +14,9 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowManager
+import android.view.ViewTreeObserver
 import android.view.accessibility.AccessibilityEvent
+import android.view.autofill.AutofillManager
 import android.widget.Button
 import android.widget.TextView
 
@@ -45,8 +47,15 @@ class LockScreen(
     private val contentAccessibility = content.importantForAccessibility
     /// The prompt on screen, so it is never opened twice and goes with the window.
     private var prompt: CancellationSignal? = null
-    /// What setRecentsScreenshotEnabled was last given; the platform starts at true.
-    private var screenshots = true
+    /// What setRecentsScreenshotEnabled was last given by this window; null
+    /// until the first sync sets it. Not assumed to be the platform's starting
+    /// true: the platform keeps the last value for the activity across a
+    /// rebuilt window and the process's death.
+    private var screenshots: Boolean? = null
+    /// Between onStart and onStop.
+    private var started = false
+    /// This window has drawn since its last onStart (AppLock.shown).
+    private var drawn = false
 
     /// Whether the window is showing the lock view.
     var locked = false
@@ -67,25 +76,41 @@ class LockScreen(
             sync()
             if (locked) ask()
         }
+        // The first frame after each start tells AppLock that the visit is
+        // real. A window Android starts and stops in the background never
+        // draws. Runs before every frame, so it reads a flag and nothing more.
+        activity.window.decorView.viewTreeObserver.addOnDrawListener(
+            ViewTreeObserver.OnDrawListener {
+                if (started && !drawn) {
+                    drawn = true
+                    AppLock.shared.shown()
+                }
+            },
+        )
     }
 
     fun onStart() {
         AppLock.shared.started(SystemClock.elapsedRealtime())
+        started = true
+        drawn = false
         sync()
     }
 
     /// The prompt opens by itself once a visit (AppLock.promptsByItself),
-    /// posted so that it opens over a window that has finished resuming.
+    /// posted so that it opens over a window that has finished resuming, and
+    /// only if the window is still started by then: Android can start, resume
+    /// and stop a window in the background in one go.
     fun onResume() {
         sync()
         if (AppLock.shared.promptsByItself(isOn())) {
-            main.post { if (!activity.isDestroyed && locked) ask() }
+            main.post { if (!activity.isDestroyed && started && locked) ask() }
         }
     }
 
     /// The prompt goes with the window: Android may refuse it to an app that is
     /// not in front, and its answer would come to nobody.
     fun onStop() {
+        started = false
         cancelPrompt()
         AppLock.shared.stopped(SystemClock.elapsedRealtime())
     }
@@ -123,13 +148,17 @@ class LockScreen(
             status.text = null
             // A keyboard left up for a field behind the lock has nothing to type into.
             activity.window.insetsController?.hide(WindowInsets.Type.ime())
+            // Fields that disappear can make autofill offer to save what was
+            // typed in them, in a window of its own over the lock.
+            activity.getSystemService(AutofillManager::class.java)?.cancel()
         } else {
             cancelPrompt()
         }
         onChange(now)
     }
 
-    private fun isOn(): Boolean = settings.appLock && deviceSecure(activity)
+    /// Whether the lock is on: turned on, and the phone has a screen lock.
+    fun isOn(): Boolean = settings.appLock && deviceSecure(activity)
 
     /// AppLock.recentsGuard and AppLock.secureWindow decide how; each is changed
     /// only when it differs, since every change is a call to the window manager.

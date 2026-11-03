@@ -5,7 +5,9 @@ package com.nicholaskmitchell.smylte
 /// starts, and when the app comes back AWAY_MS or more after the last of its
 /// windows stopped. A window rebuilt by a configuration change, or a short
 /// trip to a picker or a system screen, is back long before that, so neither
-/// locks.
+/// locks. A visit counts only once one of its windows has drawn: Android can
+/// start and stop a window that nobody sees (rebuilding it in the background
+/// after its page's process died), and that must not restart the time away.
 ///
 /// One instance, `shared`, holds the state for the whole process: the two
 /// windows agree, and a rebuilt window finds the lock as its predecessor left
@@ -24,6 +26,10 @@ class AppLock {
     private var leftAt: Long? = null
     /// The prompt has opened by itself during this visit.
     private var prompted = false
+    /// A window has drawn during this visit (shown), so someone may have seen it.
+    private var drawn = false
+    /// leftAt as this visit found it, kept for a visit that never draws.
+    private var leftBefore: Long? = null
 
     /// A window started, at `now` on SystemClock.elapsedRealtime, which counts
     /// deep sleep, so a phone left asleep is away. The first window to start
@@ -33,19 +39,29 @@ class AppLock {
         if (visible == 0) {
             val left = leftAt
             if (left != null && relocks(now - left)) locked = true
+            leftBefore = left
             leftAt = null
             prompted = false
+            drawn = false
         }
         visible += 1
     }
 
+    /// A window of the app has drawn a frame since it started: the visit is a
+    /// real one. The next visit's start clears it again.
+    fun shown() {
+        drawn = true
+    }
+
     /// A window stopped. When it was the last visible one, the time away
-    /// starts. A stop without a start (never expected) leaves the count at
-    /// zero rather than below it, which would stop every later return from
-    /// counting as one.
+    /// starts then, or, if no window drew during the visit, keeps running from
+    /// where it was. A stop without a start (never expected) changes nothing:
+    /// the count stays at zero rather than going below it, which would stop
+    /// every later return from counting as one, and the time away is kept.
     fun stopped(now: Long) {
-        if (visible > 0) visible -= 1
-        if (visible == 0) leftAt = now
+        if (visible == 0) return
+        visible -= 1
+        if (visible == 0) leftAt = if (drawn) now else leftBefore
     }
 
     /// Whether the windows hide their content now. `on`: the lock is turned on
