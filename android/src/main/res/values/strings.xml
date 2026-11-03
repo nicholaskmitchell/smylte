@@ -23,6 +23,8 @@
     <string name="file_saved">The file was saved.</string>
     <string name="file_not_saved">The file could not be saved.</string>
     <string name="no_app_for_link">No app on this device can open that link.</string>
+    <string name="webview_name">Android System WebView</string>
+    <string name="webview_outdated">Smylte needs %1$s %3$d or later, and this phone has version %2$s. Update %1$s from the phone\'s app store, then tap Try again.</string>
 
     <string name="lock_title">Smylte is locked</string>
     <string name="lock_unlock">Unlock</string>
@@ -47,7 +49,7 @@
 
     <string name="lock_setting_heading">App lock</string>
     <string name="lock_setting">Lock Smylte</string>
-    <string name="lock_setting_note">Asks for your fingerprint, face or screen lock when Smylte starts, and when you come back to it after 5 minutes or more. Recents shows no preview of Smylte while it is on. This applies at once, on this phone only.</string>
-    <string name="lock_setting_note_secure">Asks for your fingerprint, face or screen lock when Smylte starts, and when you come back to it after 5 minutes or more. Recents shows no preview of Smylte while it is on, and on this version of Android screenshots of Smylte are blocked too. This applies at once, on this phone only.</string>
+    <string name="lock_setting_note">Asks for your fingerprint, face or screen lock when Smylte starts, and when you come back to it after 5 minutes or more. Recents keeps no preview of Smylte while it is on. This applies at once, on this phone only.</string>
+    <string name="lock_setting_note_secure">Asks for your fingerprint, face or screen lock when Smylte starts, and when you come back to it after 5 minutes or more. Recents keeps no preview of Smylte while it is on, and on this version of Android screenshots of Smylte are blocked too. This applies at once, on this phone only.</string>
     <string name="lock_setting_unavailable">To lock Smylte, the phone needs a screen lock. Set a PIN, pattern or password in the phone\'s settings first.</string>
 </resources>

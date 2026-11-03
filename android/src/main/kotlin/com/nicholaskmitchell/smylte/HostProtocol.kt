@@ -276,6 +276,26 @@ object HostProtocol {
         locked: Boolean,
     ): Boolean =
         failed || locked || pageReady || (pageFinished && !wantsReady) || elapsedMs < 0 || elapsedMs >= SPLASH_CAP_MS
+
+    // ── the WebView ─────────────────────────────────────────────────────────
+
+    /// The oldest WebView that runs the web build: Chrome 107, the Chrome in
+    /// Vite 7's default build target ("baseline-widely-available"), which the
+    /// frontend keeps by setting no build.target of its own. An older WebView
+    /// fails to parse the page's script and shows nothing at all, not even an
+    /// error, so the host checks first and says what to update.
+    const val MIN_WEBVIEW_MAJOR = 107
+
+    /// The major version in a WebView package's versionName ("133.0.6943.137"
+    /// is 133), or null when there is none to read.
+    fun webViewMajor(versionName: String?): Int? =
+        versionName?.trim()?.substringBefore('.')?.toIntOrNull()?.takeIf { it > 0 }
+
+    /// Whether the WebView is too old to run the page. A version that can't be
+    /// read is let through: the page may well run, and a refusal would leave no
+    /// way in.
+    fun webViewTooOld(versionName: String?): Boolean =
+        webViewMajor(versionName)?.let { it < MIN_WEBVIEW_MAJOR } == true
 }
 
 /// A file the page asked to save, after the host has checked it. Only `of`

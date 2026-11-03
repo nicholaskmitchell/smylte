@@ -22,7 +22,7 @@ import android.widget.TextView
 /// The app lock (AppLock) in one window. While the app is locked, the window's
 /// content is hidden and the lock view stands in its place, asking through
 /// Android's own prompt for a biometric or the phone's screen lock. While the
-/// lock is on, Recents shows no preview of the window.
+/// lock is on, Recents keeps no preview of the window.
 ///
 /// Both activities hold one and report every onStart, onResume, onStop and
 /// onDestroy to it (AppLockTest checks that they do), because the time away is

@@ -663,6 +663,15 @@ served from disk
 gets a port of `csp.py`'s policy (`Csp.kt`), which `test_csp.py` checks as it
 checks the desktop's copy.
 
+**An outdated WebView says so.** The web build keeps Vite 7's default target,
+Chrome 107, and an older WebView fails to parse its script and shows a blank
+page with no error. Android 11 images without Google Play ship WebView 83. So
+before start-up the client reads the WebView provider's version
+(`WebView.getCurrentWebViewPackage()`) and, below 107, shows the failure screen,
+naming the WebView and asking for an update, without downloading anything. A
+version it can't read is let through. A test fails if the frontend sets a build
+target of its own or moves off Vite 7, since either can change the minimum.
+
 **An app, not a page in a browser.** A WebView's defaults give the page away in
 a few places, and the client changes the ones that are WebView settings.
 - Its edge effect is off. WebView draws the stretch (a glow on Android 11) over

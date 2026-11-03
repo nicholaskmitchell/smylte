@@ -759,4 +759,55 @@ class HostProtocolTest {
         assertTrue(source.none { it.trimStart().startsWith("import android.") })
         assertTrue(source.none { it.contains("org.json") })
     }
+
+    // ── the WebView ─────────────────────────────────────────────────────────
+
+    @Test
+    fun the_webview_major_version_is_read_from_its_version_name() {
+        assertEquals(133, HostProtocol.webViewMajor("133.0.6943.137"))
+        assertEquals(83, HostProtocol.webViewMajor("83.0.4103.106"))
+        assertEquals(107, HostProtocol.webViewMajor(" 107.0.5304.105 "))
+        assertEquals(140, HostProtocol.webViewMajor("140"))
+        assertNull(HostProtocol.webViewMajor(null))
+        assertNull(HostProtocol.webViewMajor(""))
+        assertNull(HostProtocol.webViewMajor("unknown"))
+        assertNull(HostProtocol.webViewMajor("0.1"))
+        assertNull(HostProtocol.webViewMajor("-5.0"))
+    }
+
+    @Test
+    fun a_webview_older_than_107_is_too_old_and_an_unreadable_one_is_not() {
+        assertEquals(107, HostProtocol.MIN_WEBVIEW_MAJOR)
+        assertTrue(HostProtocol.webViewTooOld("83.0.4103.106"))
+        assertTrue(HostProtocol.webViewTooOld("106.0.5249.126"))
+        assertFalse(HostProtocol.webViewTooOld("107.0.5304.105"))
+        assertFalse(HostProtocol.webViewTooOld("133.0.6943.137"))
+        assertFalse(HostProtocol.webViewTooOld(null))
+        assertFalse(HostProtocol.webViewTooOld("unknown"))
+    }
+
+    @Test
+    fun the_minimum_webview_follows_the_frontends_build_target() {
+        // MIN_WEBVIEW_MAJOR is Chrome 107 because the frontend builds with
+        // Vite 7's default target. A build.target of its own, or another major
+        // of Vite, can change what the page needs: update the minimum with it.
+        val config = File("../frontend/vite.config.ts").readText()
+        assertFalse(Regex("""\btarget\s*:""").containsMatchIn(config))
+        val pkg = File("../frontend/package.json").readText()
+        assertTrue(Regex(""""vite"\s*:\s*"\^7\.""").containsMatchIn(pkg))
+    }
+
+    @Test
+    fun boot_checks_the_webview_before_start_up() {
+        val source = File("src/main/kotlin/com/nicholaskmitchell/smylte/MainActivity.kt").readText()
+        val boot = source.substringAfter("private fun boot() {").substringBefore("\n    }\n")
+        val check = boot.indexOf("outdatedWebView()?.let {")
+        assertTrue(check >= 0)
+        assertTrue(check < boot.indexOf("booting = true"))
+        assertTrue(check < boot.indexOf("Background.updates.execute"))
+        assertTrue(boot.contains("showSplash(it, failed = true)"))
+        val outdated = source.substringAfter("private fun outdatedWebView(): String? {").substringBefore("\n    }\n")
+        assertTrue(outdated.contains("WebView.getCurrentWebViewPackage() ?: return null"))
+        assertTrue(outdated.contains("if (!HostProtocol.webViewTooOld(provider.versionName)) return null"))
+    }
 }

@@ -24,6 +24,10 @@ You need Android 11 or later and an `https://` server address: the address you
 open Smylte at in a browser, with no path. The server's sign-in cookie is
 `Secure`, so plain `http://` can't work.
 
+The phone's WebView must be version 107 or later. A phone that gets updates from
+Google Play or its maker has a newer one. On an older one Smylte names the
+version it found and asks for an update, rather than showing a blank page.
+
 [rel]: https://github.com/nicholaskmitchell/smylte/releases/tag/desktop-latest
 
 ### Where your server runs
@@ -155,14 +159,18 @@ settings.
 
 ### Recents
 
-While the lock is on, Recents never shows a preview of Smylte. The preview is
-taken when you leave, before anyone knows whether you'll be back within 5
-minutes, so it has to be blank whenever the lock is on, not only while Smylte is
-locked.
+While the lock is on, Recents keeps no preview of Smylte. The preview is taken
+when you leave, before anyone knows whether you'll be back within 5 minutes, so
+it has to be blank whenever the lock is on, not only while Smylte is locked.
 
 - **Android 13 and later:** Smylte asks Android not to take one
   (`setRecentsScreenshotEnabled(false)`). Screenshots and screen recordings work
-  as usual while Smylte is unlocked.
+  as usual while Smylte is unlocked. Opening Recents from inside Smylte still
+  shows its live window, as Recents does for any app on screen: what you were
+  already looking at. Once you leave, the card shows only Smylte's colour.
+  `FLAG_SECURE` would blank the live window too, but it would also take
+  screenshots away, and the lock guards against someone who picks the phone up
+  later, who would find only the stored preview.
 - **Android 11, 12 and 12L:** the only way is `FLAG_SECURE`. It also blocks
   screenshots and screen recordings of Smylte, and shows Smylte black when the
   screen is cast or shared. Smylte sets it only while the lock is on, so turning
@@ -400,6 +408,8 @@ The JVM unit tests run without a device. They cover:
 - that the palette is read by its named ids, in tone order, wherever the clock
   is read;
 - the text zoom, and the body size it is measured at, against the stylesheet;
+- the oldest WebView that runs the page, that the frontend still builds for it
+  (Vite 7's default target), and that start-up checks it first;
 - the launcher icon against `frontend/public/favicon.svg`.
 
 `backend/tests/test_csp.py` fails if `Csp.kt`'s directives drift from the
@@ -439,8 +449,13 @@ adb shell am start -W -S -a android.intent.action.MAIN -c android.intent.categor
 - **Start-up fails:** block GitHub on the phone's network (a Private DNS or
   router block on `github.com` and `objects.githubusercontent.com`), clear
   Smylte's storage, set it up again (setup needs only the server), force-stop it
-  and start it from the launcher. The failure screen, with Retry and Server
-  settings, shows as soon as the check fails, not after 3 s.
+  and start it from the launcher. The failure screen, with Try again and
+  Settings, shows as soon as the check fails, not after 3 s.
+- **An outdated WebView:** on an emulator whose WebView is older than 107 (the
+  Android 11 `google_apis` image ships 83), set Smylte up and start it. The
+  failure screen names the WebView and its version and asks for an update,
+  instead of a blank page, and Try again shows it again. The page-side checks
+  on Android 11 need a `google_apis_playstore` image with the WebView updated.
 - **Input during the splash:** on a slow start, tap the screen and press Back
   and a hardware key repeatedly. No "isn't responding" dialog appears.
 - **TalkBack:** on a cold start TalkBack reads nothing from Smylte until the
@@ -527,7 +542,11 @@ fingerprint enrolled and a PIN set.
   - Cancel the prompt with Back: the lock view stays, no prompt opens by itself,
     and **Unlock** opens one.
   - Use a wrong finger until the sensor locks out: still locked, the lock view
-    shows Android's message (record the words), and the PIN still works.
+    shows Android's message (record the words), and the PIN still works. On
+    Android 16 the fifth wrong finger locks the whole phone instead: unlock the
+    phone, and Smylte is still locked, asks again and takes the PIN. On Android
+    11 the prompt switches to its PIN pad: cancel it, and the lock view shows no
+    message.
 - **Under 5 minutes away.** None of these asks:
   - leaving with Home and returning within a minute;
   - turning the screen off and on within a minute;
@@ -578,9 +597,10 @@ fingerprint enrolled and a PIN set.
   and return: no "Save password?" shows over the lock. Unlock: the fields still
   hold what was typed.
 - **Recents.**
-  - With the lock on, open Recents from the app and from Server settings: no
-    preview of Smylte (on 13 or later the app's colour or icon, on Android 11
-    and 12 a blank card).
+  - With the lock on, leave the app with Home, and Server settings too, then
+    open Recents: no preview of Smylte (on 13 or later the app's colour or icon,
+    on Android 11 and 12 a blank card). Opened from inside the app, Recents
+    shows its live window on 13 or later and a blank card on 11 and 12.
     - Turn the lock off, open and leave the app, and check Recents again: the
       preview is back.
   - The same after a restart: with the lock on, leave the app, run
@@ -589,7 +609,8 @@ fingerprint enrolled and a PIN set.
     it: the preview is back.
 - **Screenshots.** With the lock on, a screenshot of the app works on 13 or
   later and is refused on Android 11 and 12. With the lock off it works on both.
-  On the lock view a screenshot is refused on every version.
+  On the lock view no screenshot shows Smylte: Android refuses it, or on
+  Android 16 saves an all-black image.
 - **The assistant.** On Android 13 or later, with the lock view showing in the
   app and in Server settings, invoke the assistant ("What's on my screen", or a
   third-party assistant set as the default, then long-press Home): it gets no

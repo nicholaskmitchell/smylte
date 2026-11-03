@@ -181,6 +181,12 @@ class MainActivity : Activity() {
 
     private fun boot() {
         if (booting) return
+        // Before start-up, which would otherwise download a web build this
+        // WebView can't run and then show a blank page.
+        outdatedWebView()?.let {
+            showSplash(it, failed = true)
+            return
+        }
         booting = true
         showSplash(getString(R.string.starting), failed = false)
         val origin = origin
@@ -218,12 +224,25 @@ class MainActivity : Activity() {
         // through it.
         pageShown = false
         showPage()
-        // The failure screen's Retry and Server settings must never wait
+        // The failure screen's Try again and Settings must never wait
         // behind the platform splash.
         if (failed) {
             splashFailed = true
             releaseSplashIfDue()
         }
+    }
+
+    /// The failure screen's text when the phone's WebView is too old to run the
+    /// page, or null. It names the WebView as the phone lists it (Android
+    /// System WebView, or a replacement such as Vanadium), falling back to the
+    /// usual name when the label can't be read.
+    private fun outdatedWebView(): String? {
+        val provider = WebView.getCurrentWebViewPackage() ?: return null
+        if (!HostProtocol.webViewTooOld(provider.versionName)) return null
+        val name = provider.applicationInfo?.loadLabel(packageManager)?.toString()
+            ?.takeIf { it.isNotBlank() && it != provider.packageName }
+            ?: getString(R.string.webview_name)
+        return getString(R.string.webview_outdated, name, provider.versionName, HostProtocol.MIN_WEBVIEW_MAJOR)
     }
 
     private fun open() {
