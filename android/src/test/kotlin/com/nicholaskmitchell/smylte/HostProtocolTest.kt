@@ -566,9 +566,18 @@ class HostProtocolTest {
         assertTrue(hold.contains("main.postDelayed(splashCap, left)"))
         // On 13 and later the start counts from when it was asked for.
         assertTrue(code.contains("Process.getStartRequestedUptimeMillis()"))
-        // The first window is told once a process, at its creation.
+        // The first window is told once a process, at its creation, before
+        // anything can return early, and that is what the cap is counted by.
         assertEquals(1, Regex("""createdBefore = true""").findAll(code).count())
-        assertTrue(code.contains("val firstWindow = !createdBefore"))
+        assertTrue(hold.contains("HostProtocol.splashSince(now, processStart(), firstWindow)"))
+        val create = code.substringAfter("override fun onCreate(").substringBefore("holdSplash(savedInstanceState, firstWindow)")
+        val read = create.indexOf("val firstWindow = !createdBefore")
+        assertTrue(read >= 0)
+        assertTrue(create.indexOf("createdBefore = true") > read)
+        // Before the early return of a phone that is not set up yet.
+        val early = Regex("""^\s+return$""", RegexOption.MULTILINE).find(create)
+        assertTrue(early != null)
+        assertTrue(create.indexOf("createdBefore = true") < early!!.range.first)
     }
 
     @Test

@@ -225,8 +225,9 @@ can't be read there anyway.
 - **The splash screen stays until the app is ready.** On Android 12 and
   later the phone's splash screen, with Smylte's icon, stays up until Smylte
   has signed in, or shown its sign-in screen or its offline notice. It stays
-  about three seconds from the tap at most: on a slow connection Smylte's own
-  "Starting…" screen then says what it's waiting for.
+  about three seconds from the tap at most (unless the phone took ten seconds
+  or more just to open Smylte): on a slow connection Smylte's own "Starting…"
+  screen then says what it's waiting for.
 - **The accent can follow the wallpaper.** On Android 12 and later, Appearance
   has a switch that takes the accent from the phone's wallpaper colours, on this
   phone only. Smylte uses the shade of that colour that stays readable on the

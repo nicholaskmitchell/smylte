@@ -129,6 +129,10 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Read and set at every creation, before anything can return, whether
+        // or not this one holds the splash.
+        val firstWindow = !createdBefore
+        createdBefore = true
         settings = Settings(this)
         if (!settings.configured) {
             startActivity(Intent(this, SetupActivity::class.java))
@@ -154,9 +158,6 @@ class MainActivity : Activity() {
         stripDismiss = findViewById(R.id.strip_dismiss)
         webAccessibility = web.importantForAccessibility
         lock = LockScreen(this, settings, findViewById(R.id.main_content), findViewById(R.id.lock), ::onLockChanged)
-        // Read and set at every creation, whether or not this one holds the splash.
-        val firstWindow = !createdBefore
-        createdBefore = true
         holdSplash(savedInstanceState, firstWindow)
 
         Insets.edgeToEdge(window, root)

@@ -833,14 +833,17 @@ failure screen ends the hold at once, and nothing holds it past about 3 seconds
 from the tap. On a cold launch (the process's first window) the cap counts from
 the process's start, when the platform splash went up (on Android 13 and later,
 from when that start was asked for), so the time to reach the window does not
-come on top, and a start that took the whole cap to get there holds nothing.
-Start-up is serial (a release check, the session check, the page, the app's own
-`/api/me`), so on a slow network "Starting…" then shows how far it got. A window
-that has never drawn also has no input focus, so a key event waiting 5 seconds
-for one is an ANR. A window rebuilt from saved state, after a renderer crash or
-a wallpaper change, has no splash in front of it, and the window the settings
-screen opens may have none, so neither holds: holding their draw would show a
-blank window. Any script can call `ready()`; at worst the splash ends early.
+come on top, and a start that took the whole cap to get there holds nothing. A
+first window that comes 10 seconds or more after the process started is taken
+for a warm one, since the process most likely started for something else before
+the tap; a cold start that slow is held for up to 3 seconds more. Start-up is
+serial (a release check, the session check, the page, the app's own `/api/me`),
+so on a slow network "Starting…" then shows how far it got. A window that has
+never drawn also has no input focus, so a key event waiting 5 seconds for one is
+an ANR. A window rebuilt from saved state, after a renderer crash or a wallpaper
+change, has no splash in front of it, and the window the settings screen opens
+may have none, so neither holds: holding their draw would show a blank window.
+Any script can call `ready()`; at worst the splash ends early.
 
 **An optional app lock.**
 
