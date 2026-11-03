@@ -259,7 +259,7 @@ export function canSaveFiles(): boolean {
  *  platform's splash screen. App says it once, when its sign-in check first
  *  answers; the routes without a sign-in say it from main.tsx as they render.
  *  A no-op in a browser, in a desktop client, and in a client without
- *  `ready`, which ends the splash when the page has loaded instead.
+ *  `ready`, which does not hold the splash screen at all.
  *
  *  It is called at once, never from a frame callback: while the splash is
  *  held the window does not draw, and frames may not come. */

@@ -60,7 +60,10 @@ class PageBridgeTest {
     fun the_page_can_call_exactly_these_methods() {
         val methods = PageBridge::class.java.declaredMethods
             .filter { Modifier.isPublic(it.modifiers) && !it.isSynthetic }
-        assertEquals(setOf("themeColour", "hello", "saveFile", "layers", "haptic", "ready"), methods.map { it.name }.toSet())
+        assertEquals(
+            setOf("themeColour", "hello", "saveFile", "layers", "haptic", "ready"),
+            methods.map { it.name }.toSet(),
+        )
         for (m in methods) {
             assertTrue(m.name, m.isAnnotationPresent(JavascriptInterface::class.java))
         }

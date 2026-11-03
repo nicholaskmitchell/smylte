@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
 import android.os.SystemClock
 import android.text.format.DateFormat
 import android.util.TypedValue
@@ -103,7 +104,9 @@ class MainActivity : Activity() {
     private var splashPageReady = false
     private var splashPageFinished = false
     private var splashFailed = false
-    private val splashCap = Runnable { releaseSplashIfDue() }
+    // The cap ends the hold outright, without asking splashRelease again, so
+    // no rounding of the elapsed time can leave the window held past it.
+    private val splashCap = Runnable { splashHeld = false }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -233,7 +236,8 @@ class MainActivity : Activity() {
         } == true
         if (!HostProtocol.holdsSplash(Build.VERSION.SDK_INT, savedInstanceState != null, fromLauncher)) return
         splashHeld = true
-        splashHeldSince = SystemClock.uptimeMillis()
+        val now = SystemClock.uptimeMillis()
+        splashHeldSince = HostProtocol.splashSince(now, Process.getStartUptimeMillis())
         val content = findViewById<View>(android.R.id.content)
         content.viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
             override fun onPreDraw(): Boolean {
@@ -245,7 +249,7 @@ class MainActivity : Activity() {
                 return true
             }
         })
-        main.postDelayed(splashCap, HostProtocol.SPLASH_CAP_MS)
+        main.postDelayed(splashCap, HostProtocol.SPLASH_CAP_MS - (now - splashHeldSince))
     }
 
     /// Ends the hold once HostProtocol.splashRelease says so. Nothing needs to

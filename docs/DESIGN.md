@@ -830,9 +830,11 @@ window does not draw. A page from before `ready` ends the hold when it has
 loaded, at `onPageFinished`, by which time its scripts, and so its `hello`,
 have run. `onPageCommitVisible` would not do, because it needs a drawn window
 and can come before `hello`. The failure screen ends the hold at once, and
-nothing holds it past 3 seconds. Start-up is serial (a release check, the
-session check, the page, the app's own `/api/me`), so on a slow network
-"Starting…" then shows how far it got. A window that has never drawn also has
+nothing holds it past 3 seconds, counted on a cold launch from the process's
+start, when the platform splash went up, so that the time to reach the window
+does not come on top. Start-up is serial (a release check, the session check,
+the page, the app's own `/api/me`), so on a slow network "Starting…" then
+shows how far it got. A window that has never drawn also has
 no input focus, so a key event waiting 5 seconds for one is an ANR. A window
 rebuilt from saved state, after a renderer crash or a wallpaper change, has no
 splash in front of it, and the window the settings screen opens may have none,

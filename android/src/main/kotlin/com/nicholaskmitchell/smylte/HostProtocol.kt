@@ -198,6 +198,16 @@ object HostProtocol {
     /// that waits that long for one is an ANR.
     const val SPLASH_CAP_MS = 3_000L
 
+    /// When the cap starts counting. On a cold launch that is the process's own
+    /// start, because the platform splash has been up since the tap that
+    /// started it, and the cap has to bound what the user sees: the time to
+    /// reach onCreate (inflating the WebView, loading its provider) would
+    /// otherwise come on top of it, and eat into the 5 s margin. On a warm
+    /// launch the process started long before this window, so it counts from
+    /// now. A start in the future (a clock that went backwards) counts from now.
+    fun splashSince(now: Long, processStart: Long): Long =
+        if (now - processStart in 0 until SPLASH_CAP_MS) processStart else now
+
     /// Whether onCreate holds the splash screen. Only a fresh launch from the
     /// launcher is sure to have one in front of the window: a window rebuilt
     /// from saved state after a renderer crash or a wallpaper change has none,

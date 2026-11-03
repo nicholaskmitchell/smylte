@@ -466,6 +466,22 @@ class HostProtocolTest {
 
     @Test
 
+    fun the_splash_cap_counts_from_the_process_start_on_a_cold_launch() {
+        val cap = HostProtocol.SPLASH_CAP_MS
+        // Cold: the process started 800 ms ago, when the splash went up.
+        assertEquals(10_000L, HostProtocol.splashSince(now = 10_800, processStart = 10_000))
+        assertEquals(10_000L, HostProtocol.splashSince(now = 10_000 + cap - 1, processStart = 10_000))
+        // Warm: the process is older than the cap, so it counts from now.
+        assertEquals(10_000L + cap, HostProtocol.splashSince(now = 10_000 + cap, processStart = 10_000))
+        assertEquals(900_000L, HostProtocol.splashSince(now = 900_000, processStart = 10_000))
+        // A start in the future counts from now.
+        assertEquals(10_000L, HostProtocol.splashSince(now = 10_000, processStart = 12_000))
+        // Simultaneous: from that moment.
+        assertEquals(10_000L, HostProtocol.splashSince(now = 10_000, processStart = 10_000))
+    }
+
+    @Test
+
     fun the_splash_is_held_only_on_a_fresh_launch_from_the_launcher() {
         assertTrue(HostProtocol.holdsSplash(31, restored = false, fromLauncher = true))
         assertTrue(HostProtocol.holdsSplash(36, restored = false, fromLauncher = true))

@@ -30,10 +30,11 @@ afterEach(() => {
 })
 
 describe('main.tsx: the splash signal', () => {
-  it.each(['/book/abc', '/display/abc', '/share/abc'])('%s says ready once, as soon as it has rendered', async (path) => {
-    await load(path)
-    expect(ready).toHaveBeenCalledTimes(1)
-  })
+  it.each(['/book/abc', '/display/abc', '/share/abc'])(
+    '%s says ready once, as soon as it has rendered', async (path) => {
+      await load(path)
+      expect(ready).toHaveBeenCalledTimes(1)
+    })
 
   it('the app\'s own route leaves it to App', async () => {
     await load('/')

@@ -113,7 +113,9 @@ describe('<App> in the Android client: the splash screen', () => {
     expect(ready).toHaveBeenCalledTimes(1)
   })
 
-  it('says it once under StrictMode, as main.tsx renders the app', async () => {
+  // A smoke test of the production mount: StrictMode's extra effect run comes
+  // while auth is 'loading', so the ref is pinned by the transition tests, not here.
+  it('says it once when mounted as main.tsx mounts it, under StrictMode', async () => {
     render(<StrictMode><App /></StrictMode>)
     await waitFor(() => expect(ready).toHaveBeenCalledTimes(1))
     await flush()
