@@ -134,14 +134,14 @@ const hits = (el: Element) => {
 // in its `.dash-mod`.
 const DIMMED_CONTROLS = `
   <div class="shell">
-    <div class="topbar"><div class="menu settings-menu" data-view="panel">
+    <div class="topbar"><div class="set-frame"><div class="menu settings-menu" data-view="panel">
       <div class="set-body"><div class="set-panels"><div class="set-panel">
         <div class="disp-picks">
           <button type="button" class="chip" aria-pressed="false">Family</button>
           <button type="button" class="chip is-on" aria-pressed="true">Work</button>
         </div>
       </div></div></div>
-    </div></div>
+    </div></div></div>
     <div class="work">
       <div class="side"><div class="side-list">
         <div class="side-item cal-hidden" role="checkbox" aria-checked="false" tabindex="0">

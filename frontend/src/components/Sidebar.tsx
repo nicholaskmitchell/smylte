@@ -188,7 +188,9 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
   const [groupDraft, setGroupDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [renameUnsent, reportRename] = useUnsentCount()
-  useEffect(() => { if (!adding) setAddDraft('') }, [adding])
+  // `sending` belongs to the form that sent: one opened after the drawer
+  // closed mid-create holds new text, which Back has to ask about.
+  useEffect(() => { if (!adding) { setAddDraft(''); setSending(false) } }, [adding])
   useEffect(() => { if (!addingGroup) setGroupDraft('') }, [addingGroup])
   const drawerDraft = (adding && !sending && addDraft.trim() !== '')
     || (addingGroup && groupDraft.trim() !== '')
@@ -532,7 +534,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
   )
 
   const editModal = editing && (
-    <EditModal item={editing} placeholder={tr(words.one)}
+    <EditModal item={editing} placeholder={tr(words.one)} wide={!isMobile}
       groups={groupsOn ? groups! : undefined}
       groupId={groupsOn ? (groupOf.get(editing.id) ?? null) : undefined}
       onSetGroup={groupsOn ? (gid) => moveListToGroup(editing.id, gid) : undefined}
@@ -931,9 +933,13 @@ function AddForm({ placeholder, onCancel, onCreate, onDraft }: {
   )
 }
 
-function EditModal({ item, placeholder, groups, groupId, onSetGroup, onClose, onSave, onDelete, onArchive }: {
+function EditModal({ item, placeholder, wide, groups, groupId, onSetGroup, onClose, onSave, onDelete, onArchive }: {
   item: List
   placeholder: string
+  /** Drawn beside the desktop sidebar, whose look it carries (`.side-editor`).
+   *  It used to inherit that by sitting inside `.side`; it no longer does, so
+   *  that a fold cannot unmount it. */
+  wide?: boolean
   groups?: TaskGroup[]
   groupId?: string | null
   onSetGroup?: (groupId: string | null) => void
@@ -988,7 +994,7 @@ function EditModal({ item, placeholder, groups, groupId, onSetGroup, onClose, on
   const scrimPress = useRef(false)
 
   return (
-    <div className="overlay"
+    <div className={wide ? 'overlay side-editor' : 'overlay'}
       onMouseDown={(e) => { scrimPress.current = e.target === e.currentTarget }}
       onClick={(e) => {
         if (e.target === e.currentTarget && scrimPress.current) onClose()

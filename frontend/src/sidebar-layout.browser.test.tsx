@@ -354,3 +354,28 @@ describe('Classic is not touched', () => {
     expect(getComputedStyle(host.querySelector('.scroll')!).paddingRight).toBe('0px')
   })
 })
+
+// SettingsMenu keeps one tree at both widths, so on a wide screen the menu sits
+// in a `.set-frame` wrapper, and in the Classic frame that wrapper is a child of
+// `.topbar`, a flex row with a 22px gap. `display: contents` keeps it out of
+// the row. Without it the wrapper is a zero-width flex item, and the gear moved
+// 22px left every time Settings opened.
+describe('the settings menu in the classic top bar', () => {
+  const bar = (menu = '') => `<div class="shell"><div class="topbar">
+    <span class="brand">Smylte<span class="dot">.</span></span>
+    <div class="tabs"><button class="tab active">Today</button><button class="tab">Home</button></div>
+    <span class="spacer"></span>
+    <button class="icon-btn gear"><svg width="15" height="15"></svg></button>${menu}
+  </div></div>`
+
+  it('opens without moving the gear', async () => {
+    await viewport(1280, 800)
+    const closed = box((await mount(bar())).querySelector('.gear')!)
+    document.body.innerHTML = ''
+    const host = await mount(bar(
+      '<div class="set-frame"><div class="menu settings-menu" data-view="panel"><button class="btn ghost">x</button></div></div>'))
+    expect(getComputedStyle(host.querySelector('.set-frame')!).display).toBe('contents')
+    expect(box(host.querySelector('.gear')!)).toEqual(closed)
+  })
+})
+

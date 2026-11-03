@@ -197,3 +197,56 @@ describe('"Discard changes?" over the editor, at 390x844', () => {
     expect(document.querySelector('#task-title')).not.toBeNull()
   })
 })
+
+/** The lists Sidebar under the Classic frame's `.work`, at the given size. */
+async function mountClassicSidebar(width: number, height: number) {
+  await viewport(width, height)
+  host = document.createElement('div')
+  host.className = 'shell'
+  host.dataset.layout = 'classic'
+  document.body.appendChild(host)
+  const work = document.createElement('div')
+  work.className = 'work'
+  host.appendChild(work)
+  root = createRoot(work)
+  root.render(
+    <StrictMode>
+      <I18nProvider value="en">
+        <Sidebar kind="list" items={lists} countOf={() => 0} onItems={vi.fn()}
+          api={{ create: vi.fn(), update: vi.fn(), remove: vi.fn(), reorder: vi.fn() }} />
+      </I18nProvider>
+    </StrictMode>)
+  return work
+}
+
+const editorModal = () => document.querySelector('.overlay [role="dialog"][aria-label="List"]')
+const prop = (el: Element, name: string) => getComputedStyle(el).getPropertyValue(name).trim()
+
+// The editor no longer sits inside `.side`, so that a fold cannot unmount it,
+// and it carries what it used to inherit there through `.side-editor`. Without
+// that, the Classic desktop editor drew its focus rings 2px outside each
+// control instead of inside, and filled a hovered Delete with --paper.
+describe('the list editor keeps the look of where it is drawn', () => {
+  it('beside the desktop sidebar, the sidebar\'s focus offset and hover fill', async () => {
+    await mountClassicSidebar(1200, 800)
+    await until('the desktop sidebar mounts', () => !!document.querySelector('.side:not(.drawer)'))
+    ;(document.querySelector('[aria-label="Edit Work"]') as HTMLElement).click()
+    await until('the editor opens', () => !!editorModal())
+    const side = document.querySelector('.side')!
+    expect(prop(side, '--focus-offset')).toBe('-2px')
+    expect(prop(editorModal()!, '--focus-offset')).toBe('-2px')
+    expect(prop(editorModal()!, '--ghost-hover-bg')).toBe(prop(side, '--ghost-hover-bg'))
+  })
+
+  it('on a phone, what the page around it has, as before', async () => {
+    const work = await mountClassicSidebar(390, 844)
+    await until('the trigger bar mounts', () => !!document.querySelector('.side-mobiletrigger'))
+    ;(document.querySelector('.side-mobiletrigger') as HTMLElement).click()
+    await until('the drawer opens', () => !!document.querySelector('.side.drawer [aria-label="Edit Work"]'))
+    ;(document.querySelector('.side.drawer [aria-label="Edit Work"]') as HTMLElement).click()
+    await until('the editor opens', () => !!editorModal())
+    expect(prop(editorModal()!, '--focus-offset')).toBe(prop(work, '--focus-offset'))
+    expect(prop(editorModal()!, '--ghost-hover-bg')).toBe(prop(work, '--ghost-hover-bg'))
+  })
+})
+

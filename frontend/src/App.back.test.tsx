@@ -275,6 +275,26 @@ describe('<App> in the Android client: Back while a new list is being created, o
     expect(hardware.isConnected).toBe(true)
     expect(hardware).toHaveValue('Hardware')
   })
+
+  // "Being sent" belongs to the form that sent. A form opened after the drawer
+  // closed mid-create holds new text, and Back has to ask about it.
+  it.each([
+    ['Back', () => back()],
+    ['its ✕', () => userEvent.click(within(drawer()!).getByRole('button', { name: 'Close' }))],
+  ] as const)('asks about a form opened after %s closed the drawer mid-create', async (_, close) => {
+    await createHeld()
+    await close()
+    expect(drawer()).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: 'New list' }))
+    const open = await screen.findByRole('dialog', { name: 'Manage lists' })
+    const hardware = within(open).getByRole('textbox')
+    await userEvent.type(hardware, 'Hardware')
+    back()
+    expect(question()).toBeInTheDocument()
+    expect(drawer()).toBeInTheDocument()
+    expect(hardware).toHaveValue('Hardware')
+  })
 })
 
 describe.each([

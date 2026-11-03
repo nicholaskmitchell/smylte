@@ -92,7 +92,7 @@
    stands out is 2px more than any of them has, and the clipped side is the
    one a right-aligned toggle or a full-width row most needs. */
 .set-panels, .side, .side-mobilebar, .tabs, .arch-list, .conn-list, .habit-list,
-.dash-mod-body { --focus-offset: -2px; }
+.dash-mod-body, .side-editor { --focus-offset: -2px; }
 .set-panel { display: flex; flex-direction: column; gap: 9px; }
 /* A subhead introducing the next block, not the first line of the panel. */
 .set-panel .menu-head:not(:first-child) { margin-top: 14px; }
@@ -174,8 +174,11 @@ button.menu-toggle:active { scale: var(--press-scale); }
 }
 .side-item.active { border-left-color: var(--accent); background: var(--bg-elev); }
 /* An outlined control on the --paper sidebar steps its hover up to --bg-elev
-   (see --ghost-hover-bg-on-paper). Not the drawer, which is --bg-elev itself. */
-.side:not(.drawer), .disp-url { --ghost-hover-bg: var(--ghost-hover-bg-on-paper); }
+   (see --ghost-hover-bg-on-paper). Not the drawer, which is --bg-elev itself.
+   `.side-editor` is the desktop list editor, drawn beside `.side` rather than
+   inside it (Sidebar.tsx), which keeps what it inherited there (with the
+   --focus-offset above). */
+.side:not(.drawer), .disp-url, .side-editor { --ghost-hover-bg: var(--ghost-hover-bg-on-paper); }
 .side-item .swatch { width: 8px; height: 8px; flex: none; background: var(--fg-faint); border-radius: var(--r-dot); }
 /* the pinned "All" row's swatch — a wheel of the preset collection colors. The
    gradient itself is an inline style built from SWATCHES in Sidebar.tsx (one
