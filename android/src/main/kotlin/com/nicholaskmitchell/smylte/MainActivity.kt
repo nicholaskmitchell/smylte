@@ -21,6 +21,8 @@ import android.view.View
 import android.view.ViewTreeObserver
 import android.view.WindowInsetsController
 import android.webkit.CookieManager
+import android.webkit.JsPromptResult
+import android.webkit.JsResult
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.ServiceWorkerClient
 import android.webkit.ServiceWorkerController
@@ -42,7 +44,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /// The window: a WebView showing the app at the server's own origin, with its
 /// files answered from the downloaded web build (LocalAssets), plus the
-/// start-up splash and the update strip.
+/// start-up splash, the update strip and the app lock (LockScreen).
 class MainActivity : Activity() {
     private lateinit var settings: Settings
     private lateinit var updater: Updater
@@ -59,6 +61,9 @@ class MainActivity : Activity() {
     private lateinit var stripAction: Button
     private lateinit var stripDismiss: Button
 
+    /// The app lock in this window.
+    private lateinit var lock: LockScreen
+
     private val main = Handler(Looper.getMainLooper())
 
     private var booting = false
@@ -69,6 +74,17 @@ class MainActivity : Activity() {
     private var clearHistoryOnLoad = false
     private var restorePath: String? = null
     private var lastBackgroundCheck = 0L
+    /// Start-up has opened the page, so the WebView shows unless the app is locked (showPage).
+    private var pageShown = false
+    /// The WebView's own accessibility importance, restored when the lock lets go.
+    private var webAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+    /// Pickers' answers that came back while the window was locked, in order (runHeld).
+    private val heldResults = mutableListOf<HeldResult>()
+    /// The window was locked when it started, so the splash hold ends at once (HostProtocol.splashRelease).
+    private var splashLocked = false
+    /// Between onStart and onStop. A picker's answer that comes before onStart
+    /// waits for it (HostProtocol.holdsResult).
+    private var started = false
 
     private var backCallback: Any? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
@@ -108,6 +124,9 @@ class MainActivity : Activity() {
     // no rounding of the elapsed time can leave the window held past it.
     private val splashCap = Runnable { splashHeld = false }
 
+    /// A picker's answer that came back to a locked window.
+    private class HeldResult(val requestCode: Int, val resultCode: Int, val data: Intent?)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         settings = Settings(this)
@@ -133,6 +152,8 @@ class MainActivity : Activity() {
         stripText = findViewById(R.id.strip_text)
         stripAction = findViewById(R.id.strip_action)
         stripDismiss = findViewById(R.id.strip_dismiss)
+        webAccessibility = web.importantForAccessibility
+        lock = LockScreen(this, settings, findViewById(R.id.main_content), findViewById(R.id.lock), ::onLockChanged)
         holdSplash(savedInstanceState)
 
         Insets.edgeToEdge(window, root)
@@ -189,7 +210,8 @@ class MainActivity : Activity() {
         splashActions.visibility = if (failed) View.VISIBLE else View.GONE
         // The splash has no background of its own, so the page must not show
         // through it.
-        web.visibility = View.INVISIBLE
+        pageShown = false
+        showPage()
         // The failure screen's Retry and Server settings must never wait
         // behind the platform splash.
         if (failed) {
@@ -202,7 +224,8 @@ class MainActivity : Activity() {
         val path = restorePath ?: "/"
         restorePath = null
         splash.visibility = View.GONE
-        web.visibility = View.VISIBLE
+        pageShown = true
+        showPage()
         web.loadUrl(origin + path)
         loaded = true
     }
@@ -258,11 +281,57 @@ class MainActivity : Activity() {
     private fun releaseSplashIfDue() {
         if (!splashHeld) return
         val elapsed = SystemClock.uptimeMillis() - splashHeldSince
-        if (!HostProtocol.splashRelease(elapsed, splashFailed, splashPageReady, splashWantsReady, splashPageFinished)) {
-            return
-        }
+        val due = HostProtocol.splashRelease(
+            elapsed, splashFailed, splashPageReady, splashWantsReady, splashPageFinished, splashLocked,
+        )
+        if (!due) return
         splashHeld = false
         main.removeCallbacks(splashCap)
+    }
+
+    // ── the app lock ────────────────────────────────────────────────────────
+
+    /// The WebView shows only when start-up has opened the page and the app is
+    /// not locked. Its own visibility, and not only its container's
+    /// (LockScreen), so WebView treats the page as hidden while it is locked,
+    /// and a page that finishes loading behind the lock stays hidden. The only
+    /// place the WebView's visibility changes (AppLockTest).
+    private fun showPage() {
+        val locked = lock.locked
+        web.visibility = if (pageShown && !locked) View.VISIBLE else View.INVISIBLE
+        web.importantForAccessibility =
+            if (locked) View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS else webAccessibility
+    }
+
+    /// The lock took hold or let go (LockScreen.sync).
+    private fun onLockChanged(locked: Boolean) {
+        showPage()
+        syncBack()
+        if (locked) {
+            // A locked start shows the lock view at once: holding the platform's
+            // splash would only keep the prompt waiting, and the page is hidden
+            // either way (HostProtocol.splashRelease).
+            splashLocked = true
+            releaseSplashIfDue()
+            // A date picker left open would stand over the lock view.
+            if (showingOurPage()) web.evaluateJavascript(HostProtocol.CLOSE_PICKER_SCRIPT, null)
+        } else {
+            runHeld()
+        }
+    }
+
+    /// Work that waits for the window to be started and unlocked: picker
+    /// answers that came back before then, in order, and an install whose
+    /// download finished meanwhile. Runs when the lock lets go and on every
+    /// resume, which also covers an answer that came before onStart (Android 11)
+    /// and a window that comes back unlocked with a save held from before
+    /// Android restarted the app.
+    private fun runHeld() {
+        if (HostProtocol.holdsResult(started, lock.locked)) return
+        val held = heldResults.toList()
+        heldResults.clear()
+        for (result in held) deliverResult(result.requestCode, result.resultCode, result.data)
+        if (pendingInstall && resumed) launchInstaller()
     }
 
     // ── the WebView ─────────────────────────────────────────────────────────
@@ -445,7 +514,7 @@ class MainActivity : Activity() {
             return
         }
         val ours = showingOurPage()
-        if (!HostProtocol.allowSave(resumed, ours, SystemClock.uptimeMillis(), lastPickerClosed)) {
+        if (!HostProtocol.allowSave(resumed, ours, SystemClock.uptimeMillis(), lastPickerClosed, lock.locked)) {
             saveBusy.set(false)
             sendEvent(HostProtocol.savedEvent(HostProtocol.SaveOutcome.FAILED))
             return
@@ -530,6 +599,11 @@ class MainActivity : Activity() {
             saveBusy.set(true)
             saveRestored = true
             pickerOpen = true
+            if (state.containsKey(KEY_HELD_SAVE_CODE)) {
+                @Suppress("DEPRECATION")   // the Class overload is API 33
+                val data = state.getParcelable<Intent>(KEY_HELD_SAVE_DATA)
+                heldResults += HeldResult(REQUEST_SAVE, state.getInt(KEY_HELD_SAVE_CODE), data)
+            }
         }
         stash.delete()   // read once; a stale one from a killed process goes too
     }
@@ -607,21 +681,63 @@ class MainActivity : Activity() {
                 false
             }
         }
+
+        // alert, confirm, prompt and beforeunload. WebView's own dialog for one
+        // would stand over the lock view, in a window FLAG_SECURE does not
+        // cover, with whatever text the script chose. The app never uses them,
+        // so while it is locked they are answered as if dismissed.
+
+        override fun onJsAlert(view: WebView, url: String?, message: String?, result: JsResult): Boolean =
+            refusedWhileLocked(result) || super.onJsAlert(view, url, message, result)
+
+        override fun onJsConfirm(view: WebView, url: String?, message: String?, result: JsResult): Boolean =
+            refusedWhileLocked(result) || super.onJsConfirm(view, url, message, result)
+
+        override fun onJsPrompt(
+            view: WebView,
+            url: String?,
+            message: String?,
+            defaultValue: String?,
+            result: JsPromptResult,
+        ): Boolean = refusedWhileLocked(result) || super.onJsPrompt(view, url, message, defaultValue, result)
+
+        override fun onJsBeforeUnload(view: WebView, url: String?, message: String?, result: JsResult): Boolean =
+            refusedWhileLocked(result) || super.onJsBeforeUnload(view, url, message, result)
+
+        private fun refusedWhileLocked(result: JsResult): Boolean {
+            if (!lock.locked) return false
+            result.cancel()
+            return true
+        }
     }
 
     @Deprecated("Activity result API; this client takes no AndroidX")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode != REQUEST_FILE && requestCode != REQUEST_SAVE) {
+            @Suppress("DEPRECATION")
+            super.onActivityResult(requestCode, resultCode, data)
+            return
+        }
+        // A picker can come back to a locked window: it stayed open
+        // AppLock.AWAY_MS or more, or Android ended the app meanwhile. Its
+        // answer waits for the unlock (runHeld), so the page takes it, and says
+        // how it went, where the user can see it. On Android 11 it can also come
+        // before onStart, which is where the lock takes hold again, so it waits
+        // for that too.
+        if (HostProtocol.holdsResult(started, lock.locked)) {
+            heldResults += HeldResult(requestCode, resultCode, data)
+            return
+        }
+        deliverResult(requestCode, resultCode, data)
+    }
+
+    private fun deliverResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode == REQUEST_FILE) {
             fileCallback?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data))
             fileCallback = null
-            return
-        }
-        if (requestCode == REQUEST_SAVE) {
+        } else {
             finishSave(resultCode, data)
-            return
         }
-        @Suppress("DEPRECATION")
-        super.onActivityResult(requestCode, resultCode, data)
     }
 
     private fun openExternally(url: Uri) {
@@ -642,19 +758,22 @@ class MainActivity : Activity() {
         val mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
             WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
         window.insetsController?.setSystemBarsAppearance(if (dark) mask else 0, mask)
-        splashText.setTextColor(if (dark) 0xFF1A1814.toInt() else 0xFFF4F1E8.toInt())
+        val text = if (dark) 0xFF1A1814.toInt() else 0xFFF4F1E8.toInt()
+        splashText.setTextColor(text)
+        lock.textColour(text)
     }
 
     // ── back ────────────────────────────────────────────────────────────────
 
-    /// Back closes the page's top layer, then walks its history, then leaves.
-    /// On 13 and later that is an OnBackInvokedCallback held only while there is
-    /// a layer or history to walk, so the system's own back-to-home gesture
-    /// plays when there is not; and an app targeting 16 is never sent
-    /// onBackPressed at all.
+    /// Back closes the page's top layer, then walks its history, then leaves;
+    /// while the app is locked it moves the task to the back. On 13 and later
+    /// that is an OnBackInvokedCallback held only while there is a layer or
+    /// history to walk, or while the app is locked, so the system's own
+    /// back-to-home gesture plays otherwise; and an app targeting 16 is never
+    /// sent onBackPressed at all.
     private fun syncBack() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-        val want = HostProtocol.wantsBackCallback(pageLayers, showingOurPage(), canWalkBack())
+        val want = HostProtocol.wantsBackCallback(pageLayers, showingOurPage(), canWalkBack(), lock.locked)
         val registered = backCallback
         if (want && registered == null) {
             // Registered for a reason that has since gone, so drop it and the
@@ -668,11 +787,12 @@ class MainActivity : Activity() {
         }
     }
 
-    /// False when Back is not the app's to handle: no layer and no history.
+    /// False when Back is not the app's to handle: no layer, no history, and not locked.
     private fun routeBack(): Boolean {
-        when (HostProtocol.backAction(pageLayers, showingOurPage(), canWalkBack())) {
+        when (HostProtocol.backAction(pageLayers, showingOurPage(), canWalkBack(), lock.locked)) {
             HostProtocol.BackAction.PAGE -> sendEvent(HostProtocol.backEvent())
             HostProtocol.BackAction.HISTORY -> web.goBack()
+            HostProtocol.BackAction.MOVE_TO_BACK -> moveTaskToBack(true)
             HostProtocol.BackAction.SYSTEM -> return false
         }
         return true
@@ -848,7 +968,7 @@ class MainActivity : Activity() {
                             refreshStrip()
                         } else {
                             pendingInstall = true
-                            if (resumed) launchInstaller()
+                            if (resumed && !lock.locked) launchInstaller()
                         }
                     },
                     onFailure = {
@@ -920,6 +1040,8 @@ class MainActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
+        lock.onStart()
+        started = true
         // Android keeps an app's process for days. A start-up check alone
         // would then leave a phone on an old build for as long as Smylte stays
         // in memory, so a return to the app after hours away checks again. A
@@ -946,7 +1068,8 @@ class MainActivity : Activity() {
         resumed = true
         web.onResume()
         refreshEnv()
-        if (pendingInstall) launchInstaller()
+        lock.onResume()
+        runHeld()
         // Back from the "install unknown apps" screen, or the installer.
         if (loaded) refreshStrip()
     }
@@ -983,11 +1106,26 @@ class MainActivity : Activity() {
                 outState.putString(KEY_SAVE_NAME, r.name)
                 outState.putString(KEY_SAVE_MIME, r.mime)
             }
+            // The picker has answered, but to a locked window, so the answer waits
+            // for the unlock. It goes with the payload, so a window rebuilt
+            // meanwhile writes the file after its own unlock instead of waiting for
+            // an answer that has already come.
+            heldResults.lastOrNull { it.requestCode == REQUEST_SAVE }?.let {
+                outState.putInt(KEY_HELD_SAVE_CODE, it.resultCode)
+                outState.putParcelable(KEY_HELD_SAVE_DATA, it.data)
+            }
         }
+    }
+
+    override fun onStop() {
+        started = false
+        lock.onStop()
+        super.onStop()
     }
 
     override fun onDestroy() {
         main.removeCallbacks(splashCap)
+        if (::lock.isInitialized) lock.onDestroy()
         if (::web.isInitialized) {
             fileCallback?.onReceiveValue(null)
             fileCallback = null
@@ -1003,6 +1141,8 @@ class MainActivity : Activity() {
         const val KEY_SAVE_OPEN = "save_open"
         const val KEY_SAVE_NAME = "save_name"
         const val KEY_SAVE_MIME = "save_mime"
+        const val KEY_HELD_SAVE_CODE = "held_save_code"
+        const val KEY_HELD_SAVE_DATA = "held_save_data"
         const val STASH = "export/pending"
         const val RECHECK_MS = 6 * 60 * 60 * 1000L
         const val RETRY_MS = 15 * 60 * 1000L

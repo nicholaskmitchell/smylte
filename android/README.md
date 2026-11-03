@@ -105,12 +105,78 @@ on first run and from the error screen if the app can't start.
   it was saved with: change the address and Smylte asks for the password again
   rather than sending the old one to the new server.
 - **GitHub token**: optional; see above.
+- **App lock**: optional; see [The app lock](#the-app-lock). It applies as soon
+  as you flip it, without **Check and save**.
 
 The password and the token are encrypted with AES-GCM under a key that the
 Android keystore generates and never releases, so a copy of the app's files is
 useless without the phone. The password is encrypted for its server address, so
 it can't be decrypted for any other. As on the desktop, this doesn't stop code
 running as the app from reading them.
+
+## The app lock
+
+With **Lock Smylte** on in Server settings, Smylte asks for your fingerprint,
+face or screen lock (PIN, pattern or password) through Android's own prompt:
+
+- when it starts;
+- when you come back after 5 minutes or more with none of its windows on screen.
+  The time counts from when the last of them left the screen, sleep included, so
+  a screen turned off counts as away.
+
+It doesn't ask when the window is rebuilt (a rotation, a fold, a new wallpaper),
+or when you come back within 5 minutes from a screen Smylte opened, such as the
+save or open dialog. A dialog left open longer comes back locked, and what you
+chose in it (a file saved or opened) goes ahead once you unlock.
+
+While Smylte is locked it shows only a lock screen with **Unlock**. The app, its
+update strip and Server settings stay hidden, from TalkBack too, and the
+launcher's Server settings shortcut opens the lock screen as well. Smylte goes
+on starting and signing in behind it, so the app is ready when you unlock. A
+date or time picker left open closes when Smylte locks.
+
+Cancelling the prompt, too many wrong attempts, or a sensor that isn't available
+leave Smylte locked, and **Unlock** asks again. Back moves Smylte to the
+background, from the app and from Server settings alike, without closing
+anything that was open in either, and no save dialog can open over the lock.
+
+Face unlock is offered only where Android rates it as strong (Class 3).
+Otherwise the prompt offers the fingerprint or the screen lock.
+
+The switch is offered only when the phone has a screen lock, because nothing
+else could unlock Smylte. If you remove the screen lock while the lock is on,
+Smylte stops locking (anyone holding the phone can open it anyway) and Server
+settings says why. The setting is kept, so Smylte locks again once the phone has
+a screen lock. Removing the screen lock is also the way out if the prompt ever
+can't succeed. Clearing Smylte's storage works too, but removes all its
+settings.
+
+### Recents
+
+While the lock is on, Recents never shows a preview of Smylte. The preview is
+taken when you leave, before anyone knows whether you'll be back within 5
+minutes, so it has to be blank whenever the lock is on, not only while Smylte is
+locked.
+
+- **Android 13 and later:** Smylte asks Android not to take one
+  (`setRecentsScreenshotEnabled(false)`). Screenshots and screen recordings work
+  as usual while Smylte is unlocked.
+- **Android 11, 12 and 12L:** the only way is `FLAG_SECURE`. It also blocks
+  screenshots and screen recordings of Smylte, and shows Smylte black when the
+  screen is cast or shared. Smylte sets it only while the lock is on, so turning
+  the lock off brings screenshots back.
+  - Setting it only while leaving was ruled out, because Android can take the
+    preview before Smylte has set it.
+  - Setting it only while locked would come too late, for the same reason.
+  - Leaving the preview alone would show the app to whoever opens Recents on a
+    locked Smylte.
+
+On every Android version, the window is also `FLAG_SECURE` while Smylte is
+locked, so screenshots, screen recordings and casts of the lock view are blocked
+too. Hiding the views is not enough: the digital assistant's "use text from
+screen" reads hidden views as well, unless the window is secure, and would hand
+it the page's text and the server address before the unlock. The flag is cleared
+on unlock, except on Android 11 to 12L while the lock is on.
 
 ## What it stores
 
@@ -120,7 +186,7 @@ can't be read there anyway.
 
 | Where | What |
 | --- | --- |
-| `shared_prefs/smylte.xml` | Server address, username, encrypted password and token, the last release ETag and check time, the last page colour |
+| `shared_prefs/smylte.xml` | Server address, username, encrypted password and token, the last release ETag and check time, the last page colour, whether the app lock is on (whether it is locked right now is kept only in memory, so a restart locks) |
 | `files/web/` | The downloaded web build, with a record of the release asset it came from |
 | `files/web.next/` | A newer build waiting for a reload, when there is one |
 | `files/release.json` | The last release description, for conditional checks |
@@ -166,6 +232,10 @@ can't be read there anyway.
   phone only. Smylte uses the shade of that colour that stays readable on the
   theme's backgrounds, and keeps the theme's own accent when none does. The
   theme, its exports and your other devices are unchanged.
+- **It can lock.** With the app lock on, Smylte asks for the phone's
+  fingerprint, face or screen lock when it starts and when you come back after a
+  while ([The app lock](#the-app-lock)). The desktop clients rely on the
+  computer's own lock.
 
 ## Building
 
@@ -305,6 +375,19 @@ The JVM unit tests run without a device. They cover:
   which one each name plays on each Android version, where Back goes, which
   page a count of open layers belongs to, and when the splash screen is held
   and what ends it;
+- the app lock: a process start and 5 minutes away lock, while a rebuilt window
+  or a shorter trip away doesn't; the time counts from the last window to stop,
+  and a clock that went backwards locks; a lock that is off, or a phone without
+  a screen lock, never locks, and turning the lock on locks nothing at once; the
+  prompt opens by itself once a visit, and only its success unlocks; which
+  errors show their message; how Recents is kept blank on each Android version,
+  and that a locked window is secure on all of them; that Back and saves are
+  held while locked, a picker's answer waits for a window that has started and
+  is unlocked, and a locked start ends the splash at once; that both windows
+  report their lifecycle on the clock that counts sleep; and, by reading the
+  source, the wiring each of these rests on (the secure flag, the hidden page
+  and views, the setting's default, Back in both windows, the page's own
+  dialogs, and a date picker left open);
 - that the page and the window agree on the event, its outcomes, the env
   version and the env's fields, the accent's tones, every event type, the
   haptic names and the `ready` capability (against `frontend/src/android.ts`),
@@ -413,11 +496,114 @@ On Android 12 or later, in Settings › Appearance › Customize…
   switch, the theme's accent, everything else works. This APK with an older web
   build: nothing changes.
 
+### The app lock
+
+On Android 13 or later, and on Android 11 where a check names it, with a
+fingerprint enrolled and a PIN set.
+
+- **The switch.** Server settings shows "App lock" with **Lock Smylte**, off.
+  With no screen lock on the phone it shows only the note that a screen lock is
+  needed; set a PIN and return, and the switch appears. TalkBack reads it as a
+  switch with its label and state, and a double-tap flips it.
+- **On, nothing locks yet.** Turn it on and go back to the app: no prompt.
+- **Cold start.** Force-stop Smylte and start it with the launcher command
+  above.
+  - The splash ends at once on the lock view ("Smylte is locked", **Unlock**),
+    well before 3 s, and the prompt opens by itself.
+  - On Android 13 or later, screen-record the start and step through it.
+    Smylte's window is black (it is secure) from its very first frame until the
+    unlock; a frame of Smylte that isn't black before then means the flag came
+    too late.
+  - To see what the screen itself showed, film the same start with a second
+    camera in slow motion: no frame shows the app, "Starting…" or the update
+    strip before the prompt succeeds.
+- **Unlock.** A fingerprint unlocks, and so does the PIN. The app, or
+  "Starting…", then appears, signed in.
+- **Errors leave it locked.**
+  - Cancel the prompt with Back: the lock view stays, no prompt opens by itself,
+    and **Unlock** opens one.
+  - Use a wrong finger until the sensor locks out: still locked, the lock view
+    shows Android's message (record the words), and the PIN still works.
+- **Under 5 minutes away.** None of these asks:
+  - leaving with Home and returning within a minute;
+  - turning the screen off and on within a minute;
+  - rotating, folding, or changing the wallpaper.
+- **5 minutes or more.** Leave with Home, wait 5 minutes, and return from the
+  launcher and from Recents: locked, with the prompt. The same after 5 minutes
+  with the screen off.
+- **The save dialog.** On Android 13 or later, and on Android 11.
+  - Export the theme, wait a minute in the save dialog, and save: no prompt, and
+    the app says it saved.
+  - Export again, wait 5 minutes in the dialog, and save: Smylte comes back
+    locked and says nothing yet. Unlock: only now does it say it saved, and the
+    file holds the theme.
+  - Import the same way: the theme is read only after the unlock.
+  - On Android 11, also: export, let the screen turn off with the dialog open,
+    wait 5 minutes, then wake the phone and save. Again nothing is said and
+    nothing is written until the unlock.
+- **A held save across a restart.** Export, wait 5 minutes in the dialog, and
+  save. On the lock view press Back, then run
+  `adb shell am kill com.nicholaskmitchell.smylte` and return. Smylte starts
+  locked; unlock, and a toast says whether the file was saved. Record which, and
+  whether the file holds the theme.
+- **Back while locked.** Open a task and type in it. Leave for 5 minutes and
+  return. Cancel the prompt and press Back: Smylte goes to the background.
+  Return and unlock: the task is still open with the typed text.
+- **Back from locked Server settings.** With the lock on, open Server settings
+  from the app and type a new address without saving. Leave for 5 minutes and
+  return. Cancel the prompt and press Back: Smylte goes to the background, and
+  on Android 15 or later the back animation shows the home screen, never the
+  app. Return and unlock: Server settings still shows the typed address.
+- **The shortcut.** With Smylte force-stopped, long-press the icon and choose
+  Server settings. The lock view shows, not the fields. Unlock, then press Back:
+  the app opens with no second prompt. Repeat after 5 minutes away with Smylte
+  in the background.
+- **A date picker.** Open a task's date field so that its picker shows, leave
+  for 5 minutes, and return: the picker has closed and only the lock view shows.
+  Within 5 minutes it is still open.
+- **Recents.**
+  - With the lock on, open Recents from the app and from Server settings: no
+    preview of Smylte (on 13 or later the app's colour or icon, on Android 11
+    and 12 a blank card).
+  - Turn the lock off, open and leave the app, and check Recents again: the
+    preview is back.
+- **Screenshots.** With the lock on, a screenshot of the app works on 13 or
+  later and is refused on Android 11 and 12. With the lock off it works on both.
+  On the lock view a screenshot is refused on every version.
+- **The assistant.** On Android 13 or later, with the lock view showing in the
+  app and in Server settings, invoke the assistant ("What's on my screen", or a
+  third-party assistant set as the default, then long-press Home): it gets no
+  text from the app. Unlocked, it can read the screen again.
+- **No screen lock.**
+  - With the lock on, remove the phone's screen lock and return. Smylte doesn't
+    lock and doesn't crash, and Server settings shows the note, not the switch.
+  - Set a PIN again: the switch shows On, and the next cold start locks.
+- **TalkBack.**
+  - On the lock view, TalkBack reads "Smylte is locked" as a heading and Unlock
+    as a button. Swiping finds nothing of the app, the update strip or the
+    settings.
+  - While locked, switch on aeroplane mode so that the app's offline notice
+    appears behind the lock: TalkBack says nothing from the app.
+  - After unlocking, record where TalkBack's focus lands.
+- **Keyboard.** With a hardware keyboard, Tab reaches only Unlock while locked,
+  and reaches the app after unlocking.
+- **An update.** Tap Update, leave before the download finishes, and return
+  after 5 minutes. The installer opens only after the unlock.
+- **Split screen.** Put Smylte beside another app and use the other app for 6
+  minutes: Smylte does not lock, since it stayed on screen.
+- **Android 11.** The prompt offers the PIN as well as the fingerprint, Recents
+  shows a blank card, and screenshots are refused while the lock is on.
+- **Version skew.** The APK from before this change has no switch, and updating
+  from it leaves the lock off. With this APK and an older web build the lock
+  behaves the same, since nothing in it depends on the page.
+
 ## Source layout
 
 ```
 MainActivity.kt   the window: WebView, splash, update strip, back, haptics, file picker and saves
 SetupActivity.kt  the settings screen
+AppLock.kt        when the app lock locks, free of Android classes so it is tested
+LockScreen.kt     the lock view, the prompt and the Recents guard, in each window
 LocalAssets.kt    answers the WebView's requests from the web build
 PageBridge.kt     what the page can ask of the window (window.SmylteAndroid)
 HostProtocol.kt   the bridge's rules and messages, free of Android classes so they are tested

@@ -841,6 +841,70 @@ splash in front of it, and the window the settings screen opens may have none,
 so neither holds: holding their draw would show a blank window. Any script can
 call `ready()`; at worst the splash ends early.
 
+**An optional app lock.**
+
+The session cookie lasts seven days, so anyone holding the unlocked phone has
+the account. Server settings has an opt-in lock, kept in the app's own
+preferences rather than the account, because it concerns this phone.
+
+**The prompt.**
+- It asks through the platform's `BiometricPrompt` (there is no AndroidX here)
+  for a Class 3 biometric or the screen lock
+  (`BIOMETRIC_STRONG | DEVICE_CREDENTIAL`).
+- Allowing the screen lock is what lets every phone with one unlock. It also
+  rules out a cancel button, which the platform refuses alongside it.
+- The lock is offered only while `KeyguardManager.isDeviceSecure`, and a phone
+  without a screen lock is never locked: nothing could unlock it, and anyone
+  holding it can open the app anyway.
+
+**When it locks.**
+- It locks when the process starts, and when the app comes back after
+  five minutes or more with none of its windows visible.
+- The time is `SystemClock.elapsedRealtime`, which counts deep sleep, recorded
+  when the last window stops and compared when one starts. So a window rebuilt
+  by a configuration change or a renderer crash, or a quick trip to the save
+  dialog or another app, never locks.
+- The state is one object for the process (`AppLock`, tested on the JVM). The
+  settings window, which the launcher's shortcut opens on its own, therefore
+  locks with the app.
+
+**While locked.**
+- Each window hides everything but a lock view. The container is `INVISIBLE`
+  (the page keeps its size) and `NO_HIDE_DESCENDANTS`, and it drops the
+  accessibility events a page sends up through it. The WebView itself is
+  `INVISIBLE` too, so WebView treats the page as hidden.
+- The hold on the platform splash ends at once, and the app goes on starting
+  behind the lock.
+- Only the prompt's success unlocks.
+- Back, in either window, moves the task to the back rather than reaching the
+  page or finishing the window, which would drop whatever was open in it.
+  Closing the settings would also show the window under them, whose last picture
+  may be from before the lock.
+- The page cannot open a save dialog over the lock.
+- A picker's answer that comes back to a locked window waits for the unlock. So
+  does one that comes before the window has started: Android 11 delivers
+  activity results before `onStart`, which is where the lock takes hold again
+  (`HostProtocol.holdsResult`). A held save goes into the saved state with its
+  payload.
+- A dialog is a window of its own, outside the lock view and its `FLAG_SECURE`.
+  WebView's dialogs for `alert`, `confirm`, `prompt` and `beforeunload`, which
+  the app never uses, are answered as dismissed while locked. A date or time
+  picker left open closes as the window locks, by blurring its field
+  (`HostProtocol.CLOSE_PICKER_SCRIPT`); a select's list closes by itself when
+  the WebView is hidden.
+
+**Recents.** The preview is taken when a window leaves, so it stays blank for as
+long as the lock is on: `setRecentsScreenshotEnabled(false)` on Android 13 and
+later, and `FLAG_SECURE` on 11 and 12, the only way there, which also blocks
+screenshots (README.md has the trade-off). While a window is locked it is
+`FLAG_SECURE` on every version, because hiding the views does not keep the
+digital assistant's screen-text request from reading them, and a secure window
+is the one thing it skips.
+
+**No page involvement.** The page is never told about the lock, and there is no
+bridge method, so the lock works the same with any web build. The one thing the
+window does in the page is blur a date or time field as it locks.
+
 **Stage, then swap.** Android keeps processes alive for days, so the client also
 checks for updates when it returns to the foreground after six hours or more. A
 build must never change under a running page, so downloading and swapping are

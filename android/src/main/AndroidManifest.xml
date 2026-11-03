@@ -6,6 +6,10 @@
          system installer. Android still asks the user to allow it once, and
          still refuses any APK not signed with this app's own key. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- For the optional app lock (LockScreen): Android's own prompt for a
+         biometric or the screen lock. A normal permission, granted at install;
+         the app learns only whether the prompt succeeded. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <!-- Lets MainActivity find the SYSTEM installer by name and send the
          update to it explicitly, rather than to whichever app claims APKs. -->

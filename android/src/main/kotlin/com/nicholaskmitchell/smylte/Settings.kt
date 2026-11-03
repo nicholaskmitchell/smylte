@@ -87,6 +87,13 @@ class Settings(context: Context) {
         get() = prefs.getInt(THEME_COLOUR, 0)
         set(v) = prefs.edit().putInt(THEME_COLOUR, v).apply()
 
+    /// Whether the app lock is on (AppLock, LockScreen). This phone's own
+    /// choice: never sent to the server or the account, and left alone by
+    /// save(), so saving the server settings keeps it.
+    var appLock: Boolean
+        get() = prefs.getBoolean(APP_LOCK, false)
+        set(v) = prefs.edit().putBoolean(APP_LOCK, v).apply()
+
     val configured: Boolean get() = origin.isNotEmpty()
 
     private companion object {
@@ -98,6 +105,7 @@ class Settings(context: Context) {
         const val LAST_CHECK = "last_check"
         const val THEME_COLOUR = "theme_colour"
         const val TOKEN_REJECTED = "github_token_rejected"
+        const val APP_LOCK = "app_lock"
 
         const val TOKEN_PURPOSE = "github-token"
         fun passwordPurpose(origin: String) = "password for $origin"

@@ -197,12 +197,45 @@ class HostProtocolTest {
 
     fun a_save_waits_after_a_picker() {
         val now = 10_000L
-        assertFalse(HostProtocol.allowSave(true, true, now, 8_001L))
-        assertTrue(HostProtocol.allowSave(true, true, now, 8_000L))
-        assertTrue(HostProtocol.allowSave(true, true, now, null))
-        assertFalse(HostProtocol.allowSave(true, true, now, 10_500L))
-        assertFalse(HostProtocol.allowSave(false, true, now, null))
-        assertFalse(HostProtocol.allowSave(true, false, now, null))
+        assertFalse(HostProtocol.allowSave(true, true, now, 8_001L, locked = false))
+        assertTrue(HostProtocol.allowSave(true, true, now, 8_000L, locked = false))
+        assertTrue(HostProtocol.allowSave(true, true, now, null, locked = false))
+        assertFalse(HostProtocol.allowSave(true, true, now, 10_500L, locked = false))
+        assertFalse(HostProtocol.allowSave(false, true, now, null, locked = false))
+        assertFalse(HostProtocol.allowSave(true, false, now, null, locked = false))
+    }
+
+    @Test
+
+    fun no_save_dialog_opens_over_the_lock() {
+        assertFalse(HostProtocol.allowSave(true, true, 10_000L, null, locked = true))
+    }
+
+    @Test
+
+    fun a_pickers_answer_waits_for_a_started_unlocked_window() {
+        assertFalse(HostProtocol.holdsResult(started = true, locked = false))
+        assertTrue(HostProtocol.holdsResult(started = true, locked = true))
+        // Android 11: the answer comes before onStart, where the lock may yet
+        // take hold, so it waits even though the window says it is unlocked.
+        assertTrue(HostProtocol.holdsResult(started = false, locked = false))
+        assertTrue(HostProtocol.holdsResult(started = false, locked = true))
+    }
+
+    @Test
+
+    fun locking_closes_only_a_date_or_time_fields_picker() {
+        val js = HostProtocol.CLOSE_PICKER_SCRIPT
+        assertTrue(js.contains("document.activeElement"))
+        assertTrue(js.contains("e instanceof HTMLInputElement"))
+        assertTrue(js.contains("/^(date|time|datetime-local|month|week)\$/.test(e.type)"))
+        assertTrue(js.endsWith("e.blur();})();"))
+        // It blurs and does nothing else to the page.
+        assertEquals(1, Regex("""\.blur\(""").findAll(js).count())
+        // The one "=" is its own variable's: nothing on the page is assigned.
+        assertEquals(1, js.count { it == '=' })
+        assertTrue(js.contains("var e=document.activeElement;"))
+        assertFalse(js.contains("dispatchEvent"))
     }
 
     @Test
@@ -397,28 +430,44 @@ class HostProtocolTest {
     @Test
 
     fun back_closes_the_pages_top_layer_first() {
-        assertEquals(HostProtocol.BackAction.PAGE, HostProtocol.backAction(1, pageIsOurs = true, canGoBack = true))
-        assertEquals(HostProtocol.BackAction.PAGE, HostProtocol.backAction(1, pageIsOurs = true, canGoBack = false))
-        assertEquals(HostProtocol.BackAction.HISTORY, HostProtocol.backAction(0, pageIsOurs = true, canGoBack = true))
-        assertEquals(HostProtocol.BackAction.SYSTEM, HostProtocol.backAction(0, pageIsOurs = true, canGoBack = false))
+        assertEquals(HostProtocol.BackAction.PAGE, HostProtocol.backAction(1, pageIsOurs = true, canGoBack = true, locked = false))
+        assertEquals(HostProtocol.BackAction.PAGE, HostProtocol.backAction(1, pageIsOurs = true, canGoBack = false, locked = false))
+        assertEquals(HostProtocol.BackAction.HISTORY, HostProtocol.backAction(0, pageIsOurs = true, canGoBack = true, locked = false))
+        assertEquals(HostProtocol.BackAction.SYSTEM, HostProtocol.backAction(0, pageIsOurs = true, canGoBack = false, locked = false))
     }
 
     @Test
 
     fun a_page_that_is_not_ours_gets_no_back() {
-        assertEquals(HostProtocol.BackAction.HISTORY, HostProtocol.backAction(2, pageIsOurs = false, canGoBack = true))
-        assertEquals(HostProtocol.BackAction.SYSTEM, HostProtocol.backAction(2, pageIsOurs = false, canGoBack = false))
+        assertEquals(HostProtocol.BackAction.HISTORY, HostProtocol.backAction(2, pageIsOurs = false, canGoBack = true, locked = false))
+        assertEquals(HostProtocol.BackAction.SYSTEM, HostProtocol.backAction(2, pageIsOurs = false, canGoBack = false, locked = false))
     }
 
     @Test
 
     fun the_callback_is_held_only_while_back_stays_in_the_app() {
-        assertTrue(HostProtocol.wantsBackCallback(1, pageIsOurs = true, canGoBack = true))
-        assertTrue(HostProtocol.wantsBackCallback(1, pageIsOurs = true, canGoBack = false))
-        assertTrue(HostProtocol.wantsBackCallback(0, pageIsOurs = true, canGoBack = true))
-        assertFalse(HostProtocol.wantsBackCallback(0, pageIsOurs = true, canGoBack = false))
-        assertTrue(HostProtocol.wantsBackCallback(2, pageIsOurs = false, canGoBack = true))
-        assertFalse(HostProtocol.wantsBackCallback(2, pageIsOurs = false, canGoBack = false))
+        assertTrue(HostProtocol.wantsBackCallback(1, pageIsOurs = true, canGoBack = true, locked = false))
+        assertTrue(HostProtocol.wantsBackCallback(1, pageIsOurs = true, canGoBack = false, locked = false))
+        assertTrue(HostProtocol.wantsBackCallback(0, pageIsOurs = true, canGoBack = true, locked = false))
+        assertFalse(HostProtocol.wantsBackCallback(0, pageIsOurs = true, canGoBack = false, locked = false))
+        assertTrue(HostProtocol.wantsBackCallback(2, pageIsOurs = false, canGoBack = true, locked = false))
+        assertFalse(HostProtocol.wantsBackCallback(2, pageIsOurs = false, canGoBack = false, locked = false))
+    }
+
+    @Test
+
+    fun back_leaves_a_locked_window_without_closing_it() {
+        // Nothing reaches a page the user cannot see, and the window is not
+        // finished, so what the page had open is still there after the unlock.
+        for (layers in 0..1) {
+            for (canGoBack in listOf(false, true)) {
+                assertEquals(
+                    HostProtocol.BackAction.MOVE_TO_BACK,
+                    HostProtocol.backAction(layers, pageIsOurs = true, canGoBack = canGoBack, locked = true),
+                )
+                assertTrue(HostProtocol.wantsBackCallback(layers, pageIsOurs = true, canGoBack = canGoBack, locked = true))
+            }
+        }
     }
 
     @Test
@@ -451,7 +500,15 @@ class HostProtocolTest {
         pageReady: Boolean = false,
         wantsReady: Boolean = false,
         pageFinished: Boolean = false,
-    ) = HostProtocol.splashRelease(elapsed, failed, pageReady, wantsReady, pageFinished)
+        locked: Boolean = false,
+    ) = HostProtocol.splashRelease(elapsed, failed, pageReady, wantsReady, pageFinished, locked)
+
+    @Test
+
+    fun a_locked_window_ends_the_splash() {
+        assertTrue(release(elapsed = 0, wantsReady = true, locked = true))
+        assertFalse(release(elapsed = 0, wantsReady = true))
+    }
 
     @Test
 

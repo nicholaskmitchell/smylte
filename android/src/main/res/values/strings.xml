@@ -24,6 +24,11 @@
     <string name="file_not_saved">The file could not be saved.</string>
     <string name="no_app_for_link">No app on this device can open that link.</string>
 
+    <string name="lock_title">Smylte is locked</string>
+    <string name="lock_unlock">Unlock</string>
+    <string name="lock_prompt_title">Unlock Smylte</string>
+    <string name="lock_prompt_unavailable">Android could not show its unlock prompt. Tap Unlock to try again.</string>
+
     <string name="setup_title">Smylte</string>
     <string name="setup_intro">Connect to your Smylte server. The app itself is downloaded from the Smylte release on GitHub and keeps itself up to date; your tasks and calendars stay on your server.</string>
     <string name="setup_server">Server address, as you open Smylte in a browser (https://…)</string>
@@ -39,4 +44,10 @@
     <string name="setup_not_saved">Could not save the settings: %1$s</string>
     <string name="setup_token_refused">GitHub refused this token, so it was not saved. Check it, or leave the field empty.</string>
     <string name="setup_token_rejected">GitHub refused the saved token, so update checks are running without it. Replace it or leave the field empty.</string>
+
+    <string name="lock_setting_heading">App lock</string>
+    <string name="lock_setting">Lock Smylte</string>
+    <string name="lock_setting_note">Asks for your fingerprint, face or screen lock when Smylte starts, and when you come back to it after 5 minutes or more. Recents shows no preview of Smylte while it is on. This applies at once, on this phone only.</string>
+    <string name="lock_setting_note_secure">Asks for your fingerprint, face or screen lock when Smylte starts, and when you come back to it after 5 minutes or more. Recents shows no preview of Smylte while it is on, and on this version of Android screenshots of Smylte are blocked too. This applies at once, on this phone only.</string>
+    <string name="lock_setting_unavailable">To lock Smylte, the phone needs a screen lock. Set a PIN, pattern or password in the phone\'s settings first.</string>
 </resources>

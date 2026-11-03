@@ -52,8 +52,9 @@ object HostProtocol {
 
     enum class SaveReport { PAGE, TOAST }
 
-    /// Where Back goes: the page's top layer, then its history, then the system.
-    enum class BackAction { PAGE, HISTORY, SYSTEM }
+    /// Where Back goes: the page's top layer, then its history, then the system;
+    /// or, while the app is locked, the task to the back (MOVE_TO_BACK).
+    enum class BackAction { PAGE, HISTORY, SYSTEM, MOVE_TO_BACK }
 
     /// The host only asks whether the page has a layer open; the bound keeps a
     /// hostile count meaningless.
@@ -139,11 +140,30 @@ object HostProtocol {
         "window.dispatchEvent(new CustomEvent('$EVENT',{detail:$detail}));"
 
     /// May a save dialog open now? The window must be in front with the app's
-    /// own page loaded, and the last dialog must have closed long enough ago.
-    /// The comparison is on `now - lastPickerClosed`, so a negative elapsed
-    /// time (a clock that went backwards) is refused.
-    fun allowSave(resumed: Boolean, mainFrameOurs: Boolean, now: Long, lastPickerClosed: Long?): Boolean =
-        resumed && mainFrameOurs && (lastPickerClosed == null || now - lastPickerClosed >= SAVE_BACKOFF_MS)
+    /// own page loaded and not locked: no dialog opens over the lock, where
+    /// nobody can have asked for one, and its file name is the page's text. The
+    /// last dialog must also have closed long enough ago. The comparison is on
+    /// `now - lastPickerClosed`, so a negative elapsed time (a clock that went
+    /// backwards) is refused.
+    fun allowSave(resumed: Boolean, mainFrameOurs: Boolean, now: Long, lastPickerClosed: Long?, locked: Boolean): Boolean =
+        !locked && resumed && mainFrameOurs && (lastPickerClosed == null || now - lastPickerClosed >= SAVE_BACKOFF_MS)
+
+    /// Whether a picker's answer waits rather than reaching the page now: while
+    /// the window is locked, and until it has started. On Android 11 and early
+    /// builds of 12 an answer can arrive before onStart, which is where the
+    /// lock takes hold again after a long stay in the picker, so `locked` may
+    /// not yet say what it will. A held answer is delivered at the resume or the
+    /// unlock, whichever comes later (MainActivity.runHeld).
+    fun holdsResult(started: Boolean, locked: Boolean): Boolean = !started || locked
+
+    /// Run in the page as the window locks. A date or time field's picker is a
+    /// dialog of its own, above the lock view and outside its FLAG_SECURE, and
+    /// hiding the WebView does not close it as it closes a select's list.
+    /// Blurring its field does (Blink's ChooserOnlyTemporalInputTypeView::Blur).
+    /// Only such a field is touched, so no other field's blur handler runs.
+    const val CLOSE_PICKER_SCRIPT =
+        "(function(){var e=document.activeElement;" +
+            "if(e instanceof HTMLInputElement&&/^(date|time|datetime-local|month|week)\$/.test(e.type))e.blur();})();"
 
     /// Where a save's result is shown. The page that asked hears it; if that
     /// document has gone, or a restored activity has no page yet, a native
@@ -158,18 +178,23 @@ object HostProtocol {
     fun layersAfterReport(held: Int, depth: Int, reportedIn: Int, current: Int): Int =
         if (reportedIn == current) depth else held
 
-    /// The page's top layer first, then its history, then the system (which
+    /// While the app is locked, Back never reaches the page, which the user
+    /// cannot see, and never finishes the window either, which would drop
+    /// whatever the page had open: it moves the task to the back. Otherwise the
+    /// page's top layer first, then its history, then the system (which
     /// leaves). A page that is not the app's own cannot be sent the event.
-    fun backAction(layers: Int, pageIsOurs: Boolean, canGoBack: Boolean): BackAction = when {
+    fun backAction(layers: Int, pageIsOurs: Boolean, canGoBack: Boolean, locked: Boolean): BackAction = when {
+        locked -> BackAction.MOVE_TO_BACK
         layers > 0 && pageIsOurs -> BackAction.PAGE
         canGoBack -> BackAction.HISTORY
         else -> BackAction.SYSTEM
     }
 
-    /// Hold an OnBackInvokedCallback only while Back stays in the app, so the
-    /// system's back-to-home animation plays when it does not.
-    fun wantsBackCallback(layers: Int, pageIsOurs: Boolean, canGoBack: Boolean): Boolean =
-        backAction(layers, pageIsOurs, canGoBack) != BackAction.SYSTEM
+    /// Hold an OnBackInvokedCallback only while Back stays in the app, or while
+    /// the app is locked, so the system's back-to-home animation plays
+    /// otherwise.
+    fun wantsBackCallback(layers: Int, pageIsOurs: Boolean, canGoBack: Boolean, locked: Boolean): Boolean =
+        backAction(layers, pageIsOurs, canGoBack, locked) != BackAction.SYSTEM
 
     /// Whether a finger is down after this event. A list of the actions that
     /// set it rather than a range: DOWN..MOVE would include UP (1). POINTER_UP
@@ -220,6 +245,8 @@ object HostProtocol {
     /// first view is up (ready(), callable by any script, so at worst the splash
     /// ends early); a page that never announced CAP_READY (a web build from
     /// before it) has loaded; start-up failed, so the failure screen must show;
+    /// the window is locked, so its lock view shows at once (holding the splash
+    /// would only keep the prompt waiting, and the page is hidden either way);
     /// the cap has passed. "Loaded" is onPageFinished, which comes after the
     /// page's scripts and so after its hello. It is never onPageCommitVisible,
     /// which rests on a visual-state callback that needs a drawn window, and
@@ -231,7 +258,9 @@ object HostProtocol {
         pageReady: Boolean,
         wantsReady: Boolean,
         pageFinished: Boolean,
-    ): Boolean = failed || pageReady || (pageFinished && !wantsReady) || elapsedMs < 0 || elapsedMs >= SPLASH_CAP_MS
+        locked: Boolean,
+    ): Boolean =
+        failed || locked || pageReady || (pageFinished && !wantsReady) || elapsedMs < 0 || elapsedMs >= SPLASH_CAP_MS
 }
 
 /// A file the page asked to save, after the host has checked it. Only `of`

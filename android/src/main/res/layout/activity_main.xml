@@ -1,102 +1,113 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The root's padding is set from the window insets (Insets.kt), and its
      background is the page's own theme colour, which is what shows behind the
-     transparent status and navigation bars. -->
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+     transparent status and navigation bars, and behind the lock view, which has
+     no background of its own. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/root"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:orientation="vertical">
+    android:layout_height="match_parent">
 
-    <!-- The update strip: the desktop clients' notice, above the page rather
-         than over it, so it never covers the app's own header. -->
+    <!-- Everything the window shows but the lock view. LockScreen hides it as
+         one while the app is locked. -->
     <LinearLayout
-        android:id="@+id/strip"
+        android:id="@+id/main_content"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:background="@color/strip_background"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingStart="16dp"
-        android:paddingEnd="4dp"
-        android:visibility="gone">
+        android:layout_height="match_parent"
+        android:orientation="vertical">
 
-        <TextView
-            android:id="@+id/strip_text"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:paddingTop="10dp"
-            android:paddingBottom="10dp"
-            android:textColor="@color/strip_text"
-            android:textSize="14sp" />
-
-        <Button
-            android:id="@+id/strip_action"
-            style="?android:attr/borderlessButtonStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textColor="@color/strip_text" />
-
-        <Button
-            android:id="@+id/strip_dismiss"
-            style="?android:attr/borderlessButtonStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/not_now"
-            android:textColor="@color/strip_text" />
-    </LinearLayout>
-
-    <FrameLayout
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1">
-
-        <WebView
-            android:id="@+id/web"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:visibility="invisible" />
-
+        <!-- The update strip: the desktop clients' notice, above the page rather
+             than over it, so it never covers the app's own header. -->
         <LinearLayout
-            android:id="@+id/splash"
+            android:id="@+id/strip"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:gravity="center"
-            android:orientation="vertical"
-            android:padding="32dp">
+            android:layout_height="wrap_content"
+            android:background="@color/strip_background"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="16dp"
+            android:paddingEnd="4dp"
+            android:visibility="gone">
 
             <TextView
-                android:id="@+id/splash_text"
+                android:id="@+id/strip_text"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:paddingTop="10dp"
+                android:paddingBottom="10dp"
+                android:textColor="@color/strip_text"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/strip_action"
+                style="?android:attr/borderlessButtonStyle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:gravity="center"
-                android:text="@string/starting"
-                android:textSize="16sp" />
+                android:textColor="@color/strip_text" />
+
+            <Button
+                android:id="@+id/strip_dismiss"
+                style="?android:attr/borderlessButtonStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/not_now"
+                android:textColor="@color/strip_text" />
+        </LinearLayout>
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <WebView
+                android:id="@+id/web"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="invisible" />
 
             <LinearLayout
-                android:id="@+id/splash_actions"
-                style="?android:attr/buttonBarStyle"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:orientation="horizontal"
-                android:visibility="gone">
+                android:id="@+id/splash"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:padding="32dp">
 
-                <Button
-                    android:id="@+id/retry"
-                    style="?android:attr/buttonBarButtonStyle"
+                <TextView
+                    android:id="@+id/splash_text"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="@string/try_again" />
+                    android:gravity="center"
+                    android:text="@string/starting"
+                    android:textSize="16sp" />
 
-                <Button
-                    android:id="@+id/open_settings"
-                    style="?android:attr/buttonBarButtonStyle"
+                <LinearLayout
+                    android:id="@+id/splash_actions"
+                    style="?android:attr/buttonBarStyle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="@string/settings" />
+                    android:layout_marginTop="16dp"
+                    android:orientation="horizontal"
+                    android:visibility="gone">
+
+                    <Button
+                        android:id="@+id/retry"
+                        style="?android:attr/buttonBarButtonStyle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/try_again" />
+
+                    <Button
+                        android:id="@+id/open_settings"
+                        style="?android:attr/buttonBarButtonStyle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings" />
+                </LinearLayout>
             </LinearLayout>
-        </LinearLayout>
-    </FrameLayout>
-</LinearLayout>
+        </FrameLayout>
+    </LinearLayout>
+
+    <include layout="@layout/lock" />
+</FrameLayout>
