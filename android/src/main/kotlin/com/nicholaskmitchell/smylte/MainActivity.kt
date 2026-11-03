@@ -85,6 +85,8 @@ class MainActivity : Activity() {
     /// Between onStart and onStop. A picker's answer that comes before onStart
     /// waits for it (HostProtocol.holdsResult).
     private var started = false
+    /// The WebView's renderer has gone and this window is being replaced.
+    private var rendererGone = false
 
     private var backCallback: Any? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
@@ -514,7 +516,11 @@ class MainActivity : Activity() {
         sendEvent(HostProtocol.envEvent(next))
     }
 
-    private fun showingOurPage(): Boolean = loaded && web.url?.let { isOurs(Uri.parse(it)) } == true
+    /// False once the page's renderer has gone: the WebView is not to be used
+    /// again, only replaced (onRenderProcessGone), and a script sent to it
+    /// would start a renderer for a page that is about to go.
+    private fun showingOurPage(): Boolean =
+        !rendererGone && loaded && web.url?.let { isOurs(Uri.parse(it)) } == true
 
     private fun canWalkBack(): Boolean = loaded && web.canGoBack()
 
@@ -677,6 +683,7 @@ class MainActivity : Activity() {
         /// app too. Start the window again instead; onSaveInstanceState
         /// carries the page's path to the new one.
         override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+            rendererGone = true
             if (!isDestroyed) recreate()
             return true
         }

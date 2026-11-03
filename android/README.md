@@ -566,12 +566,13 @@ fingerprint enrolled and a PIN set.
   picker shows, leave with Home, and return within a minute: the picker has
   closed. Open it again, leave for 5 minutes, and film the return: only the lock
   view shows, with no picker even for a frame.
-- **The page's process ends while you're away.** On an emulator or a phone with
-  root, leave Smylte with Home, and 4 minutes later kill the WebView's renderer
-  process (`adb shell ps -A | grep sandboxed_process` for its id, then
-  `adb shell su -c kill <id>`). Return at 9 minutes: locked, with the prompt. In
-  a second run, kill it 1 minute after leaving and return at 3 minutes: not
-  locked, and the app has rebuilt its page.
+- **The page's process ends while you're away.** On an emulator image without
+  Google Play, run `adb root`, leave Smylte with Home, and 4 minutes later kill
+  the WebView's renderer: `adb shell ps -A | grep sandboxed_process` lists one
+  per app using a WebView, and killing them all with `adb shell kill <id>` is
+  fine on a test device. Return at 7 minutes: locked, with the prompt (before
+  this was fixed, it opened unlocked). In a second run, kill it 1 minute after
+  leaving and return at 3 minutes: not locked, and the app has rebuilt its page.
 - **Autofill.** With a password manager set as the autofill service, open Server
   settings, type a username and password without saving, leave for 5 minutes,
   and return: no "Save password?" shows over the lock. Unlock: the fields still

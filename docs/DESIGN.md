@@ -875,7 +875,8 @@ preferences rather than the account, because it concerns this phone.
   `OnDrawListener` on the decor view, taken off again with the window, which a
   rebuilt one can keep). Android can take a window from `onStart`
   to `onStop` unseen: `recreate()` of a stopped activity, which the host does
-  when the renderer dies in the background, runs the new instance through start,
+  when the renderer dies in the background (after which it sends that WebView no
+  more scripts), runs the new instance through start,
   resume, pause and stop in one go. Such a pass leaves the time away as it was,
   and the prompt it would have opened by itself is dropped, since that waits for
   a window still started. A stop with no window started changes nothing.

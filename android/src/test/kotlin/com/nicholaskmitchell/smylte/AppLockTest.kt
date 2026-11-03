@@ -200,13 +200,15 @@ class AppLockTest {
 
     @Test
 
-    fun an_unseen_window_relocks_when_it_is_due_and_stays_locked() {
+    fun repeated_unseen_rebuilds_keep_the_time_away_running() {
+        // The page's process can die again after each rebuild.
         val lock = unlocked()
         lock.stopped(0)
+        for (t in listOf(60_000L, 120_000L, 180_000L, 240_000L)) {
+            lock.started(t)
+            lock.stopped(t)
+        }
         lock.started(away)
-        assertTrue(lock.isLocked())
-        lock.stopped(away)
-        lock.started(away + 10)
         assertTrue(lock.isLocked())
     }
 
@@ -219,16 +221,6 @@ class AppLockTest {
         lock.stopped(280_000)
         lock.started(540_000)
         assertFalse(lock.isLocked())
-    }
-
-    @Test
-
-    fun an_unseen_window_at_the_process_start_leaves_it_locked() {
-        val lock = AppLock()
-        lock.started(0)
-        lock.stopped(0)
-        lock.started(10)
-        assertTrue(lock.isLocked())
     }
 
     // ── when the lock is off or the phone has no screen lock ────────────────
@@ -661,6 +653,19 @@ class AppLockTest {
         val close = stop.indexOf("if (lock.isOn() && showingOurPage()) web.evaluateJavascript(HostProtocol.CLOSE_PICKER_SCRIPT, null)")
         assertTrue(close >= 0)
         assertTrue(close < stop.indexOf("lock.onStop()"))
+    }
+
+    @Test
+
+    fun nothing_is_sent_to_a_page_whose_renderer_has_gone() {
+        val code = flat("MainActivity.kt")
+        assertTrue(code.contains("private fun showingOurPage(): Boolean = !rendererGone && loaded &&"))
+        val gone = between(code, "override fun onRenderProcessGone(", "return true")
+        assertTrue(gone.indexOf("rendererGone = true") in 0 until gone.indexOf("recreate()"))
+        // Every script the window sends goes through that check.
+        val sends = Regex("""web\.evaluateJavascript\(""").findAll(code).count()
+        assertEquals(sends, Regex("""showingOurPage\(\)\) web\.evaluateJavascript\(""").findAll(code).count() + 1)
+        assertTrue(between(code, "private fun sendEvent(", "private fun ").contains("if (isDestroyed || !showingOurPage()) return"))
     }
 
     @Test

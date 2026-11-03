@@ -108,11 +108,6 @@ class SetupActivity : Activity() {
         super.onDestroy()
     }
 
-    /// Back while locked moves the app to the back, as MainActivity's does
-    /// (HostProtocol.backAction). Closing these settings instead would drop
-    /// what was typed in them, and would show the window underneath, whose
-    /// last picture may be from before the lock. On 13 and later that is a
-    /// callback held only while locked, so the system's own Back runs otherwise.
     /// The lock took hold or let go (LockScreen.sync).
     private fun onLockChanged(locked: Boolean) {
         syncBack(locked)
@@ -126,6 +121,11 @@ class SetupActivity : Activity() {
         if (locked) getSystemService(AutofillManager::class.java)?.cancel()
     }
 
+    /// Back while locked moves the app to the back, as MainActivity's does
+    /// (HostProtocol.backAction). Closing these settings instead would drop
+    /// what was typed in them, and would show the window underneath, whose
+    /// last picture may be from before the lock. On 13 and later that is a
+    /// callback held only while locked, so the system's own Back runs otherwise.
     private fun syncBack(locked: Boolean) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         val registered = backCallback
