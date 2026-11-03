@@ -249,4 +249,3 @@ describe('the list editor keeps the look of where it is drawn', () => {
     expect(prop(editorModal()!, '--ghost-hover-bg')).toBe(prop(work, '--ghost-hover-bg'))
   })
 })
-

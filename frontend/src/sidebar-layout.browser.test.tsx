@@ -378,4 +378,3 @@ describe('the settings menu in the classic top bar', () => {
     expect(box(host.querySelector('.gear')!)).toEqual(closed)
   })
 })
-
