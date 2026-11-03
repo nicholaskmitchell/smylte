@@ -418,3 +418,33 @@ describe('<AppearancePanel> export', () => {
     expect(notice).not.toHaveBeenCalled()
   })
 })
+
+describe('<AppearancePanel> the wallpaper accent', () => {
+  it('offers no switch unless the app passes one', () => {
+    setup()
+    expect(screen.queryByLabelText('Accent from wallpaper')).toBeNull()
+  })
+
+  it('says its state and flips it, without touching the theme', async () => {
+    const onChange = vi.fn()
+    const onToggle = vi.fn()
+    const panel = (on: boolean) => (
+      <AppearancePanel appearance={{}} onChange={onChange} mode="light" onMode={vi.fn()}
+        onClose={vi.fn()} wallpaperAccent={{ on, onToggle }} />
+    )
+    const { rerender } = render(panel(false))
+    const toggle = screen.getByLabelText('Accent from wallpaper')
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    expect(toggle).toHaveTextContent('Off')
+    expect(toggle).toHaveAccessibleDescription(/On this phone only/)
+    await userEvent.click(toggle)
+    expect(onToggle).toHaveBeenCalledWith(true)
+    expect(onChange).not.toHaveBeenCalled()
+
+    rerender(panel(true))
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    expect(toggle).toHaveTextContent('On')
+    await userEvent.click(toggle)
+    expect(onToggle).toHaveBeenLastCalledWith(false)
+  })
+})

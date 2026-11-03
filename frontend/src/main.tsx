@@ -15,6 +15,7 @@ import { DisplayView } from './components/DisplayView'
 import { SharePage } from './components/SharePage'
 import { markReady, startAndroidHost } from './android'
 import { startCaptionSync } from './desktop'
+import { startSystemAccent } from './system-accent'
 
 // /book/<token> is the public client-booking page: no session, no login — the
 // branch happens before mount so the authed shell (and its /api/me call) never
@@ -43,6 +44,14 @@ startCaptionSync()
 // reason as the caption sync, so every route gets it, and a no-op in a browser
 // and in the desktop clients.
 startAndroidHost()
+
+// This phone's accent from the wallpaper, when its switch is on, before the
+// first frame: App paints it again after its own tokens, but only after the
+// first paint, and the tab strip would open on the theme's accent until then.
+// The app's own route only, because App is what keeps it current afterwards;
+// the routes without a sign-in show the theme as they find it. A no-op in a
+// browser, in the desktop clients and on Android 11.
+if (!booking && !display && !share) startSystemAccent()
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

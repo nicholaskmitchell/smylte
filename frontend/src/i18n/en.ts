@@ -1011,6 +1011,11 @@ export const en = {
   'appear.resetNamed': 'Reset {token}',
   'appear.pickColor': '{token} — pick a color',
   'appear.customFont': 'Custom ({family})',
+  // Android only: this phone's accent from the wallpaper
+  'appear.systemAccent': 'Accent from wallpaper',
+  'appear.systemAccentOn': 'On',
+  'appear.systemAccentOff': 'Off',
+  'appear.systemAccentHint': 'On this phone only, the accent follows your wallpaper when its color reads clearly on this theme. The theme itself keeps its accent.',
   // ── the public booking page ─────────────────────────────────────────────────
   'book.loading': 'Loading times…',
   'book.notFound': 'This booking link is no longer available.',

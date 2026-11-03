@@ -517,6 +517,11 @@ sides, because a pre-paint script writes them into the CSSOM and a `url()` beaco
 or a property break-out must never survive storage. `appearance.test.ts` checks
 the defaults and presets against `tokens.css`.
 
+One appearance choice is not the account's: in the Android client a phone can
+take its accent from the wallpaper (see Android client). It is written over the
+theme's inline tokens and never into a theme, so it is not synced, exported or
+applied on any other device.
+
 ## Claude connector
 
 - **Read-only about whether a day exists.** A connector can see today, add to
@@ -715,6 +720,33 @@ in flight. Once the account has a clock, the phone's setting no longer applies.
 The settings API has no "only if absent" write, so a choice made on another
 device during that one round trip would be overwritten; that can happen once per
 account.
+
+**An accent from the wallpaper, on this phone only.**
+- On Android 12 and later `hello` also reports the phone's accent palette. That
+  is Material You's `system_accent1` colours, 13 tones from 0 to 1000, each read
+  by its own named resource id and sent as `#rrggbb`.
+- Appearance shows a switch only when the palette is there. The switch is
+  remembered in the WebView's own storage (`smylte-device-accent`) and never in
+  the account, so the owner's other devices, the theme and its exports keep the
+  theme's accent.
+- When it is on, the page writes `--accent` inline after the theme's tokens, so
+  it beats a custom theme's accent on this phone. It is written again on every
+  theme or mode change, because `applyTokens` clears every token first. main.tsx
+  writes it once before the first render.
+- The shade is Material's own accent tone for each mode, 600 on light and 200 on
+  dark, stepping darker or lighter until one clears 3:1 against all three
+  backgrounds (`--bg`, `--bg-elev`, `--paper`). That is the floor the shipped
+  accents are held to; if no tone clears it, the theme's accent stays.
+- A custom background may be any CSS colour. One the contrast code cannot read,
+  a `color-mix()` for instance, is painted on a canvas and read back, as the
+  bar-colour watcher does. The pick is checked again once painted, since a
+  background may itself be defined from the accent.
+- A new palette arrives with a rebuilt window's `hello`, or as the env event
+  when the window is not rebuilt (the manifest's `configChanges` lists
+  `assetsPaths`).
+- Any script on the page can read the palette, as it can the clock. It says
+  something about the wallpaper and nothing else, and goes only to the user's
+  own server's page.
 
 **Back closes what is open, and asks before it discards.** Every dialog, sheet
 and popover registers as a layer (`layers.ts`), in the order it opened, and the

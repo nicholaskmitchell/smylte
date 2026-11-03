@@ -32,7 +32,8 @@ import {
   sanitizeTriggers, type Trigger,
 } from './notifications'
 import { TimeFormatProvider } from './timeformat'
-import { haptic, hostClock, markReady, onHostEnv } from './android'
+import { haptic, hostAccent, hostClock, markReady, onHostEnv } from './android'
+import { applySystemAccent, readDeviceAccent, writeDeviceAccent } from './system-accent'
 import {
   DEFAULT_TAB_ORDER, DEFAULT_TAB_START, TAB_LABELS, cacheTab, isTab, readCachedTab,
   resolveStartTab, sanitizeTabOrder, sanitizeTabStart, type Tab, type TabStart,
@@ -285,6 +286,13 @@ export function App() {
   // Seeded from the pre-paint cache so the editor opens showing what is already
   // on screen; the server overwrites it a moment later like every other setting.
   const [appearance, setAppearance] = useState<Appearance>(() => readCachedAppearance() ?? {})
+  // The phone's wallpaper palette inside the Android client on Android 12 and
+  // later, else null, which hides the switch. Followed through env events, so a
+  // palette that changes without the window being rebuilt still repaints.
+  const [wallpaperRamp, setWallpaperRamp] = useState<readonly string[] | null>(hostAccent)
+  // This phone's switch for the wallpaper accent (system-accent.ts). Never part
+  // of the account's settings, so it is never written by saveSettings.
+  const [wallpaperAccent, setWallpaperAccent] = useState(readDeviceAccent)
   // NULL means "never arranged", `[]` means "deliberately empty", and they used
   // to be the same value. `HomeView` reads an empty array as "show the stock
   // five", which is right for a new account and wrong the moment the owner
@@ -419,12 +427,22 @@ export function App() {
     setTheme(next)
   }, [])
 
+  // The immediate `follow()` catches an env event that arrived between the
+  // first render and this effect. Outside the Android client this is a no-op.
+  useEffect(() => {
+    const follow = () => setWallpaperRamp(hostAccent())
+    follow()
+    return onHostEnv(follow)
+  }, [])
+
   // The one place appearance reaches the DOM, by both of its routes. A shipped
   // preset is an attribute, because it is a whole alternative design and lives
   // in tokens.css; a saved theme is a sparse map of inline properties on <html>,
   // which wins over :root without replacing it. The two are mutually exclusive,
   // and clearing both restores the shipped design exactly. Re-runs on a
   // light/dark flip too, since either route carries a separate map per mode.
+  // Inside the Android client, this phone's wallpaper accent is written last,
+  // so it wins over both.
   useEffect(() => {
     const mode: Mode = theme === 'dark' ? 'dark' : 'light'
     const slug = presetSlug(appearance?.active)
@@ -433,10 +451,14 @@ export function App() {
     const tokens = resolve(appearance, mode)
     applyTokens(document.documentElement, tokens)
     ensureFonts(tokens)
+    // This phone's wallpaper accent, over the theme's: after applyTokens, which
+    // has just cleared it, and before syncThemeColor, which reads only --bg.
+    // Switched off, it is simply not written again.
+    if (wallpaperAccent) applySystemAccent(document.documentElement, mode, wallpaperRamp)
     // Reads the resolved --bg back off the element, so it is correct whichever
     // route set it — hence last.
     syncThemeColor()
-  }, [appearance, theme])
+  }, [appearance, theme, wallpaperAccent, wallpaperRamp])
 
   // Settings are account-synced: once authenticated, the server is the source of
   // truth (localStorage is only the pre-paint cache to avoid a flash).
@@ -891,6 +913,12 @@ export function App() {
     cacheAppearance(next)
     saveSettingsSoon({ appearance: next })
   }, [saveSettingsSoon])
+
+  // Per device: stored on this phone and never in the settings write.
+  const changeWallpaperAccent = useCallback((on: boolean) => {
+    writeDeviceAccent(on)
+    setWallpaperAccent(on)
+  }, [])
 
   const changeDashboard = useCallback((next: DashboardModule[]) => {
     setDashboard(next)
@@ -1594,6 +1622,7 @@ export function App() {
       {appearanceOpen && (
         <AppearancePanel appearance={appearance} onChange={changeAppearance}
           mode={theme === 'dark' ? 'dark' : 'light'} onMode={changeTheme}
+          wallpaperAccent={wallpaperRamp ? { on: wallpaperAccent, onToggle: changeWallpaperAccent } : undefined}
           onClose={() => setAppearanceOpen(false)} />
       )}
       {(layout === 'classic' || focusOpen) && offlineBar}

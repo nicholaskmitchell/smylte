@@ -1,5 +1,7 @@
 package com.nicholaskmitchell.smylte
 
+import java.util.Locale
+
 /// The rules of the page bridge (PageBridge) and the messages the host sends
 /// back to the page.
 ///
@@ -17,6 +19,12 @@ object HostProtocol {
     /// What hello answers when the host failed: the page reads it as no env at
     /// all (it has no v).
     const val NO_ENV = "{}"
+
+    /// The tones of the phone's accent palette that hello reports, in order: the
+    /// system_accent1 colours of Material You (Android 12 and later), from 0
+    /// (white) to 1000 (black). SystemAccent reads one named id per tone, and
+    /// HostProtocolTest holds this list to android.ts's ACCENT_TONES.
+    val ACCENT_TONES: List<Int> = listOf(0, 10, 50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000)
 
     const val MAX_CAPS_CHARS = 256
     const val MAX_CAPS = 16
@@ -101,9 +109,20 @@ object HostProtocol {
         return raw.split(',').take(MAX_CAPS).filter { CAP.matches(it) }.toSet()
     }
 
-    /// What hello answers. It takes only a boolean, so nothing the page sends
-    /// can reach the JSON.
-    fun envJson(clock24: Boolean): String = """{"v":$ENV_VERSION,"clock24":$clock24}"""
+    /// What hello answers. It takes a boolean and colours the host read itself,
+    /// formatted here, so nothing the page sends can reach the JSON. The accent
+    /// palette is left out when there is none (Android 11) and when it does not
+    /// hold exactly one colour per tone, so the page never sees a partial one.
+    fun envJson(clock24: Boolean, accent: List<Int>? = null): String {
+        val palette = accent?.takeIf { it.size == ACCENT_TONES.size }
+            ?.joinToString(",", prefix = ",\"accent\":[", postfix = "]") { "\"${accentHex(it)}\"" }
+            ?: ""
+        return """{"v":$ENV_VERSION,"clock24":$clock24$palette}"""
+    }
+
+    /// One palette colour as the page reads it: `#rrggbb`, lowercase, with the
+    /// alpha masked off (the platform's colours are opaque ARGB ints).
+    fun accentHex(argb: Int): String = "#%06x".format(Locale.ROOT, argb and 0xFFFFFF)
 
     fun envEvent(env: String): String = """{"type":"env","env":$env}"""
 

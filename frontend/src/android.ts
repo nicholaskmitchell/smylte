@@ -20,6 +20,9 @@
 // and the app's failure toast asks for a `reject` (App.tsx). The host plays
 // them only in answer to a touch, and only if the phone's touch feedback is on.
 //
+// On Android 12 and later the env carries the phone's accent palette, which
+// Appearance offers as this phone's accent (system-accent.ts).
+//
 // On Android 12 and later the host holds the platform's splash screen until
 // the page says its first view is up (`markReady`), or until its own cap.
 //
@@ -54,7 +57,10 @@ interface AndroidBridge {
 /// What the host reports about the device. Every field is optional: the host
 /// may be older than the page or newer. `clock24` is the phone's 12/24-hour
 /// setting; App shows it while the account has none and saves it once.
-export type HostEnv = { clock24?: boolean }
+/// `accent` is the phone's wallpaper palette, one colour per tone of
+/// ACCENT_TONES, on Android 12 and later; Appearance offers it as this phone's
+/// accent.
+export type HostEnv = { clock24?: boolean; accent?: readonly string[] }
 
 /** The haptics the host can play; HostProtocolTest holds this list to the
  *  host's, reading it from this one line. */
@@ -64,6 +70,19 @@ const isHapticKind = (s: string): s is HapticKind => HAPTIC_KINDS.includes(s)
 // The controls whose click can play one. The nearest to the click decides, so
 // a plain button inside a toggle's row plays nothing.
 const HAPTIC_CONTROL = 'button, [role="button"], [role="checkbox"], [role="switch"], input[type="checkbox"]'
+
+/** The tones of the phone's accent palette, in the order the host sends them
+ *  (Material You's system_accent1 colours). HostProtocolTest holds this list
+ *  to the host's, reading it from this one line. */
+export const ACCENT_TONES: readonly number[] = [0, 10, 50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
+const HEX6 = /^#[0-9a-f]{6}$/
+
+/** One lowercase `#rrggbb` per tone, as the host formats them. Anything else
+ *  is no palette at all, so the page never paints from part of one. */
+export function isAccentRamp(v: unknown): v is readonly string[] {
+  return Array.isArray(v) && v.length === ACCENT_TONES.length
+    && v.every((c) => typeof c === 'string' && HEX6.test(c))
+}
 
 /** 'busy' is page-only: a save is already waiting for the picker (a second tap).
  *  The host never sends it. */
@@ -110,6 +129,7 @@ export function readEnv(raw: unknown): HostEnv | null {
   if (o.v !== ENV_VERSION) return null
   const out: HostEnv = {}
   if (typeof o.clock24 === 'boolean') out.clock24 = o.clock24
+  if (isAccentRamp(o.accent)) out.accent = [...o.accent]
   return out
 }
 
@@ -215,6 +235,13 @@ export function hostEnv(): HostEnv | null {
 export function hostClock(): TimeFormat | null {
   const c = env?.clock24
   return c === undefined ? null : c ? '24h' : '12h'
+}
+
+/** The phone's wallpaper palette, or null when the host has not sent one (a
+ *  browser, a desktop client, Android 11, a client from before it, or an env
+ *  this page cannot read). */
+export function hostAccent(): readonly string[] | null {
+  return env?.accent ?? null
 }
 
 /** Call `fn` whenever the host sends a new env. Returns the unsubscribe. */

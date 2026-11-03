@@ -34,12 +34,15 @@ import {
 // resolved at each call site — a module constant has no translator.
 const AT_CAP = 'appear.atCap'
 
-export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }: {
+export function AppearancePanel({ appearance, onChange, mode, onMode, onClose, wallpaperAccent }: {
   appearance: Appearance
   onChange: (next: Appearance) => void
   mode: Mode
   onMode: (next: Mode) => void
   onClose: () => void
+  /** This phone's switch for the accent from the wallpaper. Passed only inside
+   *  the Android client on a phone that reports a palette. */
+  wallpaperAccent?: { on: boolean; onToggle: (on: boolean) => void }
 }) {
   const tr = useT()
   // The mode as a WORD, twice on this screen: inside a sentence ("2 overrides
@@ -307,6 +310,25 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose }:
               on the preset attribute a fork does not carry — so a fork of it is
               not a copy of it, and the panel says so before anyone finds out. */}
           {active?.id === 'preset:classic' && <p className="hintline">{tr('appear.classicHint')}</p>}
+
+          {/* ---- this phone only ---- */}
+          {/* Not part of the theme: it is stored on this phone, never saved to the
+              account or exported, and the theme keeps its own accent everywhere
+              else. A settings toggle like every other: named by its label, saying
+              its state. */}
+          {wallpaperAccent && (
+            <>
+              <div className="menu-row">
+                <label htmlFor="appear-wallpaper-accent">{tr('appear.systemAccent')}</label>
+                <button className="menu-toggle" id="appear-wallpaper-accent"
+                  aria-pressed={wallpaperAccent.on} aria-describedby="appear-wallpaper-accent-hint"
+                  onClick={() => wallpaperAccent.onToggle(!wallpaperAccent.on)}>
+                  {tr(wallpaperAccent.on ? 'appear.systemAccentOn' : 'appear.systemAccentOff')}
+                </button>
+              </div>
+              <p className="hintline" id="appear-wallpaper-accent-hint">{tr('appear.systemAccentHint')}</p>
+            </>
+          )}
 
           {/* ---- which mode am I editing ---- */}
           <div className="appear-modes" role="group" aria-label={tr('appear.editingMode')}>

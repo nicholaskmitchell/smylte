@@ -1075,6 +1075,11 @@ export const de: Catalogue = {
   'appear.resetNamed': '{token} zurücksetzen',
   'appear.pickColor': '{token} — eine Farbe wählen',
   'appear.customFont': 'Eigene ({family})',
+  // Android only: this phone's accent from the wallpaper
+  'appear.systemAccent': 'Akzent vom Hintergrundbild',
+  'appear.systemAccentOn': 'An',
+  'appear.systemAccentOff': 'Aus',
+  'appear.systemAccentHint': 'Nur auf diesem Telefon folgt der Akzent deinem Hintergrundbild, wenn dessen Farbe auf diesem Theme gut lesbar ist. Das Theme selbst behält seinen Akzent.',
   // ── the public booking page ─────────────────────────────────────────────────
   'book.loading': 'Zeiten werden geladen…',
   'book.notFound': 'Dieser Buchungslink ist nicht mehr verfügbar.',

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { RAMP, RAMP2 } from './test/accent'
 
 // The module keeps its state at module level, so each test gets a fresh one.
 let a: typeof import('./android')
@@ -88,6 +89,12 @@ describe('android: starting', () => {
     ['{"v":1,"clock24":true}', { clock24: true }],
     ['{"v":1,"clock24":"yes"}', {}],
     ['{"v":1,"clock24":false,"accent":["#fff"],"future":1}', { clock24: false }],
+    [JSON.stringify({ v: 1, clock24: false, accent: RAMP }), { clock24: false, accent: RAMP }],
+    [JSON.stringify({ v: 1, clock24: true, accent: RAMP.slice(0, 12) }), { clock24: true }],
+    [JSON.stringify({ v: 1, clock24: true, accent: [...RAMP, '#000000'] }), { clock24: true }],
+    [JSON.stringify({ v: 1, clock24: true, accent: RAMP.map((c, i) => (i === 0 ? '#FFFFFF' : c)) }), { clock24: true }],
+    [JSON.stringify({ v: 1, clock24: true, accent: RAMP.map((c, i) => (i === 0 ? 7 : c)) }), { clock24: true }],
+    ['{"v":1,"clock24":true,"accent":"#ffffff"}', { clock24: true }],
     ['{"v":2,"clock24":true}', null],
     ['{"clock24":true}', null],
     ['not json', null],
@@ -187,6 +194,31 @@ describe('android: the phone\'s clock', () => {
     expect(a.hostClock()).toBe('12h')
     fire({ type: 'env', env: { v: 1, clock24: true } })
     expect(a.hostClock()).toBe('24h')
+  })
+})
+
+describe('android: the wallpaper palette', () => {
+  it('is null outside the client, in a client without hello, and on a phone without one', async () => {
+    expect(a.hostAccent()).toBeNull()
+    bridge({ themeColour: vi.fn() })
+    a.startAndroidHost()
+    expect(a.hostAccent()).toBeNull()
+    // The module is fresh again, so this start reads a hello with no palette.
+    vi.resetModules()
+    a = await import('./android')
+    bridge({ hello: () => '{"v":1,"clock24":false}' })
+    a.startAndroidHost()
+    expect(a.hostAccent()).toBeNull()
+  })
+
+  it('follows an env event, and an env without one drops it', () => {
+    bridge({ hello: () => JSON.stringify({ v: 1, clock24: false, accent: RAMP }) })
+    a.startAndroidHost()
+    expect(a.hostAccent()).toEqual(RAMP)
+    fire({ type: 'env', env: { v: 1, clock24: false, accent: RAMP2 } })
+    expect(a.hostAccent()).toEqual(RAMP2)
+    fire({ type: 'env', env: { v: 1, clock24: false } })
+    expect(a.hostAccent()).toBeNull()
   })
 })
 

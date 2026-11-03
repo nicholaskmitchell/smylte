@@ -126,7 +126,7 @@ can't be read there anyway.
 | `files/release.json` | The last release description, for conditional checks |
 | `cache/updates/` | An app update between download and install |
 | `cache/export/` | A file being saved, while Android's save dialog is open, in case Android closes Smylte meanwhile |
-| `app_webview/` | The WebView's cookies and local storage |
+| `app_webview/` | The WebView's cookies and local storage, including whether the accent follows the wallpaper |
 
 ## Differences from the desktop clients
 
@@ -161,6 +161,11 @@ can't be read there anyway.
   has signed in, or shown its sign-in screen or its offline notice. It never
   stays longer than three seconds: on a slow connection Smylte's own
   "Starting…" screen then says what it's waiting for.
+- **The accent can follow the wallpaper.** On Android 12 and later, Appearance
+  has a switch that takes the accent from the phone's wallpaper colours, on this
+  phone only. Smylte uses the shade of that colour that stays readable on the
+  theme's backgrounds, and keeps the theme's own accent when none does. The
+  theme, its exports and your other devices are unchanged.
 
 ## Building
 
@@ -293,16 +298,20 @@ The JVM unit tests run without a device. They cover:
 - the bar colours;
 - the page bridge: exactly which methods the page can call, that release builds
   keep them, that `android.ts` declares the same methods, and what each accepts;
-- the bridge's rules: capabilities, the env and its events, a saved file's type,
-  name and size, the wait between save dialogs, where a save's result is shown,
-  touch tracking, when a haptic may play and which one each name plays on each
-  Android version, where Back goes, which page a count of open layers
-  belongs to, and when the splash screen is held and what ends it;
+- the bridge's rules: capabilities, the env and its events (the accent palette
+  in the env: its tones, its colours as `#rrggbb`, none when it is the wrong
+  size), a saved file's type, name and size, the wait between save dialogs,
+  where a save's result is shown, touch tracking, when a haptic may play and
+  which one each name plays on each Android version, where Back goes, which
+  page a count of open layers belongs to, and when the splash screen is held
+  and what ends it;
 - that the page and the window agree on the event, its outcomes, the env
-  version and the env's fields, every event type, the haptic names and the `ready`
-  capability (against `frontend/src/android.ts`), that the window never
-  overrides the system's touch feedback setting, and that the splash never waits
-  on anything that needs a drawn window;
+  version and the env's fields, the accent's tones, every event type, the
+  haptic names and the `ready` capability (against `frontend/src/android.ts`),
+  that the window never overrides the system's touch feedback setting, and that
+  the splash never waits on anything that needs a drawn window;
+- that the palette is read by its named ids, in tone order, wherever the clock
+  is read;
 - the text zoom, and the body size it is measured at, against the stylesheet;
 - the launcher icon against `frontend/public/favicon.svg`.
 
@@ -372,6 +381,38 @@ adb shell am start -W -S -a android.intent.action.MAIN -c android.intent.categor
   still carries the old one), the splash ends when the page has loaded. Record
   any blank frame before the tabs appear.
 
+### The accent from the wallpaper
+
+On Android 12 or later, in Settings › Appearance › Customize…
+
+- **The switch.** "Accent from wallpaper" shows and reads Off. On Android 11 it
+  is not there.
+- **On.** The accent changes at once to a wallpaper colour: the active tab,
+  buttons, an active icon button, task checks, focus rings and selected text.
+  Compare it with Wallpaper & style's palette.
+- **Legible everywhere.** With at least three wallpapers (one pale, one dark,
+  one strongly coloured), check Smylte, Classic and Workspace, each in light and
+  in dark. The accent stays readable on chips, on active icon buttons (which
+  draw the background colour on the accent) and on buttons. Record any
+  combination that kept the theme's accent because no shade was readable.
+- **A new wallpaper.** With the switch on and a task open, change the wallpaper
+  (or only the palette), then return. The accent follows without a restart.
+  Record whether the window was rebuilt (the task closed, the page reloaded) or
+  not (the task stayed open): this shows how this Android version delivers a
+  palette.
+- **Off.** The theme's accent returns at once, and stays after a restart.
+- **Cold start, on.** The first screen after the splash already has the
+  wallpaper accent, with no flash of the theme's accent on the tab strip.
+- **This phone only.** In a browser on the same account the accent is the
+  theme's and there is no switch. An export from the phone holds the theme's
+  accent.
+- **TalkBack.** The switch reads its label, state and hint, and a double-tap
+  flips it. Record the words.
+- **Touch.** With touch feedback on, flipping it plays the toggle haptic.
+- **Version skew.** The APK from before this change with the new web build: no
+  switch, the theme's accent, everything else works. This APK with an older web
+  build: nothing changes.
+
 ## Source layout
 
 ```
@@ -391,6 +432,7 @@ Settings.kt       stored settings
 PasswordVault.kt  AES-GCM under an Android keystore key
 ServerAddress.kt  the server address rules
 ThemeColour.kt    the page colour and the script that reports it
+SystemAccent.kt   the phone's accent palette, for the page's accent from the wallpaper
 TextZoom.kt       the page's text size, from the system font size
 ApkProvider.kt    hands the downloaded APK to the installer
 Insets.kt         edge to edge, clear of the bars and the keyboard

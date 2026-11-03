@@ -117,7 +117,7 @@ class MainActivity : Activity() {
         updater = Updater(this, settings)
         assets = LocalAssets(updater.web.root, origin)
         restorePath = savedInstanceState?.getString(KEY_PATH)
-        envJson = HostProtocol.envJson(DateFormat.is24HourFormat(this))
+        envJson = currentEnv()
         restoreSave(savedInstanceState)
 
         setContentView(R.layout.activity_main)
@@ -403,13 +403,20 @@ class MainActivity : Activity() {
         }
     }
 
+    /// What hello reports: the phone's 12/24-hour setting and, on Android 12 and
+    /// later, its accent palette. Main thread.
+    private fun currentEnv(): String =
+        HostProtocol.envJson(DateFormat.is24HourFormat(this), SystemAccent.read(this))
+
     /// Tell the page when the facts hello reported have changed. It runs in
     /// onResume, so a Settings change made while away is picked up (a
     /// ContentObserver is skipped because its notifications are unconfirmed),
     /// and in onConfigurationChanged, because a locale change changes the
-    /// default.
+    /// default. A new wallpaper palette reaches the page either way: a rebuilt
+    /// window's page asks hello afresh, and a window that is not rebuilt
+    /// (configChanges lists assetsPaths) sends it from here.
     private fun refreshEnv() {
-        val next = HostProtocol.envJson(DateFormat.is24HourFormat(this))
+        val next = currentEnv()
         if (next == envJson) return
         envJson = next
         sendEvent(HostProtocol.envEvent(next))

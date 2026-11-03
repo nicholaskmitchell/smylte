@@ -14,6 +14,12 @@ import java.io.File
 class HostProtocolTest {
     private fun name(n: String?) = SaveRequest.of(n, "application/json", "{}")?.name
 
+    // The same palette as the frontend's test fixture (src/test/accent.ts).
+    private val PALETTE = listOf(
+        0xFFFFFFFF, 0xFFFEFBFF, 0xFFEDF0FF, 0xFFD8E2FF, 0xFFADC6FF, 0xFF7EABFF, 0xFF4D8EFF,
+        0xFF2173E8, 0xFF005AC1, 0xFF004494, 0xFF002E69, 0xFF001A41, 0xFF000000,
+    ).map { it.toInt() }
+
     // ── capabilities ────────────────────────────────────────────────────────
 
     @Test
@@ -49,6 +55,41 @@ class HostProtocolTest {
     fun env_json_is_exact() {
         assertEquals("""{"v":1,"clock24":true}""", HostProtocol.envJson(true))
         assertEquals("""{"v":1,"clock24":false}""", HostProtocol.envJson(false))
+    }
+
+    @Test
+
+    fun env_json_carries_the_accent_palette() {
+        assertEquals(
+            """{"v":1,"clock24":true,"accent":["#ffffff","#fefbff","#edf0ff","#d8e2ff","#adc6ff","#7eabff","#4d8eff","#2173e8","#005ac1","#004494","#002e69","#001a41","#000000"]}""",
+            HostProtocol.envJson(true, PALETTE),
+        )
+    }
+
+    @Test
+
+    fun a_palette_of_the_wrong_size_is_left_out() {
+        val bare = """{"v":1,"clock24":false}"""
+        assertEquals(bare, HostProtocol.envJson(false, null))
+        assertEquals(bare, HostProtocol.envJson(false, emptyList()))
+        assertEquals(bare, HostProtocol.envJson(false, PALETTE.take(12)))
+        assertEquals(bare, HostProtocol.envJson(false, PALETTE + PALETTE[0]))
+    }
+
+    @Test
+
+    fun accent_colours_are_opaque_lowercase_hex() {
+        assertEquals("#005ac1", HostProtocol.accentHex(0xFF005AC1.toInt()))
+        assertEquals("#ffffff", HostProtocol.accentHex(0x80FFFFFF.toInt()))
+        assertEquals("#ffffff", HostProtocol.accentHex(-1))
+        assertEquals("#000000", HostProtocol.accentHex(0))
+        assertEquals("#000001", HostProtocol.accentHex(1))
+    }
+
+    @Test
+
+    fun accent_tones_are_material_yous() {
+        assertEquals(listOf(0, 10, 50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000), HostProtocol.ACCENT_TONES)
     }
 
     @Test
@@ -524,16 +565,28 @@ class HostProtocolTest {
     @Test
 
     fun the_page_reads_every_env_field() {
-        // The page acts on env fields now: it writes `clock24` to the account.
-        // A field renamed on one side alone would leave the page silently
-        // reading nothing. The version is pinned by the test above.
+        // The page acts on env fields now: it writes `clock24` to the account
+        // and paints `accent`. A field renamed on one side alone would leave
+        // the page silently reading nothing. The version is pinned by the test
+        // above.
         val ts = File("../frontend/src/android.ts").readText()
-        val fields = Regex(""""([A-Za-z0-9_]+)":""").findAll(HostProtocol.envJson(true))
+        val fields = Regex(""""([A-Za-z0-9_]+)":""")
+            .findAll(HostProtocol.envJson(true, List(HostProtocol.ACCENT_TONES.size) { 0 }))
             .map { it.groupValues[1] }.filter { it != "v" }.toList()
         assertTrue("the env carries no fields", fields.isNotEmpty())
         for (field in fields) {
             assertTrue(field, Regex("""\.$field\b""").containsMatchIn(ts))
         }
+    }
+
+    @Test
+
+    fun the_page_reads_the_same_accent_tones() {
+        val ts = File("../frontend/src/android.ts").readText()
+        val match = Regex("""export const ACCENT_TONES[^=]*= \[([^\]]*)\]""").find(ts)
+        assertNotNull("android.ts has no ACCENT_TONES", match)
+        val tones = match!!.groupValues[1].split(',').map { it.trim().toInt() }
+        assertEquals(HostProtocol.ACCENT_TONES, tones)
     }
 
     @Test
