@@ -280,29 +280,37 @@ object HostProtocol {
     // ── the WebView ─────────────────────────────────────────────────────────
 
     /// The oldest WebView that runs the page, as the Chromium version it is
-    /// built on. The page's script needs only Chrome 107 (Vite 7's default build
-    /// target, which the frontend keeps), but its stylesheet needs 111: its
-    /// palette is written in oklch() and its tints in color-mix(), and a
-    /// WebView without them drops every colour that uses them, so a done task's
-    /// check and today's date in the calendar vanish. Below 107 the script
-    /// doesn't even parse, and the page is blank. Either way nothing says why,
-    /// so the host checks first and says what to update.
+    /// built on. The stylesheet sets it: its palette is written in oklch() and
+    /// its tints in color-mix(), both 111, and a WebView without them drops
+    /// every colour that uses them, so a done task's check and today's date in
+    /// the calendar vanish. Below 108 the layout collapses too (dvh), and below
+    /// 85 the script doesn't parse and the page is blank. None of it says why,
+    /// so the host checks first and says what to update. The frontend's
+    /// webview-floor test fails when the page starts to need something newer.
     const val MIN_WEBVIEW_MAJOR = 111
+
+    /// No WebView on Android 11, Smylte's oldest, is built on a Chromium older
+    /// than this: Android 11 shipped with 83, and Android won't use a provider
+    /// older than the one the phone came with. A lower number is a provider's
+    /// own numbering (Huawei's WebView is numbered 11 to 15), which the Chrome/
+    /// token can carry, since from Chromium 156 it is the provider package's
+    /// versionName. It is read as no version at all.
+    const val OLDEST_REAL_MAJOR = 70
 
     private val CHROME_TOKEN = Regex("""\bChrome/(\d+(?:\.\d+)*)""")
 
     /// The engine's version in a WebView's user agent ("… Chrome/133.0.6943.137
     /// Mobile Safari/537.36" gives "133.0.6943.137"), or null when it has
-    /// none. The user agent, not the WebView package's versionName: every
-    /// provider's engine writes its own Chromium version there, while a
-    /// provider can number its package its own way.
+    /// none. The user agent, not the WebView package's versionName, because a
+    /// provider can number its package its own way: Huawei's WebView 14.0.0.331
+    /// is Chromium 99, and says so in its user agent.
     fun chromiumVersion(userAgent: String?): String? =
         userAgent?.let { CHROME_TOKEN.find(it)?.groupValues?.get(1) }
 
     /// The major version in a Chromium version ("133.0.6943.137" is 133), or
-    /// null when there is none to read.
+    /// null when there is none to read or it is below OLDEST_REAL_MAJOR.
     fun webViewMajor(version: String?): Int? =
-        version?.trim()?.substringBefore('.')?.toIntOrNull()?.takeIf { it > 0 }
+        version?.trim()?.substringBefore('.')?.toIntOrNull()?.takeIf { it >= OLDEST_REAL_MAJOR }
 
     /// Whether the WebView is too old to run the page. A version that can't be
     /// read is let through: the page may well run, and a refusal would leave no

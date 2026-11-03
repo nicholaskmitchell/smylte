@@ -410,8 +410,9 @@ The JVM unit tests run without a device. They cover:
   is read;
 - the text zoom, and the body size it is measured at, against the stylesheet;
 - the oldest WebView that runs the page, read from the user agent's `Chrome/`
-  version; that the frontend keeps Vite 7's default target, and that start-up
-  checks the WebView first;
+  version, with a provider's own numbering let through; that the frontend keeps
+  Vite 7's default target, and that start-up checks the WebView first (the
+  frontend's `webview-floor.test.ts` checks the page against the same floor);
 - the launcher icon against `frontend/public/favicon.svg`.
 
 `backend/tests/test_csp.py` fails if `Csp.kt`'s directives drift from the

@@ -24,7 +24,7 @@
     <string name="file_not_saved">The file could not be saved.</string>
     <string name="no_app_for_link">No app on this device can open that link.</string>
     <string name="webview_name">Android System WebView</string>
-    <string name="webview_outdated">Smylte needs a newer %1$s. It runs on Chromium %3$d or later, and this phone\'s %1$s is Chromium %2$s. Update %1$s from the phone\'s app store, then tap Try again.</string>
+    <string name="webview_outdated">Smylte needs a newer %1$s. It runs on Chromium %3$d or later, and this phone\'s %1$s is Chromium %2$s. Update %1$s from the phone\'s app store or its system updates, then tap Try again.</string>
 
     <string name="lock_title">Smylte is locked</string>
     <string name="lock_unlock">Unlock</string>

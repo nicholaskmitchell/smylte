@@ -292,7 +292,8 @@ class AppSourceTest(unittest.TestCase):
         pattern = lib.format_regex(strings["webview_outdated"], {2: r"83(?:\.\d+)*", 3: "111"})
         name = "Android System WebView"
         shown = (f"Smylte needs a newer {name}. It runs on Chromium 111 or later, and this phone's {name} "
-                 f"is Chromium 83.0.4103.106. Update {name} from the phone's app store, then tap Try again.")
+                 f"is Chromium 83.0.4103.106. Update {name} from the phone's app store or its system updates, "
+                 "then tap Try again.")
         self.assertTrue(pattern.fullmatch(shown))
         self.assertIsNone(pattern.fullmatch(shown.replace("Chromium 83.", "Chromium 84.")))
         self.assertIsNone(pattern.fullmatch(shown.replace("Chromium 111", "Chromium 107")))

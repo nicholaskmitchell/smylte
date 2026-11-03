@@ -663,18 +663,29 @@ served from disk
 gets a port of `csp.py`'s policy (`Csp.kt`), which `test_csp.py` checks as it
 checks the desktop's copy.
 
-**An outdated WebView says so.** The page needs Chromium 111. Its script keeps
-Vite 7's default target, Chrome 107, and an older WebView fails to parse it and
-shows a blank page with no error. Its stylesheet writes the palette in `oklch()`
-and the tints in `color-mix()`, both 111, and a WebView without them drops every
-colour that uses them: a done task's check and today's date vanish. Android 11
-images without Google Play ship WebView 83. So before start-up the client reads
-the engine's version from the `Chrome/` token of its default user agent and,
-below 111, shows the failure screen, naming the WebView and asking for an
-update, without downloading anything. The user agent rather than the provider
-package's `versionName`, because a provider such as Huawei's numbers its package
-its own way. A version it can't read is let through. A test fails if the
-frontend sets a build target of its own or moves off Vite 7.
+**An outdated WebView says so.** The page needs Chromium 111, and below it the
+page loads broken with no message. Its stylesheet writes the palette in
+`oklch()` and the tints in `color-mix()`, both 111, and a WebView without them
+drops every colour that uses them: a done task's check and today's date vanish.
+Below 108 the layout collapses as well (`dvh`), and below 85 the script doesn't
+parse and the page is blank. Android 11 images without Google Play ship WebView
+83.
+
+So before start-up the client reads the engine's version from the `Chrome/`
+token of its default user agent and, below 111, shows the failure screen,
+naming the WebView and asking for an update, without downloading anything. It
+reads the user agent rather than the provider package's `versionName`, because
+a provider can number its package its own way: Huawei's WebView 14.0.0.331 is
+Chromium 99. From Chromium 156 the token is itself the package's `versionName`,
+so a number below 70, older than any WebView Android 11 can run, is taken for
+such a numbering and let through, as is a version that can't be read. A page
+that loads degraded is better than a phone turned away for good.
+
+The frontend's `webview-floor.test.ts` fails when the page uses a feature newer
+than the floor, from a list of likely ones with their WebView versions, and
+when nothing on that list needs the floor any more. An Android test fails if the
+frontend sets a build target of its own or moves off Vite 7, either of which can
+let newer script syntax through.
 
 **An app, not a page in a browser.** A WebView's defaults give the page away in
 a few places, and the client changes the ones that are WebView settings.

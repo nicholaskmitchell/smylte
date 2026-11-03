@@ -792,6 +792,11 @@ class HostProtocolTest {
         assertNull(HostProtocol.webViewMajor("unknown"))
         assertNull(HostProtocol.webViewMajor("0.1"))
         assertNull(HostProtocol.webViewMajor("-5.0"))
+        // A provider's own numbering, not a Chromium version.
+        assertEquals(70, HostProtocol.OLDEST_REAL_MAJOR)
+        assertEquals(70, HostProtocol.webViewMajor("70.0.3538.110"))
+        assertNull(HostProtocol.webViewMajor("69.0.3497.100"))
+        assertNull(HostProtocol.webViewMajor("15.0.4.326"))
     }
 
     @Test
@@ -804,13 +809,23 @@ class HostProtocolTest {
         assertFalse(HostProtocol.webViewTooOld(HostProtocol.chromiumVersion(UA_133)))
         assertFalse(HostProtocol.webViewTooOld(null))
         assertFalse(HostProtocol.webViewTooOld("unknown"))
+        // Huawei's WebView 14.0.0.331 is Chromium 99, and its user agent says so.
+        assertTrue(HostProtocol.webViewTooOld(HostProtocol.chromiumVersion("Mozilla/5.0 (Linux; Android 12; NOH-NX9; wv) " +
+            "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/99.0.4844.88 Mobile Safari/537.36")))
+        // A user agent carrying the provider's own number is let through.
+        assertFalse(HostProtocol.webViewTooOld(HostProtocol.chromiumVersion("Version/4.0 Chrome/15.0.4.326 Mobile")))
+        // The reduced user agent keeps the real major.
+        assertFalse(HostProtocol.webViewTooOld(HostProtocol.chromiumVersion("(Linux; Android 10; K; wv) Chrome/146.0.0.0 Mobile")))
+        assertTrue(HostProtocol.webViewTooOld(HostProtocol.chromiumVersion("(Linux; Android 10; K; wv) Chrome/110.0.0.0 Mobile")))
     }
 
     @Test
     fun the_frontend_keeps_vites_default_target() {
-        // The script's own floor is Vite 7's default target, Chrome 107, below
-        // MIN_WEBVIEW_MAJOR. A target of the frontend's own, or another major
-        // of Vite, can raise it: check the minimum again if this fails.
+        // Vite's target bounds the newest syntax that reaches the page as
+        // written (Vite 7's default lets through what Chrome 107 parses). A
+        // target of the frontend's own, or another major of Vite, can let newer
+        // syntax through, which the frontend's webview-floor test can't see:
+        // check MIN_WEBVIEW_MAJOR again if this fails.
         val config = File("../frontend/vite.config.ts").readText()
         val build = Regex("""\bbuild\s*:\s*\{[^}]*\}""").find(config)?.value
         assertNotNull(build)
