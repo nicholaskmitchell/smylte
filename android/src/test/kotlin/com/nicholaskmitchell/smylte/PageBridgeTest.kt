@@ -20,6 +20,7 @@ class PageBridgeTest {
         val saves = mutableListOf<SaveRequest>()
         val depths = mutableListOf<Int>()
         val haptics = mutableListOf<HostProtocol.Haptic>()
+        var readies = 0
 
         override fun colour(colour: Int) {
             if (fail) throw IllegalStateException("host failed")
@@ -47,6 +48,11 @@ class PageBridgeTest {
             saves += request
             return accept
         }
+
+        override fun ready() {
+            if (fail) throw IllegalStateException("host failed")
+            readies += 1
+        }
     }
 
     @Test
@@ -54,7 +60,7 @@ class PageBridgeTest {
     fun the_page_can_call_exactly_these_methods() {
         val methods = PageBridge::class.java.declaredMethods
             .filter { Modifier.isPublic(it.modifiers) && !it.isSynthetic }
-        assertEquals(setOf("themeColour", "hello", "saveFile", "layers", "haptic"), methods.map { it.name }.toSet())
+        assertEquals(setOf("themeColour", "hello", "saveFile", "layers", "haptic", "ready"), methods.map { it.name }.toSet())
         for (m in methods) {
             assertTrue(m.name, m.isAnnotationPresent(JavascriptInterface::class.java))
         }
@@ -98,6 +104,19 @@ class PageBridgeTest {
         assertFalse(bridge.saveFile("a", "application/json", "{}"))
         bridge.layers(1)
         bridge.haptic("confirm")
+        bridge.ready()
+    }
+
+    @Test
+
+    fun ready_reaches_the_host_each_time() {
+        val host = FakeHost()
+        val bridge = PageBridge(host)
+        // The host ends its hold on the first call, and a later one changes
+        // nothing there.
+        bridge.ready()
+        bridge.ready()
+        assertEquals(2, host.readies)
     }
 
     @Test

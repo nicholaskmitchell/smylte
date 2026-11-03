@@ -13,7 +13,7 @@ import { App } from './App'
 import { BookingPage } from './components/BookingPage'
 import { DisplayView } from './components/DisplayView'
 import { SharePage } from './components/SharePage'
-import { startAndroidHost } from './android'
+import { markReady, startAndroidHost } from './android'
 import { startCaptionSync } from './desktop'
 
 // /book/<token> is the public client-booking page: no session, no login — the
@@ -52,3 +52,9 @@ createRoot(document.getElementById('root')!).render(
           : <App />}
   </React.StrictMode>,
 )
+
+// The routes without a sign-in have nothing to wait for, so they tell the
+// Android client their first view is up as soon as it has been handed to
+// React, and its splash screen ends. App says so itself, when its sign-in
+// check answers. A no-op in a browser and in the desktop clients.
+if (booking || display || share) markReady()

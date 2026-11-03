@@ -156,6 +156,11 @@ can't be read there anyway.
   fails each give a short vibration, as the phone's own controls do. It
   follows the phone's touch feedback setting and answers only a touch, so
   TalkBack (which has its own) and a keyboard get none.
+- **The splash screen stays until the app is ready.** On Android 12 and
+  later the phone's splash screen, with Smylte's icon, stays up until Smylte
+  has signed in, or shown its sign-in screen or its offline notice. It never
+  stays longer than three seconds: on a slow connection Smylte's own
+  "Starting…" screen then says what it's waiting for.
 
 ## Building
 
@@ -291,17 +296,81 @@ The JVM unit tests run without a device. They cover:
 - the bridge's rules: capabilities, the env and its events, a saved file's type,
   name and size, the wait between save dialogs, where a save's result is shown,
   touch tracking, when a haptic may play and which one each name plays on each
-  Android version, where Back goes, and which page a count of open layers
-  belongs to;
+  Android version, where Back goes, which page a count of open layers
+  belongs to, and when the splash screen is held and what ends it;
 - that the page and the window agree on the event, its outcomes, the env
-  version and the env's fields, every event type and the haptic names (against
-  `frontend/src/android.ts`), and that the window never overrides the system's
-  touch feedback setting;
+  version and the env's fields, every event type, the haptic names and the `ready`
+  capability (against `frontend/src/android.ts`), that the window never
+  overrides the system's touch feedback setting, and that the splash never waits
+  on anything that needs a drawn window;
 - the text zoom, and the body size it is measured at, against the stylesheet;
 - the launcher icon against `frontend/public/favicon.svg`.
 
 `backend/tests/test_csp.py` fails if `Csp.kt`'s directives drift from the
 server's.
+
+## Checks on a phone
+
+The tests above run without a device. What only a phone can show is checked
+by hand, on Android 12 or later and on Android 11 where a check names it,
+before a release that changes it.
+
+### Start-up and the splash screen
+
+Time a cold start with the launcher's own intent. A start without the
+`LAUNCHER` category never holds the splash, so `am start -n` alone measures
+nothing:
+
+```bash
+adb shell am start -W -S -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n com.nicholaskmitchell.smylte/.MainActivity
+```
+
+`TotalTime` is when the window first drew, which is when the splash ended.
+
+- **Signed in, fast network.** The icon stays until the app's tabs appear, with
+  no "Starting…" in between. Record five starts on Wi-Fi and five on mobile
+  data. Times well under 3000 ms show the page ran while the window was held.
+  If every start takes 3000 ms or more, the WebView is starved while held and
+  only the cap ends the splash: record it. If most starts on mobile data reach
+  3000 ms, record that too, for the owner's choice of cap.
+- **Signed out** (Log out in Settings, then start): the splash ends on the
+  sign-in screen.
+- **Server stopped, phone online:** the splash ends on the app with its offline
+  notice, or at about 3 s on "Starting…".
+- **A network that hangs** (a Wi-Fi network without internet access): the splash
+  ends at about 3 s and "Starting…" shows its progress. `TotalTime` is about
+  3000 ms, never near 5000.
+- **Start-up fails:** block GitHub on the phone's network (a Private DNS or
+  router block on `github.com` and `objects.githubusercontent.com`), clear
+  Smylte's storage, set it up again (setup needs only the server), force-stop it
+  and start it from the launcher. The failure screen, with Retry and Server
+  settings, shows as soon as the check fails, not after 3 s.
+- **Input during the splash:** on a slow start, tap the screen and press Back
+  and a hardware key repeatedly. No "isn't responding" dialog appears.
+- **TalkBack:** on a cold start TalkBack reads nothing from Smylte until the
+  splash ends, never "Starting…" behind it, then reads the first screen.
+- **The end of the splash:** nothing jumps under the status bar, and the bars
+  take the page's colours.
+- **No blank window on recreation.** With the app open, change the wallpaper (or
+  the colour palette in Wallpaper & style), which rebuilds the window: the page
+  returns with no splash and no blank pause. With Developer options' "Don't keep
+  activities" on, leave Smylte and return from Recents. Then `adb shell am kill
+  com.nicholaskmitchell.smylte` while it is in the background, and return. Each
+  time, record what shows; it is never a blank window for longer than a flash.
+  (A renderer crash rebuilds the window the same way, but can't be caused on
+  demand.)
+- **First run:** after Server settings is saved for the first time, the window
+  opens on "Starting…" without a frozen settings screen or a blank pause.
+- **After an app update:** Open in the installer holds the splash as the
+  launcher does.
+- **Hot start:** with Smylte in the background, open it again. There is no
+  splash, and the page is as it was.
+- **Android 11:** no change: "Starting…", then the app.
+- **Version skew:** with the APK from before this change and the new web build,
+  the start is as before (icon, "Starting…", the app) and the app works. With
+  this APK and a web build from before this change (installed while the release
+  still carries the old one), the splash ends when the page has loaded. Record
+  any blank frame before the tabs appear.
 
 ## Source layout
 

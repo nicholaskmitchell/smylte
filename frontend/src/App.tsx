@@ -32,7 +32,7 @@ import {
   sanitizeTriggers, type Trigger,
 } from './notifications'
 import { TimeFormatProvider } from './timeformat'
-import { haptic, hostClock, onHostEnv } from './android'
+import { haptic, hostClock, markReady, onHostEnv } from './android'
 import {
   DEFAULT_TAB_ORDER, DEFAULT_TAB_START, TAB_LABELS, cacheTab, isTab, readCachedTab,
   resolveStartTab, sanitizeTabOrder, sanitizeTabStart, type Tab, type TabStart,
@@ -398,6 +398,20 @@ export function App() {
       document.removeEventListener('visibilitychange', wake)
     }
   }, [auth, retryBoot])
+
+  // Inside the Android client the platform's splash screen stays up until the
+  // first real view: signed in, the sign-in card, or offline over the saved
+  // rows. Said once, the first time the sign-in check answers: a later sign-in
+  // or sign-out is not a start, and StrictMode's second run of this effect
+  // finds the ref already set. An effect rather than a frame callback, because
+  // while the splash is held the window does not draw and frames may not come.
+  // A no-op in a browser and in the desktop clients.
+  const saidReady = useRef(false)
+  useEffect(() => {
+    if (auth === 'loading' || saidReady.current) return
+    saidReady.current = true
+    markReady()
+  }, [auth])
 
   const applyTheme = useCallback((next: string) => {
     document.documentElement.dataset.theme = next

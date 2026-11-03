@@ -20,6 +20,9 @@
 // and the app's failure toast asks for a `reject` (App.tsx). The host plays
 // them only in answer to a touch, and only if the phone's touch feedback is on.
 //
+// On Android 12 and later the host holds the platform's splash screen until
+// the page says its first view is up (`markReady`), or until its own cap.
+//
 // The module has no side effects on import: `startAndroidHost` is called from
 // main.tsx, and everything else reads the bridge when it is called.
 
@@ -32,10 +35,12 @@ export const ANDROID_EVENT = 'smylte-android'
 // adds never does, because each is read on its own.
 const ENV_VERSION = 1
 
-// What this page announces in `hello`. Only what it actually does: a host may
-// act on a capability, for instance by holding the splash screen for one, so
-// announcing one the page never fulfils would cost the user time.
-const CAPS = 'back,haptics,save'
+// What this page announces in `hello`. Only what it actually does: the host
+// holds its splash screen for `ready` until the page calls ready()
+// (markReady), so announcing a capability the page never fulfils would cost
+// the user time. Every route fulfils `ready`: App when its sign-in check
+// answers, the others in main.tsx as soon as they render.
+const CAPS = 'back,haptics,ready,save'
 
 interface AndroidBridge {
   themeColour?: (hex: string) => void
@@ -43,6 +48,7 @@ interface AndroidBridge {
   layers?: (depth: number) => unknown
   haptic?: (kind: string) => unknown
   saveFile?: (name: string, mime: string, text: string) => unknown
+  ready?: () => unknown
 }
 
 /// What the host reports about the device. Every field is optional: the host
@@ -220,6 +226,24 @@ export function onHostEnv(fn: (env: HostEnv) => void): () => void {
 /** Whether the host can save a file through Android's own dialog. */
 export function canSaveFiles(): boolean {
   return typeof bridge()?.saveFile === 'function'
+}
+
+/** Tell the host the page's first view is up, so it stops holding the
+ *  platform's splash screen. App says it once, when its sign-in check first
+ *  answers; the routes without a sign-in say it from main.tsx as they render.
+ *  A no-op in a browser, in a desktop client, and in a client without
+ *  `ready`, which ends the splash when the page has loaded instead.
+ *
+ *  It is called at once, never from a frame callback: while the splash is
+ *  held the window does not draw, and frames may not come. */
+export function markReady(): void {
+  const b = bridge()
+  if (!b || typeof b.ready !== 'function') return
+  try {
+    b.ready()
+  } catch {
+    // The host ends the splash by itself at its cap.
+  }
 }
 
 /** Ask the host for a haptic. A no-op outside the client and in a client

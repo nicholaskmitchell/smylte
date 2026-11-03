@@ -46,6 +46,7 @@ describe('android: outside the Android client', () => {
     expect(a.canSaveFiles()).toBe(false)
     expect(a.hostEnv()).toBeNull()
     expect(() => a.startAndroidHost()).not.toThrow()
+    expect(() => a.markReady()).not.toThrow()
     expect(add).not.toHaveBeenCalledWith('smylte-android', expect.anything())
     expect(await a.saveTextFile('a', 'application/json', '{}')).toBe('unsupported')
   })
@@ -63,6 +64,7 @@ describe('android: an older client', () => {
     expect(a.canSaveFiles()).toBe(false)
     expect(await a.saveTextFile('a', 'application/json', '{}')).toBe('unsupported')
     expect(() => a.startAndroidHost()).not.toThrow()
+    expect(() => a.markReady()).not.toThrow()
     expect(a.hostEnv()).toBeNull()
   })
 })
@@ -79,7 +81,7 @@ describe('android: starting', () => {
     a.startAndroidHost()
     a.startAndroidHost()
     expect(hello).toHaveBeenCalledTimes(1)
-    expect(hello).toHaveBeenCalledWith('back,haptics,save')
+    expect(hello).toHaveBeenCalledWith('back,haptics,ready,save')
   })
 
   it.each([
@@ -462,5 +464,44 @@ describe('android: haptics', () => {
     a.startAndroidHost()
     html('<button aria-pressed="false"></button>').click()
     expect(haptic).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('android: ready', () => {
+  it('does nothing in a client without ready()', () => {
+    const hello = vi.fn(() => '{"v":1}')
+    const themeColour = vi.fn()
+    bridge({ hello, themeColour })
+    expect(() => a.markReady()).not.toThrow()
+    expect(hello).not.toHaveBeenCalled()
+    expect(themeColour).not.toHaveBeenCalled()
+  })
+
+  it('tells the host, and nothing more', () => {
+    const ready = vi.fn()
+    bridge({ ready })
+    a.markReady()
+    expect(ready.mock.calls).toEqual([[]])
+  })
+
+  it('calls it on the bridge, not detached', () => {
+    const host = { ready: vi.fn() }
+    bridge(host)
+    a.markReady()
+    expect(host.ready.mock.contexts[0]).toBe(host)
+  })
+
+  it('survives a host that throws', () => {
+    bridge({ ready: () => { throw new Error('host failed') } })
+    expect(() => a.markReady()).not.toThrow()
+  })
+
+  it('does not wait for a frame', () => {
+    const raf = vi.spyOn(window, 'requestAnimationFrame')
+    const ready = vi.fn()
+    bridge({ ready })
+    a.markReady()
+    expect(ready).toHaveBeenCalledTimes(1)
+    expect(raf).not.toHaveBeenCalled()
   })
 })

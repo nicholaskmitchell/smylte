@@ -27,6 +27,9 @@ class PageBridge(private val host: Host) {
 
         /// Start a save; false when one is already pending. Bridge thread; must not block.
         fun save(request: SaveRequest): Boolean
+
+        /// The page's first view is up. Bridge thread; the host posts to the main thread.
+        fun ready()
     }
 
     /// The page's background colour, from ThemeColour.WATCH_SCRIPT. At worst
@@ -67,4 +70,13 @@ class PageBridge(private val host: Host) {
     @JavascriptInterface
     fun saveFile(name: String?, mime: String?, text: String?): Boolean =
         runCatching { SaveRequest.of(name, mime, text)?.let(host::save) ?: false }.getOrDefault(false)
+
+    /// The page's first view is up: the app has signed in, or shows its sign-in
+    /// or offline screen. The host stops holding the splash screen, if it still
+    /// is. It takes nothing, so there is nothing to check; at worst a script
+    /// ends the splash early.
+    @JavascriptInterface
+    fun ready() {
+        runCatching { host.ready() }
+    }
 }

@@ -17,6 +17,7 @@ import android.os.SystemClock
 import android.text.format.DateFormat
 import android.util.TypedValue
 import android.view.View
+import android.view.ViewTreeObserver
 import android.view.WindowInsetsController
 import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
@@ -91,6 +92,19 @@ class MainActivity : Activity() {
     /// Whether the page may play a haptic now. Main thread: the touch listener and the posted haptic both run there.
     private val hapticGate = HapticGate()
 
+    /// While true the window does not draw, so the platform's splash screen
+    /// stays up (holdSplash). Main thread; read before every frame, so a flag
+    /// and nothing more.
+    private var splashHeld = false
+    private var splashHeldSince = 0L
+    /// The page announced HostProtocol.CAP_READY, so its load no longer ends
+    /// the hold; its ready() does. Written on the bridge thread by hello.
+    @Volatile private var splashWantsReady = false
+    private var splashPageReady = false
+    private var splashPageFinished = false
+    private var splashFailed = false
+    private val splashCap = Runnable { releaseSplashIfDue() }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         settings = Settings(this)
@@ -116,6 +130,7 @@ class MainActivity : Activity() {
         stripText = findViewById(R.id.strip_text)
         stripAction = findViewById(R.id.strip_action)
         stripDismiss = findViewById(R.id.strip_dismiss)
+        holdSplash(savedInstanceState)
 
         Insets.edgeToEdge(window, root)
         settings.themeColour.takeIf { it != 0 }?.let(::applyThemeColour)
@@ -172,6 +187,12 @@ class MainActivity : Activity() {
         // The splash has no background of its own, so the page must not show
         // through it.
         web.visibility = View.INVISIBLE
+        // The failure screen's Retry and Server settings must never wait
+        // behind the platform splash.
+        if (failed) {
+            splashFailed = true
+            releaseSplashIfDue()
+        }
     }
 
     private fun open() {
@@ -190,6 +211,54 @@ class MainActivity : Activity() {
         if (!AssetRoutes.isSameOrigin(origin, url.scheme, url.host, url.port)) return "/"
         val path = url.encodedPath?.takeIf { it.startsWith("/") } ?: "/"
         return path + (url.encodedQuery?.let { "?$it" } ?: "")
+    }
+
+    // ── the splash screen ───────────────────────────────────────────────────
+
+    /// Keeps the platform's splash screen (Android 12 and later) up until the
+    /// app's first view is ready, rather than following it with this window's
+    /// own "Starting…" and then an empty page. The system removes its splash
+    /// at the window's first frame, so the window simply does not draw until
+    /// then. HostProtocol.splashRelease says what ends the hold, and its cap
+    /// ends it in any case. The listener runs before every frame while the
+    /// hold lasts, so it reads a flag and nothing more.
+    ///
+    /// Only a fresh launch from the launcher holds (HostProtocol.holdsSplash).
+    /// The splash's exit animation is left to the system: on Android 12 and
+    /// 12L, taking it over can change how the window fits the system bars,
+    /// which Insets depends on.
+    private fun holdSplash(savedInstanceState: Bundle?) {
+        val fromLauncher = intent?.let {
+            it.action == Intent.ACTION_MAIN && it.hasCategory(Intent.CATEGORY_LAUNCHER)
+        } == true
+        if (!HostProtocol.holdsSplash(Build.VERSION.SDK_INT, savedInstanceState != null, fromLauncher)) return
+        splashHeld = true
+        splashHeldSince = SystemClock.uptimeMillis()
+        val content = findViewById<View>(android.R.id.content)
+        content.viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                if (splashHeld) return false
+                // Fetched again rather than kept: the observer the view had
+                // before it was attached is merged into the window's then, and
+                // removing a listener from it would throw.
+                content.viewTreeObserver.removeOnPreDrawListener(this)
+                return true
+            }
+        })
+        main.postDelayed(splashCap, HostProtocol.SPLASH_CAP_MS)
+    }
+
+    /// Ends the hold once HostProtocol.splashRelease says so. Nothing needs to
+    /// ask for a frame: a draw the listener cancelled is tried again on the
+    /// next one. Main thread.
+    private fun releaseSplashIfDue() {
+        if (!splashHeld) return
+        val elapsed = SystemClock.uptimeMillis() - splashHeldSince
+        if (!HostProtocol.splashRelease(elapsed, splashFailed, splashPageReady, splashWantsReady, splashPageFinished)) {
+            return
+        }
+        splashHeld = false
+        main.removeCallbacks(splashCap)
     }
 
     // ── the WebView ─────────────────────────────────────────────────────────
@@ -288,9 +357,14 @@ class MainActivity : Activity() {
             }
         }
 
-        // The host acts on no capability yet; reading them now keeps the page's
-        // half of the handshake unchanged when one does.
-        override fun hello(caps: Set<String>): String = envJson
+        // A page that announces ready will say when its first view is up, so
+        // its load no longer ends the splash hold. Set here on the bridge
+        // thread rather than posted, so it is in place before the page's load
+        // event can reach onPageFinished. No other capability is consulted.
+        override fun hello(caps: Set<String>): String {
+            if (HostProtocol.CAP_READY in caps) splashWantsReady = true
+            return envJson
+        }
 
         override fun layers(depth: Int) {
             // Read at the call, so a report still queued when the next document
@@ -318,6 +392,14 @@ class MainActivity : Activity() {
             if (!saveBusy.compareAndSet(false, true)) return false
             main.post { launchSave(request) }
             return true
+        }
+
+        override fun ready() {
+            main.post {
+                if (isDestroyed) return@post
+                splashPageReady = true
+                releaseSplashIfDue()
+            }
         }
     }
 
@@ -468,6 +550,11 @@ class MainActivity : Activity() {
         }
 
         override fun onPageFinished(view: WebView, url: String) {
+            // A page that never announced ready (a web build from before it)
+            // has nothing more to say, so its load can end the splash hold
+            // (HostProtocol.splashRelease).
+            splashPageFinished = true
+            releaseSplashIfDue()
             if (isOurs(Uri.parse(url))) {
                 view.evaluateJavascript(ThemeColour.WATCH_SCRIPT, null)
                 if (clearHistoryOnLoad) {
@@ -889,6 +976,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        main.removeCallbacks(splashCap)
         if (::web.isInitialized) {
             fileCallback?.onReceiveValue(null)
             fileCallback = null

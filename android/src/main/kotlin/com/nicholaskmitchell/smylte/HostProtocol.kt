@@ -160,6 +160,49 @@ object HostProtocol {
         ACTION_UP, ACTION_CANCEL -> false
         else -> was
     }
+
+    // ── the splash screen ───────────────────────────────────────────────────
+
+    /// The capability a page announces in hello when it will call ready(): the
+    /// host then waits for that call rather than ending the splash hold when the
+    /// page has loaded.
+    const val CAP_READY = "ready"
+
+    /// Android 12, the first version with a platform splash screen.
+    const val SDK_SPLASH_SCREEN = 31
+
+    /// The longest the splash screen is held. Start-up is serial (a release
+    /// check when the last is over ten minutes old, the session check, the page,
+    /// the app's own /api/me), so a slow network takes longer than this, and the
+    /// window's own "Starting…" then shows how far it got. Well under 5 s,
+    /// because a window that has never drawn has no input focus, and a key event
+    /// that waits that long for one is an ANR.
+    const val SPLASH_CAP_MS = 3_000L
+
+    /// Whether onCreate holds the splash screen. Only a fresh launch from the
+    /// launcher is sure to have one in front of the window: a window rebuilt
+    /// from saved state after a renderer crash or a wallpaper change has none,
+    /// nor may the window the settings screen opens, and holding their first
+    /// draw would show a blank window instead. Android 11 has no platform splash.
+    fun holdsSplash(sdk: Int, restored: Boolean, fromLauncher: Boolean): Boolean =
+        sdk >= SDK_SPLASH_SCREEN && !restored && fromLauncher
+
+    /// Whether a held splash screen ends now. The first of: the page said its
+    /// first view is up (ready(), callable by any script, so at worst the splash
+    /// ends early); a page that never announced CAP_READY (a web build from
+    /// before it) has loaded; start-up failed, so the failure screen must show;
+    /// the cap has passed. "Loaded" is onPageFinished, which comes after the
+    /// page's scripts and so after its hello. It is never onPageCommitVisible,
+    /// which rests on a visual-state callback that needs a drawn window, and
+    /// which can come before hello. An elapsed time below zero (a clock that
+    /// went backwards) ends it too, because a hold must never outlast its cap.
+    fun splashRelease(
+        elapsedMs: Long,
+        failed: Boolean,
+        pageReady: Boolean,
+        wantsReady: Boolean,
+        pageFinished: Boolean,
+    ): Boolean = failed || pageReady || (pageFinished && !wantsReady) || elapsedMs < 0 || elapsedMs >= SPLASH_CAP_MS
 }
 
 /// A file the page asked to save, after the host has checked it. Only `of`

@@ -782,6 +782,31 @@ TalkBack, Switch Access and a keyboard produce no touch, so they get none, and
 TalkBack gives its own. Drags play nothing yet, because whether HTML5 drag works
 on touch in WebView is unverified.
 
+**The splash screen lasts until the app has signed in.** On Android 12 and
+later the system shows a splash screen, the icon on the window's background,
+until the app's window first draws. The window used to draw at once, so a cold
+start showed that splash, then the client's own "Starting…", then an empty page
+until the app painted. Now, on a fresh launch from the launcher, the window
+holds its first draw with an `OnPreDrawListener` on the content view (the
+technique AndroidX's splash library uses), and the listener reads one flag,
+because it runs before every frame while it holds. The page announces `ready`
+in `hello` and calls `ready()` once its first view is real. App does so the
+first time its sign-in check answers (signed in, signed out or offline), and
+the routes without a sign-in do so as soon as they render. The call comes from
+an effect, never a frame callback, because frames may not come while the
+window does not draw. A page from before `ready` ends the hold when it has
+loaded, at `onPageFinished`, by which time its scripts, and so its `hello`,
+have run. `onPageCommitVisible` would not do, because it needs a drawn window
+and can come before `hello`. The failure screen ends the hold at once, and
+nothing holds it past 3 seconds. Start-up is serial (a release check, the
+session check, the page, the app's own `/api/me`), so on a slow network
+"Starting…" then shows how far it got. A window that has never drawn also has
+no input focus, so a key event waiting 5 seconds for one is an ANR. A window
+rebuilt from saved state, after a renderer crash or a wallpaper change, has no
+splash in front of it, and the window the settings screen opens may have none,
+so neither holds: holding their draw would show a blank window. Any script can
+call `ready()`; at worst the splash ends early.
+
 **Stage, then swap.** Android keeps processes alive for days, so the client also
 checks for updates when it returns to the foreground after six hours or more. A
 build must never change under a running page, so downloading and swapping are

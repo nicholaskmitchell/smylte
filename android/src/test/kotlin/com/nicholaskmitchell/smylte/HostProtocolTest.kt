@@ -402,6 +402,103 @@ class HostProtocolTest {
         assertEquals(0, HostProtocol.layersAfterReport(held = 1, depth = 0, reportedIn = 4, current = 4))
     }
 
+    // ── the splash screen ───────────────────────────────────────────────────
+
+    private fun release(
+        elapsed: Long = 100,
+        failed: Boolean = false,
+        pageReady: Boolean = false,
+        wantsReady: Boolean = false,
+        pageFinished: Boolean = false,
+    ) = HostProtocol.splashRelease(elapsed, failed, pageReady, wantsReady, pageFinished)
+
+    @Test
+
+    fun splash_constants_are_the_platforms() {
+        assertEquals(Build.VERSION_CODES.S, HostProtocol.SDK_SPLASH_SCREEN)
+        assertEquals("ready", HostProtocol.CAP_READY)
+        assertEquals(3_000L, HostProtocol.SPLASH_CAP_MS)
+        // A window that has never drawn has no input focus, and a key event
+        // that waits 5 s for one is an ANR.
+        assertTrue(HostProtocol.SPLASH_CAP_MS < 5_000L)
+    }
+
+    @Test
+
+    fun the_splash_is_held_only_on_a_fresh_launch_from_the_launcher() {
+        assertTrue(HostProtocol.holdsSplash(31, restored = false, fromLauncher = true))
+        assertTrue(HostProtocol.holdsSplash(36, restored = false, fromLauncher = true))
+        // Android 11 has no platform splash.
+        assertFalse(HostProtocol.holdsSplash(30, restored = false, fromLauncher = true))
+        // Rebuilt from saved state: no splash in front of it.
+        assertFalse(HostProtocol.holdsSplash(34, restored = true, fromLauncher = true))
+        // Opened by the settings screen, which may have no splash either.
+        assertFalse(HostProtocol.holdsSplash(34, restored = false, fromLauncher = false))
+    }
+
+    @Test
+
+    fun nothing_ends_the_splash_early() {
+        assertFalse(release(elapsed = 0))
+        assertFalse(release(elapsed = 2_999))
+        assertFalse(release(wantsReady = true))
+    }
+
+    @Test
+
+    fun the_pages_ready_ends_the_splash() {
+        assertTrue(release(pageReady = true, wantsReady = true))
+        // From a page that never announced it: at worst the splash ends early.
+        assertTrue(release(pageReady = true))
+    }
+
+    @Test
+
+    fun the_failure_screen_ends_the_splash() {
+        assertTrue(release(elapsed = 0, failed = true, wantsReady = true))
+    }
+
+    @Test
+
+    fun the_cap_ends_the_splash() {
+        assertFalse(release(elapsed = 2_999, wantsReady = true))
+        assertTrue(release(elapsed = 3_000, wantsReady = true))
+        assertTrue(release(elapsed = Long.MAX_VALUE, wantsReady = true))
+    }
+
+    @Test
+
+    fun an_old_page_ends_the_splash_when_it_has_loaded() {
+        assertFalse(release(wantsReady = false, pageFinished = false))
+        assertTrue(release(wantsReady = false, pageFinished = true))
+    }
+
+    @Test
+
+    fun a_new_page_is_waited_for_after_it_has_loaded() {
+        assertFalse(release(wantsReady = true, pageFinished = true))
+        assertTrue(release(wantsReady = true, pageFinished = true, pageReady = true))
+        assertTrue(release(elapsed = 3_000, wantsReady = true, pageFinished = true))
+    }
+
+    @Test
+
+    fun a_clock_that_went_backwards_ends_the_splash() {
+        assertTrue(release(elapsed = -1, wantsReady = true))
+    }
+
+    @Test
+
+    fun the_splash_waits_on_nothing_that_needs_a_drawn_window() {
+        // While the window does not draw, a visual-state callback may never
+        // come, and a listener on the splash's exit changes how the window fits
+        // the bars on Android 12 and 12L.
+        val activity = File("src/main/kotlin/com/nicholaskmitchell/smylte/MainActivity.kt").readText()
+        for (name in listOf("onPageCommitVisible", "postVisualStateCallback", "setOnExitAnimationListener")) {
+            assertFalse(name, activity.contains(name))
+        }
+    }
+
     // ── drift and purity ────────────────────────────────────────────────────
 
     @Test
@@ -418,6 +515,9 @@ class HostProtocolTest {
         assertNotNull("no CAPS in android.ts", caps)
         assertTrue("CAPS is empty", caps!!.isNotEmpty())
         val tokens = caps.split(',')
+        // The host holds the splash screen for this capability, so the page must
+        // announce it (App.ready.test.tsx proves it is fulfilled).
+        assertTrue(HostProtocol.CAP_READY, HostProtocol.CAP_READY in tokens)
         assertEquals(tokens.toSet(), HostProtocol.parseCaps(caps))
     }
 
