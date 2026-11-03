@@ -5,9 +5,10 @@ Drives the debug build with adb on the emulator boot.sh started, through
 first launch, the app lock and the start-up failure screen. The checks run in
 order and each builds on the state the last one left; the first failure stops
 the run. At the end of every check, and once more in any case, the app's
-crashes and ANRs are looked for. Every uiautomator dump, dumpsys output,
-screenshot and logcat taken goes under --diag, which the workflow uploads when
-a check fails, so a failure can be read from the artifacts alone.
+crashes and ANRs are looked for. Every uiautomator dump and screenshot, the
+last dumpsys output of each wait, a full set of dumpsys output when a check
+fails, and the whole logcat go under --diag, which the workflow uploads when a
+check fails, so a failure can be read from the artifacts alone.
 
     smoke.py --apk android/build/outputs/apk/debug/smylte-android-debug.apk \\
              --diag "$SMYLTE_DIAG" --api 35

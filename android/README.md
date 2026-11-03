@@ -27,7 +27,8 @@ open Smylte at in a browser, with no path. The server's sign-in cookie is
 The phone's WebView must be built on Chromium 111 or later. A phone that gets
 updates from Google Play or its maker has a newer one. On an older one Smylte
 names the version it found and asks for an update, rather than showing a blank
-or broken page.
+or broken page. It still offers a newer Smylte when one is out, since a newer
+one may accept the WebView.
 
 [rel]: https://github.com/nicholaskmitchell/smylte/releases/tag/desktop-latest
 
@@ -169,9 +170,10 @@ it has to be blank whenever the lock is on, not only while Smylte is locked.
   as usual while Smylte is unlocked. Opening Recents from inside Smylte still
   shows its live window, as Recents does for any app on screen: what you were
   already looking at. Once you leave, the card shows only Smylte's colour.
-  `FLAG_SECURE` would blank the live window too, but it would also take
-  screenshots away, and the lock guards against someone who picks the phone up
-  later, who would find only the stored preview.
+  `FLAG_SECURE` wouldn't hide the live window either, since that window is
+  drawn on the phone's own screen, and it would take screenshots away. The lock
+  guards against someone who picks the phone up later, who finds only the
+  stored preview.
 - **Android 11, 12 and 12L:** the only way is `FLAG_SECURE`. It also blocks
   screenshots and screen recordings of Smylte, and shows Smylte black when the
   screen is cast or shared. Smylte sets it only while the lock is on, so turning
@@ -437,7 +439,8 @@ It runs on pull requests and pushes to `main` that change `android/`,
 emulator, Run workflow). It is not part of `ci.yml`, the deploy gate, so a
 flaky emulator never holds a deploy back. When a check fails, the run's
 artifacts (`android-emulator-api30-…` and `android-emulator-api35-…`, kept 5
-days) hold every screen dump, screenshot and dumpsys output it took, the whole
+days) hold every screen dump and screenshot it took, the last dumpsys output
+each wait read, a full set of dumpsys output taken at the failure, the whole
 logcat and the emulator's own log; the job summary lists which checks passed.
 Its parsers have unit tests that need no emulator; from the repository root:
 
@@ -630,7 +633,9 @@ fingerprint enrolled and a PIN set.
   - With the lock on, leave the app with Home, and Server settings too, then
     open Recents: no preview of Smylte (on 13 or later the app's colour or icon,
     on Android 11 and 12 a blank card). Opened from inside the app, Recents
-    shows its live window on 13 or later and a blank card on 11 and 12.
+    shows its live window on 12 or later, where the launcher draws the running
+    app's card live, and a blank card on 11. Some makers' launchers show a
+    blank card on 12 and 12L instead; record which.
     - Turn the lock off, open and leave the app, and check Recents again: the
       preview is back.
   - The same after a restart: with the lock on, leave the app, run

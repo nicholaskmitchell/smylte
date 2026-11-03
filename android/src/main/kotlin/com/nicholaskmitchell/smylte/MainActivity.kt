@@ -185,6 +185,7 @@ class MainActivity : Activity() {
         // WebView can't run and then show a blank page.
         outdatedWebView()?.let {
             showSplash(it, failed = true)
+            offerClientOnly()
             return
         }
         booting = true
@@ -246,7 +247,34 @@ class MainActivity : Activity() {
             info.loadLabel(packageManager).toString()
                 .takeIf { it.isNotBlank() && it != provider.packageName && it != info.name }
         } ?: getString(R.string.webview_name)
-        return getString(R.string.webview_outdated, name, engine, HostProtocol.MIN_WEBVIEW_MAJOR)
+        // The minimum as text, so its digits are ASCII like the version's in
+        // every locale (%d would write them in Persian or Bengali digits).
+        return getString(R.string.webview_outdated, name, engine, HostProtocol.MIN_WEBVIEW_MAJOR.toString())
+    }
+
+    /// Whether offerClientOnly's release check is running, so that tapping
+    /// Try again doesn't stack them.
+    private var offeringClient = false
+
+    /// On the outdated WebView screen, the way out that doesn't need the
+    /// WebView: a newer APK, offered on the strip as it is over the page. Never
+    /// a staged web build, whose Reload would open the page this WebView can't
+    /// run. A check that fails changes nothing, since the screen already says
+    /// what to do.
+    private fun offerClientOnly() {
+        if (offeringClient) return
+        offeringClient = true
+        Background.updates.execute {
+            val client = try {
+                updater.clientOnly()
+            } catch (_: Exception) {
+                null
+            }
+            main.post {
+                offeringClient = false
+                if (!isDestroyed && client != null) offer(Updater.Outcome(client, staged = null))
+            }
+        }
     }
 
     private fun open() {

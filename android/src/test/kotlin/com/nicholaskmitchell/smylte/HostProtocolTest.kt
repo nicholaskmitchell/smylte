@@ -827,9 +827,21 @@ class HostProtocolTest {
         // syntax through, which the frontend's webview-floor test can't see:
         // check MIN_WEBVIEW_MAJOR again if this fails.
         val config = File("../frontend/vite.config.ts").readText()
-        val build = Regex("""\bbuild\s*:\s*\{[^}]*\}""").find(config)?.value
-        assertNotNull(build)
-        assertFalse(Regex("""\b(target|cssTarget)\s*:""").containsMatchIn(build!!))
+        // The whole build block, nested objects and all, by counting braces.
+        val open = Regex("""\bbuild\s*:\s*\{""").find(config)
+        assertNotNull(open)
+        var depth = 0
+        var end = -1
+        for (i in open!!.range.last until config.length) {
+            if (config[i] == '{') depth++
+            if (config[i] == '}' && --depth == 0) {
+                end = i
+                break
+            }
+        }
+        assertTrue(end > 0)
+        val build = config.substring(open.range.first, end + 1)
+        assertFalse(Regex("""\b(target|cssTarget)\b""").containsMatchIn(build))
         assertFalse(config.contains("cssTarget"))
         val pkg = File("../frontend/package.json").readText()
         assertTrue(Regex(""""vite"\s*:\s*"\^7\.""").containsMatchIn(pkg))
@@ -840,7 +852,9 @@ class HostProtocolTest {
     fun boot_checks_the_webview_before_start_up() {
         val source = File("src/main/kotlin/com/nicholaskmitchell/smylte/MainActivity.kt").readText()
         val boot = source.substringAfter("private fun boot() {").substringBefore("\n    }\n")
-        val check = boot.indexOf("outdatedWebView()?.let {\n            showSplash(it, failed = true)\n            return\n        }")
+        val check = boot.indexOf(
+            "outdatedWebView()?.let {\n            showSplash(it, failed = true)\n            offerClientOnly()\n            return\n        }",
+        )
         assertTrue(check >= 0)
         assertTrue(check < boot.indexOf("booting = true"))
         assertTrue(check < boot.indexOf("Background.updates.execute"))
@@ -848,7 +862,31 @@ class HostProtocolTest {
         assertTrue(outdated.contains("HostProtocol.chromiumVersion(WebSettings.getDefaultUserAgent(this))"))
         assertTrue(outdated.contains("if (!HostProtocol.webViewTooOld(engine)) return null"))
         assertTrue(outdated.contains("it != provider.packageName && it != info.name"))
+        // The minimum goes in as text, so its digits are ASCII in every locale.
+        assertTrue(outdated.contains("HostProtocol.MIN_WEBVIEW_MAJOR.toString())"))
+        val strings = File("src/main/res/values/strings.xml").readText()
+        assertTrue(strings.contains("It runs on Chromium %3\$s or later"))
+        assertFalse(Regex("name=\"webview_outdated\">[^<]*%\\d\\\$d").containsMatchIn(strings))
         // The window's own user agent is the default one: nothing sets it.
         assertFalse(source.contains("userAgentString ="))
+    }
+
+    @Test
+    fun the_outdated_webview_screen_offers_only_the_apk() {
+        // A phone the WebView check turns away still hears of a newer APK,
+        // which may let it in; it is never offered a staged web build, whose
+        // Reload would open the page this WebView can't run.
+        val main = File("src/main/kotlin/com/nicholaskmitchell/smylte/MainActivity.kt").readText()
+        val offer = main.substringAfter("private fun offerClientOnly() {").substringBefore("\n    }\n")
+        assertTrue(offer.contains("if (offeringClient) return"))
+        assertTrue(offer.contains("updater.clientOnly()"))
+        assertTrue(offer.contains("offer(Updater.Outcome(client, staged = null))"))
+        assertFalse(offer.contains("web.staged()"))
+        val updater = File("src/main/kotlin/com/nicholaskmitchell/smylte/Updater.kt").readText()
+        val clientOnly = updater.substringAfter("fun clientOnly(): ReleaseAsset? {").substringBefore("\n    }\n")
+        assertTrue(clientOnly.contains("return outdatedClient(saved ?: fetchAssets(GitHub.NORMAL))"))
+        assertTrue(clientOnly.contains("in 0 until RECENT_MS"))
+        assertFalse(clientOnly.contains("stageWeb"))
+        assertFalse(clientOnly.contains("promote"))
     }
 }

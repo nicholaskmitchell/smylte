@@ -42,8 +42,9 @@ jobs:
     # Pinned: ubuntu-latest is moving to 26.04, and KVM for the emulator and
     # the SDK's layout are what this relies on, as they are on 24.04.
     runs-on: ubuntu-24.04
-    # Building ~5 min, the SDK and the boot ~8, the checks ~15 (two of them
-    # wait out the app lock's 5 minutes and 30 seconds). The limit leaves room
+    # Building ~5 min with a cold cache, the SDK and the boot ~8, the checks
+    # ~10 (check 7 waits out the app lock's 5 minutes and 30 seconds). The
+    # first runs took about 11 minutes in all. The limit leaves room
     # for the boot and checks steps' own limits (20 and 30) on top of the
     # build, and for the stop and the upload after them.
     timeout-minutes: 70

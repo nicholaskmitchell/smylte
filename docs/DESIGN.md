@@ -679,7 +679,11 @@ a provider can number its package its own way: Huawei's WebView 14.0.0.331 is
 Chromium 99. From Chromium 156 the token is itself the package's `versionName`,
 so a number below 70, older than any WebView Android 11 can run, is taken for
 such a numbering and let through, as is a version that can't be read. A page
-that loads degraded is better than a phone turned away for good.
+that loads degraded is better than a phone turned away for good. For the same
+reason the failure screen still checks the release and offers a newer APK,
+which may accept the WebView (a lower floor, or a better reading of its
+version); it never offers a staged web build, whose Reload would open the page
+this WebView can't run.
 
 The frontend's `webview-floor.test.ts` fails when the page uses a feature newer
 than the floor, from a list of likely ones with their WebView versions, and

@@ -30,26 +30,46 @@ interface Feature {
   cosmetic?: string
 }
 
+/** A CSS property as a stylesheet, an inline style object or setProperty writes it. */
+function prop(...names: string[]): RegExp {
+  const camel = (name: string) => name.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())
+  return new RegExp(names.flatMap((name) => [
+    `\\b(?:${name}|${camel(name)})\\s*:`,
+    `setProperty\\(\\s*['"\`]${name}['"\`]`,
+  ]).join('|'))
+}
+
+// A colour function's first argument as CSS writes it, so that a script
+// function of the same name (contrast.ts parses oklch() strings) isn't one.
+const COLOUR_ARG = String.raw`\s*(?:[-+.\d]|from\b|none\b|var\(|calc\(|\$\{)`
+
 const FEATURES: Feature[] = [
   // What sets the floor today.
-  { name: 'oklch()', pattern: /\boklch\(/, webview: 111 },
-  { name: 'oklab()', pattern: /\boklab\(/, webview: 111 },
-  { name: 'color-mix()', pattern: /\bcolor-mix\(/, webview: 111 },
+  { name: 'oklch()', pattern: new RegExp(String.raw`\boklch\(` + COLOUR_ARG), webview: 111 },
+  { name: 'oklab()', pattern: new RegExp(String.raw`\boklab\(` + COLOUR_ARG), webview: 111 },
+  { name: 'color-mix()', pattern: /\bcolor-mix\(\s*(?:in\b|\$\{)/, webview: 111 },
   { name: 'lab() and lch()', pattern: /(?<![\w.-])(?:lab|lch)\(/, webview: 111, cssOnly: true },
   { name: 'color() with a colour space', pattern: /(?<![\w.-])color\(\s*(?:srgb|display-p3|rec2020|a98-rgb|prophoto-rgb|xyz)/, webview: 111 },
   { name: 'dynamic, small and large viewport units', pattern: /\d(?:dv|sv|lv)(?:h|w|i|b|min|max)\b/, webview: 108 },
   // Newer than the floor.
-  { name: 'relative colour syntax (from)', pattern: /\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(\s*from\b/, webview: 119 },
+  // Relative colour syntax: first support is 119 everywhere, but rgb(),
+  // oklab() and oklch() compute wrong channels until 122, hsl() and hwb()
+  // until 125.
+  { name: 'relative colour syntax in lab(), lch() and color()', pattern: /(?<![\w.-])(?:lab|lch|color)\(\s*from\b/, webview: 119 },
+  { name: 'relative colour syntax in rgb(), oklab() and oklch()', pattern: /\b(?:rgba?|oklab|oklch)\(\s*from\b/, webview: 122 },
+  { name: 'relative colour syntax in hsl() and hwb()', pattern: /\b(?:hsla?|hwb)\(\s*from\b/, webview: 125 },
   { name: 'light-dark()', pattern: /\blight-dark\(/, webview: 123 },
-  { name: 'anchor positioning (anchor-name, anchor())', pattern: /\banchor-name\s*:|(?<![\w.-])anchor\(/, webview: 125 },
-  { name: 'position-anchor', pattern: /\bposition-anchor\s*:/, webview: 151 },
+  { name: 'anchor-name', pattern: prop('anchor-name'), webview: 125 },
+  { name: 'anchor()', pattern: /(?<![\w.-])anchor\(/, webview: 125, cssOnly: true },
+  { name: 'position-anchor', pattern: prop('position-anchor'), webview: 151 },
   { name: '@starting-style', pattern: /@starting-style\b/, webview: 117 },
   { name: '@scope', pattern: /@scope\b/, webview: 118 },
-  { name: 'field-sizing', pattern: /\bfield-sizing\s*:/, webview: 123 },
-  { name: 'interpolate-size and calc-size()', pattern: /\binterpolate-size\s*:|\bcalc-size\(/, webview: 129 },
-  { name: 'text-box', pattern: /\btext-box(?:-trim|-edge)?\s*:/, webview: 133 },
+  { name: 'field-sizing', pattern: prop('field-sizing'), webview: 123 },
+  { name: 'interpolate-size', pattern: prop('interpolate-size'), webview: 129 },
+  { name: 'calc-size()', pattern: /\bcalc-size\(/, webview: 129 },
+  { name: 'text-box', pattern: prop('text-box', 'text-box-trim', 'text-box-edge'), webview: 133 },
   { name: 'round(), mod() and rem()', pattern: /(?<![\w.-])(?:round|mod|rem)\(/, webview: 125, cssOnly: true },
-  { name: 'transition-behavior', pattern: /\btransition-behavior\s*:|\ballow-discrete\b/, webview: 117 },
+  { name: 'transition-behavior', pattern: new RegExp(prop('transition-behavior').source + String.raw`|\ballow-discrete\b`), webview: 117 },
   { name: 'popover', pattern: /:popover-open\b|\bpopover=|\b(?:show|hide|toggle)Popover\(/, webview: 114 },
   { name: ':user-valid and :user-invalid', pattern: /:user-(?:in)?valid\b/, webview: 119 },
   { name: '::details-content', pattern: /::details-content\b/, webview: 131 },
@@ -64,7 +84,7 @@ const FEATURES: Feature[] = [
   { name: 'Intl.DurationFormat', pattern: /\bIntl\.DurationFormat\b/, webview: 129 },
   // Newer than the floor, and only cosmetic without it.
   {
-    name: 'font-size-adjust', pattern: /\bfont-size-adjust\s*:/, webview: 127,
+    name: 'font-size-adjust', pattern: prop('font-size-adjust'), webview: 127,
     cosmetic: 'text renders at its own x-height, about 5% smaller',
   },
   {
@@ -72,7 +92,7 @@ const FEATURES: Feature[] = [
     cosmetic: 'recognised but without effect, so an overflowing Focus view stays centred and a short window cuts off its top',
   },
   {
-    name: 'scrollbar-width and scrollbar-color', pattern: /\bscrollbar-(?:width|color)\s*:/, webview: Infinity,
+    name: 'scrollbar-width and scrollbar-color', pattern: prop('scrollbar-width', 'scrollbar-color'), webview: Infinity,
     cosmetic: 'no WebView has them; the tab strip hides its scrollbar with ::-webkit-scrollbar',
   },
   {
@@ -100,10 +120,11 @@ function sources(): string[] {
 
 /** The text with its comments removed, since comments mention features the page doesn't use. */
 function code(path: string): string {
-  const text = readFileSync(path, 'utf8').replace(/\/\*[\s\S]*?\*\//g, ' ')
-  if (path.endsWith('.css')) return text
-  // `//` after a colon is a URL, not a comment.
-  return text.replace(/<!--[\s\S]*?-->/g, ' ').replace(/(^|[^:\\])\/\/.*$/gm, '$1')
+  const text = readFileSync(path, 'utf8')
+  if (path.endsWith('.css')) return text.replace(/\/\*[\s\S]*?\*\//g, ' ')
+  // One pass from the left, so that a `/*` inside a `//` comment (a path such
+  // as /api/public/*) opens nothing. `//` after a colon is a URL, not a comment.
+  return text.replace(/<!--[\s\S]*?-->|\/\*[\s\S]*?\*\/|(^|[^:\\])\/\/.*$/gm, (_m, before?: string) => before ?? ' ')
 }
 
 function minWebView(): number {
@@ -144,7 +165,8 @@ describe('the Android WebView floor', () => {
     // Each of these would show the page broken on an Android WebView between
     // the floor and its version. Raise MIN_WEBVIEW_MAJOR in HostProtocol.kt (and
     // its tests and docs) to the highest of them, or give the feature a fallback
-    // and mark it cosmetic here.
+    // and mark it cosmetic here. If the match isn't the feature at all (a
+    // script function that shares its name), narrow the pattern instead.
     expect(above, `above the Android floor of ${floor}`).toEqual([])
   })
 
@@ -160,7 +182,25 @@ describe('the Android WebView floor', () => {
     const color = FEATURES.find((f) => f.name === 'oklch()')!
     expect(uses.get(color)).toContain(join('src', 'styles', 'tokens.css'))
     expect(uses.get(color)).toContain(join('src', 'appearance.ts'))
+    // contrast.ts parses oklch() strings in script; that needs no WebView 111.
+    expect(uses.get(color)).not.toContain(join('src', 'contrast.ts'))
     // app.css explains in a comment why it doesn't use :has(); comments are stripped.
     expect(code(join(FRONTEND, 'src/styles/app.css'))).not.toMatch(/\/\*/)
+    // A `/*` inside a `//` comment hides no code after it.
+    expect(code(join(FRONTEND, 'src/components/BookingPage.tsx'))).toContain("setPhase('unavailable')")
+  })
+
+  it('reads a property however the page writes it', () => {
+    const sizing = FEATURES.find((f) => f.name === 'field-sizing')!.pattern
+    expect(sizing.test('textarea { field-sizing: content }')).toBe(true)
+    expect(sizing.test("style={{ fieldSizing: 'content' }}")).toBe(true)
+    expect(sizing.test("el.style.setProperty('field-sizing', 'content')")).toBe(true)
+    expect(sizing.test('const sizing = 1')).toBe(false)
+    const oklch = FEATURES.find((f) => f.name === 'oklch()')!.pattern
+    expect(oklch.test("'oklch(0.60 0.19 42)'")).toBe(true)
+    expect(oklch.test('oklch(var(--l) 0.1 40)')).toBe(true)
+    expect(oklch.test('`oklch(${l} ${c} ${h})`')).toBe(true)
+    expect(oklch.test('function oklch(s: string)')).toBe(false)
+    expect(oklch.test('?? oklch(v)')).toBe(false)
   })
 })

@@ -100,6 +100,26 @@ class Updater(private val context: Context, private val settings: Settings) {
         return Outcome(assets?.let { outdatedClient(it) }, web.staged())
     }
 
+    /// The APK offer alone, for a window that won't open the page because its
+    /// WebView is too old for it. No web build is fetched, since this WebView
+    /// can't run one. A newer APK may let this WebView in (a lower floor, or a
+    /// better reading of its version), and the phone would otherwise never
+    /// hear of it. Within RECENT_MS the release is read from the copy the last
+    /// check saved, as startUp does. Throws when the release can't be read.
+    fun clientOnly(): ReleaseAsset? {
+        val recent = System.currentTimeMillis() - settings.lastCheck in 0 until RECENT_MS
+        val saved = if (recent) {
+            try {
+                parseAssets(releaseCache.readText())
+            } catch (_: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+        return outdatedClient(saved ?: fetchAssets(GitHub.NORMAL))
+    }
+
     /// The check made while the app is open. Stages a newer web build for the
     /// next reload but never swaps it in: the page is running from `web`.
     fun check(): Outcome {
