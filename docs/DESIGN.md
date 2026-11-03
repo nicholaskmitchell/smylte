@@ -872,7 +872,8 @@ preferences rather than the account, because it concerns this phone.
   settings window, which the launcher's shortcut opens on its own, therefore
   locks with the app.
 - A visit counts only once one of its windows has drawn a frame (an
-  `OnDrawListener` on the decor view). Android can take a window from `onStart`
+  `OnDrawListener` on the decor view, taken off again with the window, which a
+  rebuilt one can keep). Android can take a window from `onStart`
   to `onStop` unseen: `recreate()` of a stopped activity, which the host does
   when the renderer dies in the background, runs the new instance through start,
   resume, pause and stop in one go. Such a pass leaves the time away as it was,
@@ -887,8 +888,11 @@ preferences rather than the account, because it concerns this phone.
 - The hold on the platform splash ends at once, and the app goes on starting
   behind the lock.
 - Only the prompt's success unlocks.
-- Locking cancels autofill's session, so fields that vanish behind the lock
-  don't bring up its save dialog over it.
+- Server settings cancels autofill's session as it locks, so fields that vanish
+  behind the lock don't bring up its save dialog over it; they are the
+  platform's own fields, which start a new session when next touched. The app's
+  window does not: WebView keeps its own autofill state, which a cancel from
+  outside would put out of step, and hiding a WebView brings up no save.
 - Back, in either window, moves the task to the back rather than reaching the
   page or finishing the window, which would drop whatever was open in it.
   Closing the settings would also show the window under them, whose last picture

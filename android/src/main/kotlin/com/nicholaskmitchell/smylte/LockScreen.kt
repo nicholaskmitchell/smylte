@@ -16,7 +16,6 @@ import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.ViewTreeObserver
 import android.view.accessibility.AccessibilityEvent
-import android.view.autofill.AutofillManager
 import android.widget.Button
 import android.widget.TextView
 
@@ -56,6 +55,15 @@ class LockScreen(
     private var started = false
     /// This window has drawn since its last onStart (AppLock.shown).
     private var drawn = false
+    /// The first frame after each start tells AppLock that the visit is real.
+    /// A window Android starts and stops in the background never draws. Runs
+    /// before every frame, so it reads a flag and nothing more.
+    private val onDraw = ViewTreeObserver.OnDrawListener {
+        if (started && !drawn) {
+            drawn = true
+            AppLock.shared.shown()
+        }
+    }
 
     /// Whether the window is showing the lock view.
     var locked = false
@@ -76,17 +84,7 @@ class LockScreen(
             sync()
             if (locked) ask()
         }
-        // The first frame after each start tells AppLock that the visit is
-        // real. A window Android starts and stops in the background never
-        // draws. Runs before every frame, so it reads a flag and nothing more.
-        activity.window.decorView.viewTreeObserver.addOnDrawListener(
-            ViewTreeObserver.OnDrawListener {
-                if (started && !drawn) {
-                    drawn = true
-                    AppLock.shared.shown()
-                }
-            },
-        )
+        activity.window.decorView.viewTreeObserver.addOnDrawListener(onDraw)
     }
 
     fun onStart() {
@@ -115,9 +113,14 @@ class LockScreen(
         AppLock.shared.stopped(SystemClock.elapsedRealtime())
     }
 
+    /// Also takes the draw listener off the window's decor, which a rebuilt
+    /// window can keep (preserveWindow), so no destroyed activity is held. Read
+    /// from the decor again: the observer it had before it was attached was
+    /// merged into the window's then.
     fun onDestroy() {
         main.removeCallbacksAndMessages(null)
         cancelPrompt()
+        activity.window.decorView.viewTreeObserver.let { if (it.isAlive) it.removeOnDrawListener(onDraw) }
     }
 
     /// The lock view's text in a colour that reads on the window's background,
@@ -148,9 +151,6 @@ class LockScreen(
             status.text = null
             // A keyboard left up for a field behind the lock has nothing to type into.
             activity.window.insetsController?.hide(WindowInsets.Type.ime())
-            // Fields that disappear can make autofill offer to save what was
-            // typed in them, in a window of its own over the lock.
-            activity.getSystemService(AutofillManager::class.java)?.cancel()
         } else {
             cancelPrompt()
         }

@@ -562,7 +562,8 @@ class AppLockTest {
 
     fun back_while_locked_moves_the_settings_to_the_back_too() {
         val code = flat("SetupActivity.kt")
-        assertTrue(code.contains("findViewById(R.id.lock), ::syncBack)"))
+        assertTrue(code.contains("findViewById(R.id.lock), ::onLockChanged)"))
+        assertTrue(between(code, "private fun onLockChanged(locked: Boolean)", "private fun ").contains("{ syncBack(locked)"))
         val sync = between(code, "private fun syncBack(locked: Boolean)", "override fun onBackPressed()")
         assertTrue(sync.contains("if (locked && registered == null) { val callback = OnBackInvokedCallback { moveTaskToBack(true) }"))
         assertTrue(sync.contains("} else if (!locked && registered != null) {"))
@@ -605,8 +606,15 @@ class AppLockTest {
         val code = flat("LockScreen.kt")
         assertTrue(
             code.contains(
-                "activity.window.decorView.viewTreeObserver.addOnDrawListener( ViewTreeObserver.OnDrawListener { " +
-                    "if (started && !drawn) { drawn = true AppLock.shared.shown() } }, )",
+                "private val onDraw = ViewTreeObserver.OnDrawListener { " +
+                    "if (started && !drawn) { drawn = true AppLock.shared.shown() } }",
+            ),
+        )
+        assertTrue(code.contains("activity.window.decorView.viewTreeObserver.addOnDrawListener(onDraw)"))
+        // Taken off again with the window, which a rebuilt one can keep.
+        assertTrue(
+            between(code, "fun onDestroy()", "fun textColour(").contains(
+                "activity.window.decorView.viewTreeObserver.let { if (it.isAlive) it.removeOnDrawListener(onDraw) }",
             ),
         )
         assertTrue(code.contains("fun onStart() { AppLock.shared.started(SystemClock.elapsedRealtime()) started = true drawn = false sync() }"))
@@ -626,10 +634,14 @@ class AppLockTest {
 
     @Test
 
-    fun locking_cancels_autofill() {
-        val sync = between(flat("LockScreen.kt"), "fun sync()", "fun isOn()")
-        val branch = between(sync, "if (now) {", "} else {")
-        assertTrue(branch.contains("activity.getSystemService(AutofillManager::class.java)?.cancel()"))
+    fun the_settings_cancel_autofill_as_they_lock_and_the_page_does_not() {
+        val change = between(flat("SetupActivity.kt"), "private fun onLockChanged(locked: Boolean)", "private fun ")
+        assertTrue(change.contains("if (locked) getSystemService(AutofillManager::class.java)?.cancel()"))
+        // WebView keeps its own autofill state, which a cancel from outside
+        // would put out of step.
+        for (name in listOf("LockScreen.kt", "MainActivity.kt")) {
+            assertFalse(name, source(name).contains("AutofillManager"))
+        }
     }
 
     @Test

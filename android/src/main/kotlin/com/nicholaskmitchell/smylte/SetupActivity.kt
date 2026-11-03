@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.view.View
+import android.view.autofill.AutofillManager
 import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
 import android.widget.Button
@@ -47,7 +48,7 @@ class SetupActivity : Activity() {
         // The settings hide behind the lock too: they show the server and the
         // account, they are where the lock is turned off, and the launcher's
         // shortcut opens them directly.
-        lock = LockScreen(this, settings, findViewById(R.id.setup_content), findViewById(R.id.lock), ::syncBack)
+        lock = LockScreen(this, settings, findViewById(R.id.setup_content), findViewById(R.id.lock), ::onLockChanged)
         server = findViewById(R.id.server)
         username = findViewById(R.id.username)
         password = findViewById(R.id.password)
@@ -112,6 +113,19 @@ class SetupActivity : Activity() {
     /// what was typed in them, and would show the window underneath, whose
     /// last picture may be from before the lock. On 13 and later that is a
     /// callback held only while locked, so the system's own Back runs otherwise.
+    /// The lock took hold or let go (LockScreen.sync).
+    private fun onLockChanged(locked: Boolean) {
+        syncBack(locked)
+        // Fields that disappear behind the lock can make autofill offer to
+        // save what was typed in them, in a window of its own over the lock,
+        // so the session goes. Only here: these are the platform's own fields,
+        // which start a new session when next touched. The app's window does
+        // not do this, because WebView keeps its own autofill state, which a
+        // cancel from outside would put out of step, and hiding a WebView
+        // brings up no save anyway.
+        if (locked) getSystemService(AutofillManager::class.java)?.cancel()
+    }
+
     private fun syncBack(locked: Boolean) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         val registered = backCallback
