@@ -223,15 +223,25 @@ object HostProtocol {
     /// that waits that long for one is an ANR.
     const val SPLASH_CAP_MS = 3_000L
 
-    /// When the cap starts counting. On a cold launch that is the process's own
+    /// The longest a cold start can take to reach its first window and still
+    /// be taken for one. Its own measure, not the cap: a slow phone can take
+    /// longer than the cap to get there, and its splash has been up all along.
+    const val COLD_START_MS = 10_000L
+
+    /// When the cap starts counting. On a cold launch (this process's first
+    /// window, created soon after the process started) that is the process's
     /// start, because the platform splash has been up since the tap that
     /// started it, and the cap has to bound what the user sees: the time to
     /// reach onCreate (inflating the WebView, loading its provider) would
-    /// otherwise come on top of it, and eat into the 5 s margin. On a warm
-    /// launch the process started long before this window, so it counts from
-    /// now. A start in the future (a clock that went backwards) counts from now.
-    fun splashSince(now: Long, processStart: Long): Long =
-        if (now - processStart in 0 until SPLASH_CAP_MS) processStart else now
+    /// otherwise come on top of it, and eat into the 5 s margin. Otherwise the
+    /// process was already running when the tap came, so it counts from now. A
+    /// start in the future (a clock that went backwards) counts from now.
+    fun splashSince(now: Long, processStart: Long, firstWindow: Boolean): Long =
+        if (firstWindow && now - processStart in 0 until COLD_START_MS) processStart else now
+
+    /// How much of the cap is left. At zero or below nothing is held: a cold
+    /// start that took the whole cap to reach its window shows it at once.
+    fun splashLeft(now: Long, since: Long): Long = SPLASH_CAP_MS - (now - since)
 
     /// Whether onCreate holds the splash screen. Only a fresh launch from the
     /// launcher is sure to have one in front of the window: a window rebuilt

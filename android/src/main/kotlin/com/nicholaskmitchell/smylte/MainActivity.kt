@@ -154,7 +154,10 @@ class MainActivity : Activity() {
         stripDismiss = findViewById(R.id.strip_dismiss)
         webAccessibility = web.importantForAccessibility
         lock = LockScreen(this, settings, findViewById(R.id.main_content), findViewById(R.id.lock), ::onLockChanged)
-        holdSplash(savedInstanceState)
+        // Read and set at every creation, whether or not this one holds the splash.
+        val firstWindow = !createdBefore
+        createdBefore = true
+        holdSplash(savedInstanceState, firstWindow)
 
         Insets.edgeToEdge(window, root)
         settings.themeColour.takeIf { it != 0 }?.let(::applyThemeColour)
@@ -250,17 +253,22 @@ class MainActivity : Activity() {
     /// hold lasts, so it reads a flag and nothing more.
     ///
     /// Only a fresh launch from the launcher holds (HostProtocol.holdsSplash).
-    /// The splash's exit animation is left to the system: on Android 12 and
+    /// The cap counts from the tap as nearly as the app can tell
+    /// (HostProtocol.splashSince), and a launch that has used it all before
+    /// getting here holds nothing. The splash's exit animation is left to the system: on Android 12 and
     /// 12L, taking it over can change how the window fits the system bars,
     /// which Insets depends on.
-    private fun holdSplash(savedInstanceState: Bundle?) {
+    private fun holdSplash(savedInstanceState: Bundle?, firstWindow: Boolean) {
         val fromLauncher = intent?.let {
             it.action == Intent.ACTION_MAIN && it.hasCategory(Intent.CATEGORY_LAUNCHER)
         } == true
         if (!HostProtocol.holdsSplash(Build.VERSION.SDK_INT, savedInstanceState != null, fromLauncher)) return
-        splashHeld = true
         val now = SystemClock.uptimeMillis()
-        splashHeldSince = HostProtocol.splashSince(now, Process.getStartUptimeMillis())
+        val since = HostProtocol.splashSince(now, processStart(), firstWindow)
+        val left = HostProtocol.splashLeft(now, since)
+        if (left <= 0) return
+        splashHeld = true
+        splashHeldSince = since
         val content = findViewById<View>(android.R.id.content)
         content.viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
             override fun onPreDraw(): Boolean {
@@ -272,8 +280,15 @@ class MainActivity : Activity() {
                 return true
             }
         })
-        main.postDelayed(splashCap, HostProtocol.SPLASH_CAP_MS - (now - splashHeldSince))
+        main.postDelayed(splashCap, left)
     }
+
+    /// When this process was started, on uptimeMillis. On 13 and later, when
+    /// its start was asked for, which is closer to the tap than the moment it
+    /// began running.
+    private fun processStart(): Long =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) Process.getStartRequestedUptimeMillis()
+        else Process.getStartUptimeMillis()
 
     /// Ends the hold once HostProtocol.splashRelease says so. Nothing needs to
     /// ask for a frame: a draw the listener cancelled is tried again on the
@@ -1135,6 +1150,10 @@ class MainActivity : Activity() {
     }
 
     private companion object {
+        /// A MainActivity has been created in this process before, so the next
+        /// is not a cold launch's first window (holdSplash). Main thread only.
+        var createdBefore = false
+
         const val KEY_PATH = "path"
         const val REQUEST_FILE = 1
         const val REQUEST_SAVE = 2

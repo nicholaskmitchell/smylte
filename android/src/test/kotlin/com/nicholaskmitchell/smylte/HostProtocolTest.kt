@@ -525,16 +525,50 @@ class HostProtocolTest {
 
     fun the_splash_cap_counts_from_the_process_start_on_a_cold_launch() {
         val cap = HostProtocol.SPLASH_CAP_MS
-        // Cold: the process started 800 ms ago, when the splash went up.
-        assertEquals(10_000L, HostProtocol.splashSince(now = 10_800, processStart = 10_000))
-        assertEquals(10_000L, HostProtocol.splashSince(now = 10_000 + cap - 1, processStart = 10_000))
-        // Warm: the process is older than the cap, so it counts from now.
-        assertEquals(10_000L + cap, HostProtocol.splashSince(now = 10_000 + cap, processStart = 10_000))
-        assertEquals(900_000L, HostProtocol.splashSince(now = 900_000, processStart = 10_000))
-        // A start in the future counts from now.
-        assertEquals(10_000L, HostProtocol.splashSince(now = 10_000, processStart = 12_000))
-        // Simultaneous: from that moment.
-        assertEquals(10_000L, HostProtocol.splashSince(now = 10_000, processStart = 10_000))
+        val cold = HostProtocol.COLD_START_MS
+        fun since(now: Long, processStart: Long = 10_000, firstWindow: Boolean = true) =
+            HostProtocol.splashSince(now, processStart, firstWindow)
+        // Cold: the process's first window, 800 ms after it started, when the
+        // splash went up.
+        assertEquals(10_000L, since(10_800))
+        assertEquals(10_000L, since(10_000 + cap - 1))
+        // Still cold when reaching the window took the whole cap or more: a
+        // slow start is not taken for a warm one, whose hold would come on top.
+        assertEquals(10_000L, since(10_000 + cap))
+        assertEquals(10_000L, since(10_000 + cold - 1))
+        // A first window long after the process started: the process was
+        // running before the tap, so the cap counts from now.
+        assertEquals(10_000L + cold, since(10_000 + cold))
+        assertEquals(900_000L, since(900_000))
+        // Not the process's first window: warm, however young the process.
+        assertEquals(10_800L, since(10_800, firstWindow = false))
+        // A start in the future counts from now; simultaneous, from that moment.
+        assertEquals(10_000L, since(10_000, processStart = 12_000))
+        assertEquals(10_000L, since(10_000, processStart = 10_000))
+        assertTrue(cold > cap)
+    }
+
+    @Test
+
+    fun a_launch_that_used_up_the_cap_holds_nothing() {
+        val cap = HostProtocol.SPLASH_CAP_MS
+        assertEquals(cap, HostProtocol.splashLeft(now = 5_000, since = 5_000))
+        assertEquals(2_200L, HostProtocol.splashLeft(now = 10_800, since = 10_000))
+        assertEquals(1L, HostProtocol.splashLeft(now = 10_000 + cap - 1, since = 10_000))
+        assertEquals(0L, HostProtocol.splashLeft(now = 10_000 + cap, since = 10_000))
+        assertTrue(HostProtocol.splashLeft(now = 10_000 + 2 * cap, since = 10_000) < 0)
+        // The window holds only with time left, and the cap's timer is set to it.
+        val code = File("src/main/kotlin/com/nicholaskmitchell/smylte/MainActivity.kt").readText()
+        val hold = code.substringAfter("private fun holdSplash(").substringBefore("private fun processStart()")
+        val skip = hold.indexOf("if (left <= 0) return")
+        assertTrue(skip >= 0)
+        assertTrue(skip < hold.indexOf("splashHeld = true"))
+        assertTrue(hold.contains("main.postDelayed(splashCap, left)"))
+        // On 13 and later the start counts from when it was asked for.
+        assertTrue(code.contains("Process.getStartRequestedUptimeMillis()"))
+        // The first window is told once a process, at its creation.
+        assertEquals(1, Regex("""createdBefore = true""").findAll(code).count())
+        assertTrue(code.contains("val firstWindow = !createdBefore"))
     }
 
     @Test

@@ -413,8 +413,8 @@ export function App() {
   // later sign-in, sign-out or offline retry from counting as a start.
   // (StrictMode's extra run of this effect comes at mount, while auth is still
   // 'loading', so the first return handles it.) An effect rather than a frame
-  // callback, because
-  // while the splash is held the window does not draw and frames may not come.
+  // callback, because while the splash is held the window does not draw and
+  // frames may not come.
   // A no-op in a browser and in the desktop clients.
   const saidReady = useRef(false)
   useEffect(() => {
