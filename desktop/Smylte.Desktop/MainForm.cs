@@ -76,7 +76,7 @@ public sealed class MainForm : Form, IDesktopBridge
 
     /// Shown when the published exe is a different binary from this one. The
     /// client cannot overwrite itself while running, but it can rename itself
-    /// aside and start the replacement (Updater.ReplaceClientAsync), so the
+    /// aside and start the replacement (Updater.PrepareClientAsync), so the
     /// strip offers to do exactly that. Only when that refuses — an exe in a
     /// folder this user cannot write, a release with no digest to check the
     /// download against — does it fall back to the download page.
@@ -138,26 +138,19 @@ public sealed class MainForm : Form, IDesktopBridge
             var progress = new Progress<string>(text => message.Text = text);
             try
             {
-                var exe = await Updater
-                    .ReplaceClientAsync(_settings, progress, CancellationToken.None)
+                var staged = await Updater
+                    .PrepareClientAsync(_settings, progress, CancellationToken.None)
                     .ConfigureAwait(true);
                 message.Text = "Restarting…";
                 // The engine lets go of the profile folder first. WebView2's
                 // browser processes outlive the window that made them by up to
                 // a few seconds, and they hold the user-data folder the whole
-                // time; the new client waited for THIS process to exit and then
-                // asked for that folder while they still had it, and failed to
-                // start with an error that a manual restart a moment later
-                // never reproduced. See ReleaseBrowserAsync.
+                // time. See ReleaseBrowserAsync.
                 await ReleaseBrowserAsync().ConfigureAwait(true);
-                // The new file is in place; this process is still the old image.
-                // Start the new one and tell it whom to wait for, then leave.
-                Process.Start(new ProcessStartInfo(exe)
-                {
-                    Arguments = $"{Updater.AfterUpdateFlag} {Environment.ProcessId}",
-                    UseShellExecute = true,
-                    WorkingDirectory = Path.GetDirectoryName(exe) ?? "",
-                });
+                // Nothing at this exe's path has changed: the new client
+                // installs itself once this one has gone (Updater's section
+                // note on why this process must not move its own file).
+                Updater.StartReplacement(staged, Environment.ProcessPath!);
                 Close();
             }
             catch (Exception ex)

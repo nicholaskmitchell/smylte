@@ -65,20 +65,21 @@ public sealed class ClientUpdateTests : IDisposable
     // ── the swap ────────────────────────────────────────────────────────────
 
     [Fact]
-    public void The_swap_puts_the_new_file_at_the_exes_path_and_keeps_the_old_beside_it()
+    public void The_install_puts_a_copy_at_the_exes_path_and_keeps_the_old_beside_it()
     {
         var exe = Write("Smylte.exe", "old");
         var staged = Write("Smylte.exe.new", "new");
 
-        Updater.SwapClient(exe, staged);
+        Updater.InstallClient(exe, staged);
 
         Assert.Equal("new", File.ReadAllText(exe));
         Assert.Equal("old", File.ReadAllText(Updater.RetiredClientPath(exe)));
-        Assert.False(File.Exists(staged));
+        // Copied, not moved: the hop installing it is running from this file.
+        Assert.Equal("new", File.ReadAllText(staged));
     }
 
     [Fact]
-    public void A_swap_whose_second_move_fails_puts_the_old_exe_back()
+    public void An_install_whose_copy_fails_puts_the_old_exe_back()
     {
         // The staged file is missing — the shape of any failure between the two
         // moves. The running exe had already been renamed aside by then, and a
@@ -86,20 +87,20 @@ public sealed class ClientUpdateTests : IDisposable
         var exe = Write("Smylte.exe", "old");
         var staged = Path.Combine(_dir, "Smylte.exe.new");
 
-        Assert.ThrowsAny<IOException>(() => Updater.SwapClient(exe, staged));
+        Assert.ThrowsAny<IOException>(() => Updater.InstallClient(exe, staged));
 
         Assert.Equal("old", File.ReadAllText(exe));
         Assert.False(File.Exists(Updater.RetiredClientPath(exe)));
     }
 
     [Fact]
-    public void A_retired_file_from_last_time_does_not_block_the_swap()
+    public void A_retired_file_from_last_time_does_not_block_the_install()
     {
         var exe = Write("Smylte.exe", "old");
         Write("Smylte.exe.old", "older still");
         var staged = Write("Smylte.exe.new", "new");
 
-        Updater.SwapClient(exe, staged);
+        Updater.InstallClient(exe, staged);
 
         Assert.Equal("new", File.ReadAllText(exe));
         Assert.Equal("old", File.ReadAllText(Updater.RetiredClientPath(exe)));
@@ -158,8 +159,44 @@ public sealed class ClientUpdateTests : IDisposable
         // and the swap's own rollback is what owns the window. What must not
         // happen is the staged file going with it.
         Write("Smylte.exe.new", "new");
-        Updater.SwapClient(Write("Smylte.exe", "old again"), Updater.StagedClientPath(exe));
+        Updater.InstallClient(Write("Smylte.exe", "old again"), Updater.StagedClientPath(exe));
         Assert.Equal("new", File.ReadAllText(exe));
+    }
+
+    // ── the hop: the old client never moves its own file ───────────────────
+
+    [Fact]
+    public void The_downloaded_client_is_told_where_to_install_itself_and_whom_to_wait_for()
+    {
+        // "Could not load file or assembly 'System.IO.Pipes'": the old client
+        // renamed its own running bundle and then needed an assembly from it.
+        // Now it only starts the download, which installs itself.
+        var args = Updater.HandOffArguments("/opt/Smylte", 4321);
+
+        Assert.Equal("/opt/Smylte", Updater.FinishUpdateTarget(args));
+        Assert.Equal(4321, Updater.AfterUpdatePid(args));
+    }
+
+    [Fact]
+    public void A_launch_without_the_hop_flag_is_not_a_hop()
+    {
+        Assert.Null(Updater.FinishUpdateTarget(Array.Empty<string>()));
+        Assert.Null(Updater.FinishUpdateTarget(new[] { "--after-update", "12" }));
+        Assert.Null(Updater.FinishUpdateTarget(new[] { "--finish-update" }));
+    }
+
+    [Fact]
+    public void The_installed_client_clears_the_download_the_hop_ran_from()
+    {
+        var exe = Write("Smylte.exe", "new");
+        var staged = Write("Smylte.exe.new", "new");
+
+        Updater.RemoveStagedClient(exe);
+
+        Assert.False(File.Exists(staged));
+        Assert.True(File.Exists(exe));
+        Updater.RemoveStagedClient(exe);
+        Updater.RemoveStagedClient(null);
     }
 
     // ── the flag the updater starts its replacement with ────────────────────
@@ -257,7 +294,7 @@ public sealed class ClientUpdateTests : IDisposable
         var exe = Write("Smylte", "old");
         var staged = Write("Smylte.new", "new");
         Updater.MakeExecutable(staged);
-        Updater.SwapClient(exe, staged);
+        Updater.InstallClient(exe, staged);
 
         Assert.Equal("new", File.ReadAllText(exe));
         if (OperatingSystem.IsWindows()) return;

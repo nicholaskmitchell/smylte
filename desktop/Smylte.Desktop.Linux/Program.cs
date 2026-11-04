@@ -29,6 +29,25 @@ internal static class Program
         // half lives in its own [MethodImpl(NoInlining)] method for the same
         // reason: inlining it up here would drag the type references with it.
 
+        // `--finish-update <exe>`: this is the downloaded client on its hop
+        // (Updater's section note). First, before the display backend or the
+        // native preflight: it opens no window and needs no library, and it
+        // must install itself even on a machine whose check would fail.
+        if (Updater.FinishUpdateTarget(args) is { } target && Updater.FinishUpdate(target, args)) return 0;
+
+        // A client the updater just swapped in is started BY the one it
+        // replaces, which is still running. Wait for it to leave before asking
+        // for the single-instance name, or this launch is answered as a remote
+        // activation — it would raise the old window and exit, and the update
+        // would look like it did nothing at all. Only then can the retired file
+        // be deleted.
+        if (Updater.AfterUpdatePid(args) is { } previous)
+        {
+            Updater.WaitForPreviousClient(previous);
+            if (Updater.FinishUpdateTarget(args) is null) Updater.RemoveStagedClient(Environment.ProcessPath);
+        }
+        Updater.RemoveRetiredClient(Environment.ProcessPath);
+
         var settings = Settings.Load();
 
         if (args.Any(a => a.Equals("--check", StringComparison.OrdinalIgnoreCase)))
@@ -81,14 +100,6 @@ internal static class Program
             return 1;
         }
 
-        // A client the updater just swapped in is started BY the one it
-        // replaces, which is still running. Wait for it to leave before asking
-        // for the single-instance name, or this launch is answered as a remote
-        // activation — it would raise the old window and exit, and the update
-        // would look like it did nothing at all. Only then can the retired file
-        // be deleted.
-        if (Updater.AfterUpdatePid(args) is { } previous) Updater.WaitForPreviousClient(previous);
-        Updater.RemoveRetiredClient(Environment.ProcessPath);
 
         // BEFORE Gtk(), and that is the point of it being its own path.
         // Writing a desktop entry is file IO — it opens no window and needs no
