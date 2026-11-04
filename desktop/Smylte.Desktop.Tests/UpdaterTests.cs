@@ -242,8 +242,8 @@ public sealed class UpdaterTests : IDisposable
         var unpacked = _settings.WebRoot + ".new";
         MakeBuild(unpacked, "new");
 
-        Updater.Stage(_settings, unpacked, 42, "2026-11-04T00:00:00Z");
-        Assert.Equal((42L, "2026-11-04T00:00:00Z"), Updater.StagedAsset(_settings));
+        Updater.Stage(_settings, unpacked, "sha256:42");
+        Assert.Equal("sha256:42", Updater.StagedAsset(_settings));
         Assert.Equal("old", File.ReadAllText(Path.Combine(_settings.WebRoot, "index.html")));
 
         Updater.PromoteStagedBuild(_settings);
@@ -252,8 +252,7 @@ public sealed class UpdaterTests : IDisposable
         Assert.False(Directory.Exists(Updater.StagedRoot(_settings)));
         Assert.False(Directory.Exists(_settings.WebRoot + ".old"));
         Assert.False(File.Exists(Path.Combine(_settings.WebRoot, ".smylte-asset")));
-        Assert.Equal(42, _settings.LastAssetId);
-        Assert.Equal("2026-11-04T00:00:00Z", _settings.LastAssetStamp);
+        Assert.Equal("sha256:42", _settings.LastAssetStamp);
     }
 
     [Fact]

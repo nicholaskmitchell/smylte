@@ -26,7 +26,8 @@ public sealed class Settings
 
     /// Optional. The repository is public, so release assets download without
     /// one; this exists because anonymous GitHub API access is capped at 60
-    /// requests an hour per IP. A launch spends one, which is ample on a normal
+    /// requests an hour per IP. The release is read from GitLab first, so a launch
+    /// spends one only when GitLab cannot answer; that is ample on a normal
     /// connection and not necessarily ample behind a shared or CGNAT address.
     /// A fine-grained PAT with Contents:read is enough.
     public string GitHubToken { get; set; } = "";
@@ -37,9 +38,9 @@ public sealed class Settings
     /// start. LocalServer only picks a different one if this is genuinely taken.
     public int Port { get; set; } = 47821;
 
-    /// What the last downloaded web build was, so an unchanged release is a
-    /// single API call rather than a re-download.
-    public long LastAssetId { get; set; }
+    /// What the last downloaded web build was (its checksum, Updater's asset
+    /// key), so an unchanged release is a single API call rather than a
+    /// re-download.
     public string LastAssetStamp { get; set; } = "";
 
     /// SHA-256 of this exe, and the write time it was computed for. Hashing 69 MB

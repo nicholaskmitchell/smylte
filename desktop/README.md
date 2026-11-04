@@ -46,6 +46,13 @@ a log file and in a dialog if it can open one. `--check` tests this and exits.
 
 ## Updates
 
+Both kinds of update read the `desktop-latest` release from GitLab first and
+from GitHub when GitLab can't answer. The files themselves are published on
+GitHub; GitLab's copy of the release links to them and lists the SHA-256 of
+each, and every download is checked against it. If GitLab's copy is behind (it
+follows GitHub's within a minute or two of a publish) or lists no checksums,
+the client asks GitHub instead.
+
 - **The web app** updates on every launch. The client checks whether
   `smylte-web.zip` on the release has changed, downloads it if so, and runs the
   copy it has when offline. A push to `main` reaches the desktop on the next
@@ -53,7 +60,7 @@ a log file and in a dialog if it can open one. `--check` tests this and exits.
   it has; a check or download still running then finishes in the background,
   and its build is put in place on the following start.
 - **The client binary** updates from a strip at the top of the window. **Update**
-  downloads the new binary, checks it against the SHA-256 GitHub publishes,
+  downloads the new binary, checks it against the release's SHA-256,
   swaps it in and restarts. On Windows it waits for the web engine to let go of
   the profile folder before the new client starts. If that isn't possible (the folder isn't writable,
   or the release has no digest), the strip explains why and links to the
@@ -87,8 +94,8 @@ it's derived from `secret.key`, `/etc/machine-id` and your user name. If the
 password can't be decrypted, the app shows its login screen. Neither method stops
 a process running as you from reading it.
 
-The optional **GitHub token** (only useful if update checks hit the 60
-requests/hour anonymous limit), the server URL, username, data folder and port
+The optional **GitHub token** (only used when the client falls back to GitHub,
+and only useful if those checks hit the 60 requests/hour anonymous limit), the server URL, username, data folder and port
 are stored in plain text. Treat the file like any file holding a token.
 
 ## Changing settings

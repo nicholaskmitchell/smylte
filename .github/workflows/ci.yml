@@ -228,6 +228,7 @@ jobs:
         run: |
           pip install --quiet pyyaml
           .github/workflows/tests/publish-release.test.sh
+          .github/workflows/tests/record-checksums.test.sh
 
   security:
     runs-on: ubuntu-latest

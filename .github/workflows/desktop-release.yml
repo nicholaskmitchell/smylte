@@ -66,7 +66,7 @@ jobs:
 
       - name: Stamp the build
         # Not read by anything automatically — the client tells builds apart by
-        # the release asset's id and updated_at (Updater.cs). This is for a human
+        # the release asset's SHA-256 (Updater.cs, record-checksums.sh). This is for a human
         # wondering which commit a running desktop app is actually on.
         run: |
           printf '{"sha":"%s","built":"%s"}\n' \
@@ -406,8 +406,13 @@ jobs:
     # The one job that publishes, and the only one that needs to write. It runs
     # no dependency install code at all — its steps are `gh` calls over the
     # artifacts the other two built.
+    #
+    # `actions: write` is for one call: starting the GitLab sync once the
+    # release is up (record-checksums.sh), which a release edit made with this
+    # token would not start on its own.
     permissions:
       contents: write
+      actions: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -710,8 +715,9 @@ jobs:
           if [ "$RELEASE_STATE" = present ]; then
             # Assets first, notes second, and the order matters. If this step dies
             # in between, new binaries under stale notes is the harmless half —
-            # the client keys on the asset id and updated_at (Updater.cs), never
-            # the body, so it still gets the right build. The reverse would leave
+            # a client reading GitHub keys on the asset's own digest (Updater.cs),
+            # and one reading GitLab's copy finds its checksums stale and asks
+            # GitHub, so it still gets the right build. The reverse would leave
             # notes promising a commit whose binaries were never uploaded, which
             # reads as shipped and is not.
             retry gh release upload desktop-latest $FILES --clobber
@@ -756,3 +762,13 @@ jobs:
             echo "::error::desktop-latest notes do not record the android version code ${ANDROID_NOTE_CODE}"
             exit 1
           fi
+
+      - name: Record checksums and hand the release to GitLab
+        # The desktop clients read the release from GitLab first, and GitLab's
+        # copy carries GitHub's notes but not its per-file digests; these lines
+        # are how a client reading it checks what it downloaded. Its own step,
+        # after the publish, so the digests are those of the files actually on
+        # the release, the clobbered ones and the ones this run left in place.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: .github/workflows/scripts/record-checksums.sh

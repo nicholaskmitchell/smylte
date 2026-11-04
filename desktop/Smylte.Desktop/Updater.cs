@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Smylte.Desktop;
 
@@ -21,18 +22,52 @@ namespace Smylte.Desktop;
 public sealed record UpdateResult(
     bool Updated, string Message, bool ClientOutdated, Task<UpdateResult>? Later = null);
 
+/// One file on the release, wherever the release was read from.
+/// <param name="Digest">"sha256:<hex>", or null when the release states none.</param>
+/// <param name="Key">What tells this file's builds apart: its digest, or for a
+/// GitHub asset without one, its id and upload time.</param>
+/// <param name="Url">Where to download it from when read from GitLab.</param>
+/// <param name="GitHubId">The GitHub asset id, or 0 when read from GitLab.</param>
+internal sealed record ReleaseAsset(string Name, string? Digest, string Key, string Url, long GitHubId)
+{
+    public bool ViaGitLab => GitHubId == 0;
+}
+
+/// The release's files, as GitLab or GitHub described them.
+internal sealed record ReleaseInfo(bool FromGitLab, IReadOnlyList<ReleaseAsset> Assets)
+{
+    public ReleaseAsset? Find(string name) => Assets.FirstOrDefault(a => a.Name == name);
+}
+
+/// GitLab's copy of the release described a file other than the one its link
+/// now serves: the copy is behind GitHub's (the release is rolling, and the copy
+/// follows it through the sync). GitHub's own answer is asked for instead.
+internal sealed class StaleReleaseException() : Exception("GitLab's copy of the release is behind.");
+
 /// Keeps the local copy of the web build in step with what CI published.
 ///
 /// The client never builds anything and never clones the repository: CI runs the
 /// same typecheck, tests and `vite build` the deploy already depends on, then
 /// attaches the result to a rolling `desktop-latest` release. This reads that
 /// release and unpacks it. That is what makes the exe a thing you install once.
+///
+/// The release is read from GitLab first, where the project lives, and from
+/// GitHub when GitLab cannot answer. The files themselves are published on
+/// GitHub (desktop-release.yml) and GitLab's copy of the release links to them,
+/// with the checksum of each in its notes; every download is checked against
+/// that checksum before it is used.
 public static class Updater
 {
     private const string Owner = "nicholaskmitchell";
     private const string Repo = "smylte";
     private const string Tag = "desktop-latest";
     private const string AssetName = "smylte-web.zip";
+
+    internal const string GitLabReleaseApi =
+        $"https://gitlab.com/api/v4/projects/{Owner}%2F{Repo}/releases/{Tag}";
+
+    /// How long GitLab gets to answer before GitHub is asked instead.
+    private static readonly TimeSpan GitLabPatience = TimeSpan.FromSeconds(15);
 
     /// The client binary for the OS this process is running on.
     ///
@@ -51,7 +86,7 @@ public static class Updater
     /// Where to send someone whose client is out of date. The release is rolling,
     /// so this link never changes and always has the current exe behind it.
     public const string ReleaseUrl =
-        $"https://github.com/{Owner}/{Repo}/releases/tag/{Tag}";
+        $"https://gitlab.com/{Owner}/{Repo}/-/releases/{Tag}";
 
     /// How long a launch with a build already on disk waits for the update
     /// check before opening that build.
@@ -142,7 +177,7 @@ public static class Updater
 
         var haveLocal = HaveLocalBuild(settings);
 
-        JsonElement release;
+        ReleaseInfo release;
         try
         {
             log.Report("Checking for updates…");
@@ -154,43 +189,62 @@ public static class Updater
             // first run has nothing to fall back to.
             if (haveLocal) return new UpdateResult(false, "Offline — using the installed build.", false);
             throw new InvalidOperationException(
-                "Could not reach GitHub to download the app, and there is no local copy yet. "
+                "Could not reach GitLab or GitHub to download the app, and there is no local copy yet. "
                 + "Check the connection. If this keeps happening, a GitHub token in settings "
-                + "raises the API rate limit.", ex);
+                + "raises GitHub's API rate limit.", ex);
         }
 
+        try
+        {
+            return await RefreshFromAsync(settings, gate, release, haveLocal, log, ct).ConfigureAwait(false);
+        }
+        catch (StaleReleaseException) when (release.FromGitLab)
+        {
+            log.Report("Checking GitHub for the latest build…");
+            try
+            {
+                release = await FetchGitHubReleaseAsync(settings, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (haveLocal && ex is HttpRequestException or TaskCanceledException)
+            {
+                return new UpdateResult(false, "Offline — using the installed build.", false);
+            }
+            return await RefreshFromAsync(settings, gate, release, haveLocal, log, ct).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<UpdateResult> RefreshFromAsync(
+        Settings settings, SwapGate gate, ReleaseInfo release, bool haveLocal,
+        IProgress<string> log, CancellationToken ct)
+    {
         // Free: the exe's digest is in the release payload already fetched, so
         // noticing a new client costs no extra request.
-        var clientOutdated = IsClientOutdated(FindAsset(release, ClientAssetName), settings);
+        var clientOutdated = IsClientOutdated(release.Find(ClientAssetName), settings);
 
-        if (FindAsset(release, AssetName) is not { } asset)
+        if (release.Find(AssetName) is not { } asset)
         {
             if (haveLocal) return new UpdateResult(false, "Up to date.", clientOutdated);
             throw new InvalidOperationException(
                 $"The {Tag} release has no {AssetName} asset, and there is no local copy yet.");
         }
 
-        var id = asset.GetProperty("id").GetInt64();
-        var stamp = asset.TryGetProperty("updated_at", out var u) ? u.GetString() ?? "" : "";
-
-        if (haveLocal && id == settings.LastAssetId && stamp == settings.LastAssetStamp)
+        if (haveLocal && asset.Key == settings.LastAssetStamp)
             return new UpdateResult(false, "Up to date.", clientOutdated);
-        if (haveLocal && StagedAsset(settings) == (id, stamp))
+        if (haveLocal && StagedAsset(settings) == asset.Key)
             return new UpdateResult(false, "The latest build is ready for the next start.", clientOutdated);
 
         log.Report("Downloading the latest build…");
         var installed = false;
         if (await SwapOrKeepLocalAsync(
                 async () => installed = await DownloadAndInstallAsync(
-                    settings, gate, id, stamp, log, ct).ConfigureAwait(false),
+                    settings, gate, asset, log, ct).ConfigureAwait(false),
                 haveLocal, clientOutdated, log).ConfigureAwait(false) is { } kept)
             return kept;
 
         if (!installed)
             return new UpdateResult(false, "The latest build is ready for the next start.", clientOutdated);
 
-        settings.LastAssetId = id;
-        settings.LastAssetStamp = stamp;
+        settings.LastAssetStamp = asset.Key;
         settings.Save();
 
         return new UpdateResult(true, "Updated to the latest build.", clientOutdated);
@@ -217,7 +271,8 @@ public static class Updater
             await swap().ConfigureAwait(false);
             return null;
         }
-        catch (Exception ex) when (haveLocal)
+        // A stale GitLab copy is not a failed update: the caller asks GitHub.
+        catch (Exception ex) when (haveLocal && ex is not StaleReleaseException)
         {
             log.Report("Update failed — using the installed build.");
             return new UpdateResult(
@@ -266,11 +321,9 @@ public static class Updater
     /// Every uncertain path returns false. A missing digest field, an unreadable
     /// exe, an unexpected format: none of those are evidence of being out of date,
     /// and a false alarm here sends someone to re-download 69 MB for nothing.
-    private static bool IsClientOutdated(JsonElement? clientAsset, Settings settings)
+    private static bool IsClientOutdated(ReleaseAsset? clientAsset, Settings settings)
     {
-        if (clientAsset is not { } asset) return false;
-        if (!asset.TryGetProperty("digest", out var field)) return false;
-        if (field.GetString() is not { Length: > 0 } published) return false;
+        if (clientAsset?.Digest is not { } published) return false;
 
         var local = LocalClientDigest(settings);
         return local is not null && !string.Equals(local, published, StringComparison.OrdinalIgnoreCase);
@@ -301,16 +354,9 @@ public static class Updater
         }
     }
 
-    private static JsonElement? FindAsset(JsonElement release, string name)
-    {
-        if (!release.TryGetProperty("assets", out var assets)) return null;
-        foreach (var asset in assets.EnumerateArray())
-            if (asset.TryGetProperty("name", out var n) && n.GetString() == name)
-                return asset;
-        return null;
-    }
-
-    private static HttpClient MakeClient(Settings settings)
+    /// `settings` is null for a client that must not carry the GitHub token:
+    /// one talking to GitLab, or downloading from a link GitLab handed out.
+    private static HttpClient MakeClient(Settings? settings)
     {
         var http = new HttpClient(new SocketsHttpHandler
         {
@@ -322,13 +368,49 @@ public static class Updater
 
         // GitHub rejects requests without a User-Agent outright.
         http.DefaultRequestHeaders.UserAgent.ParseAdd("Smylte-Desktop/1.0");
-        if (!string.IsNullOrWhiteSpace(settings.GitHubToken))
+        if (settings is not null && !string.IsNullOrWhiteSpace(settings.GitHubToken))
             http.DefaultRequestHeaders.Authorization =
                 new AuthenticationHeaderValue("Bearer", settings.GitHubToken.Trim());
         return http;
     }
 
-    private static async Task<JsonElement> FetchReleaseAsync(Settings settings, CancellationToken ct)
+    /// The release, from GitLab when it can say everything this client needs,
+    /// otherwise from GitHub. GitLab failing in any way (unreachable, slow, an
+    /// answer without the checksums) only ever means asking GitHub; GitHub
+    /// failing is what the caller hears about.
+    internal static async Task<ReleaseInfo> FetchReleaseAsync(Settings settings, CancellationToken ct) =>
+        await FetchReleaseAsync(
+            () => FetchGitLabReleaseAsync(ct), () => FetchGitHubReleaseAsync(settings, ct), ct)
+            .ConfigureAwait(false);
+
+    internal static async Task<ReleaseInfo> FetchReleaseAsync(
+        Func<Task<ReleaseInfo?>> gitLab, Func<Task<ReleaseInfo>> gitHub, CancellationToken ct)
+    {
+        try
+        {
+            if (await gitLab().ConfigureAwait(false) is { } release) return release;
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            // Asked of GitHub below.
+        }
+        return await gitHub().ConfigureAwait(false);
+    }
+
+    private static async Task<ReleaseInfo?> FetchGitLabReleaseAsync(CancellationToken ct)
+    {
+        using var patience = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        patience.CancelAfter(GitLabPatience);
+
+        using var http = MakeClient(null);
+        using var resp = await http.GetAsync(GitLabReleaseApi, patience.Token).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadAsStringAsync(patience.Token).ConfigureAwait(false);
+        using var doc = JsonDocument.Parse(body);
+        return ParseGitLabRelease(doc.RootElement, AssetName, ClientAssetName);
+    }
+
+    private static async Task<ReleaseInfo> FetchGitHubReleaseAsync(Settings settings, CancellationToken ct)
     {
         using var http = MakeClient(settings);
         using var req = new HttpRequestMessage(HttpMethod.Get,
@@ -340,19 +422,96 @@ public static class Updater
 
         var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         using var doc = JsonDocument.Parse(body);
-        return doc.RootElement.Clone();   // the JsonDocument is about to be disposed
+        return ParseGitHubRelease(doc.RootElement);
+    }
+
+    /// A checksum line in the release notes, as desktop-release.yml writes them:
+    /// "- smylte-web.zip: sha256:<hex>". Backticks around either half are
+    /// allowed, in case the notes are ever tidied by hand.
+    private static readonly Regex ChecksumLine = new(
+        @"^[ \t]*[-*]?[ \t]*`?(?<name>[A-Za-z0-9._-]+)`?:[ \t]*`?(?<digest>sha256:[0-9a-fA-F]{64})`?[ \t]*\r?$",
+        RegexOptions.Multiline | RegexOptions.CultureInvariant);
+
+    /// GitLab's copy of the release, or null when it cannot be used: every name
+    /// in `required` needs both a link and a checksum, because a file whose
+    /// download cannot be checked is not one this client installs.
+    internal static ReleaseInfo? ParseGitLabRelease(JsonElement release, params string[] required)
+    {
+        var description = release.TryGetProperty("description", out var d) && d.ValueKind == JsonValueKind.String
+            ? d.GetString() ?? ""
+            : "";
+        var digests = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (Match m in ChecksumLine.Matches(description))
+            digests.TryAdd(m.Groups["name"].Value, m.Groups["digest"].Value.ToLowerInvariant());
+
+        var assets = new List<ReleaseAsset>();
+        if (release.TryGetProperty("assets", out var a) && a.ValueKind == JsonValueKind.Object
+            && a.TryGetProperty("links", out var links) && links.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var link in links.EnumerateArray())
+            {
+                if (Text(link, "name") is not { } name || !digests.TryGetValue(name, out var digest)) continue;
+                var url = Text(link, "direct_asset_url") ?? Text(link, "url");
+                if (url is null || !Uri.TryCreate(url, UriKind.Absolute, out var uri)
+                    || uri.Scheme != Uri.UriSchemeHttps)
+                    continue;
+                if (assets.Any(x => x.Name == name)) continue;
+                assets.Add(new ReleaseAsset(name, digest, digest, url, 0));
+            }
+        }
+
+        return required.All(n => assets.Any(x => x.Name == n)) ? new ReleaseInfo(true, assets) : null;
+    }
+
+    internal static ReleaseInfo ParseGitHubRelease(JsonElement release)
+    {
+        var assets = new List<ReleaseAsset>();
+        if (release.TryGetProperty("assets", out var list) && list.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var asset in list.EnumerateArray())
+            {
+                if (Text(asset, "name") is not { } name) continue;
+                if (!asset.TryGetProperty("id", out var idField) || !idField.TryGetInt64(out var id)) continue;
+                var digest = PublishedDigest(asset)?.ToLowerInvariant();
+                var key = digest ?? $"{id}:{Text(asset, "updated_at")}";
+                assets.Add(new ReleaseAsset(name, digest, key, Text(asset, "browser_download_url") ?? "", id));
+            }
+        }
+        return new ReleaseInfo(false, assets);
+    }
+
+    private static string? Text(JsonElement obj, string property) =>
+        obj.TryGetProperty(property, out var v) && v.ValueKind == JsonValueKind.String
+            && v.GetString() is { Length: > 0 } text
+            ? text
+            : null;
+
+    /// Download one asset to `destination` and check it against the release's
+    /// checksum. False when it does not match (the file is deleted); a GitHub
+    /// asset whose release states no checksum is taken as downloaded.
+    private static async Task<bool> DownloadVerifiedAsync(
+        Settings settings, ReleaseAsset asset, string destination, string what,
+        IProgress<string> log, CancellationToken ct)
+    {
+        await DownloadAssetAsync(settings, asset, destination, what, log, ct).ConfigureAwait(false);
+        if (asset.Digest is null || DigestMatches(destination, asset.Digest)) return true;
+        try { File.Delete(destination); } catch (Exception) { /* best effort */ }
+        return false;
     }
 
     /// Fetch one release asset to `destination`, saying how far along it is.
     private static async Task DownloadAssetAsync(
-        Settings settings, long assetId, string destination, string what,
+        Settings settings, ReleaseAsset asset, string destination, string what,
         IProgress<string> log, CancellationToken ct)
     {
-        using var http = MakeClient(settings);
-        using var req = new HttpRequestMessage(HttpMethod.Get,
-            $"https://api.github.com/repos/{Owner}/{Repo}/releases/assets/{assetId}");
-        // The asset endpoint (rather than browser_download_url) is what makes
-        // this work unchanged whether the repository is public or private.
+        // A GitLab link is fetched as it is, without the GitHub token: it is a
+        // plain download, and the token is not GitLab's to see. A GitHub asset
+        // goes through the asset endpoint (rather than browser_download_url),
+        // which is what makes it work whether the repository is public or private.
+        using var http = MakeClient(asset.ViaGitLab ? null : settings);
+        using var req = new HttpRequestMessage(HttpMethod.Get, asset.ViaGitLab
+            ? asset.Url
+            : $"https://api.github.com/repos/{Owner}/{Repo}/releases/assets/{asset.GitHubId}");
         req.Headers.Accept.ParseAdd("application/octet-stream");
 
         using var resp = await http
@@ -394,12 +553,17 @@ public static class Updater
     /// already serving the installed one, stage it for the next start. True when
     /// it went live.
     private static async Task<bool> DownloadAndInstallAsync(
-        Settings settings, SwapGate gate, long assetId, string stamp,
+        Settings settings, SwapGate gate, ReleaseAsset asset,
         IProgress<string> log, CancellationToken ct)
     {
-        var zipPath = Path.Combine(Path.GetTempPath(), $"smylte-web-{assetId}.zip");
-        await DownloadAssetAsync(settings, assetId, zipPath, "Downloading the latest build…", log, ct)
-            .ConfigureAwait(false);
+        var zipPath = Path.Combine(Path.GetTempPath(), $"smylte-web-{Environment.ProcessId}.zip");
+        if (!await DownloadVerifiedAsync(settings, asset, zipPath, "Downloading the latest build…", log, ct)
+                .ConfigureAwait(false))
+        {
+            if (asset.ViaGitLab) throw new StaleReleaseException();
+            throw new InvalidOperationException(
+                "The downloaded build did not match the checksum the release publishes.");
+        }
 
         log.Report("Installing…");
 
@@ -415,7 +579,7 @@ public static class Updater
             return true;
         }
 
-        Stage(settings, staging, assetId, stamp);
+        Stage(settings, staging, asset.Key);
         return false;
     }
 
@@ -460,26 +624,23 @@ public static class Updater
     /// rather than into settings: this runs on a background thread while the
     /// window owns the settings, and the marker and the build it describes then
     /// move together or not at all.
-    internal static void Stage(Settings settings, string unpacked, long assetId, string stamp)
+    internal static void Stage(Settings settings, string unpacked, string key)
     {
         var next = StagedRoot(settings);
         if (Directory.Exists(next)) Retry(() => Directory.Delete(next, recursive: true));
-        File.WriteAllText(Path.Combine(unpacked, StagedMarker),
-            assetId.ToString(CultureInfo.InvariantCulture) + "\n" + stamp);
+        File.WriteAllText(Path.Combine(unpacked, StagedMarker), key);
         Retry(() => Directory.Move(unpacked, next));
     }
 
-    /// Which asset is staged, or null when nothing usable is.
-    internal static (long Id, string Stamp)? StagedAsset(Settings settings)
+    /// Which asset is staged (its key), or null when nothing usable is.
+    internal static string? StagedAsset(Settings settings)
     {
         var next = StagedRoot(settings);
         try
         {
             if (!File.Exists(Path.Combine(next, "index.html"))) return null;
-            var lines = File.ReadAllText(Path.Combine(next, StagedMarker)).Split('\n', 2);
-            if (!long.TryParse(lines[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var id))
-                return null;
-            return (id, lines.Length > 1 ? lines[1] : "");
+            var key = File.ReadAllText(Path.Combine(next, StagedMarker)).Trim();
+            return key.Length > 0 ? key : null;
         }
         catch (Exception)
         {
@@ -516,8 +677,7 @@ public static class Updater
             return;
         }
 
-        settings.LastAssetId = staged.Id;
-        settings.LastAssetStamp = staged.Stamp;
+        settings.LastAssetStamp = staged;
         try { settings.Save(); } catch (Exception) { /* checked again next start; costs a download */ }
     }
 
@@ -677,23 +837,14 @@ public static class Updater
 
         log.Report("Checking the release…");
         var release = await FetchReleaseAsync(settings, ct).ConfigureAwait(false);
-        if (FindAsset(release, ClientAssetName) is not { } asset)
-            throw new InvalidOperationException($"The {Tag} release has no {ClientAssetName}.");
-        // Refused rather than trusted: an unverifiable binary is not swapped in.
-        var digest = PublishedDigest(asset)
-            ?? throw new InvalidOperationException(
-                "The release states no digest for the client, so a download could not be checked.");
-
         var staged = StagedClientPath(exe);
-        var id = asset.GetProperty("id").GetInt64();
-        await DownloadAssetAsync(settings, id, staged, "Downloading the new client…", log, ct)
-            .ConfigureAwait(false);
-
-        if (!DigestMatches(staged, digest))
+        if (!await DownloadClientAsync(settings, release, staged, log, ct).ConfigureAwait(false))
         {
-            try { File.Delete(staged); } catch (Exception) { /* best effort */ }
-            throw new InvalidOperationException(
-                "The downloaded client did not match the digest the release publishes; nothing was changed.");
+            // GitLab's copy of the release is behind the file its link serves.
+            release = await FetchGitHubReleaseAsync(settings, ct).ConfigureAwait(false);
+            if (!await DownloadClientAsync(settings, release, staged, log, ct).ConfigureAwait(false))
+                throw new InvalidOperationException(
+                    "The downloaded client did not match the digest the release publishes; nothing was changed.");
         }
 
         // A downloaded file is 0644, and 0644 is not executable. Nothing else
@@ -703,6 +854,26 @@ public static class Updater
         MakeExecutable(staged);
 
         return staged;
+    }
+
+    /// False when the download did not match a checksum GitLab's copy gave;
+    /// throws for everything a second source would not change.
+    private static async Task<bool> DownloadClientAsync(
+        Settings settings, ReleaseInfo release, string staged, IProgress<string> log, CancellationToken ct)
+    {
+        if (release.Find(ClientAssetName) is not { } asset)
+            throw new InvalidOperationException($"The {Tag} release has no {ClientAssetName}.");
+        // Refused rather than trusted: an unverifiable binary is not swapped in.
+        if (asset.Digest is null)
+            throw new InvalidOperationException(
+                "The release states no digest for the client, so a download could not be checked.");
+
+        if (await DownloadVerifiedAsync(settings, asset, staged, "Downloading the new client…", log, ct)
+                .ConfigureAwait(false))
+            return true;
+        if (asset.ViaGitLab) return false;
+        throw new InvalidOperationException(
+            "The downloaded client did not match the digest the release publishes; nothing was changed.");
     }
 
     /// "sha256:<hex>" as the release states it, or null when it does not.

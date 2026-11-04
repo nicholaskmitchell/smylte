@@ -11,11 +11,12 @@
 #   android         Android client unit tests, lint and an unsigned build; only
 #                   when android/ or a file its tests read changes, because the
 #                   SDK is a large download
-#   workflows       desktop-release.yml's publish step against a stubbed `gh`
+#   workflows       desktop-release.yml's publish step against a stubbed `gh` (and record-checksums.sh)
 #   security-*      pip-audit + bandit, and npm audit
 #
-# Release publishing stays on GitHub (desktop-release.yml): the desktop client
-# updates from the `desktop-latest` GitHub Release.
+# Release publishing stays on GitHub (desktop-release.yml). The desktop client
+# reads the `desktop-latest` release from GitLab's copy first (made by the sync,
+# with the checksums record-checksums.sh writes) and from GitHub as a fallback.
 #
 # Pull requests mirrored from GitHub arrive as gh-pr-N branches pushed with
 # `ci.skip`, so outside code never runs here unprompted. After reviewing one,
@@ -206,6 +207,7 @@ workflows:
   script:
     - pip install --quiet pyyaml
     - .github/workflows/tests/publish-release.test.sh
+    - .github/workflows/tests/record-checksums.test.sh
 
 security-python:
   image: python:3.12-bookworm
