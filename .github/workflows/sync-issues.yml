@@ -52,6 +52,7 @@ jobs:
     env:
       GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
       GITLAB_PATH: ${{ vars.GITLAB_PATH }}
+      GITLAB_FORMER_BOT_IDS: ${{ vars.GITLAB_FORMER_BOT_IDS }}
       GH_TOKEN: ${{ github.token }}
       MODE: ${{ inputs.mode }}
       DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
@@ -210,10 +211,15 @@ jobs:
           # ---------- who wrote what ----------
 
           GL_BOT_ID = call("GET", GL_ROOT + "/user", GL_HEADERS)["id"]
+          # A re-created token (after a project transfer, say) comes with a new bot
+          # user. The bots that ran this sync before are listed in the repository
+          # variable GITLAB_FORMER_BOT_IDS, so their markers stay trusted and the
+          # issues and comments they mirrored stay linked instead of being copied again.
+          GL_BOT_IDS = {GL_BOT_ID} | {int(x) for x in re.findall(r"\d+", os.environ.get("GITLAB_FORMER_BOT_IDS") or "")}
 
 
           def is_gl_bot(obj):
-              return (obj.get("author") or {}).get("id") == GL_BOT_ID
+              return (obj.get("author") or {}).get("id") in GL_BOT_IDS
 
 
           def login(obj):

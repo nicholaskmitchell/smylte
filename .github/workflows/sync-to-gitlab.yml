@@ -55,9 +55,15 @@ jobs:
           # reviewing the MR, start its pipeline by hand.
           git push -o ci.skip "$REMOTE" "FETCH_HEAD:refs/heads/$BR" --force
 
-          # The project's owner merges every merge request, so assign it to them.
-          # A project with no single owner (a group's) gets no assignee.
-          OWNER=$(curl -s --max-time 20 -H "PRIVATE-TOKEN: $GITLAB_TOKEN" "$API" | jq -r '.owner.id // empty' || true)
+          # The project's owner merges every merge request, so assign it to them:
+          # the owner of a personal project, or for a group's project the first
+          # person with the Owner role (bots excluded). No owner found: no assignee.
+          OWNER=$(curl -s --max-time 20 -H "PRIVATE-TOKEN: $GITLAB_TOKEN" "$API" | jq -r '.owner.id // empty' 2>/dev/null || true)
+          if [ -z "$OWNER" ]; then
+            OWNER=$(curl -s --max-time 20 -H "PRIVATE-TOKEN: $GITLAB_TOKEN" "$API/members/all?per_page=100" \
+              | jq -r 'if type == "array" then [.[] | select(.access_level >= 50 and .state == "active"
+                  and (.username | test("^(project|group)_[0-9]+_bot") | not))][0].id // empty else empty end' 2>/dev/null || true)
+          fi
           OUT="$RUNNER_TEMP/mr.json"
           CODE=$(curl -s -o "$OUT" -w '%{http_code}' -X POST \
             -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
