@@ -12,6 +12,27 @@
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
 }
+/* Classic's views, under the top bar. A column like the shell, so each view's
+   root takes `flex: 1` of it exactly as it did as the shell's own child.
+
+   `isolation` is the point of it. An overlay scroll bar (WebKitGTK's, and
+   WebView2's since its scroll bars went overlay) of a scroller that is not a
+   stacking context is painted after everything in the stacking context that
+   holds it, whatever the z-index of the rest. With the views loose in the root,
+   that put a pane's scroll bar, still showing for a second after a scroll, on
+   top of the Settings popover opened from the top bar. As a stacking context
+   of their own the views paint, scroll bars and all, below it. `.frame-main`
+   (layout.css) does the same in the sidebar layout.
+
+   The cost, and why it stops at the views: a dialog drawn INSIDE a view (a
+   task, the day popover) is now ordered with the views as a whole, so it
+   still covers the top bar and the nav but not the Settings popover, which
+   is never open at the same time. `.appnav` is not isolated: Sidebar draws
+   its dialogs into it, and there they would land under the views. */
+.views {
+  flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column;
+  isolation: isolate;
+}
 
 /* ---- top bar ---- */
 .topbar {

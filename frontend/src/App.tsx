@@ -1619,7 +1619,9 @@ export function App() {
 
         {settingsMenu}
       </div>
-      {views}
+      {/* A box of its own so the views are one stacking context; see `.views`
+          in app.css for why that keeps their scroll bars off Settings. */}
+      <div className="views">{views}</div>
       </>)}
       {appearanceOpen && (
         <AppearancePanel appearance={appearance} onChange={changeAppearance}
