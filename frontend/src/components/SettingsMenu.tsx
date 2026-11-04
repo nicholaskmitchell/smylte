@@ -14,21 +14,23 @@
 // section's name in the title bar. `data-view` is what CSS gates that on.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { calendarFitKey, type CalendarFit } from '../calendar'
+import { DEFAULT_CALENDAR_FIT, calendarFitKey, type CalendarFit } from '../calendar'
 import { useIsMobile, useEscape } from '../hooks'
 import { PendingWrite, UnsentInput, useLayer, usePendingCount, useUnsentCount } from '../layers'
-import { sessionKey } from '../session'
-import { timeFormatKey, type TimeFormat } from '../time'
-import { LANGUAGES, languageLabel, type Language } from '../lang'
+import { SESSION_DEFAULT, sessionKey } from '../session'
+import { DEFAULT_TIME_FORMAT, timeFormatKey, type TimeFormat } from '../time'
+import { DEFAULT_LANGUAGE, LANGUAGES, languageLabel, type Language } from '../lang'
 import { useT } from '../i18n'
 import type { List } from '../api'
 import type { Tab, TabStart } from '../tabs'
-import { layoutKey, type Layout } from '../layout'
+import { DEFAULT_LAYOUT, layoutKey, type Layout } from '../layout'
 import { ArchivedCalendarsSection } from './ArchivedCalendarsSection'
 import { ConnectionsSection } from './ConnectionsSection'
 import { DisplaysSection } from './DisplaysSection'
 import { SharesSection } from './SharesSection'
 import { DeveloperSection } from './DeveloperSection'
+import { Fold, HowFold } from './SettingsFold'
+import { PLAN_ON_DUE_TODAY, STALE_OVERDUE_DAYS } from './TodayView'
 import { DesktopSection } from './DesktopSection'
 import { TabsSection } from './TabsSection'
 import { CapacitySection } from './CapacitySection'
@@ -44,19 +46,25 @@ import type { Trigger } from '../notifications'
 // holds and is the reason it has to be: the nav item and the phone title bar
 // both render it, a test asserts they agree, and two `tr()` calls on one key
 // agree by construction where two translations of one English word need not.
+//
+// In the order someone looks for things (the tidy Søren's Settings had first):
+// how the account measures time, how the app looks, then the two kinds of item,
+// then what reaches you and what you hand out, and the account last. Each has a
+// one-line `blurb`, shown under its name in the phone's index and as the nav
+// item's tooltip on a desktop. Developer's display previews moved into
+// Displays, which is what they preview.
 const SECTIONS = [
-  { id: 'general', label: 'settings.section.general' },
-  { id: 'appearance', label: 'settings.section.appearance' },
-  { id: 'calendar', label: 'settings.section.calendar' },
-  { id: 'tasks', label: 'settings.section.tasks' },
-  { id: 'focus', label: 'settings.section.focus' },
-  { id: 'notifications', label: 'settings.section.notifications' },
-  { id: 'mail', label: 'settings.section.mail' },
-  { id: 'displays', label: 'settings.section.displays' },
-  { id: 'shares', label: 'settings.section.shares' },
-  { id: 'developer', label: 'settings.section.developer' },
-  { id: 'account', label: 'settings.section.account' },
-  { id: 'about', label: 'settings.section.about' },
+  { id: 'general', label: 'settings.section.general', blurb: 'settings.blurb.general' },
+  { id: 'appearance', label: 'settings.section.appearance', blurb: 'settings.blurb.appearance' },
+  { id: 'tasks', label: 'settings.section.tasks', blurb: 'settings.blurb.tasks' },
+  { id: 'calendar', label: 'settings.section.calendar', blurb: 'settings.blurb.calendar' },
+  { id: 'focus', label: 'settings.section.focus', blurb: 'settings.blurb.focus' },
+  { id: 'notifications', label: 'settings.section.notifications', blurb: 'settings.blurb.notifications' },
+  { id: 'mail', label: 'settings.section.mail', blurb: 'settings.blurb.mail' },
+  { id: 'shares', label: 'settings.section.shares', blurb: 'settings.blurb.shares' },
+  { id: 'displays', label: 'settings.section.displays', blurb: 'settings.blurb.displays' },
+  { id: 'account', label: 'settings.section.account', blurb: 'settings.blurb.account' },
+  { id: 'about', label: 'settings.section.about', blurb: 'settings.blurb.about' },
 ] as const
 
 type Section = (typeof SECTIONS)[number]['id']
@@ -197,6 +205,11 @@ export function SettingsMenu({
   // The archived-calendar agenda is a step below the Calendar section. It lives
   // here so one back control can unwind the whole stack in order.
   const [viewingCal, setViewingCal] = useState<List | null>(null)
+  // The archived-calendar fold, held here because opening an agenda inside it
+  // has to keep it open on the way back out.
+  const [archivedOpen, setArchivedOpen] = useState(false)
+  // The display previews render every mode at once, so only while looked at.
+  const [previewsOpen, setPreviewsOpen] = useState(false)
 
   const panels = useRef<HTMLDivElement>(null)
 
@@ -243,6 +256,9 @@ export function SettingsMenu({
 
   const tr = useT()
   const active = SECTIONS.find((s) => s.id === section)!
+  /** A hint, then what it is out of the box: every control says its default. */
+  const withDefault = (hint: string, value: string) =>
+    `${hint} ${tr('settings.default', { value })}`
   /** Read the stale-overdue field and store it, or put it back.
    *
    *  Clamped rather than refused, unlike the fields whose grammar can fail to
@@ -286,8 +302,15 @@ export function SettingsMenu({
         <button key={s.id} type="button" role="tab" id={`set-tab-${s.id}`}
           className={`set-nav-item ${section === s.id ? 'active' : ''}`}
           aria-selected={section === s.id} aria-controls={`set-panel-${s.id}`}
+          // Named by its label alone, so the blurb reads as a description
+          // rather than as part of what the item is called.
+          aria-label={tr(s.label)} aria-describedby={`set-blurb-${s.id}`}
+          title={tr(s.blurb)}
           onClick={() => show(s.id)}>
-          {tr(s.label)}
+          <span className="set-nav-text">
+            <span className="set-nav-label">{tr(s.label)}</span>
+            <span className="set-nav-blurb" id={`set-blurb-${s.id}`}>{tr(s.blurb)}</span>
+          </span>
         </button>
       ))}
     </div>
@@ -299,10 +322,6 @@ export function SettingsMenu({
         aria-labelledby={`set-tab-${section}`}>
         {section === 'general' && (
           <>
-            <div className="menu-head">{tr('settings.tabs')}</div>
-            <TabsSection order={tabOrder} start={startTab} layout={layout}
-              onOrderChange={onTabOrderChange} onStartChange={onStartTabChange} />
-
             {/* First in the panel, above the clock: it decides what every
                 other label on this screen says, so a reader who cannot read
                 them should not have to get past them to reach it. */}
@@ -323,7 +342,9 @@ export function SettingsMenu({
                 ))}
               </select>
             </div>
-            <div className="hintline">{tr('settings.language.hint')}</div>
+            <div className="hintline">
+              {withDefault(tr('settings.language.hint'), languageLabel(DEFAULT_LANGUAGE))}
+            </div>
 
             <div className="menu-head">{tr('settings.clock')}</div>
             <div className="menu-row">
@@ -333,7 +354,10 @@ export function SettingsMenu({
                 {tr(timeFormatKey(timeFormat))}
               </button>
             </div>
-            <div className="hintline">{tr('settings.clock.hint')}</div>
+            <div className="hintline">
+              {withDefault(tr('settings.clock.short'), tr(timeFormatKey(DEFAULT_TIME_FORMAT)))}
+            </div>
+            <HowFold title={tr('settings.clock.how')}>{tr('settings.clock.hint')}</HowFold>
 
             {/* Beside the clock, because both answer "how does this account
                 measure time" — and a day's length belongs next to how the day
@@ -354,6 +378,9 @@ export function SettingsMenu({
                 {homeTz || tr('settings.notSet')}
               </button>
             </div>
+            <div className="hintline">
+              {withDefault(tr('settings.homeTimezone.hint'), tr('settings.notSet'))}
+            </div>
           </>
         )}
 
@@ -369,12 +396,17 @@ export function SettingsMenu({
                 {tr(layoutKey(layout))}
               </button>
             </div>
-            <div className="hintline">{tr('settings.layout.hint')}</div>
+            <div className="hintline">
+              {withDefault(tr('settings.layout.hint'), tr(layoutKey(DEFAULT_LAYOUT)))}
+            </div>
             <div className="menu-row">
               <label>{tr('settings.theme')}</label>
               <button className="menu-toggle" onClick={onToggleTheme}>
                 {tr(theme === 'dark' ? 'theme.dark' : 'theme.light')}
               </button>
+            </div>
+            <div className="hintline">
+              {withDefault(tr('settings.theme.hint'), tr('theme.light'))}
             </div>
             <div className="menu-row">
               <label>{tr('settings.appearance')}</label>
@@ -383,6 +415,15 @@ export function SettingsMenu({
                 {tr('settings.appearance.customize')}
               </button>
             </div>
+            <div className="hintline">{tr('settings.appearance.hint')}</div>
+
+            {/* Here rather than under General since the tidy: which views
+                the strip or the sidebar shows, and in what order, is how the
+                app looks. */}
+            <div className="menu-head">{tr('settings.tabs')}</div>
+            <TabsSection order={tabOrder} start={startTab} layout={layout}
+              onOrderChange={onTabOrderChange} onStartChange={onStartTabChange} />
+
             <DesktopSection />
           </>
         )}
@@ -404,16 +445,25 @@ export function SettingsMenu({
                 {tr(calendarFitKey(calFit))}
               </button>
             </div>
-            <div className="hintline">{tr('settings.calendarFit.hint')}</div>
-
-            <div className="menu-head">{tr('settings.archivedCalendars')}</div>
+            <div className="hintline">
+              {withDefault(tr('settings.calendarFit.hint'), tr(calendarFitKey(DEFAULT_CALENDAR_FIT)))}
+            </div>
             </>)}
-            <ArchivedCalendarsSection archived={archivedCals}
-              onChange={onArchivedCalsChange} onExpire={onExpire}
-              viewing={viewingCal} onViewing={setViewingCal} />
-            {!viewingCal && (
-              <div className="hintline">{tr('settings.archived.hint')}</div>
-            )}
+            {/* A fold whose summary counts them. Opening an agenda takes the
+                panel (`bare` hides the summary under the calendar's own name
+                in the title bar) and keeps the fold open for the way back. */}
+            <Fold className={viewingCal ? 'bare' : undefined}
+              open={archivedOpen || !!viewingCal} onOpenChange={setArchivedOpen}
+              summary={archivedCals.length
+                ? tr('settings.archived.summary', { n: String(archivedCals.length) })
+                : tr('settings.archived.summaryNone')}>
+              <ArchivedCalendarsSection archived={archivedCals}
+                onChange={onArchivedCalsChange} onExpire={onExpire}
+                viewing={viewingCal} onViewing={setViewingCal} />
+              {!viewingCal && (
+                <div className="hintline">{tr('settings.archived.hint')}</div>
+              )}
+            </Fold>
           </>
         )}
 
@@ -427,6 +477,9 @@ export function SettingsMenu({
                   ? 'settings.completedTasks.shown' : 'settings.completedTasks.hidden')}
               </button>
             </div>
+            <div className="hintline">
+              {withDefault(tr('settings.completedTasks.hint'), tr('settings.completedTasks.hidden'))}
+            </div>
             <div className="menu-row">
               <label htmlFor="set-autoclose">{tr('settings.autoCloseParents')}</label>
               <button className="menu-toggle" id="set-autoclose"
@@ -435,7 +488,15 @@ export function SettingsMenu({
                   ? 'settings.autoCloseParents.on' : 'settings.autoCloseParents.off')}
               </button>
             </div>
-            <div className="hintline">{tr('settings.autoCloseParents.hint')}</div>
+            <div className="hintline">
+              {withDefault(tr('settings.autoCloseParents.hint'), tr('settings.autoCloseParents.on'))}
+            </div>
+            {/* The overdue strip's two levers, set once by most people, so
+                folded under a line that says what they are set to. */}
+            <Fold summary={tr(staleOverdue > 0 ? 'settings.overdue.summary' : 'settings.overdue.summaryOff', {
+              n: String(staleOverdue),
+              plan: tr(planOnDueToday ? 'settings.overdue.planned' : 'settings.overdue.notPlanned'),
+            })}>
             <div className="menu-row">
               <label htmlFor="set-stale-overdue">{tr('settings.staleOverdue')}</label>
               {/* A number the owner types, committed on blur and on Enter like
@@ -460,7 +521,9 @@ export function SettingsMenu({
                 }} />
             </div>
             <div className="hintline">
-              {tr(staleOverdue > 0 ? 'settings.staleOverdue.hint' : 'settings.staleOverdue.off')}
+              {staleOverdue > 0
+                ? withDefault(tr('settings.staleOverdue.hint'), String(STALE_OVERDUE_DAYS))
+                : tr('settings.staleOverdue.off')}
             </div>
             {/* Directly under the threshold, because the two describe one
                 strip: that one says when a task starts being asked about, this
@@ -479,9 +542,12 @@ export function SettingsMenu({
               </button>
             </div>
             <div className="hintline">
-              {tr(staleOverdue > 0
-                ? 'settings.planOnDueToday.hint' : 'settings.planOnDueToday.moot')}
+              {staleOverdue > 0
+                ? withDefault(tr('settings.planOnDueToday.hint'),
+                  tr(PLAN_ON_DUE_TODAY ? 'settings.planOnDueToday.on' : 'settings.planOnDueToday.off'))
+                : tr('settings.planOnDueToday.moot')}
             </div>
+            </Fold>
           </>
         )}
 
@@ -525,6 +591,12 @@ export function SettingsMenu({
           <>
             <div className="hintline">{tr('disp.intro')}</div>
             <DisplaysSection onExpire={onExpire} archived={archivedCals} />
+            {/* What was the Developer section: every mode at common panel
+                sizes. Rendering them all is not free, and they are a
+                reference, so folded. */}
+            <Fold summary={tr('disp.previews.summary')} onOpenChange={setPreviewsOpen}>
+              {previewsOpen && <DeveloperSection />}
+            </Fold>
           </>
         )}
 
@@ -534,8 +606,6 @@ export function SettingsMenu({
             <SharesSection onExpire={onExpire} archived={archivedCals} />
           </>
         )}
-
-        {section === 'developer' && <DeveloperSection />}
 
         {section === 'account' && (
           <>
@@ -550,7 +620,9 @@ export function SettingsMenu({
                 {tr(sessionKey(sessionTtl))}
               </button>
             </div>
-            <div className="hintline">{tr('settings.session.hint')}</div>
+            <div className="hintline">
+              {withDefault(tr('settings.session.hint'), tr(sessionKey(SESSION_DEFAULT)))}
+            </div>
 
             <div className="menu-head">{tr('settings.connectedApps')}</div>
             <ConnectionsSection onExpire={onExpire} />

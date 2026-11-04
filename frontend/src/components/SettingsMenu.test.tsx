@@ -102,10 +102,11 @@ describe('<SettingsMenu> on a desktop', () => {
   it('puts each setting in its own section', async () => {
     show()
     // A sample per section — the point is that they are apart, not together.
-    expect(within(panel()).getByLabelText('Opens on')).toBeInTheDocument()
+    expect(within(panel()).getByLabelText('Language')).toBeInTheDocument()
 
     await userEvent.click(nav('Appearance'))
     expect(within(panel()).getByRole('button', { name: 'Customize appearance' })).toBeInTheDocument()
+    expect(within(panel()).getByLabelText('Opens on')).toBeInTheDocument()
 
     await userEvent.click(nav('Calendar'))
     expect(within(panel()).getByRole('button', { name: 'Fixed or dynamic calendar grid' })).toBeInTheDocument()
@@ -574,5 +575,64 @@ describe('<SettingsMenu> planning the work you answer with today', () => {
     await user.click(nav('Tasks'))
     expect(screen.getByRole('button', { name: NAME })).toBeInTheDocument()
     expect(panel()).toHaveTextContent(/Has no effect while the setting above is 0/)
+  })
+})
+
+// ── tidied: blurbs, defaults, folds ─────────────────────────────────────────
+
+describe('<SettingsMenu> tidied', () => {
+  it('describes every section in a line, under its name on a phone', () => {
+    stubMatchMedia(true)
+    show()
+    const tasks = nav('Tasks')
+    // Named by the label alone; the blurb is its description.
+    expect(tasks).toHaveAccessibleDescription('Finished tasks, subtasks and overdue tasks')
+    expect(within(tasks).getByText('Finished tasks, subtasks and overdue tasks')).toBeInTheDocument()
+  })
+
+  it('gives the blurb as a tooltip in the desktop column', () => {
+    stubMatchMedia(false)
+    show()
+    expect(nav('Calendar')).toHaveAttribute('title', 'The month grid and archived calendars')
+  })
+
+  it('says each control’s default', async () => {
+    stubMatchMedia(false)
+    show()
+    expect(within(panel()).getByText(/How times are written.*Default: 12-hour\./)).toBeInTheDocument()
+    await userEvent.click(nav('Appearance'))
+    expect(within(panel()).getByText(/Default: Sidebar\./)).toBeInTheDocument()
+    expect(within(panel()).getByText(/Light or dark.*Default: Light\./)).toBeInTheDocument()
+    await userEvent.click(nav('Tasks'))
+    expect(within(panel()).getByText(/finished\. Default: Hidden\./)).toBeInTheDocument()
+  })
+
+  it('folds the overdue levers under a line that says what is set', async () => {
+    stubMatchMedia(false)
+    show({ staleOverdue: 5, planOnDueToday: true })
+    await userEvent.click(nav('Tasks'))
+    const summary = within(panel()).getByText(
+      'Overdue tasks: asked about after 5 days · moved ones are planned')
+    const fold = summary.closest('details')!
+    expect(fold).not.toHaveAttribute('open')
+    await userEvent.click(summary)
+    expect(fold).toHaveAttribute('open')
+    expect(within(fold).getByLabelText('Days overdue before asking')).toHaveValue(5)
+  })
+
+  it('counts archived calendars in their fold', async () => {
+    stubMatchMedia(false)
+    show({ archivedCals: ['a', 'b'] })
+    await userEvent.click(nav('Calendar'))
+    expect(within(panel()).getByText('Archived calendars: 2')).toBeInTheDocument()
+  })
+
+  it('keeps the display previews in Displays, and has no Developer section', async () => {
+    stubMatchMedia(false)
+    m.displays.mockResolvedValue([])
+    show()
+    expect(screen.queryByRole('tab', { name: 'Developer' })).toBeNull()
+    await userEvent.click(nav('Displays'))
+    expect(within(panel()).getByText('Preview every display mode')).toBeInTheDocument()
   })
 })

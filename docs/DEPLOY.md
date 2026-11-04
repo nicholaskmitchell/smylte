@@ -409,7 +409,7 @@ Pair a display in **Settings → Displays**. Each one has a token and these URLs
 - The token gives read access to your events and habits. Use **New URL** if it
   leaks. MicroPython doesn't verify TLS certificates by default (see
   `firmware/README.md`).
-- **Settings → Developer** previews every mode at real panel sizes through
+- **Settings → Displays → Preview every display mode** previews every mode at real panel sizes through
   `GET /api/displays/preview.png`, without creating a display or token.
 
 The renderer needs Pillow and the fonts in `backend/smylted/display/fonts/`.

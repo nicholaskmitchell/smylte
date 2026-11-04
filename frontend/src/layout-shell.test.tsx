@@ -119,6 +119,7 @@ describe('the sidebar layout', () => {
   it('says where the tab order shows', async () => {
     render(<App />)
     await userEvent.click(await screen.findByRole('button', { name: 'Settings' }))
+    await userEvent.click(screen.getByRole('tab', { name: 'Appearance' }))
     expect(await screen.findByText(/order in the sidebar/)).toBeInTheDocument()
   })
 

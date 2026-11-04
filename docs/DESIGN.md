@@ -322,7 +322,7 @@ formatted in the account's language and clock.
 **The URL is the credential.** Unlike a booking link, it shows the calendar
 itself. It is 32 bytes, reaches one read-only call, and *New URL* re-keys a
 display in place, keeping its configuration so there's no reason to leave a
-leaked token in use. Settings → Developer previews every mode at real panel
+leaked token in use. Settings → Displays → "Preview every display mode" previews every mode at real panel
 sizes without creating tokens.
 
 ## Shares

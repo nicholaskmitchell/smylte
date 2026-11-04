@@ -341,7 +341,7 @@ describe('<App> tab preferences', () => {
   it('saves a reorder from the tabs editor', async () => {
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await openSettings('General')
+    await openSettings('Appearance')
     await userEvent.click(screen.getByRole('button', { name: 'Move Calendar left' }))
     expect(m.putSettings).toHaveBeenCalledWith({
       tab_order: ['today', 'home', 'calendar', 'tasks', 'scheduling'],
@@ -353,7 +353,7 @@ describe('<App> tab preferences', () => {
   it('saves the tab to open on', async () => {
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await openSettings('General')
+    await openSettings('Appearance')
     await userEvent.selectOptions(screen.getByLabelText('Opens on'), 'scheduling')
     expect(m.putSettings).toHaveBeenCalledWith({ start_tab: 'scheduling' })
   })
@@ -682,7 +682,7 @@ describe('<App> settings writes', () => {
     m.putSettings.mockRejectedValue(new AuthError('unauthenticated'))
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await openSettings('General')
+    await openSettings('Appearance')
     await userEvent.click(screen.getByRole('button', { name: 'Move Calendar left' }))
     expect(await screen.findByRole('button', { name: /sign in/i })).toBeInTheDocument()
   })
@@ -691,7 +691,7 @@ describe('<App> settings writes', () => {
     m.putSettings.mockRejectedValue(new HttpError(422, 'dashboard.0.h: less than or equal to 40'))
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await openSettings('General')
+    await openSettings('Appearance')
     await userEvent.click(screen.getByRole('button', { name: 'Move Calendar left' }))
     expect(await screen.findByText(/couldn't save your preferences/i)).toBeInTheDocument()
   })
@@ -701,7 +701,7 @@ describe('<App> settings writes', () => {
     m.putSettings.mockRejectedValue(new TypeError('Failed to fetch'))
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await openSettings('General')
+    await openSettings('Appearance')
     await userEvent.click(screen.getByRole('button', { name: 'Move Calendar left' }))
     await waitFor(() => expect(m.putSettings).toHaveBeenCalled())
     expect(screen.queryByText(/couldn't save/i)).not.toBeInTheDocument()

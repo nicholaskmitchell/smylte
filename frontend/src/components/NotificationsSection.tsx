@@ -15,11 +15,13 @@ import { useEffect, useState } from 'react'
 import { api, AuthError } from '../api'
 import { useT } from '../i18n'
 import {
-  DEFAULT_OFF, DEFAULT_ON, MAX_EVENT_LEAD_MINUTES, MIN_EVENT_LEAD_MINUTES,
+  DEFAULT_DIGEST_TIME, DEFAULT_EVENING_TIME, DEFAULT_EVENT_LEAD_MINUTES,
+  DEFAULT_OFF, DEFAULT_ON, DEFAULT_TASK_LEAD_MINUTES, MAX_EVENT_LEAD_MINUTES, MIN_EVENT_LEAD_MINUTES,
   TRIGGER_HINTS, TRIGGER_IS_EVENING, TRIGGER_IS_LOUD, TRIGGER_LABELS,
   isDigestTime, triggerEnabled, type Trigger,
 } from '../notifications'
 import { DateTimeInput } from './DateTimeInput'
+import { Fold } from './SettingsFold'
 
 export function NotificationsSection({
   enabled, onEnabledChange,
@@ -136,6 +138,13 @@ export function NotificationsSection({
     )
   }
 
+  const withDefault = (hint: string, value: string) =>
+    `${hint} ${tr('settings.default', { value })}`
+  // Open while there is something to set up; once both halves are stored the
+  // connection is set-and-forget, and its summary says which bot and chat.
+  const [connectionOpen] = useState(() => !(tokenSet && chatId))
+  const extraOn = DEFAULT_OFF.filter((t) => triggerEnabled(triggers, t)).length
+
   return (
     <>
       <div className="menu-row">
@@ -145,9 +154,13 @@ export function NotificationsSection({
           {tr(enabled ? 'notif.on' : 'notif.off')}
         </button>
       </div>
-      <div className="hintline">{tr('notif.enabled.hint')}</div>
+      <div className="hintline">{withDefault(tr('notif.enabled.hint'), tr('notif.off'))}</div>
 
       <div className="menu-head">{tr('notif.telegram')}</div>
+      <Fold defaultOpen={connectionOpen}
+        summary={tokenSet && chatId
+          ? tr('notif.connection.summary', { bot: botId || '?', chat: chatId })
+          : tr('notif.connection.summaryNone')}>
 
       <div className="menu-row">
         <label htmlFor="notif-token">{tr('notif.token')}</label>
@@ -203,15 +216,27 @@ export function NotificationsSection({
           {result.detail}
         </div>
       )}
+      </Fold>
 
       <div className="menu-head">{tr('notif.rules')}</div>
 
       <div className="notif-rules">{DEFAULT_ON.map(rule)}</div>
 
       <div className="menu-head">{tr('notif.more')}</div>
-      <div className="notif-rules">{DEFAULT_OFF.map(rule)}</div>
+      <Fold summary={tr('notif.more.summary', {
+        n: String(extraOn), total: String(DEFAULT_OFF.length),
+      })}>
+        <div className="notif-rules">{DEFAULT_OFF.map(rule)}</div>
+      </Fold>
 
       <div className="menu-head">{tr('notif.timing')}</div>
+      {/* Out of the fold below, because it is the one thing here that stops
+          a rule from working at all. */}
+      {!homeTz && <div className="hintline warn">{tr('notif.digestTime.noTz')}</div>}
+      <Fold summary={tr('notif.timing.summary', {
+        digest: digestTime, evening: eveningTime,
+        task: String(taskLead), event: String(eventLead),
+      })}>
 
       <div className="menu-row">
         <label htmlFor="notif-digest-time">{tr('notif.digestTime')}</label>
@@ -229,10 +254,11 @@ export function NotificationsSection({
           the hour against the server clock — which is UTC in the ordinary
           deploy, so "07:30" would land in the middle of the night — and a rule
           that is on but never fires is worse than one that is off. */}
-      <div className={`hintline${homeTz ? '' : ' warn'}`}>
-        {homeTz ? tr('notif.digestTime.hint', { tz: homeTz })
-          : tr('notif.digestTime.noTz')}
-      </div>
+      {homeTz && (
+        <div className="hintline">
+          {withDefault(tr('notif.digestTime.hint', { tz: homeTz }), DEFAULT_DIGEST_TIME)}
+        </div>
+      )}
 
       <div className="menu-row">
         <label htmlFor="notif-evening">{tr('notif.eveningTime')}</label>
@@ -245,21 +271,28 @@ export function NotificationsSection({
             if (e.key === 'Escape') { setEveningDraft(eveningTime); e.stopPropagation() }
           }} />
       </div>
-      <div className="hintline">{tr('notif.eveningTime.hint')}</div>
+      <div className="hintline">
+        {withDefault(tr('notif.eveningTime.hint'), DEFAULT_EVENING_TIME)}
+      </div>
 
       <div className="menu-row">
         <label htmlFor="notif-task-lead">{tr('notif.taskLead')}</label>
         <LeadField id="notif-task-lead" value={taskLead}
           min={MIN_EVENT_LEAD_MINUTES} max={1440} onCommit={onTaskLeadChange} />
       </div>
-      <div className="hintline">{tr('notif.taskLead.hint')}</div>
+      <div className="hintline">
+        {withDefault(tr('notif.taskLead.hint'), `${DEFAULT_TASK_LEAD_MINUTES} ${tr('settings.focus.minutes')}`)}
+      </div>
 
       <div className="menu-row">
         <label htmlFor="notif-lead">{tr('notif.eventLead')}</label>
         <LeadField id="notif-lead" value={eventLead}
           min={MIN_EVENT_LEAD_MINUTES} max={MAX_EVENT_LEAD_MINUTES} onCommit={onEventLeadChange} />
       </div>
-      <div className="hintline">{tr('notif.eventLead.hint')}</div>
+      <div className="hintline">
+        {withDefault(tr('notif.eventLead.hint'), `${DEFAULT_EVENT_LEAD_MINUTES} ${tr('settings.focus.minutes')}`)}
+      </div>
+      </Fold>
 
       <div className="hintline">{tr('notif.ceiling.hint')}</div>
     </>

@@ -71,6 +71,7 @@ export function DesktopSection() {
 
   return (
     <>
+      <div className="menu-head">{tr('settings.desktopApp')}</div>
       <div className="menu-row">
         <label htmlFor="desktop-icon">{tr('settings.icon')}</label>
         <select id="desktop-icon" className="menu-toggle" value={state.choice}

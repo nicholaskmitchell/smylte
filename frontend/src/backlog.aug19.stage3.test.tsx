@@ -169,7 +169,7 @@ describe('aug19 stage 3 — a failed settings read', () => {
     await screen.findByRole('button', { name: 'Tasks' })
     await waitFor(() => expect(m.getSettings).toHaveBeenCalled())
 
-    await openSettings('General')
+    await openSettings('Appearance')
     await userEvent.click(screen.getByRole('button', { name: 'Move Calendar left' }))
 
     const wroteTabOrder = m.putSettings.mock.calls

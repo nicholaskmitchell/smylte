@@ -160,6 +160,25 @@ button.menu-toggle:active { scale: var(--press-scale); }
 /* …which a figure inside a description does not take: the mono keeps its 400. */
 .hintline .mono, .plan-hint .mono { font-weight: 400; }
 .menu-actions { display: flex; justify-content: flex-end; margin-top: 2px; }
+/* A fold in Settings (SettingsFold.tsx): a summary line saying what is in
+   force, set like a description but in the muted tone of something you can
+   press, and the rarely changed controls under it. "How … works" folds are the
+   same shape with the long explanation inside. */
+.menu-fold > summary {
+  font-size: calc(12.5px * var(--fs-scale)); line-height: 1.45; color: var(--fg-muted);
+  font-weight: var(--wght-ui); cursor: pointer; overflow-wrap: anywhere;
+}
+@media (hover: hover) { .menu-fold > summary:hover { color: var(--accent); } }
+.menu-fold-body { display: flex; flex-direction: column; gap: 9px; margin-top: 8px; }
+/* A fold whose summary would only repeat the title bar, while a step below
+   it (an archived calendar's agenda) has the panel. */
+.menu-fold.bare > summary { display: none; }
+.menu-fold.bare > .menu-fold-body { margin-top: 0; }
+/* The nav's one-line description of each section: the phone's index only,
+   where the list has the width for it. A desktop's narrow column says it as
+   a tooltip. */
+.set-nav-text { display: flex; flex-direction: column; min-width: 0; }
+.set-nav-blurb { display: none; }
 
 /* ---- work area ---- */
 .work { flex: 1; display: flex; min-height: 0; }
@@ -1128,6 +1147,11 @@ button.menu-toggle:active { scale: var(--press-scale); }
     padding: 14px 4px; display: flex; align-items: center; justify-content: space-between;
   }
   .set-sheet .set-nav-item::after { content: "›"; color: var(--fg-faint); font-size: calc(15px * var(--fs-scale)); }
+  .set-sheet .set-nav-text { flex: 1; gap: 2px; text-align: left; }
+  .set-sheet .set-nav-blurb {
+    display: block; font-size: calc(12.5px * var(--fs-scale)); line-height: 1.35;
+    color: var(--fg-muted); white-space: normal;
+  }
   .set-sheet .set-nav-item.active { border-left: 0; }
   /* The panel is now just content inside that scroller; a second nested
      scroller would trap the gesture and leave the same sections unreachable. */

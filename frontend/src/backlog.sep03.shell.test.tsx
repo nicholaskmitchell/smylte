@@ -189,7 +189,7 @@ describe('2026-09-03 — the shell while the server cannot be reached', () => {
     await screen.findByRole('status')                // the offline bar
     expect(m.getSettings).not.toHaveBeenCalled()
 
-    await openSettings('General')
+    await openSettings('Appearance')
     await userEvent.click(await screen.findByRole('button', { name: 'Move Calendar left' }))
     await act(async () => { await Promise.resolve() })
 
@@ -210,7 +210,7 @@ describe('2026-09-03 — the shell while the server cannot be reached', () => {
     await waitFor(() => expect(m.getSettings).toHaveBeenCalled())
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())
 
-    await openSettings('General')
+    await openSettings('Appearance')
     await userEvent.click(await screen.findByRole('button', { name: 'Move Calendar left' }))
     await waitFor(() => expect(m.putSettings).toHaveBeenCalledWith(
       expect.objectContaining({ tab_order: expect.any(Array) })))
@@ -246,7 +246,7 @@ describe('2026-09-03 — a settings write the server rejects, on a German accoun
     m.putSettings.mockRejectedValue(new HttpError(422, 'nope'))
     render(<App />)
     await screen.findByRole('button', { name: 'Einstellungen' })
-    await openSettings('Allgemein', 'Einstellungen')
+    await openSettings('Darstellung', 'Einstellungen')
     await userEvent.click(await screen.findByRole('button', { name: 'Kalender nach links' }))
 
     expect(await screen.findByRole('alert'))
