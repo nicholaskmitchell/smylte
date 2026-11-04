@@ -1,5 +1,5 @@
 name: Sync issues with GitLab
-# gitlab-home template 2026-11-04b (`gitlab-home update` merges newer versions into this file)
+# gitlab-home template 2026-11-04c (`gitlab-home update` merges newer versions into this file)
 # Dry runs and backfills are named apart, so a sweep can tell which earlier runs covered changes.
 run-name: ${{ inputs.dry_run && 'Sync issues with GitLab (dry run)' || inputs.mode == 'backfill' && 'Sync issues with GitLab (backfill)' || github.event.issue.title || 'Sync issues with GitLab' }}
 
@@ -24,8 +24,13 @@ run-name: ${{ inputs.dry_run && 'Sync issues with GitLab (dry run)' || inputs.mo
 #   - Closing the merge request on GitLab closes the pull request.
 #   - GitLab CI results for the pull request's latest commit show on GitHub as
 #     the "GitLab CI" check.
-# Releases published on GitHub are copied to GitLab when GitLab has the same tag
-# at the same commit (tags are never created or moved here).
+# Releases are copied both ways, for tags the two sides have at the same commit
+# (tags are never created or moved here: the push mirror copies them):
+#   - A release made on GitLab is copied to GitHub, its files listed as links,
+#     and the copy is deleted when the GitLab release is.
+#   - A release made on GitHub is copied to GitLab, with links to its files.
+#   - Edit a release where it was made: its copy is rewritten when it changes.
+#     If each side has its own release for a tag, GitHub's is copied over GitLab's.
 #
 # Every run reconciles everything updated since the last successful sweep (and at
 # least the last few hours) on both sides, so missed runs, and outages of any
@@ -62,7 +67,7 @@ permissions:
   issues: write
   pull-requests: write  # comments on pull requests, and closing them
   statuses: write       # the "GitLab CI" check
-  contents: read        # releases, and the commit a tag points at
+  contents: write       # copying GitLab releases to GitHub (and reading tags)
   actions: read         # when the last successful sweep ran
 
 concurrency:
@@ -202,7 +207,8 @@ jobs:
 
           def marks(text):
               found = {}
-              for key, value in MARK_RE.findall(text or ""):
+              # Text saved from a form on github.com has CRLF line ends, which "$" doesn't match.
+              for key, value in MARK_RE.findall((text or "").replace("\r\n", "\n")):
                   found.setdefault(key, []).append(value)
               return found
 
@@ -456,7 +462,7 @@ jobs:
 
 
           def tombstone(body, where):
-              keep = [line for line in (body or "").split("\n")
+              keep = [line for line in (body or "").replace("\r\n", "\n").split("\n")
                       if MARK_RE.fullmatch(line) and not line.startswith("<!-- issue-sync:deleted=")]
               return "\n".join([f"_(The comment copied here was deleted on {where}.)_", ""] + keep + [mark("deleted", 1)])
 
@@ -768,13 +774,18 @@ jobs:
 
           # ---------- releases ----------
 
+          def gh_release_copy(rel):
+              """A GitHub release this sync made from a GitLab one."""
+              return (rel.get("author") or {}).get("login") == GH_BOT and bool(first(rel.get("body"), "gl-release"))
+
+
           def sync_releases():
               """Releases published on GitHub, copied to GitLab with links to their files.
               GitHub's release is the source: a GitLab release for the same tag gets its
               name and notes. Only where GitLab has the same tag at the same commit: tags
               are never made or moved here, because the push mirror would overwrite
-              GitHub's with them."""
-              rels = [r for r in pages(gh, "/releases") if not r.get("draft")]
+              GitHub's with them. Copies of GitLab releases stay where they are."""
+              rels = [r for r in pages(gh, "/releases") if not r.get("draft") and not gh_release_copy(r)]
               if not rels:
                   return
               on_gl = {r["tag_name"]: r for r in pages(gl, "/releases")}
@@ -791,6 +802,11 @@ jobs:
                            + "\n\n" + inert(refs(rel.get("body"), "gh")).strip())
                   text = f"{clip(notes)}\n\n{mark('gh-release', rel['id'])}\n{mark('src', src)}"
                   mine = on_gl.get(tag)
+                  if (mine and (rel.get("author") or {}).get("login") == GH_BOT
+                          and not first(mine.get("description"), "gh-release")):
+                      # Most likely a copy of this GitLab release that lost its marker on GitHub.
+                      print(f"Release {tag}: GitLab has its own release for this tag; not overwritten")
+                      continue
                   if not mine:
                       write(gl, "POST", "/releases", {"tag_name": tag, "name": name, "description": text},
                             f"Release {tag}: copied to GitLab")
@@ -812,6 +828,110 @@ jobs:
                       if fname not in files and (have.get("url") or "").startswith(f"{GH_WEB}/releases/download/"):
                           write(gl, "DELETE", f"/releases/{q(tag)}/assets/links/{have['id']}", None,
                                 f"Release {tag}: link to {fname} removed (gone from GitHub)")
+
+
+          def gh_tag_commit(tag):
+              """The commit GitHub's tag points at, or None if GitHub has no such tag."""
+              ref = gh("GET", "/git/ref/tags/" + urllib.parse.quote(tag, safe="/"), missing_ok=True)
+              obj = ref.get("object") if isinstance(ref, dict) else None
+              for _ in range(4):  # an annotated tag points at a tag object first
+                  if not obj or obj.get("type") != "tag":
+                      break
+                  obj = (gh("GET", f"/git/tags/{obj['sha']}", missing_ok=True) or {}).get("object")
+              return obj.get("sha") if obj and obj.get("type") == "commit" else None
+
+
+          def file_link(link):
+              """A GitLab release's link to a file, as a Markdown list item (None if it isn't a web link)."""
+              url = link.get("direct_asset_url") or link.get("url") or ""
+              if not re.match(r"https?://", url):
+                  return None
+              url = urllib.parse.quote(url, safe=":/?#[]@!$&'*+,;=%~")
+              name = re.sub(r"([\\\[\]*_`<>])", r"\\\1", inert(one_line(link.get("name") or "file")))
+              return f"- [{name}]({url})"
+
+
+          def sync_releases_to_gh():
+              """Releases made on GitLab, copied to GitHub, and the copy deleted when the GitLab
+              release is. GitHub releases can't link to files elsewhere, so a copy lists the
+              GitLab release's files in its notes. Only where GitHub has the same tag at the
+              same commit (GitHub would make a missing tag itself, and tags belong to the push
+              mirror), and never over a release someone made on GitHub."""
+              gl_rels = pages(gl, "/releases")
+              gh_rels = pages(gh, "/releases")
+              copies = [r for r in gh_rels if gh_release_copy(r)]
+              if not gl_rels and not copies:
+                  return
+              theirs = {r["tag_name"] for r in gh_rels if not gh_release_copy(r)}
+              mine = {}
+              for r in copies:  # one copy per tag: a published one over a draft
+                  if r["tag_name"] not in mine or mine[r["tag_name"]].get("draft"):
+                      mine[r["tag_name"]] = r
+              made = [r for r in gl_rels if not r.get("upcoming_release") and not first(r.get("description"), "gh-release")]
+              newest = max(made, key=lambda r: ts(r["released_at"]), default=None)
+              now = dt.datetime.now(dt.timezone.utc)
+              wait = [90]  # seconds, in all, to wait for the push mirror to bring a new tag over
+              latest = []
+              for rel in made:
+                  tag = rel["tag_name"]
+                  if tag in theirs:
+                      print(f"Release {tag}: GitHub has its own release for this tag; not copied")
+                      continue
+                  name = rel.get("name") or tag
+                  links = [line for line in map(file_link, (rel.get("assets") or {}).get("links") or []) if line]
+                  src = text_hash(json.dumps([name, rel.get("description") or "", links]))
+                  have = mine.get(tag)
+                  if have and not have.get("draft") and first(have.get("body"), "src") == src:
+                      continue
+                  commit = (rel.get("commit") or {}).get("id")
+                  on_gh = gh_tag_commit(tag)
+                  while on_gh is None and wait[0] > 0 and now - ts(rel["created_at"]) < dt.timedelta(minutes=10):
+                      print(f"Release {tag}: waiting for the push mirror to bring tag {tag} to GitHub")
+                      time.sleep(15)
+                      wait[0] -= 15
+                      on_gh = gh_tag_commit(tag)
+                  if not commit or on_gh != commit:
+                      print(f"Release {tag}: GitHub doesn't have tag {tag} at the same commit; not copied")
+                      continue
+                  url = (rel.get("_links") or {}).get("self") or f"{GL_WEB}/-/releases/{q(tag)}"
+                  parts = [f"Copied from GitLab: {url}"]
+                  desc = inert(gl_links(refs(rel.get("description"), "gl"))).strip()
+                  if desc:
+                      parts.append(clip(desc))
+                  if links:
+                      parts.append("**Files**\n\n" + "\n".join(links))
+                  parts.append(f"{mark('gl-release', commit)}\n{mark('src', src)}")
+                  text = "\n\n".join(parts)
+                  if not have:
+                      # The newest GitLab release becomes GitHub's latest, unless GitHub has a newer one
+                      # (for a copy, the time its GitLab release came out).
+                      if not latest:
+                          top = gh("GET", "/releases/latest", missing_ok=True) or {}
+                          twin = next((r for r in gl_rels if r["tag_name"] == top.get("tag_name")), None)
+                          when = (twin or {}).get("released_at") if gh_release_copy(top) else top.get("published_at")
+                          latest.append(ts(when) if when else EPOCH)
+                      newer = rel is newest and ts(rel["released_at"]) > latest[0]
+                      # target_commitish: if the tag vanished meanwhile, GitHub makes it at the right commit.
+                      write(gh, "POST", "/releases",
+                            {"tag_name": tag, "target_commitish": commit, "name": name, "body": text,
+                             "draft": False, "prerelease": False, "make_latest": "true" if newer else "false"},
+                            f"Release {tag}: copied to GitHub")
+                  else:
+                      body = {"name": name, "body": text}
+                      if have.get("draft"):
+                          body.update(draft=False, make_latest="false")  # publishing would make it latest
+                      write(gh, "PATCH", f"/releases/{have['id']}", body, f"Release {tag}: GitHub copy updated")
+              on_gl = {r["tag_name"] for r in gl_rels}
+              for r in copies:
+                  # Asked again, so a release missing from a list is never deleted by mistake.
+                  if r["tag_name"] in on_gl or gl("GET", f"/releases/{q(r['tag_name'])}", missing_ok=True) is not None:
+                      continue
+                  if r.get("assets"):  # files someone uploaded to the copy would go with it
+                      print(f"::warning::Release {r['tag_name']}: gone from GitLab, but its GitHub copy has files"
+                            f" uploaded to it, so it is left for you to delete: {r.get('html_url')}")
+                      continue
+                  write(gh, "DELETE", f"/releases/{r['id']}", None,
+                        f"Release {r['tag_name']}: GitHub copy deleted (gone from GitLab)")
 
 
           # ---------- modes ----------
@@ -963,7 +1083,8 @@ jobs:
               what = "pull requests"
           else:
               guarded("CI results", sync_ci)
-              guarded("releases", sync_releases)
+              guarded("releases from GitHub", sync_releases)
+              guarded("releases to GitHub", sync_releases_to_gh)
               what = "CI results and releases"
           summary = f"{what}{' (dry run)' if DRY else ''}: {len(CHANGES)} change(s)"
           if FAILED:
