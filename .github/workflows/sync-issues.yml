@@ -1,18 +1,31 @@
 name: Sync issues with GitLab
-# gitlab-home template 2026-11-04 (`gitlab-home update` merges newer versions into this file)
+# gitlab-home template 2026-11-04b (`gitlab-home update` merges newer versions into this file)
 # Dry runs and backfills are named apart, so a sweep can tell which earlier runs covered changes.
 run-name: ${{ inputs.dry_run && 'Sync issues with GitLab (dry run)' || inputs.mode == 'backfill' && 'Sync issues with GitLab (backfill)' || github.event.issue.title || 'Sync issues with GitLab' }}
 
-# Two-way issue sync between this repo and its canonical GitLab project.
+# Two-way sync of issues, and of pull request conversations, between this repo
+# and its canonical GitLab project.
 #
+# Issues:
 #   - New issues on either side get a mirror on the other.
-#   - Comments are copied both ways.
-#   - Open/closed state follows whichever side changed it most recently.
+#   - Comments are copied both ways; edits to a comment are copied too, and a
+#     deleted comment's copy says so.
+#   - Open/closed state, and each label, follow whichever side changed them last.
 #   - Title and description belong to the side the issue was opened on; edit
 #     them there (edits to a mirror's text are overwritten).
 #   - Confidential GitLab issues and internal notes are never copied.
 #   - The two sides number issues differently, so "#12" in copied text becomes
 #     the other side's number for a linked issue, or a link back to the source.
+# Pull requests (each has a GitLab merge request from the branch gh-pr-N, made
+# by "Sync PR to GitLab"):
+#   - Comments, reviews and line comments are copied both ways, edits included
+#     (only those made after PR_SYNC_SINCE). GitHub review comments arrive with
+#     the next run, as they don't start one themselves.
+#   - Closing the merge request on GitLab closes the pull request.
+#   - GitLab CI results for the pull request's latest commit show on GitHub as
+#     the "GitLab CI" check.
+# Releases published on GitHub are copied to GitLab when GitLab has the same tag
+# at the same commit (tags are never created or moved here).
 #
 # Every run reconciles everything updated since the last successful sweep (and at
 # least the last few hours) on both sides, so missed runs, and outages of any
@@ -26,9 +39,11 @@ run-name: ${{ inputs.dry_run && 'Sync issues with GitLab (dry run)' || inputs.mo
 
 on:
   issues:
-    types: [opened, edited, closed, reopened]
+    types: [opened, edited, closed, reopened, labeled, unlabeled]
   issue_comment:
-    types: [created]
+    types: [created, edited, deleted]
+  release:
+    types: [published, edited]
   workflow_dispatch:
     inputs:
       mode:
@@ -45,7 +60,10 @@ on:
 
 permissions:
   issues: write
-  actions: read  # when the last successful sweep ran
+  pull-requests: write  # comments on pull requests, and closing them
+  statuses: write       # the "GitLab CI" check
+  contents: read        # releases, and the commit a tag points at
+  actions: read         # when the last successful sweep ran
 
 concurrency:
   group: issue-sync
@@ -53,9 +71,8 @@ concurrency:
 
 jobs:
   sync:
-    if: github.event_name != 'issue_comment' || !github.event.issue.pull_request
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     env:
       GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
       GITLAB_PATH: ${{ vars.GITLAB_PATH }}
@@ -66,10 +83,14 @@ jobs:
       WINDOW_HOURS: ${{ github.event_name == 'schedule' && '26' || '3' }}
       # Issues created before this are only synced once linked (see backfill).
       SYNC_SINCE: "2026-10-03T00:00:00Z"
+      # Pull request comments and reviews from before this aren't copied.
+      PR_SYNC_SINCE: "2026-11-04T00:00:00Z"
     steps:
-      - name: Sync
+      # One script, run as three steps: a failure in one doesn't stop the others,
+      # and each catches up from the last run in which it succeeded.
+      - name: Prepare
         run: |
-          python3 - <<'PY'
+          cat > "$RUNNER_TEMP/sync.py" <<'PY'
           import datetime as dt
           import hashlib
           import json
@@ -108,6 +129,12 @@ jobs:
 
 
           SINCE = ts(os.environ["SYNC_SINCE"])
+          PR_SINCE = ts(os.environ.get("PR_SYNC_SINCE") or "2026-11-04T00:00:00Z")
+          CI_CONTEXT = "GitLab CI"
+
+
+          def q(text):
+              return urllib.parse.quote(str(text), safe="")
 
 
           # ---------- HTTP ----------
@@ -401,10 +428,154 @@ jobs:
               return made["number"]
 
 
+          # ---------- copying comments ----------
+          # A copy carries its source's marker (gh-comment=ID, gl-note=ID, ...) and a
+          # hash of the source's text (src=...), so later runs update the copy when
+          # the source is edited and mark it when the source is deleted. Copies made
+          # before the hash was added have no src marker and are left as they are, and
+          # only copies by this run's own bot can be edited.
+
+          def text_hash(text):
+              return hashlib.sha1((text or "").replace("\r\n", "\n").encode()).hexdigest()[:16]
+
+
+          def source(key, sid, raw, header, side, bare=False):
+              """A comment to copy: marker key and id, its text, the line that introduces
+              it, the side it was written on ("gh"/"gl"); bare: no "(no text)" if empty."""
+              return {"key": key, "id": int(sid), "raw": raw or "", "header": header, "side": side, "bare": bare}
+
+
+          def render_copy(s):
+              if s["bare"] and not s["raw"].strip():
+                  text = s["header"]
+              elif s["side"] == "gh":
+                  text = s["header"] + "\n\n" + quote(refs(s["raw"], "gh"))
+              else:
+                  text = s["header"] + "\n\n" + quote(gl_links(refs(s["raw"], "gl")))
+              return f"{clip(text)}\n\n{mark(s['key'], s['id'])}\n{mark('src', text_hash(s['raw']))}"
+
+
+          def tombstone(body, where):
+              keep = [line for line in (body or "").split("\n")
+                      if MARK_RE.fullmatch(line) and not line.startswith("<!-- issue-sync:deleted=")]
+              return "\n".join([f"_(The comment copied here was deleted on {where}.)_", ""] + keep + [mark("deleted", 1)])
+
+
+          def copies_made(items, by_bot, keys):
+              """{(key, source id): copy} for the copies the sync's bots made."""
+              index = {}
+              for item in items:
+                  if by_bot(item):
+                      found = marks(item.get("body"))
+                      for key in keys:
+                          for value in found.get(key, []):
+                              index.setdefault((key, int(value)), item)
+              return index
+
+
+          def copy_comments(label, sources, copies, post, edit, may_edit, where):
+              """Copy new comments, update copies whose source was edited, and mark
+              copies whose source was deleted (where: the side the sources are on)."""
+              wanted = set()
+              for s in sources:
+                  wanted.add((s["key"], s["id"]))
+                  made = copies.get((s["key"], s["id"]))
+                  if made is None:
+                      post(render_copy(s), f"{label}: {where} {s['key']} {s['id']} copied")
+                  elif (may_edit(made) and not first(made.get("body"), "deleted")
+                        and first(made.get("body"), "src") not in (None, text_hash(s["raw"]))):
+                      edit(made, render_copy(s), f"{label}: copy of {where} {s['key']} {s['id']} updated")
+              for (key, sid), made in copies.items():
+                  if ((key, sid) not in wanted and may_edit(made) and first(made.get("body"), "src")
+                          and not first(made.get("body"), "deleted")):
+                      edit(made, tombstone(made.get("body"), where),
+                           f"{label}: copy of {where} {key} {sid} marked deleted")
+
+
+          def gl_own(item):
+              return (item.get("author") or {}).get("id") == GL_BOT_ID
+
+
+          def gh_own(item):
+              return login(item) == GH_BOT
+
+
+          def copyable_note(note):
+              return not (note.get("system") or note.get("internal") or note.get("confidential") or is_gl_bot(note))
+
+
+          def safe_path(path):
+              """A file path for a header line. It comes from the contributor's branch, and git
+              allows any character in one: keep it to one inert line with no backticks."""
+              return inert(one_line(path)).replace("`", "'")[:200]
+
+
+          def note_header(note, url):
+              who = inert(one_line(note["author"]["name"]))
+              pos = note.get("position") or {}
+              path, line = pos.get("new_path") or pos.get("old_path"), pos.get("new_line") or pos.get("old_line")
+              where = f" on `{safe_path(path)}`" + (f" line {int(line)}" if line else "") if note.get("type") == "DiffNote" and path else ""
+              return f"**{who}** (`{note['author']['username']}`) commented{where} on GitLab: {url}"
+
+
+          # ---------- labels ----------
+          # A label on one side only is added to the other side, unless the other side
+          # removed it more recently than this side added it, in which case it is removed
+          # here too. Only people's changes count: the sync's own label changes are copies.
+          # Names are compared ignoring case, as GitHub does. Labels are best effort: a
+          # label that can't be written is reported and skipped, without failing the run.
+
+          GH_LABEL_MAX = 50  # GitHub's limit (GitLab allows longer names)
+
+
+          def sync_labels(label, number, iid, ghi, gli, gh_events):
+              on_gh = {lab["name"].lower(): lab["name"] for lab in ghi.get("labels") or []}
+              on_gl = {name.lower(): name for name in gli.get("labels") or []}
+              differ = sorted(k for k in on_gh.keys() ^ on_gl.keys() if "," not in k)
+              if not differ:
+                  return
+              ev_gh = [(e["label"]["name"].lower(), "add" if e["event"] == "labeled" else "remove", ts(e["created_at"]))
+                       for e in gh_events() if e.get("event") in ("labeled", "unlabeled") and e.get("label")
+                       and (e.get("actor") or {}).get("login") != GH_BOT]
+              ev_gl = [(e["label"]["name"].lower(), e["action"], ts(e["created_at"]))
+                       for e in pages(gl, f"/issues/{iid}/resource_label_events")
+                       if e.get("label") and e.get("action") in ("add", "remove")
+                       and (e.get("user") or {}).get("id") not in GL_BOT_IDS]
+
+              def latest(events, key, action):
+                  return max((t for n, a, t in events if n == key and a == action), default=EPOCH)
+
+              def best_effort(fn, *args):
+                  try:
+                      write(fn, *args)
+                  except (SystemExit, Exception) as err:  # noqa: BLE001
+                      if CHANGES and CHANGES[-1] == args[-1]:
+                          CHANGES.pop()  # it didn't happen
+                      print(f"::warning::{args[-1]}: not done: {err}")
+
+              for key in differ:
+                  on_github = key in on_gh
+                  name = on_gh[key] if on_github else on_gl[key]
+                  added = latest(ev_gh if on_github else ev_gl, key, "add")
+                  removed = latest(ev_gl if on_github else ev_gh, key, "remove")
+                  if removed > added:
+                      if on_github:
+                          best_effort(gh, "DELETE", f"/issues/{number}/labels/{q(name)}", None,
+                                      f"{label}: label {name} removed on GitHub to match GitLab")
+                      else:
+                          best_effort(gl, "PUT", f"/issues/{iid}", {"remove_labels": name},
+                                      f"{label}: label {name} removed on GitLab to match GitHub")
+                  elif on_github:
+                      best_effort(gl, "PUT", f"/issues/{iid}", {"add_labels": name}, f"{label}: label {name} added on GitLab")
+                  elif len(name) > GH_LABEL_MAX:
+                      print(f"{label}: label {name} is too long for GitHub; not copied")
+                  else:
+                      best_effort(gh, "POST", f"/issues/{number}/labels", {"labels": [name]}, f"{label}: label {name} added on GitHub")
+
+
           # ---------- reconciling a pair ----------
 
-          def gh_state_time(number):
-              events = pages(gh, f"/issues/{number}/events")
+          def gh_state_time(events):
               return max((ts(e["created_at"]) for e in events if e.get("event") in ("closed", "reopened")),
                          default=EPOCH)
 
@@ -427,6 +598,12 @@ jobs:
               ghc = gh_comments(number)
               gln = gl_notes(iid)
               label = f"GitHub {number} / GitLab {iid}"
+              cache = []
+
+              def gh_events():  # fetched at most once, and only if needed
+                  if not cache:
+                      cache.append(pages(gh, f"/issues/{number}/events"))
+                  return cache[0]
 
               # Title and description: the side the issue was opened on wins.
               if is_gl_bot(gli):
@@ -445,7 +622,7 @@ jobs:
               # State: whichever side changed it most recently wins.
               gh_open, gl_open = ghi["state"] == "open", gli["state"] == "opened"
               if gh_open != gl_open:
-                  if gh_state_time(number) > gl_state_time(iid):
+                  if gh_state_time(gh_events()) > gl_state_time(iid):
                       write(gl, "PUT", f"/issues/{iid}", {"state_event": "reopen" if gh_open else "close"},
                             f"{label}: GitLab {'reopened' if gh_open else 'closed'} to match GitHub")
                   else:
@@ -455,40 +632,186 @@ jobs:
                       write(gh, "PATCH", f"/issues/{number}", body,
                             f"{label}: GitHub {'reopened' if gl_open else 'closed'} to match GitLab")
 
+              sync_labels(label, number, iid, ghi, gli, gh_events)
+
               # Comments, both ways. Markers say what was already copied; the
               # baselines cover comments that existed before the pair was linked.
               base_gh = base_gl = 0
-              copied_from_gh, copied_from_gl = set(), set()
               for note in gln:
                   if is_gl_bot(note):
                       found = marks(note.get("body"))
                       base_gh = max([base_gh] + [int(v) for v in found.get("baseline-gh", [])])
                       base_gl = max([base_gl] + [int(v) for v in found.get("baseline-gl", [])])
-                      copied_from_gh.update(int(v) for v in found.get("gh-comment", []))
-              for comment in ghc:
-                  if login(comment) == GH_BOT:
-                      copied_from_gl.update(int(v) for v in marks(comment.get("body")).get("gl-note", []))
+              copy_comments(
+                  label,
+                  [source("gh-comment", c["id"], c.get("body"), f"**`{login(c)}`** commented on GitHub: {c['html_url']}", "gh")
+                   for c in ghc if login(c) != GH_BOT and c["id"] > base_gh],
+                  copies_made(gln, is_gl_bot, ["gh-comment"]),
+                  lambda body, what: write(gl, "POST", f"/issues/{iid}/notes", {"body": body}, what),
+                  lambda note, body, what: write(gl, "PUT", f"/issues/{iid}/notes/{note['id']}", {"body": body}, what),
+                  gl_own, "GitHub")
+              copy_comments(
+                  label,
+                  [source("gl-note", n["id"], n.get("body"), note_header(n, f"{GL_WEB}/-/issues/{iid}#note_{n['id']}"), "gl")
+                   for n in gln if copyable_note(n) and n["id"] > base_gl],
+                  copies_made(ghc, gh_own, ["gl-note"]),
+                  lambda body, what: write(gh, "POST", f"/issues/{number}/comments", {"body": body}, what),
+                  lambda c, body, what: write(gh, "PATCH", f"/issues/comments/{c['id']}", {"body": body}, what),
+                  gh_own, "GitLab")
 
-              for comment in ghc:
-                  if login(comment) == GH_BOT or comment["id"] <= base_gh or comment["id"] in copied_from_gh:
-                      continue
-                  text = clip(f"**`{login(comment)}`** commented on GitHub: {comment['html_url']}\n\n"
-                              + quote(refs(comment.get("body"), "gh")))
-                  write(gl, "POST", f"/issues/{iid}/notes",
-                        {"body": f"{text}\n\n{mark('gh-comment', comment['id'])}"},
-                        f"{label}: GitHub comment {comment['id']} copied to GitLab")
 
-              for note in gln:
-                  if note.get("system") or note.get("internal") or note.get("confidential") or is_gl_bot(note):
+          # ---------- pull requests ----------
+
+          def own_mr(mr):
+              # Only this project's merge requests: a fork can use a branch named like ours.
+              return mr.get("source_project_id") == mr.get("target_project_id")
+
+
+          def newest_mr(number):
+              """The merge request "Sync PR to GitLab" made for pull request number (the newest, if reopened)."""
+              mrs = [m for m in gl("GET", "/merge_requests", params={"source_branch": f"gh-pr-{number}",
+                                                                     "state": "all", "per_page": 100}) or [] if own_mr(m)]
+              return max(mrs, key=lambda m: m["iid"]) if mrs else None
+
+
+          def reconcile_pr(number):
+              mr = newest_mr(number)
+              pr = gh("GET", f"/pulls/{number}", missing_ok=True)
+              if not mr or not pr:
+                  return
+              iid = mr["iid"]
+              label = f"PR {number} / MR !{iid}"
+
+              # Closing the merge request on GitLab (not merging it) closes the pull
+              # request, unless the pull request was reopened since, or the sync's own
+              # bot closed it (because the pull request was closed: a quick close and
+              # reopen on GitHub can finish in that order).
+              if (mr["state"] == "closed" and pr["state"] == "open" and mr.get("closed_at")
+                      and (mr.get("closed_by") or {}).get("id") not in GL_BOT_IDS):
+                  opened = max([ts(pr["created_at"])] + [ts(e["created_at"]) for e in pages(gh, f"/issues/{number}/events")
+                                                         if e.get("event") == "reopened"])
+                  if ts(mr["closed_at"]) > opened:
+                      write(gh, "POST", f"/issues/{number}/comments",
+                            {"body": f"The merge request for this pull request was closed on GitLab, so it is closed here too: {mr['web_url']}"},
+                            f"{label}: note that GitLab closed it")
+                      write(gh, "PATCH", f"/pulls/{number}", {"state": "closed"}, f"{label}: pull request closed to match GitLab")
+
+              ghc = gh_comments(number)
+              gln = pages(gl, f"/merge_requests/{iid}/notes", {"sort": "asc", "order_by": "created_at"})
+              from_gh = [source("gh-comment", c["id"], c.get("body"),
+                                f"**`{login(c)}`** commented on GitHub: {c['html_url']}", "gh")
+                         for c in ghc if login(c) != GH_BOT and ts(c["created_at"]) >= PR_SINCE]
+              for c in pages(gh, f"/pulls/{number}/comments"):
+                  if login(c) == GH_BOT or ts(c["created_at"]) < PR_SINCE:
                       continue
-                  if note["id"] <= base_gl or note["id"] in copied_from_gl:
+                  line = c.get("line") or c.get("original_line")
+                  verb = "replied" if c.get("in_reply_to_id") else "commented"
+                  from_gh.append(source("gh-review-comment", c["id"], c.get("body"),
+                                        f"**`{login(c)}`** {verb} on `{safe_path(c.get('path') or '')}`" + (f" line {int(line)}" if line else "")
+                                        + f" on GitHub: {c['html_url']}", "gh"))
+              verbs = {"APPROVED": "approved this", "CHANGES_REQUESTED": "requested changes", "COMMENTED": "reviewed this",
+                       "DISMISSED": "reviewed this (since dismissed)"}
+              for r in pages(gh, f"/pulls/{number}/reviews"):
+                  if (login(r) == GH_BOT or r.get("state") not in verbs or not r.get("submitted_at")
+                          or ts(r["submitted_at"]) < PR_SINCE):
                       continue
-                  who = inert(one_line(note["author"]["name"]))
-                  text = clip(f"**{who}** (`{note['author']['username']}`) commented on GitLab: "
-                              f"{GL_WEB}/-/issues/{iid}#note_{note['id']}\n\n" + quote(gl_links(refs(note.get("body"), "gl"))))
-                  write(gh, "POST", f"/issues/{number}/comments",
-                        {"body": f"{text}\n\n{mark('gl-note', note['id'])}"},
-                        f"{label}: GitLab note {note['id']} copied to GitHub")
+                  if r["state"] == "COMMENTED" and not (r.get("body") or "").strip():
+                      continue  # just a wrapper around line comments, which are copied themselves
+                  from_gh.append(source("gh-review", r["id"], r.get("body"),
+                                        f"**`{login(r)}`** {verbs[r['state']]} on GitHub: {r['html_url']}", "gh", bare=True))
+              copy_comments(
+                  label, from_gh, copies_made(gln, is_gl_bot, ["gh-comment", "gh-review-comment", "gh-review"]),
+                  lambda body, what: write(gl, "POST", f"/merge_requests/{iid}/notes", {"body": body}, what),
+                  lambda note, body, what: write(gl, "PUT", f"/merge_requests/{iid}/notes/{note['id']}", {"body": body}, what),
+                  gl_own, "GitHub")
+              copy_comments(
+                  label,
+                  [source("gl-note", n["id"], n.get("body"), note_header(n, f"{mr['web_url']}#note_{n['id']}"), "gl")
+                   for n in gln if copyable_note(n) and ts(n["created_at"]) >= PR_SINCE],
+                  copies_made(ghc, gh_own, ["gl-note"]),
+                  lambda body, what: write(gh, "POST", f"/issues/{number}/comments", {"body": body}, what),
+                  lambda c, body, what: write(gh, "PATCH", f"/issues/comments/{c['id']}", {"body": body}, what),
+                  gh_own, "GitLab")
+
+
+          CI_STATES = {"success": ("success", "passed"), "failed": ("failure", "failed"),
+                       "canceled": ("error", "was canceled"), "running": ("pending", "is running"),
+                       "pending": ("pending", "is waiting for a runner"),
+                       "waiting_for_resource": ("pending", "is waiting for a resource"),
+                       "preparing": ("pending", "is preparing")}
+
+
+          def sync_ci():
+              """GitLab CI's result for each open pull request's latest commit, as a GitHub check.
+              Pipelines that haven't started (manual, skipped, created) show nothing."""
+              for pr in pages(gh, "/pulls", {"state": "open"}):
+                  mr = newest_mr(pr["number"])
+                  if not mr or mr["state"] != "opened":
+                      continue
+                  pipes = gl("GET", f"/merge_requests/{mr['iid']}/pipelines", params={"per_page": 20}) or []
+                  if not pipes:
+                      continue
+                  pipe = max(pipes, key=lambda p: p["id"])
+                  sha = pr["head"]["sha"]
+                  if pipe.get("sha") != sha or pipe.get("status") not in CI_STATES:
+                      continue
+                  state, words = CI_STATES[pipe["status"]]
+                  shown = next((s for s in gh("GET", f"/commits/{sha}/statuses", params={"per_page": 100}) or []
+                                if s.get("context") == CI_CONTEXT), None)
+                  if shown and shown.get("state") == state and shown.get("target_url") == pipe.get("web_url"):
+                      continue
+                  write(gh, "POST", f"/statuses/{sha}",
+                        {"state": state, "context": CI_CONTEXT, "target_url": pipe.get("web_url"),
+                         "description": f"Pipeline {pipe['id']} on GitLab {words}"},
+                        f"PR {pr['number']}: {CI_CONTEXT} {pipe['status']}")
+
+
+          # ---------- releases ----------
+
+          def sync_releases():
+              """Releases published on GitHub, copied to GitLab with links to their files.
+              GitHub's release is the source: a GitLab release for the same tag gets its
+              name and notes. Only where GitLab has the same tag at the same commit: tags
+              are never made or moved here, because the push mirror would overwrite
+              GitHub's with them."""
+              rels = [r for r in pages(gh, "/releases") if not r.get("draft")]
+              if not rels:
+                  return
+              on_gl = {r["tag_name"]: r for r in pages(gl, "/releases")}
+              for rel in rels:
+                  tag = rel["tag_name"]
+                  gl_tag = gl("GET", f"/repository/tags/{q(tag)}", missing_ok=True)
+                  gh_commit = gh("GET", f"/commits/{q(tag)}", missing_ok=True)
+                  if not gl_tag or not gh_commit or (gl_tag.get("commit") or {}).get("id") != gh_commit.get("sha"):
+                      print(f"Release {tag}: GitLab doesn't have tag {tag} at the same commit; not copied")
+                      continue
+                  name = rel.get("name") or tag
+                  src = text_hash(f"{name}\0{rel.get('prerelease')}\0{rel.get('body')}")
+                  notes = (f"Copied from GitHub: {rel['html_url']}" + ("\n\n**Pre-release.**" if rel.get("prerelease") else "")
+                           + "\n\n" + inert(refs(rel.get("body"), "gh")).strip())
+                  text = f"{clip(notes)}\n\n{mark('gh-release', rel['id'])}\n{mark('src', src)}"
+                  mine = on_gl.get(tag)
+                  if not mine:
+                      write(gl, "POST", "/releases", {"tag_name": tag, "name": name, "description": text},
+                            f"Release {tag}: copied to GitLab")
+                  elif first(mine.get("description"), "src") != src:
+                      write(gl, "PUT", f"/releases/{q(tag)}", {"name": name, "description": text},
+                            f"Release {tag}: GitLab copy updated")
+                  links = {lk["name"]: lk for lk in ((mine or {}).get("assets") or {}).get("links") or []}
+                  files = {a["name"]: a["browser_download_url"] for a in rel.get("assets") or []}
+                  for fname, url in files.items():
+                      have = links.get(fname)
+                      if not have:
+                          write(gl, "POST", f"/releases/{q(tag)}/assets/links",
+                                {"name": fname, "url": url, "link_type": "package"}, f"Release {tag}: link to {fname} added")
+                      elif have.get("url") != url:
+                          write(gl, "PUT", f"/releases/{q(tag)}/assets/links/{have['id']}", {"url": url},
+                                f"Release {tag}: link to {fname} updated")
+                  for fname, have in links.items():
+                      # Only links to this repo's GitHub downloads are the sync's to remove.
+                      if fname not in files and (have.get("url") or "").startswith(f"{GH_WEB}/releases/download/"):
+                          write(gl, "DELETE", f"/releases/{q(tag)}/assets/links/{have['id']}", None,
+                                f"Release {tag}: link to {fname} removed (gone from GitHub)")
 
 
           # ---------- modes ----------
@@ -496,31 +819,59 @@ jobs:
           NOT_SWEEPS = {"Sync issues with GitLab (dry run)", "Sync issues with GitLab (backfill)"}
 
 
-          def last_sweep_start():
-              """When the most recent successful sweep began (None if unknown)."""
+          def last_success(step, since):
+              """When the most recent run in which this step succeeded began, looking no further
+              back than since and at no more than 8 unsuccessful runs (each costs a request).
+              None if there are no runs yet; since (with a warning) if none succeeded. Runs
+              from before the steps were split count when the whole run succeeded."""
               try:
                   runs = gh("GET", "/actions/workflows/sync-issues.yml/runs",
-                            params={"status": "success", "per_page": 50}) or {}
+                            params={"status": "completed", "per_page": 100}) or {}
               except SystemExit as err:
                   print(f"Can't read earlier runs, so looking back {WINDOW} only: {err}")
                   return None
+              seen = looked = 0
               for run in runs.get("workflow_runs") or []:
-                  if run.get("display_title") not in NOT_SWEEPS and run.get("run_started_at"):
-                      return ts(run["run_started_at"])
-              return None
+                  if run.get("display_title") in NOT_SWEEPS or not run.get("run_started_at"):
+                      continue
+                  began = ts(run["run_started_at"])
+                  if began < since:
+                      break
+                  seen += 1
+                  if run.get("conclusion") == "success":
+                      return began
+                  if looked >= 8:
+                      continue
+                  looked += 1
+                  try:
+                      jobs = (gh("GET", f"/actions/runs/{run['id']}/jobs") or {}).get("jobs") or []
+                  except SystemExit as err:
+                      print(f"Can't read run {run['id']}: {err}")
+                      continue
+                  if any(st.get("name") == step and st.get("conclusion") == "success"
+                         for job in jobs for st in job.get("steps") or []):
+                      return began
+              if not seen:
+                  return None
+              print(f"::warning::\"{step}\" hasn't succeeded in the recent runs; catching up from {since:%Y-%m-%d %H:%M} UTC")
+              return since
+
+
+          def window_start(step, longest):
+              # From when this step last succeeded (with a margin for clock differences),
+              # so nothing changed during an outage is skipped (even a workflow GitHub
+              # turned off after 60 quiet days), but no further back than longest.
+              now = dt.datetime.now(dt.timezone.utc)
+              start = now - WINDOW
+              last = last_success(step, now - longest)
+              if last and last - dt.timedelta(minutes=10) < start:
+                  start = max(last - dt.timedelta(minutes=10), now - longest)
+                  print(f"Catching up from {start:%Y-%m-%d %H:%M} UTC (\"{step}\" last succeeded in a run that began {last:%Y-%m-%d %H:%M} UTC)")
+              return start.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
           def sweep():
-              # From when the last successful sweep began (with a margin for clock
-              # differences), so nothing changed during an outage is skipped (even a
-              # workflow GitHub turned off after 60 quiet days); at most about a year back.
-              now = dt.datetime.now(dt.timezone.utc)
-              start = now - WINDOW
-              last = last_sweep_start()
-              if last and last - dt.timedelta(minutes=10) < start:
-                  start = max(last - dt.timedelta(minutes=10), now - dt.timedelta(days=400))
-                  print(f"Catching up from {start:%Y-%m-%d %H:%M} UTC (the last successful sweep began {last:%Y-%m-%d %H:%M} UTC)")
-              start = start.strftime("%Y-%m-%dT%H:%M:%SZ")
+              start = window_start("Issues", dt.timedelta(days=400))
               done = set()
 
               def pair(number, iid):
@@ -551,6 +902,30 @@ jobs:
                       pair(ghi["number"], iid)
 
 
+          def sweep_pulls():
+              """Pull requests touched on either side since this step last succeeded (at most
+              two weeks back: each one costs several requests)."""
+              start = window_start("Pull requests", dt.timedelta(days=14))
+              prs = {i["number"] for i in pages(gh, "/issues", {"since": start, "state": "all"}) if "pull_request" in i}
+              for mr in pages(gl, "/merge_requests", {"updated_after": start, "state": "all"}):
+                  found = re.fullmatch(r"gh-pr-(\d+)", mr.get("source_branch") or "")
+                  if found and own_mr(mr):
+                      prs.add(int(found.group(1)))
+              for number in sorted(prs):
+                  guarded(f"pull request {number}", reconcile_pr, number)
+
+
+          FAILED = []
+
+
+          def guarded(what, fn, *args):
+              try:
+                  fn(*args)
+              except (SystemExit, Exception) as err:  # noqa: BLE001 - reported, and the run fails at the end
+                  print(f"{what}: {err}")
+                  FAILED.append(what)
+
+
           def backfill():
               """Link issues the GitHub importer copied: same number, same title."""
               for ghi in pages(gh, "/issues", {"state": "all"}):
@@ -579,9 +954,34 @@ jobs:
                         f"GitLab issue {number}: linked to GitHub issue {number}")
 
 
-          backfill() if MODE == "backfill" else sweep()
-          summary = f"{MODE}{' (dry run)' if DRY else ''}: {len(CHANGES)} change(s)"
+          PART = sys.argv[1] if len(sys.argv) > 1 else "issues"
+          if PART == "issues":
+              backfill() if MODE == "backfill" else sweep()
+              what = MODE
+          elif PART == "pulls":
+              sweep_pulls()
+              what = "pull requests"
+          else:
+              guarded("CI results", sync_ci)
+              guarded("releases", sync_releases)
+              what = "CI results and releases"
+          summary = f"{what}{' (dry run)' if DRY else ''}: {len(CHANGES)} change(s)"
+          if FAILED:
+              summary += f"; failed: {', '.join(FAILED)}"
           print(summary)
           with open(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull), "a") as out:
               out.write(f"### Issue sync — {summary}\n\n" + "".join(f"- {c}\n" for c in CHANGES))
+          if FAILED:
+              sys.exit(1)  # so this step doesn't count as having caught up, and the health check sees it
           PY
+      - name: Issues
+        timeout-minutes: 12
+        run: python3 "$RUNNER_TEMP/sync.py" issues
+      - name: Pull requests
+        if: ${{ !cancelled() && inputs.mode != 'backfill' }}
+        timeout-minutes: 8
+        run: python3 "$RUNNER_TEMP/sync.py" pulls
+      - name: CI results and releases
+        if: ${{ !cancelled() && inputs.mode != 'backfill' }}
+        timeout-minutes: 4
+        run: python3 "$RUNNER_TEMP/sync.py" extras
