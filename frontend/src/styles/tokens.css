@@ -292,6 +292,7 @@
   --fs-note-step: 1px;         /* …a pixel up from the mono they were set in */
   --fvs-display: normal;       /* T1: opsz follows font-size, never pinned */
   --wght-wordmark: 500;        /* the italic "Smylte." wordmark */
+  --wght-serif: 500;           /* Newsreader body text, which set light at 400 */
 
   /* T9 · Hanken Grotesk, fitted to dense rows. This app's sizes were set for
      Inter, and Hanken sets smaller at the same font-size (x-height 0.493em,
@@ -412,6 +413,8 @@
   --wght-content: 400;
   --ls-content: 0;
 }
+/* Workspace's serif slot is the system face too, so its body text keeps 400. */
+:root[data-preset="workspace"] { --wght-serif: 400; }
 
 /* Dark grounds: a shadow in ink at these alphas does not read, so the dark
    theme uses black, and more of it. The segmented thumb's hairline steps up
@@ -530,7 +533,7 @@ input, select, textarea { font-family: inherit; }
   letter-spacing: calc(0.1em * var(--tracking)); color: var(--fg-faint);
 }
 .mono { font-family: var(--mono); font-size-adjust: none; }
-.serif { font-family: var(--serif); font-size-adjust: none; }
+.serif { font-family: var(--serif); font-size-adjust: none; font-weight: var(--wght-serif); }
 
 /* `border: 1px solid transparent` and NOT `border: 0`, which is what this was.
    `.btn.ghost` adds `border: 1px solid var(--rule)` and nothing takes a pixel

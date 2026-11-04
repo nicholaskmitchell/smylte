@@ -953,7 +953,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
 
 /* recurring-event scope chooser (this / this & following / all) */
 .scope-choose { display: flex; flex-direction: column; gap: 8px; }
-.scope-q { font-family: var(--serif); font-size-adjust: none; font-size: calc(15px * var(--fs-scale)); margin: 2px 0 4px; }
+.scope-q { font-family: var(--serif); font-size-adjust: none; font-size: calc(15px * var(--fs-scale)); font-weight: var(--wght-serif); margin: 2px 0 4px; }
 .scope-hint { font-size: calc(12px * var(--fs-scale)); color: var(--fg-muted); margin: -2px 0 2px; line-height: 1.35;
   font-weight: var(--wght-ui); }   /* T9 */
 /* "Discard changes?" (DiscardPrompt) sits over the editor it asks about, so
@@ -1551,7 +1551,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
   letter-spacing: -0.01em; }
 .booking-desc { margin: 0; font-size: calc(14px * var(--fs-scale)); color: var(--fg-muted); white-space: pre-wrap;
   overflow-wrap: anywhere; }
-.booking-lead { margin: 0; font-family: var(--serif); font-size-adjust: none; font-size: calc(17px * var(--fs-scale)); }
+.booking-lead { margin: 0; font-family: var(--serif); font-size-adjust: none; font-size: calc(17px * var(--fs-scale)); font-weight: var(--wght-serif); }
 .booking-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .booking-tz { font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale)); color: var(--fg-faint);
   text-transform: var(--label-case); letter-spacing: calc(0.06em * var(--tracking)); }
@@ -1604,7 +1604,7 @@ button.menu-toggle:active { scale: var(--press-scale); }
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   border: 1px solid var(--accent); border-radius: var(--r-sm); padding: 10px 12px;
   background: color-mix(in oklch, var(--accent) 8%, transparent);
-  font-family: var(--serif); font-size-adjust: none; font-size: calc(15px * var(--fs-scale));
+  font-family: var(--serif); font-size-adjust: none; font-size: calc(15px * var(--fs-scale)); font-weight: var(--wght-serif);
 }
 .booking-card textarea.input { resize: vertical; }
 
@@ -1636,7 +1636,7 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
   background: var(--bg-elev); padding: 18px; display: flex; flex-direction: column; gap: 10px;
 }
 .share-wrap > .share-card { max-width: 520px; margin: 0 auto; height: fit-content; }
-.share-gone__title { margin: 0; font-family: var(--serif); font-size-adjust: none; font-size: calc(17px * var(--fs-scale)); }
+.share-gone__title { margin: 0; font-family: var(--serif); font-size-adjust: none; font-size: calc(17px * var(--fs-scale)); font-weight: var(--wght-serif); }
 .share-muted { margin: 0; color: var(--fg-muted); font-size: calc(14px * var(--fs-scale)); }
 .share-label, .share-presence__eyebrow, .share-now__label, .share-then__label, .share-readonly,
 .share-live, .share-stale {
@@ -1653,7 +1653,7 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
   margin: 0; font-family: var(--serif); font-size-adjust: none; font-size: calc(28px * var(--fs-scale));
   font-weight: 500; letter-spacing: -0.01em;
 }
-.share-head__day { font-family: var(--serif); font-size-adjust: none; font-size: calc(16px * var(--fs-scale)); color: var(--fg-muted); }
+.share-head__day { font-family: var(--serif); font-size-adjust: none; font-size: calc(16px * var(--fs-scale)); font-weight: var(--wght-serif); color: var(--fg-muted); }
 .share-head__meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
 .share-live { display: inline-flex; align-items: center; gap: 6px; }
 .share-live__dot {
