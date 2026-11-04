@@ -1,17 +1,23 @@
 name: Sync PR to GitLab
+# gitlab-home template 2026-11-04 (`gitlab-home update` merges newer versions into this file)
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened, closed, edited]
 
 permissions:
   contents: read
+  issues: read         # which GitLab issue a "#N" in the description is linked to
+  pull-requests: read  # which pull request a stacked pull request is based on
 
 jobs:
   sync:
+    # Of the edits, only a new base changes anything on GitLab.
+    if: github.event.action != 'edited' || github.event.changes.base
     runs-on: ubuntu-latest
     env:
       GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
       GITLAB_PATH: ${{ vars.GITLAB_PATH }}
+      GITLAB_FORMER_BOT_IDS: ${{ vars.GITLAB_FORMER_BOT_IDS }}
       GH_READ_TOKEN: ${{ github.token }}
       PR: ${{ github.event.pull_request.number }}
       TITLE: ${{ github.event.pull_request.title }}
@@ -35,14 +41,64 @@ jobs:
           REMOTE="https://oauth2:${GITLAB_TOKEN}@gitlab.com/${GITLAB_PATH}.git"
           BR="gh-pr-$PR"
 
+          gl_get() { curl -sf --max-time 20 -H "PRIVATE-TOKEN: $GITLAB_TOKEN" "$API$1"; }
+          uri() { jq -rn --arg s "$1" '$s|@uri'; }
+          # Merge requests from this project only: anyone can open one from a fork,
+          # with a branch named like ours.
+          OWN='[.[]? | select(.source_project_id == .target_project_id)]'
+          # The GitLab branch a merge request for a PR based on $1 targets: $1 itself
+          # if GitLab has it (main), or, for a PR stacked on another open PR, that
+          # PR's gh-pr-N copy. Prints nothing if there is neither.
+          target_for() {
+            local n i
+            if gl_get "/repository/branches/$(uri "$1")" >/dev/null; then echo "$1"; return 0; fi
+            n=$(curl -sf --max-time 20 -H "Authorization: Bearer $GH_READ_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/pulls?state=open&head=$(uri "$GITHUB_REPOSITORY_OWNER:$1")" \
+              | jq -r '.[0].number // empty') || true
+            [ -n "$n" ] || return 0
+            # Both PRs may be syncing at once; give the other run a minute to push.
+            for i in 1 2 3 4 5 6; do
+              if gl_get "/repository/branches/gh-pr-$n" >/dev/null; then echo "gh-pr-$n"; return 0; fi
+              sleep 10
+            done
+          }
+          no_target() {
+            echo "::error::PR #$PR is based on $BASE, which exists only on GitHub and is not another open pull request's branch, so GitLab has nothing to merge it into. Base it on the default branch (or on an open pull request's branch) and it syncs again."
+            exit 1
+          }
+
           if [ "$ACTION" = "closed" ]; then
             IID=$(curl -s -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-              "$API/merge_requests?source_branch=$BR&state=opened" | jq -r '.[0].iid // empty')
+              "$API/merge_requests?source_branch=$BR&state=opened" | jq -r "$OWN[0].iid // empty")
             if [ -n "$IID" ]; then
               curl -s -X PUT -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
                 -d state_event=close "$API/merge_requests/$IID" >/dev/null
             fi
+            # Merge requests stacked on this one would lose their target with the
+            # branch, so point them where this one was going first.
+            NEXT=$(gl_get "/merge_requests?source_branch=$BR&state=all&per_page=100" | jq -r "$OWN[0].target_branch // empty")
+            if [ -n "$NEXT" ]; then
+              DEPS=$(gl_get "/merge_requests?target_branch=$BR&state=opened&per_page=100" | jq -r "$OWN[].iid")
+              for DEP in $DEPS; do
+                curl -sf -X PUT -H "PRIVATE-TOKEN: $GITLAB_TOKEN" --data-urlencode "target_branch=$NEXT" \
+                  "$API/merge_requests/$DEP" >/dev/null
+                echo "Merge request !$DEP now targets $NEXT"
+              done
+            fi
             git push "$REMOTE" --delete "$BR" || true
+            exit 0
+          fi
+
+          # A new base: retarget the open merge request. (With none open yet, this
+          # syncs the PR like any update below.)
+          IID=$(gl_get "/merge_requests?source_branch=$BR&state=opened" | jq -r "$OWN[0].iid // empty")
+          if [ "$ACTION" = "edited" ] && [ -n "$IID" ]; then
+            TARGET=$(target_for "$BASE")
+            [ -n "$TARGET" ] || no_target
+            curl -sf -X PUT -H "PRIVATE-TOKEN: $GITLAB_TOKEN" --data-urlencode "target_branch=$TARGET" \
+              "$API/merge_requests/$IID" >/dev/null
+            echo "Merge request !$IID now targets $TARGET"
             exit 0
           fi
 
@@ -55,6 +111,9 @@ jobs:
           # reviewing the MR, start its pipeline by hand.
           git push -o ci.skip "$REMOTE" "FETCH_HEAD:refs/heads/$BR" --force
 
+          # An open merge request follows its branch, so the push was all it needed.
+          [ -z "$IID" ] || exit 0
+
           # The project's owner merges every merge request, so assign it to them:
           # the owner of a personal project, or for a group's project the first
           # person with the Owner role (bots excluded). No owner found: no assignee.
@@ -64,14 +123,145 @@ jobs:
               | jq -r 'if type == "array" then [.[] | select(.access_level >= 50 and .state == "active"
                   and (.username | test("^(project|group)_[0-9]+_bot") | not))][0].id // empty else empty end' 2>/dev/null || true)
           fi
+          TARGET=$(target_for "$BASE")
+          [ -n "$TARGET" ] || no_target
+
+          # The PR's description, quoted. The two sides number issues differently, so
+          # "#N" becomes the linked GitLab issue's number (a pull request's becomes its
+          # merge request), else a link back to GitHub. "Fixes #N" then closes the
+          # right issue when the merge request is merged.
+          DESC="$RUNNER_TEMP/description.md"
+          python3 - "$DESC" <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          GL_ROOT = "https://gitlab.com/api/v4"
+          GL_API = GL_ROOT + "/projects/" + urllib.parse.quote(os.environ["GITLAB_PATH"], safe="")
+          GH_API = "https://api.github.com/repos/" + os.environ["GITHUB_REPOSITORY"]
+          GH_WEB = "https://github.com/" + os.environ["GITHUB_REPOSITORY"]
+          GL_HEADERS = {"PRIVATE-TOKEN": os.environ["GITLAB_TOKEN"]}
+          GH_HEADERS = {"Authorization": "Bearer " + os.environ["GH_READ_TOKEN"],
+                        "Accept": "application/vnd.github+json", "User-Agent": "pr-sync"}
+          GH_BOT = "github-actions[bot]"
+          MARK_RE = re.compile(r"^<!-- issue-sync:([a-z-]+)=([0-9a-f]+) -->$", re.M)
+          # Code, and links someone already wrote, are left as they are.
+          KEEP_RE = re.compile(r"(```.*?```|~~~.*?~~~|`[^`\n]*`|!?\[[^\]\n]*\]\([^)\n]*\))", re.S)
+          QUAL_REF_RE = re.compile(r"(?<![\w./-])([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)\b")
+          REF_RE = re.compile(r"(?<![\w/&#!.-])(?<!\]\()#(\d+)\b")
+          LOOKUPS = 30  # past that, references become plain links back to GitHub
+
+
+          def get(url, headers):
+              try:
+                  with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=20) as resp:
+                      return json.loads(resp.read() or b"null")
+              except urllib.error.HTTPError as err:
+                  if err.code in (404, 410):
+                      return None
+                  raise
+
+
+          def pages(url, headers):
+              out, page = [], 1
+              while True:
+                  batch = get(f"{url}{'&' if '?' in url else '?'}per_page=100&page={page}", headers) or []
+                  out.extend(batch)
+                  if len(batch) < 100:
+                      return out
+                  page += 1
+
+
+          def first(text, key):
+              return next((v for k, v in MARK_RE.findall(text or "") if k == key), None)
+
+
+          BOTS = []
+
+
+          def gl_bots():
+              # The issue sync trusts markers only from its own bots, current and former.
+              if not BOTS:
+                  BOTS.append({get(GL_ROOT + "/user", GL_HEADERS)["id"]}
+                              | {int(x) for x in re.findall(r"\d+", os.environ.get("GITLAB_FORMER_BOT_IDS") or "")})
+              return BOTS[0]
+
+
+          def on_gitlab(number):
+              """What GitHub's #number should say on GitLab; None leaves it as written."""
+              item = get(f"{GH_API}/issues/{number}", GH_HEADERS)
+              if not item:
+                  return None
+              back = f"[#{number}]({item['html_url']})"
+              if "pull_request" in item:
+                  mrs = [m for m in get(f"{GL_API}/merge_requests?source_branch=gh-pr-{number}&state=all&per_page=100",
+                                        GL_HEADERS) or [] if m.get("source_project_id") == m.get("target_project_id")]
+                  return f"!{mrs[0]['iid']}" if mrs else back
+              # Same rules as the issue sync: markers count only when its bots wrote them.
+              if (item.get("user") or {}).get("login") == GH_BOT and first(item.get("body"), "gl-issue"):
+                  return "#" + first(item.get("body"), "gl-issue")
+              for comment in pages(f"{GH_API}/issues/{number}/comments", GH_HEADERS):
+                  if (comment.get("user") or {}).get("login") == GH_BOT and first(comment.get("body"), "gl-issue"):
+                      return "#" + first(comment.get("body"), "gl-issue")
+              # Issues imported before the sync began are linked from the GitLab side only.
+              twin = get(f"{GL_API}/issues/{number}", GL_HEADERS)
+              if twin:
+                  linked = None
+                  if (twin.get("author") or {}).get("id") in gl_bots():
+                      linked = first(twin.get("description"), "gh-issue")
+                  if linked is None:
+                      for note in pages(f"{GL_API}/issues/{number}/notes?sort=asc&order_by=created_at", GL_HEADERS):
+                          if ((note.get("author") or {}).get("id") in gl_bots() and not note.get("system")
+                                  and first(note.get("body"), "gh-issue")):
+                              linked = first(note.get("body"), "gh-issue")
+                              break
+                  if linked == str(number):
+                      return f"#{number}"
+              return back
+
+
+          cache, lookups = {}, [LOOKUPS]
+
+
+          def plain(m):
+              number = int(m.group(1))
+              if number not in cache:
+                  if lookups[0] <= 0:
+                      return f"[#{number}]({GH_WEB}/issues/{number})"
+                  lookups[0] -= 1
+                  try:
+                      cache[number] = on_gitlab(number)
+                  except Exception as err:  # a failed lookup must not hold up the merge request
+                      print(f"Couldn't look up #{number}: {err}", file=sys.stderr)
+                      cache[number] = f"[#{number}]({GH_WEB}/issues/{number})"
+              return cache[number] or m.group(0)
+
+
+          def qualified(m):
+              return f"[{m.group(0)}](https://github.com/{m.group(1)}/issues/{m.group(2)})"
+
+
+          parts = KEEP_RE.split((os.environ.get("BODY") or "").replace("\r\n", "\n"))
+          for i in range(0, len(parts), 2):
+              parts[i] = REF_RE.sub(plain, QUAL_REF_RE.sub(qualified, parts[i]))
+          body = "".join(parts).replace("@", "@ ")
+          with open(sys.argv[1], "w", encoding="utf-8") as out:
+              out.write(f"From GitHub PR by `{os.environ['AUTHOR']}`: {os.environ['URL']}\n\n"
+                        + "\n".join("> " + line for line in body.split("\n")))
+          PY
+
           OUT="$RUNNER_TEMP/mr.json"
           CODE=$(curl -s -o "$OUT" -w '%{http_code}' -X POST \
             -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
             --data-urlencode "source_branch=$BR" \
-            --data-urlencode "target_branch=$BASE" \
+            --data-urlencode "target_branch=$TARGET" \
             --data-urlencode "title=$TITLE" \
             ${OWNER:+--data-urlencode "assignee_id=$OWNER"} \
-            --data-urlencode "description=From GitHub PR by \`$AUTHOR\`: $URL"$'\n\n'"$(printf '%s\n' "$BODY" | sed 's/@/@ /g; s/^/> /')" \
+            --data-urlencode "description@$DESC" \
             "$API/merge_requests")
           # 201 = created, 409 = an open MR for this branch already exists (fine)
           case "$CODE" in

@@ -1,4 +1,7 @@
 name: Sync issues with GitLab
+# gitlab-home template 2026-11-04 (`gitlab-home update` merges newer versions into this file)
+# Dry runs and backfills are named apart, so a sweep can tell which earlier runs covered changes.
+run-name: ${{ inputs.dry_run && 'Sync issues with GitLab (dry run)' || inputs.mode == 'backfill' && 'Sync issues with GitLab (backfill)' || github.event.issue.title || 'Sync issues with GitLab' }}
 
 # Two-way issue sync between this repo and its canonical GitLab project.
 #
@@ -8,11 +11,14 @@ name: Sync issues with GitLab
 #   - Title and description belong to the side the issue was opened on; edit
 #     them there (edits to a mirror's text are overwritten).
 #   - Confidential GitLab issues and internal notes are never copied.
+#   - The two sides number issues differently, so "#12" in copied text becomes
+#     the other side's number for a linked issue, or a link back to the source.
 #
-# Every run reconciles everything updated recently on both sides, so a missed or
-# superseded run is caught up by the next one. GitLab starts a run through a
-# project webhook that calls this workflow's workflow_dispatch endpoint; the
-# daily schedule is the safety net.
+# Every run reconciles everything updated since the last successful sweep (and at
+# least the last few hours) on both sides, so missed runs, and outages of any
+# length, are caught up by the next one. GitLab starts a run through a project
+# webhook that calls this workflow's workflow_dispatch endpoint; the daily
+# schedule is the safety net.
 #
 # Pairing is recorded in hidden markers (<!-- issue-sync:... -->). Markers are
 # only trusted in text written by the sync's own bot accounts, and markers in
@@ -39,6 +45,7 @@ on:
 
 permissions:
   issues: write
+  actions: read  # when the last successful sweep ran
 
 concurrency:
   group: issue-sync
@@ -79,6 +86,7 @@ jobs:
           GL_API = GL_ROOT + "/projects/" + urllib.parse.quote(GL_PATH, safe="")
           GL_WEB = "https://gitlab.com/" + GL_PATH
           GH_API = "https://api.github.com/repos/" + os.environ["GITHUB_REPOSITORY"]
+          GH_WEB = "https://github.com/" + os.environ["GITHUB_REPOSITORY"]
           GH_BOT = "github-actions[bot]"
           MODE = os.environ.get("MODE") or "sweep"
           DRY = os.environ.get("DRY_RUN") == "1"
@@ -260,18 +268,106 @@ jobs:
               return None
 
 
+          # ---------- references ----------
+          # GitHub numbers issues and pull requests together, GitLab numbers issues
+          # and merge requests apart, so the same number means different things on
+          # the two sides. Copied text gets the other side's number for a linked
+          # issue (and for a pull request's merge request), and a link back to the
+          # source for anything else.
+
+          # Code, and links someone already wrote, are left as they are.
+          KEEP_RE = re.compile(r"(```.*?```|~~~.*?~~~|`[^`\n]*`|!?\[[^\]\n]*\]\([^)\n]*\))", re.S)
+          QUAL_REF_RE = re.compile(r"(?<![\w./-])([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)([#!])(\d+)\b")
+          REF_RE = re.compile(r"(?<![\w/&#!.-])(?<!\]\()([#!])(\d+)\b")
+          REF_LOOKUPS = 30  # per text; past that, references become plain links back
+          REF_CACHE = {}
+
+
+          def gh_ref_on_gl(number):
+              """What GitHub's #number should say on GitLab; None leaves it as written."""
+              item = gh("GET", f"/issues/{number}", missing_ok=True)
+              if not item:
+                  return None
+              if "pull_request" in item:
+                  # Only this project's merge requests: a fork can use a branch named like ours.
+                  mrs = [m for m in gl("GET", "/merge_requests",
+                                       params={"source_branch": f"gh-pr-{number}", "state": "all", "per_page": 100}) or []
+                         if m.get("source_project_id") == m.get("target_project_id")]
+                  return f"!{mrs[0]['iid']}" if mrs else f"[#{number}]({item['html_url']})"
+              iid = gh_linked_gl(item, gh_comments(number))
+              return f"#{iid}" if iid is not None else f"[#{number}]({item['html_url']})"
+
+
+          def gl_ref_on_gh(sigil, number):
+              """What GitLab's #number or !number should say on GitHub; None leaves it."""
+              if sigil == "!":
+                  mr = gl("GET", f"/merge_requests/{number}", missing_ok=True)
+                  if not mr:
+                      return None
+                  pr = re.fullmatch(r"gh-pr-(\d+)", mr.get("source_branch") or "")
+                  if pr and mr.get("source_project_id") == mr.get("target_project_id"):
+                      return f"#{pr.group(1)}"
+                  return f"[!{number}]({mr['web_url']})"
+              gli = gl("GET", f"/issues/{number}", missing_ok=True)
+              if not gli:
+                  return None
+              if not gli.get("confidential"):
+                  linked = gl_linked_gh(gli, gl_notes(number))
+                  if linked is not None:
+                      return f"#{linked}"
+              return f"[#{number}]({gli['web_url']})"
+
+
+          def refs(text, side):
+              """References in text written on side ("gh" or "gl"), as the other side needs them."""
+              lookups = [REF_LOOKUPS]
+
+              def link_back(sigil, number):
+                  if side == "gh":
+                      return f"[#{number}]({GH_WEB}/issues/{number})"
+                  return f"[{sigil}{number}]({GL_WEB}/-/{'issues' if sigil == '#' else 'merge_requests'}/{number})"
+
+              def plain(m):
+                  sigil, number = m.group(1), int(m.group(2))
+                  if side == "gh" and sigil == "!":
+                      return m.group(0)
+                  key = (side, sigil, number)
+                  if key not in REF_CACHE:
+                      if lookups[0] <= 0:
+                          return link_back(sigil, number)
+                      lookups[0] -= 1
+                      try:
+                          REF_CACHE[key] = gh_ref_on_gl(number) if side == "gh" else gl_ref_on_gh(sigil, number)
+                      except (SystemExit, Exception) as err:  # a failed lookup must not stop the sync
+                          print(f"Couldn't look up {sigil}{number} ({err}); linking back instead")
+                          REF_CACHE[key] = link_back(sigil, number)
+                  return REF_CACHE[key] or m.group(0)
+
+              def qualified(m):
+                  path, sigil, number = m.groups()
+                  if side == "gh":
+                      return m.group(0) if sigil == "!" else f"[{m.group(0)}](https://github.com/{path}/issues/{number})"
+                  kind = "issues" if sigil == "#" else "merge_requests"
+                  return f"[{m.group(0)}](https://gitlab.com/{path}/-/{kind}/{number})"
+
+              parts = KEEP_RE.split(text or "")
+              for i in range(0, len(parts), 2):
+                  parts[i] = REF_RE.sub(plain, QUAL_REF_RE.sub(qualified, parts[i]))
+              return "".join(parts)
+
+
           # ---------- rendering ----------
 
           def render_on_gl(ghi, src):
               text = clip(f"**`{login(ghi)}`** opened this issue on GitHub: {ghi['html_url']}\n\n"
-                          + quote(ghi.get("body")))
+                          + quote(refs(ghi.get("body"), "gh")))
               return f"{text}\n\n{mark('gh-issue', ghi['number'])}\n{mark('src', src)}"
 
 
           def render_on_gh(gli, src):
               who = inert(one_line(gli["author"]["name"]))
               text = clip(f"**{who}** (`{gli['author']['username']}`) opened this issue on GitLab: "
-                          f"{gli['web_url']}\n\n" + quote(gl_links(gli.get("description"))))
+                          f"{gli['web_url']}\n\n" + quote(gl_links(refs(gli.get("description"), "gl"))))
               return f"{text}\n\n{mark('gl-issue', gli['iid'])}\n{mark('src', src)}"
 
 
@@ -377,7 +473,7 @@ jobs:
                   if login(comment) == GH_BOT or comment["id"] <= base_gh or comment["id"] in copied_from_gh:
                       continue
                   text = clip(f"**`{login(comment)}`** commented on GitHub: {comment['html_url']}\n\n"
-                              + quote(comment.get("body")))
+                              + quote(refs(comment.get("body"), "gh")))
                   write(gl, "POST", f"/issues/{iid}/notes",
                         {"body": f"{text}\n\n{mark('gh-comment', comment['id'])}"},
                         f"{label}: GitHub comment {comment['id']} copied to GitLab")
@@ -389,7 +485,7 @@ jobs:
                       continue
                   who = inert(one_line(note["author"]["name"]))
                   text = clip(f"**{who}** (`{note['author']['username']}`) commented on GitLab: "
-                              f"{GL_WEB}/-/issues/{iid}#note_{note['id']}\n\n" + quote(gl_links(note.get("body"))))
+                              f"{GL_WEB}/-/issues/{iid}#note_{note['id']}\n\n" + quote(gl_links(refs(note.get("body"), "gl"))))
                   write(gh, "POST", f"/issues/{number}/comments",
                         {"body": f"{text}\n\n{mark('gl-note', note['id'])}"},
                         f"{label}: GitLab note {note['id']} copied to GitHub")
@@ -397,8 +493,34 @@ jobs:
 
           # ---------- modes ----------
 
+          NOT_SWEEPS = {"Sync issues with GitLab (dry run)", "Sync issues with GitLab (backfill)"}
+
+
+          def last_sweep_start():
+              """When the most recent successful sweep began (None if unknown)."""
+              try:
+                  runs = gh("GET", "/actions/workflows/sync-issues.yml/runs",
+                            params={"status": "success", "per_page": 50}) or {}
+              except SystemExit as err:
+                  print(f"Can't read earlier runs, so looking back {WINDOW} only: {err}")
+                  return None
+              for run in runs.get("workflow_runs") or []:
+                  if run.get("display_title") not in NOT_SWEEPS and run.get("run_started_at"):
+                      return ts(run["run_started_at"])
+              return None
+
+
           def sweep():
-              start = (dt.datetime.now(dt.timezone.utc) - WINDOW).strftime("%Y-%m-%dT%H:%M:%SZ")
+              # From when the last successful sweep began (with a margin for clock
+              # differences), so nothing changed during an outage is skipped (even a
+              # workflow GitHub turned off after 60 quiet days); at most about a year back.
+              now = dt.datetime.now(dt.timezone.utc)
+              start = now - WINDOW
+              last = last_sweep_start()
+              if last and last - dt.timedelta(minutes=10) < start:
+                  start = max(last - dt.timedelta(minutes=10), now - dt.timedelta(days=400))
+                  print(f"Catching up from {start:%Y-%m-%d %H:%M} UTC (the last successful sweep began {last:%Y-%m-%d %H:%M} UTC)")
+              start = start.strftime("%Y-%m-%dT%H:%M:%SZ")
               done = set()
 
               def pair(number, iid):
