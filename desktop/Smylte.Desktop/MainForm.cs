@@ -142,6 +142,14 @@ public sealed class MainForm : Form, IDesktopBridge
                     .ReplaceClientAsync(_settings, progress, CancellationToken.None)
                     .ConfigureAwait(true);
                 message.Text = "Restarting…";
+                // The engine lets go of the profile folder first. WebView2's
+                // browser processes outlive the window that made them by up to
+                // a few seconds, and they hold the user-data folder the whole
+                // time; the new client waited for THIS process to exit and then
+                // asked for that folder while they still had it, and failed to
+                // start with an error that a manual restart a moment later
+                // never reproduced. See ReleaseBrowserAsync.
+                await ReleaseBrowserAsync().ConfigureAwait(true);
                 // The new file is in place; this process is still the old image.
                 // Start the new one and tell it whom to wait for, then leave.
                 Process.Start(new ProcessStartInfo(exe)
@@ -181,11 +189,20 @@ public sealed class MainForm : Form, IDesktopBridge
     private async Task InitialiseAsync()
     {
         var progress = new Progress<string>(text => _splash.Text = text);
+        var clock = new StartupClock();
         try
         {
+            // Started before the update check and awaited after the engine is
+            // up: neither needs the other, and paying for them one after the
+            // other is what held the first paint. LoginAsync never throws.
+            var login = Session.LoginAsync(
+                _settings.ServerUrl, _settings.Username, _settings.GetPassword(),
+                CancellationToken.None);
+
             var update = await Updater
                 .EnsureWebAssetsAsync(_settings, progress, CancellationToken.None)
                 .ConfigureAwait(true);
+            clock.Mark("update check");
 
             ((IProgress<string>)progress).Report("Starting…");
 
@@ -225,12 +242,18 @@ public sealed class MainForm : Form, IDesktopBridge
                     e.State = CoreWebView2PermissionState.Allow;
             };
 
-            await SeedSessionAsync().ConfigureAwait(true);
+            clock.Mark("web engine");
+
+            await SeedSessionAsync(login).ConfigureAwait(true);
+            clock.Mark("sign-in");
 
             _web.CoreWebView2.Navigate(_server.Origin + "/");
             _splash.Visible = false;
             _web.Visible = true;
             _notice.Visible = update.ClientOutdated;
+            clock.Mark("page handed over");
+            clock.Report(_settings);
+            if (update.Later is { } later) _ = ShowNoticeWhenCheckedAsync(later);
         }
         catch (WebView2RuntimeNotFoundException)
         {
@@ -479,7 +502,7 @@ public sealed class MainForm : Form, IDesktopBridge
     /// server that has just gone down, a roamed settings file DPAPI will not
     /// decrypt. In all of them the right answer is to navigate anyway and let
     /// the app's own login screen do its job, which is exactly what it is for.
-    private async Task SeedSessionAsync()
+    private async Task SeedSessionAsync(Task<IReadOnlyList<string>> login)
     {
         // The jar belongs to whichever server last filled it, and nothing has
         // ever emptied it. WebView2 keeps its cookies inside the user-data
@@ -495,10 +518,7 @@ public sealed class MainForm : Form, IDesktopBridge
             try { _settings.Save(); } catch (Exception) { /* claimed again next launch */ }
         }
 
-        var cookies = await Session
-            .LoginAsync(_settings.ServerUrl, _settings.Username, _settings.GetPassword(),
-                        CancellationToken.None)
-            .ConfigureAwait(true);
+        var cookies = await login.ConfigureAwait(true);
         if (cookies.Count == 0) return;
 
         var manager = _web.CoreWebView2.CookieManager;
@@ -510,6 +530,18 @@ public sealed class MainForm : Form, IDesktopBridge
             cookie.IsHttpOnly = true;
             manager.AddOrUpdateCookie(cookie);
         }
+    }
+
+    /// The update check the launch stopped waiting for. Its only visible result
+    /// is the client notice; a build it fetched is staged for the next start.
+    private async Task ShowNoticeWhenCheckedAsync(Task<UpdateResult> later)
+    {
+        try
+        {
+            var result = await later.ConfigureAwait(true);
+            if (result.ClientOutdated && !IsDisposed) _notice.Visible = true;
+        }
+        catch (Exception) { /* the installed build is open; nothing to say */ }
     }
 
     private void Fail(string message, bool offerSetup)
@@ -539,6 +571,32 @@ public sealed class MainForm : Form, IDesktopBridge
             }
         }
         Close();
+    }
+
+    /// How long a restart waits for the browser processes to exit. They
+    /// normally go within a second of the last view closing.
+    private static readonly TimeSpan BrowserExitWait = TimeSpan.FromSeconds(8);
+
+    /// Close every view on this environment and wait for its browser process
+    /// to exit, so the user-data folder is free for the client starting next.
+    /// `BrowserProcessExited` is the event WebView2 documents for exactly this
+    /// (it fires once every view using the environment has closed and the
+    /// processes are gone). Bounded: a process that does not leave is not a
+    /// reason to refuse the update.
+    private async Task ReleaseBrowserAsync()
+    {
+        if (_environment is not { } environment) return;
+        var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        environment.BrowserProcessExited += (_, _) => exited.TrySetResult();
+
+        // OnDocked must not bring this window back as the float closes.
+        _closing = true;
+        try { if (_float is { IsDisposed: false }) _float.Close(); }
+        catch (Exception) { /* closing anyway */ }
+        try { _web.Dispose(); }
+        catch (Exception) { /* closing anyway */ }
+
+        await Task.WhenAny(exited.Task, Task.Delay(BrowserExitWait)).ConfigureAwait(true);
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)

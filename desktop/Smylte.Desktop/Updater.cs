@@ -11,7 +11,15 @@ namespace Smylte.Desktop;
 /// The published Smylte.exe is not the one running. The client cannot replace
 /// itself, so this only ever drives a notice.
 /// </param>
-public sealed record UpdateResult(bool Updated, string Message, bool ClientOutdated);
+/// <param name="Later">
+/// Set when the launch stopped waiting for the update check and opened the
+/// installed build: the check, still running. Its own result arrives when it
+/// finishes, so the window can still raise the client notice from it. A build
+/// it downloads is staged for the next start rather than swapped under the
+/// page that is being served from it.
+/// </param>
+public sealed record UpdateResult(
+    bool Updated, string Message, bool ClientOutdated, Task<UpdateResult>? Later = null);
 
 /// Keeps the local copy of the web build in step with what CI published.
 ///
@@ -45,9 +53,93 @@ public static class Updater
     public const string ReleaseUrl =
         $"https://github.com/{Owner}/{Repo}/releases/tag/{Tag}";
 
-    public static async Task<UpdateResult> EnsureWebAssetsAsync(
-        Settings settings, IProgress<string> log, CancellationToken ct)
+    /// How long a launch with a build already on disk waits for the update
+    /// check before opening that build.
+    ///
+    /// The check used to gate the first paint outright: a GitHub API call under
+    /// a five-minute timeout, then the download, then the sign-in, all before
+    /// the page existed. On a cold start, with DNS, TLS and a slow or half-open
+    /// route all still to be paid for, that was a window with nothing in it for
+    /// fifteen seconds. An answer inside this budget is used as it always was,
+    /// so the usual case (a fast "up to date", or a small build that downloads
+    /// quickly) is unchanged; a slower one finishes in the background and its
+    /// build is in place on the next start.
+    internal static readonly TimeSpan LaunchPatience = TimeSpan.FromSeconds(3);
+
+    /// The check a launch gave up waiting for, while it is still running. One
+    /// per process: a second start (a setup save) must not race a download that
+    /// is still writing the same zip and the same staging folder.
+    private static Task<UpdateResult>? _background;
+    private static readonly object BackgroundLock = new();
+
+    public static Task<UpdateResult> EnsureWebAssetsAsync(
+        Settings settings, IProgress<string> log, CancellationToken ct) =>
+        EnsureWebAssetsAsync(
+            settings, gate => RefreshAsync(settings, gate, log, ct), LaunchPatience, ct);
+
+    /// The launch policy, with the network half passed in so it can be tested
+    /// without GitHub. `refresh` is handed the gate it must pass before it may
+    /// touch the live build.
+    internal static async Task<UpdateResult> EnsureWebAssetsAsync(
+        Settings settings, Func<SwapGate, Task<UpdateResult>> refresh, TimeSpan patience,
+        CancellationToken ct)
     {
+        // A build a previous run downloaded after its window was up goes live
+        // now, before anything serves from the folder. Local and quick.
+        PromoteStagedBuild(settings);
+
+        lock (BackgroundLock)
+        {
+            if (_background is { IsCompleted: false } running)
+                return new UpdateResult(false, "Checking for updates in the background.", false, running);
+        }
+
+        // Asked before the refresh starts, which asks it again: both recover a
+        // stranded build, and the two must not race to move the same folder.
+        var haveLocal = HaveLocalBuild(settings);
+        var gate = new SwapGate();
+        var work = refresh(gate);
+
+        // A first run has nothing to open instead, so it waits as long as it takes.
+        if (!haveLocal) return await work.ConfigureAwait(false);
+
+        var first = await Task.WhenAny(work, Task.Delay(patience, ct)).ConfigureAwait(false);
+        if (first == work) return await work.ConfigureAwait(false);
+
+        // Only if the refresh has not already begun swapping: a swap in progress
+        // is a couple of directory renames, and the folder must not be served
+        // half-moved. Waiting for it is the cheaper answer.
+        if (!gate.TryGiveUp()) return await work.ConfigureAwait(false);
+
+        lock (BackgroundLock) _background = work;
+        return new UpdateResult(false, "Checking for updates in the background.", false, work);
+    }
+
+    /// Who may touch the live build: the refresh, by swapping a new one in, or
+    /// the launch, by serving the old one. Exactly one of them wins.
+    internal sealed class SwapGate
+    {
+        private const int Waiting = 0, Swapping = 1, GaveUp = 2;
+        private int _state;
+
+        /// The refresh asks before it swaps. False means the window is already
+        /// serving the installed build: stage the new one instead.
+        public bool TryBeginSwap() =>
+            Interlocked.CompareExchange(ref _state, Swapping, Waiting) == Waiting;
+
+        /// The launch asks before it stops waiting. False means a swap has begun.
+        public bool TryGiveUp() =>
+            Interlocked.CompareExchange(ref _state, GaveUp, Waiting) == Waiting;
+    }
+
+    private static async Task<UpdateResult> RefreshAsync(
+        Settings settings, SwapGate gate, IProgress<string> log, CancellationToken ct)
+    {
+        // Off the caller's thread from the first line: the launch is timing this
+        // task against its patience, and a synchronous stretch here (the hash of
+        // our own exe, below) would be time the timer never got to count.
+        await Task.Yield();
+
         var haveLocal = HaveLocalBuild(settings);
 
         JsonElement release;
@@ -83,12 +175,19 @@ public static class Updater
 
         if (haveLocal && id == settings.LastAssetId && stamp == settings.LastAssetStamp)
             return new UpdateResult(false, "Up to date.", clientOutdated);
+        if (haveLocal && StagedAsset(settings) == (id, stamp))
+            return new UpdateResult(false, "The latest build is ready for the next start.", clientOutdated);
 
         log.Report("Downloading the latest build…");
+        var installed = false;
         if (await SwapOrKeepLocalAsync(
-                () => DownloadAndSwapAsync(settings, id, log, ct),
+                async () => installed = await DownloadAndInstallAsync(
+                    settings, gate, id, stamp, log, ct).ConfigureAwait(false),
                 haveLocal, clientOutdated, log).ConfigureAwait(false) is { } kept)
             return kept;
+
+        if (!installed)
+            return new UpdateResult(false, "The latest build is ready for the next start.", clientOutdated);
 
         settings.LastAssetId = id;
         settings.LastAssetStamp = stamp;
@@ -291,8 +390,12 @@ public static class Updater
             : $"{what} {mb} MB";
     }
 
-    private static async Task DownloadAndSwapAsync(
-        Settings settings, long assetId, IProgress<string> log, CancellationToken ct)
+    /// Download and unpack the build, then put it live, or, when the window is
+    /// already serving the installed one, stage it for the next start. True when
+    /// it went live.
+    private static async Task<bool> DownloadAndInstallAsync(
+        Settings settings, SwapGate gate, long assetId, string stamp,
+        IProgress<string> log, CancellationToken ct)
     {
         var zipPath = Path.Combine(Path.GetTempPath(), $"smylte-web-{assetId}.zip");
         await DownloadAssetAsync(settings, assetId, zipPath, "Downloading the latest build…", log, ct)
@@ -300,22 +403,43 @@ public static class Updater
 
         log.Report("Installing…");
 
-        var root = settings.WebRoot;
-        var staging = root + ".new";
-        var previous = root + ".old";
-
-        foreach (var stale in new[] { staging, previous })
-            if (Directory.Exists(stale)) Directory.Delete(stale, recursive: true);
-
-        Directory.CreateDirectory(Path.GetDirectoryName(root)!);
+        var staging = settings.WebRoot + ".new";
+        if (Directory.Exists(staging)) Retry(() => Directory.Delete(staging, recursive: true));
+        Directory.CreateDirectory(Path.GetDirectoryName(settings.WebRoot)!);
         ZipFile.ExtractToDirectory(zipPath, staging);
+        try { File.Delete(zipPath); } catch (Exception) { /* temp file; not worth failing over */ }
 
-        // Move the old copy aside rather than deleting it first, so a failure
-        // between the two steps still leaves a working install to roll back to.
-        if (Directory.Exists(root)) Directory.Move(root, previous);
+        if (gate.TryBeginSwap())
+        {
+            SwapIn(settings.WebRoot, staging);
+            return true;
+        }
+
+        Stage(settings, staging, assetId, stamp);
+        return false;
+    }
+
+    /// Put `incoming` where `root` is, keeping the old copy until the new one is
+    /// in place so a failure between the two steps still leaves a working
+    /// install to roll back to.
+    ///
+    /// Every move and delete is retried. On Windows a folder that was written a
+    /// moment ago is routinely held for a few hundred milliseconds by the
+    /// antivirus scanner or the search indexer, and the move fails with "access
+    /// denied" though nothing is wrong. Unretried, that failed the update, and
+    /// because the leftover `.old` then failed to delete at the top of the next
+    /// attempt, it went on failing until a restart let go of it. The final
+    /// delete of the old copy cannot fail the update at all: the new build is
+    /// already live, and the next start clears it.
+    internal static void SwapIn(string root, string incoming)
+    {
+        var previous = root + ".old";
+        if (Directory.Exists(previous)) Retry(() => Directory.Delete(previous, recursive: true));
+
+        if (Directory.Exists(root)) Retry(() => Directory.Move(root, previous));
         try
         {
-            Directory.Move(staging, root);
+            Retry(() => Directory.Move(incoming, root));
         }
         catch (Exception)
         {
@@ -323,8 +447,98 @@ public static class Updater
             throw;
         }
 
-        if (Directory.Exists(previous)) Directory.Delete(previous, recursive: true);
-        try { File.Delete(zipPath); } catch (Exception) { /* temp file; not worth failing over */ }
+        try { if (Directory.Exists(previous)) Retry(() => Directory.Delete(previous, recursive: true)); }
+        catch (Exception) { /* live already; RecoverStrandedBuild ignores it while `root` exists */ }
+    }
+
+    /// The file inside a staged build that says which release asset it is.
+    private const string StagedMarker = ".smylte-asset";
+
+    internal static string StagedRoot(Settings settings) => settings.WebRoot + ".next";
+
+    /// Keep a downloaded build for the next start. Written into the folder
+    /// rather than into settings: this runs on a background thread while the
+    /// window owns the settings, and the marker and the build it describes then
+    /// move together or not at all.
+    internal static void Stage(Settings settings, string unpacked, long assetId, string stamp)
+    {
+        var next = StagedRoot(settings);
+        if (Directory.Exists(next)) Retry(() => Directory.Delete(next, recursive: true));
+        File.WriteAllText(Path.Combine(unpacked, StagedMarker),
+            assetId.ToString(CultureInfo.InvariantCulture) + "\n" + stamp);
+        Retry(() => Directory.Move(unpacked, next));
+    }
+
+    /// Which asset is staged, or null when nothing usable is.
+    internal static (long Id, string Stamp)? StagedAsset(Settings settings)
+    {
+        var next = StagedRoot(settings);
+        try
+        {
+            if (!File.Exists(Path.Combine(next, "index.html"))) return null;
+            var lines = File.ReadAllText(Path.Combine(next, StagedMarker)).Split('\n', 2);
+            if (!long.TryParse(lines[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var id))
+                return null;
+            return (id, lines.Length > 1 ? lines[1] : "");
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// Make a staged build the live one, before anything serves from the folder.
+    /// Best effort: a build that will not move is left staged and the installed
+    /// one opens, which is what would have happened without it.
+    internal static void PromoteStagedBuild(Settings settings)
+    {
+        var next = StagedRoot(settings);
+        if (!Directory.Exists(next)) return;
+
+        if (StagedAsset(settings) is not { } staged)
+        {
+            // Half-written or from a build that predates the marker: not
+            // something to serve. Cleared so it is not looked at again.
+            try { Directory.Delete(next, recursive: true); } catch (Exception) { }
+            return;
+        }
+
+        try
+        {
+            RecoverStrandedBuild(settings);
+            SwapIn(settings.WebRoot, next);
+            // After the move, so a swap that fails leaves the build staged and
+            // still named. Served, it would only be a stray dotfile.
+            try { File.Delete(Path.Combine(settings.WebRoot, StagedMarker)); } catch (Exception) { }
+        }
+        catch (Exception)
+        {
+            return;
+        }
+
+        settings.LastAssetId = staged.Id;
+        settings.LastAssetStamp = staged.Stamp;
+        try { settings.Save(); } catch (Exception) { /* checked again next start; costs a download */ }
+    }
+
+    /// A file-system call retried through the transient refusals Windows hands
+    /// out while something else briefly holds a file. A handful of tries over
+    /// about a second and a half; past that the refusal is real.
+    internal static void Retry(Action io, int attempts = 6)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                io();
+                return;
+            }
+            catch (Exception ex) when (attempt < attempts
+                                       && ex is IOException or UnauthorizedAccessException)
+            {
+                Thread.Sleep(50 * attempt);
+            }
+        }
     }
 
     // ── replacing the client itself ─────────────────────────────────────────

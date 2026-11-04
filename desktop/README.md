@@ -49,10 +49,13 @@ a log file and in a dialog if it can open one. `--check` tests this and exits.
 - **The web app** updates on every launch. The client checks whether
   `smylte-web.zip` on the release has changed, downloads it if so, and runs the
   copy it has when offline. A push to `main` reaches the desktop on the next
-  start.
+  start. A launch waits at most three seconds for this before opening the copy
+  it has; a check or download still running then finishes in the background,
+  and its build is put in place on the following start.
 - **The client binary** updates from a strip at the top of the window. **Update**
   downloads the new binary, checks it against the SHA-256 GitHub publishes,
-  swaps it in and restarts. If that isn't possible (the folder isn't writable,
+  swaps it in and restarts. On Windows it waits for the web engine to let go of
+  the profile folder before the new client starts. If that isn't possible (the folder isn't writable,
   or the release has no digest), the strip explains why and links to the
   download. "Not now" hides it until the next launch.
 
@@ -73,7 +76,8 @@ app or the server don't trigger it.
 
 The data folder defaults to `%LOCALAPPDATA%\Smylte` or `~/.local/share/Smylte`
 and is chosen on first run. Failed starts are logged to
-`<data folder>/errors.log`.
+`<data folder>/errors.log`, and so is any start that took longer than five
+seconds, with how long each step took (every start prints that line to stderr).
 
 ### The password
 

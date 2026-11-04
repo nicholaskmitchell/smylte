@@ -30,6 +30,7 @@
          reached by SetPassword/GetPassword, which nothing here touches. -->
     <Compile Include="../Smylte.Desktop/LocalServer.cs" />
     <Compile Include="../Smylte.Desktop/Updater.cs" />
+    <Compile Include="../Smylte.Desktop/StartupClock.cs" />
     <Compile Include="../Smylte.Desktop/Settings.cs" />
     <!-- LocalServer serves the desktop bridge, so it needs the contract. A bare
          interface with no Windows dependency, which is why linking it here does

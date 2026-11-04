@@ -60,6 +60,7 @@
     <Compile Include="../Smylte.Desktop/LocalServer.cs" />
     <Compile Include="../Smylte.Desktop/IDesktopBridge.cs" />
     <Compile Include="../Smylte.Desktop/Updater.cs" />
+    <Compile Include="../Smylte.Desktop/StartupClock.cs" />
     <Compile Include="../Smylte.Desktop/Settings.cs" />
     <Compile Include="../Smylte.Desktop/Session.cs" />
     <Compile Include="../Smylte.Desktop/Theme.cs" />

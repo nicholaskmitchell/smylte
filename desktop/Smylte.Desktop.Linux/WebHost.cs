@@ -147,6 +147,14 @@ internal sealed class WebHost : IDisposable
         return view;
     }
 
+    /// Start the sign-in this view will be seeded with. Its own call, so the
+    /// round trip (and the server's scrypt, which is deliberately slow) runs
+    /// while the update check does rather than after it. Needs only settings:
+    /// it talks to the server directly, not through the session.
+    public static Task<IReadOnlyList<string>> BeginLogin(Settings settings, CancellationToken ct) =>
+        Smylte.Desktop.Session.LoginAsync(
+            settings.ServerUrl, settings.Username, settings.GetPassword(), ct);
+
     /// Trade the stored credentials for a session cookie and put it in the
     /// shared jar, so the app opens already signed in.
     ///
@@ -158,9 +166,9 @@ internal sealed class WebHost : IDisposable
     /// Every failure is silent and lands on that same login screen, which is
     /// what `Session.LoginAsync` returning nothing already means on Windows. So
     /// this is allowed to be best-effort in a way the rest of startup is not.
-    public async Task SeedAsync(CancellationToken ct)
+    public async Task SeedAsync(Task<IReadOnlyList<string>> login, CancellationToken ct)
     {
-        var cookies = await Session_LoginAsync(ct).ConfigureAwait(true);
+        var cookies = await login.ConfigureAwait(true);
         if (cookies.Count == 0) return;
 
         var manager = Session.GetCookieManager();
@@ -178,10 +186,6 @@ internal sealed class WebHost : IDisposable
             catch (Exception) { /* the login screen is the fallback, and it works */ }
         }
     }
-
-    private Task<IReadOnlyList<string>> Session_LoginAsync(CancellationToken ct) =>
-        Smylte.Desktop.Session.LoginAsync(
-            _settings.ServerUrl, _settings.Username, _settings.GetPassword(), ct);
 
     // ── webkit_cookie_manager_add_cookie, by hand ───────────────────────────
     //

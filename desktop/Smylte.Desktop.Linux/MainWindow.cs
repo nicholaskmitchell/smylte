@@ -274,9 +274,18 @@ internal sealed class MainWindow : IDesktopBridge
             {
                 if (generation == _generation) _splash.SetLabel(text);
             });
+            var clock = new StartupClock();
+
+            // The sign-in first, and not awaited: it needs nothing the update
+            // check produces, and the two used to be paid for one after the
+            // other before the page could exist. An overtaken start lets it
+            // finish unobserved; LoginAsync never throws.
+            var login = WebHost.BeginLogin(_settings, CancellationToken.None);
+
             var update = await Updater
                 .EnsureWebAssetsAsync(_settings, progress, CancellationToken.None)
                 .ConfigureAwait(true);
+            clock.Mark("update check");
 
             if (generation != _generation) return;
 
@@ -312,7 +321,9 @@ internal sealed class MainWindow : IDesktopBridge
             web.SetVexpand(true);
             Notifications.Attach(web, _app, _settings);
 
-            await host.SeedAsync(CancellationToken.None).ConfigureAwait(true);
+            clock.Mark("web engine");
+            await host.SeedAsync(login, CancellationToken.None).ConfigureAwait(true);
+            clock.Mark("sign-in");
 
             if (generation != _generation)
             {
@@ -367,6 +378,9 @@ internal sealed class MainWindow : IDesktopBridge
             web.LoadUri(server.Origin + "/");
             _stack.SetVisibleChildName("web");
             _banner.SetVisible(update.ClientOutdated);
+            clock.Mark("page handed over");
+            clock.Report(_settings);
+            if (update.Later is { } later) _ = ShowBannerWhenCheckedAsync(later, generation);
 
             // Handed over: the catch below cleans up what this start still
             // owns, and past this line it owns nothing.
@@ -383,6 +397,22 @@ internal sealed class MainWindow : IDesktopBridge
             host?.Dispose();
             Program.Log(_settings, ex);
             if (generation == _generation) Fail(ex.Message);
+        }
+    }
+
+    /// The update check the launch stopped waiting for, finishing. Its only
+    /// visible result is the client notice; a build it fetched is staged for
+    /// the next start.
+    private async Task ShowBannerWhenCheckedAsync(Task<UpdateResult> later, int generation)
+    {
+        try
+        {
+            var result = await later.ConfigureAwait(true);
+            if (generation == _generation && result.ClientOutdated) _banner.SetVisible(true);
+        }
+        catch (Exception ex)
+        {
+            Program.Log(_settings, ex);
         }
     }
 

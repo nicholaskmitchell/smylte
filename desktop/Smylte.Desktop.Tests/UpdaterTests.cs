@@ -151,4 +151,162 @@ public sealed class UpdaterTests : IDisposable
         Assert.False(Directory.Exists(_settings.WebRoot));
         Assert.False(Directory.Exists(_settings.WebRoot + ".old"));
     }
+
+    // ── a launch does not wait on GitHub for long ──────────────────────────
+
+    private static readonly TimeSpan Short = TimeSpan.FromMilliseconds(50);
+
+    [Fact]
+    public async Task A_slow_check_opens_the_installed_build_and_finishes_later()
+    {
+        // The cold start that sat on an empty window: the release lookup gated
+        // the first paint with a five-minute timeout. With a build on disk the
+        // launch now stops waiting after its patience and hands back the check
+        // still running, and the check is told it may not swap.
+        MakeBuild(_settings.WebRoot, "installed");
+        var answer = new TaskCompletionSource<UpdateResult>();
+        Updater.SwapGate? seen = null;
+
+        var result = await Updater.EnsureWebAssetsAsync(_settings, gate =>
+        {
+            seen = gate;
+            return answer.Task;
+        }, Short, CancellationToken.None);
+
+        Assert.False(result.Updated);
+        Assert.NotNull(result.Later);
+        Assert.False(seen!.TryBeginSwap());
+
+        answer.SetResult(new UpdateResult(false, "staged", ClientOutdated: true));
+        Assert.True((await result.Later!).ClientOutdated);
+    }
+
+    [Fact]
+    public async Task A_quick_check_is_used_as_it_always_was()
+    {
+        MakeBuild(_settings.WebRoot, "installed");
+
+        var result = await Updater.EnsureWebAssetsAsync(_settings,
+            _ => Task.FromResult(new UpdateResult(true, "Updated.", false)),
+            TimeSpan.FromSeconds(30), CancellationToken.None);
+
+        Assert.True(result.Updated);
+        Assert.Null(result.Later);
+    }
+
+    [Fact]
+    public async Task A_first_run_waits_as_long_as_the_download_takes()
+    {
+        // Nothing on disk to open instead, so patience does not apply.
+        var result = await Updater.EnsureWebAssetsAsync(_settings, async gate =>
+        {
+            await Task.Delay(Short * 4);
+            Assert.True(gate.TryBeginSwap());
+            return new UpdateResult(true, "Updated.", false);
+        }, Short, CancellationToken.None);
+
+        Assert.True(result.Updated);
+        Assert.Null(result.Later);
+    }
+
+    [Fact]
+    public async Task A_swap_already_under_way_is_waited_for()
+    {
+        // The refresh won the gate just before the patience ran out: the folder
+        // is mid-move, and serving it then would serve half a build.
+        MakeBuild(_settings.WebRoot, "installed");
+        var swapping = new TaskCompletionSource();
+
+        var launch = Updater.EnsureWebAssetsAsync(_settings, async gate =>
+        {
+            Assert.True(gate.TryBeginSwap());
+            await swapping.Task;
+            return new UpdateResult(true, "Updated.", false);
+        }, Short, CancellationToken.None);
+
+        await Task.Delay(Short * 4);
+        Assert.False(launch.IsCompleted);
+        swapping.SetResult();
+
+        var result = await launch;
+        Assert.True(result.Updated);
+        Assert.Null(result.Later);
+    }
+
+    // ── a build fetched after the window opened ────────────────────────────
+
+    [Fact]
+    public void A_staged_build_goes_live_on_the_next_start()
+    {
+        MakeBuild(_settings.WebRoot, "old");
+        var unpacked = _settings.WebRoot + ".new";
+        MakeBuild(unpacked, "new");
+
+        Updater.Stage(_settings, unpacked, 42, "2026-11-04T00:00:00Z");
+        Assert.Equal((42L, "2026-11-04T00:00:00Z"), Updater.StagedAsset(_settings));
+        Assert.Equal("old", File.ReadAllText(Path.Combine(_settings.WebRoot, "index.html")));
+
+        Updater.PromoteStagedBuild(_settings);
+
+        Assert.Equal("new", File.ReadAllText(Path.Combine(_settings.WebRoot, "index.html")));
+        Assert.False(Directory.Exists(Updater.StagedRoot(_settings)));
+        Assert.False(Directory.Exists(_settings.WebRoot + ".old"));
+        Assert.False(File.Exists(Path.Combine(_settings.WebRoot, ".smylte-asset")));
+        Assert.Equal(42, _settings.LastAssetId);
+        Assert.Equal("2026-11-04T00:00:00Z", _settings.LastAssetStamp);
+    }
+
+    [Fact]
+    public void A_staged_folder_without_its_marker_is_discarded_not_served()
+    {
+        // Half-written: the move into `.next` is the last step of staging, but
+        // a folder from anywhere else has no claim to be served.
+        MakeBuild(_settings.WebRoot, "installed");
+        MakeBuild(Updater.StagedRoot(_settings), "unknown");
+
+        Updater.PromoteStagedBuild(_settings);
+
+        Assert.Equal("installed", File.ReadAllText(Path.Combine(_settings.WebRoot, "index.html")));
+        Assert.False(Directory.Exists(Updater.StagedRoot(_settings)));
+    }
+
+    [Fact]
+    public void A_swap_leaves_the_new_build_live_and_no_old_copy()
+    {
+        MakeBuild(_settings.WebRoot, "old");
+        MakeBuild(_settings.WebRoot + ".old", "older, left by a run that could not delete it");
+        var incoming = _settings.WebRoot + ".new";
+        MakeBuild(incoming, "new");
+
+        Updater.SwapIn(_settings.WebRoot, incoming);
+
+        Assert.Equal("new", File.ReadAllText(Path.Combine(_settings.WebRoot, "index.html")));
+        Assert.False(Directory.Exists(incoming));
+        Assert.False(Directory.Exists(_settings.WebRoot + ".old"));
+    }
+
+    [Fact]
+    public void A_file_briefly_held_by_something_else_is_retried()
+    {
+        // Windows' scanner or indexer holding a just-written folder: refused
+        // twice, then fine. Unretried, the update failed until a restart.
+        var tries = 0;
+        Updater.Retry(() =>
+        {
+            if (++tries < 3) throw new UnauthorizedAccessException("in use");
+        });
+        Assert.Equal(3, tries);
+    }
+
+    [Fact]
+    public void A_refusal_that_lasts_is_still_reported()
+    {
+        var tries = 0;
+        Assert.Throws<IOException>(() => Updater.Retry(() =>
+        {
+            tries++;
+            throw new IOException("really in use");
+        }, attempts: 3));
+        Assert.Equal(3, tries);
+    }
 }

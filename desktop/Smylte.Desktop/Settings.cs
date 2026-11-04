@@ -435,7 +435,18 @@ public sealed class Settings
         catch (Exception) { /* not ours to chmod; it still works */ }
     }
 
+    /// One writer at a time. The web build's update check can now finish on a
+    /// thread-pool thread after the window is up (see Updater.EnsureWebAssetsAsync),
+    /// and two Saves racing on the one `.tmp` file fail with a sharing violation
+    /// on Windows, or interleave their bytes on Linux.
+    private static readonly object SaveLock = new();
+
     public void Save()
+    {
+        lock (SaveLock) SaveLocked();
+    }
+
+    private void SaveLocked()
     {
         Directory.CreateDirectory(Dir);
         var temp = FilePath + ".tmp";

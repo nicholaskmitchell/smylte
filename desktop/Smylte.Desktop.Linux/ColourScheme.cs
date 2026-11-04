@@ -30,7 +30,17 @@ internal static class ColourScheme
     /// light in practice and is what every other client treats it as.
     private const uint PreferDark = 1;
 
-    public static bool SystemUsesLightTheme()
+    /// The answer, once read. A start asks this three times before the page
+    /// is up (the window icon, the icon theme, the icon again once it
+    /// resolves), and each is a blocking D-Bus call that can wait out its
+    /// whole two seconds while the portal is still being activated, which on
+    /// a cold login it often is. Cleared by the change signal in Watch, the
+    /// only thing that can make it stale.
+    private static bool? _light;
+
+    public static bool SystemUsesLightTheme() => _light ??= ReadLight();
+
+    private static bool ReadLight()
     {
         try
         {
@@ -100,7 +110,11 @@ internal static class ColourScheme
                     try
                     {
                         var key = parameters.GetChildValue(1).GetString(out _);
-                        if (key == Key) onChanged();
+                        if (key == Key)
+                        {
+                            _light = null;
+                            onChanged();
+                        }
                     }
                     catch (Exception) { /* a shape we do not recognise */ }
                 });
