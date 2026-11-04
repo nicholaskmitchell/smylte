@@ -543,25 +543,98 @@ public static class Updater
 
     // ── replacing the client itself ─────────────────────────────────────────
     //
-    // A running exe cannot be overwritten on Windows, but it CAN be renamed —
-    // the image stays mapped under its new name. So the new client is
-    // downloaded beside the old one, checked against the digest the release
-    // publishes, the running file is moved aside, the new one takes its path,
-    // and the new one is started with the old process's id so it can wait for
-    // it to exit before taking the single-instance mutex. The old file is
-    // deleted on that next start, once nothing is executing it.
+    // THE RUNNING CLIENT NEVER MOVES ITS OWN FILE. It used to: download beside
+    // itself, rename the running exe aside, move the new one into its path and
+    // start it. Renaming a running image is legal on both systems, but the
+    // client is a compressed single-file bundle, and the runtime reads an
+    // assembly out of the bundle the first time it is needed, BY PATH. After
+    // the rename that path was the new binary, so the first assembly the old
+    // process had not loaded yet (System.IO.Pipes, reached by Process.Start)
+    // failed with "Could not load file or assembly", the strip said so, and the
+    // update only finished when someone restarted by hand.
     //
-    // ONE PATH ON BOTH SYSTEMS, for two different reasons, and the Linux reason
-    // is the stronger of the two. Linux would not need the rename at all — a
-    // rename over a running binary is legal there, because the running process
-    // holds the inode and only opening the file for WRITING is refused. But it
-    // does need the wait: the Linux client takes its single-instance slot as a
-    // D-Bus name, and a second process that starts while the first still owns
-    // that name does not become a second instance — it becomes a remote
-    // activation and merely raises the OLD window. An update that appears to do
-    // nothing is worse than one that fails, so `--after-update <pid>` is not
-    // Windows scaffolding carried along; it is what makes the Linux swap
-    // visible.
+    // So it takes one hop. The old client downloads and checks `<exe>.new`,
+    // starts it with `--finish-update <exe> --after-update <pid>` and leaves.
+    // That process, running from its own file, waits for the old one to exit,
+    // copies itself over `<exe>` (a copy, not a move: it is running too) and
+    // starts `<exe> --after-update <its pid>`, before it has opened a window.
+    // The installed client waits for the hop to exit and deletes `<exe>.new`.
+    //
+    // The wait is not Windows scaffolding: the Linux client takes its
+    // single-instance slot as a D-Bus name, and a second process that starts
+    // while the first still owns it becomes a remote activation of the OLD
+    // window. An update that appears to do nothing is worse than one that fails.
+
+    /// What the downloaded client is told: which path it is to install itself at.
+    public const string FinishUpdateFlag = "--finish-update";
+
+    /// The path in `--finish-update <path>`, or null when there is none.
+    public static string? FinishUpdateTarget(string[] args)
+    {
+        var at = Array.IndexOf(args, FinishUpdateFlag);
+        if (at < 0 || at + 1 >= args.Length) return null;
+        return args[at + 1] is { Length: > 0 } target ? target : null;
+    }
+
+    /// Start the downloaded client on its hop, telling it where to install
+    /// itself and whom to wait for. The caller leaves right after.
+    public static void StartReplacement(string staged, string exe)
+    {
+        // UseShellExecute false: on Linux the shell-execute path is xdg-open,
+        // which would hand an executable to whatever opens files of its type.
+        var start = new System.Diagnostics.ProcessStartInfo(staged)
+        {
+            UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(exe) ?? "",
+        };
+        foreach (var arg in HandOffArguments(exe, Environment.ProcessId)) start.ArgumentList.Add(arg);
+        System.Diagnostics.Process.Start(start);
+    }
+
+    internal static string[] HandOffArguments(string exe, int pid) =>
+        new[] { FinishUpdateFlag, exe, AfterUpdateFlag, pid.ToString(CultureInfo.InvariantCulture) };
+
+    /// The hop: run at the very top of Main, before any window. True when the
+    /// installed client has been started and this process should exit; false
+    /// when it could not be, and this process should simply carry on as the
+    /// client, from where it is, rather than leave nothing on screen.
+    public static bool FinishUpdate(string target, string[] args)
+    {
+        if (AfterUpdatePid(args) is { } previous) WaitForPreviousClient(previous);
+
+        var self = Environment.ProcessPath;
+        if (self is null || SamePath(self, target)) return false;
+
+        try
+        {
+            InstallClient(target, self);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        try
+        {
+            var start = new System.Diagnostics.ProcessStartInfo(target)
+            {
+                UseShellExecute = false,
+                WorkingDirectory = Path.GetDirectoryName(target) ?? "",
+            };
+            start.ArgumentList.Add(AfterUpdateFlag);
+            start.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+            System.Diagnostics.Process.Start(start);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static bool SamePath(string a, string b) =>
+        string.Equals(Path.GetFullPath(a), Path.GetFullPath(b),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     /// What the launched client is told, so it waits for this one to leave.
     public const string AfterUpdateFlag = "--after-update";
@@ -591,11 +664,11 @@ public static class Updater
         catch (Exception) { /* cannot watch it; carry on */ }
     }
 
-    /// Download the published exe, verify it and swap it into this exe's path.
-    /// Returns the path to start. Throws with a sentence for the strip when
-    /// anything along the way refuses; nothing is changed until the download
-    /// has been checked, and a failed swap puts the old file back.
-    public static async Task<string> ReplaceClientAsync(
+    /// Download the published exe beside this one and verify it. Returns the
+    /// staged path, for StartReplacement; nothing at this exe's path changes
+    /// here (see the section note). Throws with a sentence for the strip when
+    /// anything along the way refuses.
+    public static async Task<string> PrepareClientAsync(
         Settings settings, IProgress<string> log, CancellationToken ct)
     {
         var exe = Environment.ProcessPath;
@@ -629,9 +702,7 @@ public static class Updater
         // before the file is anywhere anyone could run it from.
         MakeExecutable(staged);
 
-        log.Report("Installing…");
-        SwapClient(exe, staged);
-        return exe;
+        return staged;
     }
 
     /// "sha256:<hex>" as the release states it, or null when it does not.
@@ -668,22 +739,37 @@ public static class Updater
     internal static string StagedClientPath(string exe) => exe + ".new";
     internal static string RetiredClientPath(string exe) => exe + ".old";
 
-    /// Move the running file aside and the staged one into its place. A failure
-    /// on the second move puts the first back, so the path never ends up empty.
-    internal static void SwapClient(string exe, string staged)
+    /// Put a copy of `source` at `target`, keeping the old file aside until the
+    /// copy is in place. `target`'s process has exited by now; `source` is the
+    /// running hop, which is why it is copied rather than moved. A failed copy
+    /// puts the old file back, so the path never ends up empty.
+    internal static void InstallClient(string target, string source)
     {
-        var retired = RetiredClientPath(exe);
-        if (File.Exists(retired)) File.Delete(retired);
-        File.Move(exe, retired);
+        var retired = RetiredClientPath(target);
+        if (File.Exists(retired)) Retry(() => File.Delete(retired));
+        if (File.Exists(target)) Retry(() => File.Move(target, retired));
         try
         {
-            File.Move(staged, exe);
+            Retry(() => File.Copy(source, target));
+            MakeExecutable(target);
         }
         catch (Exception)
         {
-            if (!File.Exists(exe) && File.Exists(retired)) File.Move(retired, exe);
+            if (!File.Exists(target) && File.Exists(retired)) File.Move(retired, target);
             throw;
         }
+    }
+
+    /// Delete the downloaded client the hop ran from. Only from a client that
+    /// was started by the hop (`--after-update`), and after waiting for it:
+    /// then nothing is downloading into the file and nothing is running it.
+    /// Any other launch must leave it alone; see RemoveRetiredClient.
+    public static void RemoveStagedClient(string? exe)
+    {
+        if (exe is null) return;
+        var staged = StagedClientPath(exe);
+        try { if (File.Exists(staged)) Retry(() => File.Delete(staged)); }
+        catch (Exception) { /* a stray copy; the next download truncates it */ }
     }
 
     /// Delete the file a previous replacement moved aside. Best effort: the
@@ -699,7 +785,7 @@ public static class Updater
     /// clicking the launcher while an update downloaded destroyed the staged
     /// file (the downloader kept writing to an unlinked inode, and the digest
     /// check then failed with "could not find file"), and a launch landing
-    /// between the two renames in SwapClient deleted BOTH files and left the
+    /// between the two renames of the old swap deleted BOTH files and left the
     /// exe path empty with nothing for the rollback to restore.
     ///
     /// A staged file abandoned by a killed download is not leaked in exchange:

@@ -59,7 +59,17 @@ internal static class Program
         // copy that had a test was the one in Updater, which neither client
         // called. Two implementations of "did the updater start me" that can
         // drift is one more than this needs.
-        if (Updater.AfterUpdatePid(args) is { } previous) Updater.WaitForPreviousClient(previous);
+        // `--finish-update <exe>`: this is the downloaded client on its hop
+        // (Updater's section note). It installs itself and starts the result
+        // before anything else in Main runs; only if that fails does it carry
+        // on as the client from where it is.
+        if (Updater.FinishUpdateTarget(args) is { } target && Updater.FinishUpdate(target, args)) return;
+
+        if (Updater.AfterUpdatePid(args) is { } previous)
+        {
+            Updater.WaitForPreviousClient(previous);
+            if (Updater.FinishUpdateTarget(args) is null) Updater.RemoveStagedClient(Environment.ProcessPath);
+        }
         Updater.RemoveRetiredClient(Environment.ProcessPath);
 
         // Ahead of the mutex check now, because the "already running" branch can

@@ -79,23 +79,16 @@ internal sealed class UpdateBanner
 
         try
         {
-            var exe = await Updater
-                .ReplaceClientAsync(_settings, progress, CancellationToken.None)
+            var staged = await Updater
+                .PrepareClientAsync(_settings, progress, CancellationToken.None)
                 .ConfigureAwait(true);
 
             _message.SetLabel("Restarting…");
 
-            // UseShellExecute FALSE. The new client is an executable file, and
-            // on Linux the shell-execute path is xdg-open, which would consult
-            // the desktop's handler for it rather than running it.
-            var start = new ProcessStartInfo(exe)
-            {
-                UseShellExecute = false,
-                WorkingDirectory = Path.GetDirectoryName(exe) ?? "",
-            };
-            start.ArgumentList.Add(Updater.AfterUpdateFlag);
-            start.ArgumentList.Add(Environment.ProcessId.ToString());
-            Process.Start(start);
+            // Nothing at this binary's path has changed: the new client installs
+            // itself once this one has gone. Moving this process's own file
+            // under it is what broke the update (Updater's section note).
+            Updater.StartReplacement(staged, Environment.ProcessPath!);
 
             _closeWindow();
         }
