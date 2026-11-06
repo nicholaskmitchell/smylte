@@ -4000,3 +4000,38 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
   border-radius: var(--r-pill); background: var(--accent); color: var(--bg);
   font-size: calc(11px * var(--fs-scale)); line-height: 1.4; text-align: center;
 }
+
+/* ---- display mode (displaymode.ts, DisplayModeFrame.tsx) ----
+   The app's own views with the frame taken away, on a tablet used as a
+   display. `.dmode` is the shell's only child then, a column like `.views`
+   so the view inside takes the height exactly as it does under the top bar.
+
+   The handle is the one piece of chrome left: faint, so it does not compete
+   with the day, and 44px, the size a finger needs. It sits bottom right, inside
+   the safe area, where none of the views put a control of their own. */
+.dmode { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.dmode-handle {
+  position: fixed; z-index: 80;
+  right: calc(12px + env(safe-area-inset-right));
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  width: 44px; height: 44px; border-radius: var(--r-md);
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--rule); background: var(--bg-elev); color: var(--fg-faint);
+  opacity: 0.55; cursor: pointer; user-select: none; -webkit-user-select: none;
+  transition: opacity 160ms ease;
+}
+.dmode-handle:hover, .dmode-handle:focus-visible { opacity: 1; }
+.dmode-bar {
+  position: fixed; z-index: 80;
+  left: calc(12px + env(safe-area-inset-left));
+  right: calc(12px + env(safe-area-inset-right));
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 8px; border: 1px solid var(--rule); border-radius: var(--r-md);
+  background: var(--bg-elev); box-shadow: var(--shadow-lg);
+  user-select: none; -webkit-user-select: none;
+}
+.dmode-bar .btn { min-height: 44px; }
+.dmode-bar__tab.active { color: var(--accent); border-color: var(--accent); }
+.dmode-bar__gap { flex: 1; }
+.dmode-bar__close { width: 44px; height: 44px; }

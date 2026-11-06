@@ -125,6 +125,14 @@ export const de: Catalogue = {
   'settings.section.shares': 'Freigaben',
 
   // Anzeigen — die passiven Bildschirme.
+  'dmode.row': 'Dieses Gerät als Anzeige nutzen',
+  'dmode.start': 'Anzeigemodus starten',
+  'dmode.hint': 'Zeigt Heute, Kalender, Start oder Aufgaben im Vollbild, angemeldet, sodass du weiterhin per Touch abhaken und Termine verschieben kannst. Der Bildschirm bleibt an, wo der Browser es erlaubt, und das Gerät bleibt eine Anzeige, bis du ihn über die Schaltfläche ⋯ in der Ecke beendest.',
+  'dmode.controls': 'Anzeige-Steuerung',
+  'dmode.hideControls': 'Anzeige-Steuerung ausblenden',
+  'dmode.fullscreen': 'Vollbild',
+  'dmode.leaveFullscreen': 'Vollbild beenden',
+  'dmode.exit': 'Anzeigemodus beenden',
   'disp.intro': 'Bildschirme, die deinen Kalender oder Tag nur anzeigen, etwa ein Wandkalender oder ein E-Ink-Panel.',
   'disp.loading': 'Anzeigen werden geladen…',
   'disp.loadFailed': 'Die Anzeigen konnten nicht geladen werden.',

@@ -106,7 +106,7 @@ export function SettingsMenu({
   notifyTaskLead, onNotifyTaskLeadChange,
   mailRev,
   user, sessionTtl, onCycleSessionTtl,
-  onLogout, onExpire, onClose, panelRef,
+  onLogout, onExpire, onEnterDisplayMode, onClose, panelRef,
 }: {
   /** Where to open, when not at the top. The menu is drawn inside whichever
    *  frame is on screen, so switching the frame remounts it — and the switch
@@ -181,6 +181,10 @@ export function SettingsMenu({
   onCycleSessionTtl: () => void
   onLogout: () => void
   onExpire: () => void
+  /** Turn this device into a display (see displaymode.ts). Optional so a
+   *  test that renders the menu alone need not supply it; without it the row
+   *  is not drawn. */
+  onEnterDisplayMode?: () => void
   onClose: () => void
   /** The surface App watches for outside clicks. */
   panelRef: React.RefObject<HTMLDivElement>
@@ -589,6 +593,15 @@ export function SettingsMenu({
 
         {section === 'displays' && (
           <>
+            {onEnterDisplayMode && (
+              <>
+                <div className="menu-row">
+                  <span>{tr('dmode.row')}</span>
+                  <button className="btn" onClick={onEnterDisplayMode}>{tr('dmode.start')}</button>
+                </div>
+                <div className="hintline">{tr('dmode.hint')}</div>
+              </>
+            )}
             <div className="hintline">{tr('disp.intro')}</div>
             <DisplaysSection onExpire={onExpire} archived={archivedCals} />
             {/* What was the Developer section: every mode at common panel

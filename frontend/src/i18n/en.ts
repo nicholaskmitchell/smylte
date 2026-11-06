@@ -111,6 +111,14 @@ export const en = {
 
   // Displays — the passive screens. A display takes no input, so every word it
   // shows and every choice about it is made here.
+  'dmode.row': 'Use this device as a display',
+  'dmode.start': 'Start display mode',
+  'dmode.hint': 'Shows Today, Calendar, Home or Tasks full screen, signed in, so you can still check things off and drag events by touch. It keeps the screen awake where the browser allows it, and this device stays a display until you exit from the ⋯ button in the corner.',
+  'dmode.controls': 'Display controls',
+  'dmode.hideControls': 'Hide display controls',
+  'dmode.fullscreen': 'Full screen',
+  'dmode.leaveFullscreen': 'Leave full screen',
+  'dmode.exit': 'Exit display mode',
   'disp.intro': 'Read-only screens for your calendar or day, such as a wall calendar or an e-ink panel.',
   'disp.loading': 'Loading displays…',
   'disp.loadFailed': 'Couldn’t load displays.',
