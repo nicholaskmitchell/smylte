@@ -55,11 +55,6 @@ const STALE_POLLS = 2.5
 // loop for why this is not the configured interval.
 const BOOT_RETRY_S = 15
 
-/** The frame minus its timestamp, for deciding whether anything actually
- *  changed. `generated_at` differs on every response by construction, so
- *  comparing whole bodies would repaint every poll — which on an eink browser
- *  (a Boox, a jailbroken Kindle) is a visible full-screen flash every five
- *  minutes for no new information. Same argument as the server's ETag. */
 // ── touch, for the signed-in display mode only ────────────────────────────
 //
 // The page at /display/<token> takes no input, and that is unchanged: nothing
@@ -108,6 +103,11 @@ export function DisplayFaces({ frame }: { frame: DisplayFrame }) {
   )
 }
 
+/** The frame minus its timestamp, for deciding whether anything actually
+ *  changed. `generated_at` differs on every response by construction, so
+ *  comparing whole bodies would repaint every poll — which on an eink browser
+ *  (a Boox, a jailbroken Kindle) is a visible full-screen flash every five
+ *  minutes for no new information. Same argument as the server's ETag. */
 const stableOf = (frame: DisplayFrame) => {
   const { generated_at: _ignored, ...rest } = frame
   return JSON.stringify(rest)
@@ -235,7 +235,8 @@ const sourceOf = (frame: DisplayFrame, id: string | null): DisplaySource | undef
 function Chip({ frame, item, drag }: {
   frame: DisplayFrame; item: DisplayItem
   drag?: { dragging: boolean } & Pick<React.HTMLAttributes<HTMLDivElement>,
-    'onPointerDown' | 'onPointerMove' | 'onPointerUp' | 'onPointerCancel'>
+    'onPointerDown' | 'onPointerMove' | 'onPointerUp' | 'onPointerCancel'
+    | 'onLostPointerCapture'>
 }) {
   const src = sourceOf(frame, item.source)
   const eink = frame.display.palette === 'eink'
@@ -360,36 +361,65 @@ function CalendarFace({ frame }: { frame: DisplayFrame }) {
   // is held until the finger has moved DRAG_SLOP_PX, so a resting thumb is
   // not a move. The chip is `touch-action: none` (display.css), or the browser
   // would take the gesture for a scroll.
-  const press = useRef<{ x: number; y: number; drag: CalDrag } | null>(null)
+  //
+  // The live press is a REF, owned by one pointer, and everything that decides
+  // a write reads it rather than the state: the state only paints the classes.
+  // Reading the state on pointerup moved the event to whichever cell had last
+  // been rendered, which on a quick flick is one short; a second finger used
+  // to replace the press and move ITS event; and a press whose chip was
+  // redrawn away mid-drag (a refetch) stayed armed, so a later tap anywhere
+  // moved the old event. So: one pointer at a time, its id checked on every
+  // event, the drop cell read where the finger lifts, and lost capture ends it.
+  const press = useRef<{
+    id: number; x: number; y: number; moved: boolean; drag: CalDrag
+  } | null>(null)
   const [drag, setDrag] = useState<CalDrag | null>(null)
   const cellAt = (x: number, y: number) =>
     (document.elementFromPoint?.(x, y)?.closest('[data-day]') as HTMLElement | null)
       ?.dataset.day ?? null
+  const end = () => { press.current = null; setDrag(null) }
   const dragProps = (item: DisplayItem, day: string, key: string) => {
     const ref = item.ref
     if (!actions || !ref || ref.recurring || !ref.start) return undefined
+    const mine = (e: React.PointerEvent) => press.current?.id === e.pointerId
+      && press.current.drag.key === key
     return {
       dragging: drag?.key === key,
       onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => {
-        if (e.button !== 0) return
+        if (e.button !== 0 || press.current) return
+        setDrag(null)
         e.currentTarget.setPointerCapture?.(e.pointerId)
-        press.current = { x: e.clientX, y: e.clientY, drag: { ref, key, from: day, over: day } }
+        press.current = {
+          id: e.pointerId, x: e.clientX, y: e.clientY, moved: false,
+          drag: { ref, key, from: day, over: day },
+        }
       },
       onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => {
         const p = press.current
-        if (!p) return
-        if (!drag && Math.hypot(e.clientX - p.x, e.clientY - p.y) < DRAG_SLOP_PX) return
-        setDrag({ ...p.drag, over: cellAt(e.clientX, e.clientY) })
+        if (!p || !mine(e)) return
+        if (!p.moved && Math.hypot(e.clientX - p.x, e.clientY - p.y) < DRAG_SLOP_PX) return
+        p.moved = true
+        p.drag = { ...p.drag, over: cellAt(e.clientX, e.clientY) }
+        setDrag(p.drag)
       },
-      onPointerUp: () => {
-        const d = drag
-        press.current = null
-        setDrag(null)
-        if (d?.over && d.over !== d.from) actions.moveEvent(d.ref, d.from, d.over)
+      onPointerUp: (e: React.PointerEvent<HTMLDivElement>) => {
+        const p = press.current
+        if (!p || !mine(e)) return
+        end()
+        if (!p.moved) return
+        const over = cellAt(e.clientX, e.clientY) ?? p.drag.over
+        if (over && over !== p.drag.from) actions.moveEvent(p.drag.ref, p.drag.from, over)
       },
-      onPointerCancel: () => { press.current = null; setDrag(null) },
+      onPointerCancel: (e: React.PointerEvent<HTMLDivElement>) => { if (mine(e)) end() },
+      onLostPointerCapture: (e: React.PointerEvent<HTMLDivElement>) => { if (mine(e)) end() },
     }
   }
+  // A press whose chip left the grid (a refetch moved or removed it) can no
+  // longer hear its own pointerup; end it rather than leave it armed.
+  useEffect(() => {
+    const p = press.current
+    if (p && !cal.weeks.some((w) => w.some((c) => c.items.some((_, i) => `${c.day}-${i}` === p.drag.key)))) end()
+  }, [cal])
   return (
     <div className="display-cal">
       {/* Rendered always, shown only by the one media query in display.css

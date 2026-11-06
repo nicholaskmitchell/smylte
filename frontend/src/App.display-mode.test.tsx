@@ -97,7 +97,7 @@ describe('<App> display mode', () => {
   })
 
   it('reads a stored value that names no face as off', async () => {
-    localStorage.setItem(DISPLAY_MODE_KEY, 'today')
+    localStorage.setItem(DISPLAY_MODE_KEY, 'scheduling')
     render(<App />)
     expect(await screen.findByRole('button', { name: 'Settings' })).toBeInTheDocument()
     expect(screen.queryByLabelText('face')).toBeNull()

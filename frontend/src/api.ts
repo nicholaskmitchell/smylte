@@ -1669,6 +1669,17 @@ export const api = {
 
   // displays (owner side)
   displays: () => j<Display[]>('GET', '/api/displays'),
+  /** The frame for the signed-in display mode: a display nobody paired, drawn
+   *  for this session, with the refs its taps and drags write to. Writes
+   *  nothing, like the developer preview it shares a route with.
+   *
+   *  Done rows are kept (struck through) rather than hidden, as a paired
+   *  display would by default: here a tap can tick a row, so the row has to
+   *  stay to be un-ticked when the tap was a mistake. */
+  displayPreview: (mode: DisplayMode, name: string, signal?: AbortSignal) =>
+    j<DisplayFrame>('GET', `/api/displays/preview?${new URLSearchParams({
+      mode, name, refs: 'true', hide_done_habits: 'false', hide_done_tasks: 'false',
+    })}`, undefined, signal),
   createDisplay: (body: DisplayInput) => j<Display>('POST', '/api/displays', body),
   patchDisplay: (token: string, body: DisplayInput | Partial<DisplayInput>) =>
     j<Display>('PATCH', `/api/displays/${encodeURIComponent(token)}`, body),
@@ -1716,14 +1727,6 @@ export const api = {
    * display's own `last_seen_at`, which is a timestamp being overwritten with a
    * newer timestamp.
    */
-  /** The frame for the signed-in display mode: a display nobody paired, drawn
-   *  for this session, with the refs its taps and drags write to. Writes
-   *  nothing, like the developer preview it shares a route with. */
-  displayPreview: (mode: DisplayMode, name: string, signal?: AbortSignal) =>
-    j<DisplayFrame>('GET', `/api/displays/preview?${new URLSearchParams({
-      mode, name, refs: 'true',
-    })}`, undefined, signal),
-
   publicDisplayFrame: (token: string, signal?: AbortSignal) =>
     j<DisplayFrame>('GET', `/api/public/display/${encodeURIComponent(token)}`,
       undefined, signal),
