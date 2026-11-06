@@ -21,10 +21,17 @@ describe('display mode, per device', () => {
     expect(localStorage.getItem(DISPLAY_MODE_KEY)).toBeNull()
   })
 
-  it('reads a value naming no face as off, the app views it once stored included', () => {
-    for (const v of ['today', 'home', 'nope', '', '1']) {
+  it('reads a value naming no face as off', () => {
+    for (const v of ['scheduling', 'nope', '', '1']) {
       localStorage.setItem(DISPLAY_MODE_KEY, v)
       expect(readDisplayMode()).toBeNull()
+    }
+  })
+
+  it('keeps a tablet left on one of the first version\'s day views a display', () => {
+    for (const v of ['today', 'home', 'tasks']) {
+      localStorage.setItem(DISPLAY_MODE_KEY, v)
+      expect(readDisplayMode()).toBe('habits')
     }
   })
 

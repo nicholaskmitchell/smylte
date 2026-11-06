@@ -2,7 +2,7 @@
 // session with refs, and the writes a tap or a drag makes.
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { BAR_IDLE_MS, DisplayModeFrame } from './DisplayModeFrame'
+import { BAR_IDLE_MS, DisplayModeFrame, STALE_AFTER_MS } from './DisplayModeFrame'
 import { api, type DisplayFrame } from '../api'
 
 vi.mock('../api', async (importOriginal) => {
@@ -99,6 +99,62 @@ describe('<DisplayModeFrame>', () => {
     expect(m.displayPreview).toHaveBeenCalledWith('calendar', expect.any(String))
   })
 
+  it('asks for the done rows too, so a tick can be taken back', async () => {
+    const { api: real } = await vi.importActual<typeof import('../api')>('../api')
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify(MONTH), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    await real.displayPreview('habits', 'Smylte')
+    const url = String(fetchSpy.mock.calls[0][0])
+    expect(url).toContain('refs=true')
+    expect(url).toContain('hide_done_habits=false')
+    expect(url).toContain('hide_done_tasks=false')
+    fetchSpy.mockRestore()
+  })
+
+  it('un-ticks a done row', async () => {
+    const done = structuredClone(DAY)
+    done.habits!.habits[0].done = true
+    m.displayPreview.mockResolvedValue(done)
+    render(frame('habits'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Stretch' }))
+    await waitFor(() => expect(m.patchDayEntry).toHaveBeenCalledWith('2026-11-06', 'en1', { done: false }))
+  })
+
+  it('writes once for a double tap while the first is still in flight', async () => {
+    m.displayPreview.mockResolvedValue(DAY)
+    let settle!: () => void
+    m.complete.mockReturnValue(new Promise((r) => { settle = () => r({} as never) }) as never)
+    render(frame('habits'))
+    const row = await screen.findByRole('button', { name: 'Invoice' })
+    fireEvent.click(row)
+    fireEvent.click(row)
+    expect(m.complete).toHaveBeenCalledTimes(1)
+    await act(async () => { settle() })
+  })
+
+  it('refetches the face on screen after a write, not the one it was made on', async () => {
+    m.displayPreview.mockImplementation(async (mode) => (mode === 'now' ? NOW : DAY))
+    let settle!: () => void
+    m.patchDayEntry.mockReturnValue(new Promise((r) => { settle = () => r({} as never) }) as never)
+    const { rerender } = render(frame('habits'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Stretch' }))
+    rerender(frame('now'))
+    await waitFor(() => expect(screen.getByText('Now')).toBeInTheDocument())
+    await act(async () => { settle() })
+    await waitFor(() => expect(m.displayPreview).toHaveBeenLastCalledWith('now', expect.any(String)))
+    expect(screen.queryByText('Stretch')).toBeNull()
+  })
+
+  it('says so when the face has not been refreshed for a while', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    m.displayPreview.mockResolvedValueOnce(MONTH).mockRejectedValue(new Error('offline'))
+    render(frame())
+    expect(await screen.findByText('November 2026')).toBeInTheDocument()
+    expect(screen.queryByText('Not updated recently')).toBeNull()
+    await act(async () => { vi.advanceTimersByTime(STALE_AFTER_MS + 60_000) })
+    expect(screen.getByText('Not updated recently')).toBeInTheDocument()
+  })
+
   it('ticks a habit on its entry and a task on its VTODO, then fetches again', async () => {
     m.displayPreview.mockResolvedValue(DAY)
     render(frame('habits'))
@@ -141,6 +197,42 @@ describe('<DisplayModeFrame>', () => {
     await waitFor(() => expect(m.patchEvent).toHaveBeenCalledWith('cal-a', 'e1', {
       start: '2026-11-09T09:00', end: '2026-11-09T09:30',
     }))
+  })
+
+  it('ignores a second finger: the first finger\'s event is the one that moves', async () => {
+    m.displayPreview.mockResolvedValue(MONTH)
+    const two = structuredClone(MONTH)
+    two.calendar!.weeks[0][1].items = [{ text: 'Lunch', time: '12:00', all_day: false,
+      source: null, continued: false, ref: { calendar: 'cal-a', uid: 'e3',
+        start: '2026-11-07T12:00:00', end: null, recurring: false } }]
+    m.displayPreview.mockResolvedValue(two)
+    render(frame())
+    const a = (await screen.findByText('Standup')).closest('.display-chip') as HTMLElement
+    const b = screen.getByText('Lunch').closest('.display-chip') as HTMLElement
+    document.elementFromPoint = vi.fn(() => document.querySelector('[data-day="2026-11-09"]'))
+    fireEvent.pointerDown(a, { button: 0, pointerId: 1, clientX: 10, clientY: 10 })
+    fireEvent.pointerDown(b, { button: 0, pointerId: 2, clientX: 50, clientY: 10 })
+    fireEvent.pointerMove(b, { pointerId: 2, clientX: 300, clientY: 10 })
+    fireEvent.pointerUp(b, { pointerId: 2, clientX: 300, clientY: 10 })
+    fireEvent.pointerMove(a, { pointerId: 1, clientX: 200, clientY: 10 })
+    fireEvent.pointerUp(a, { pointerId: 1, clientX: 200, clientY: 10 })
+    await waitFor(() => expect(m.patchEvent).toHaveBeenCalledTimes(1))
+    expect(m.patchEvent).toHaveBeenCalledWith('cal-a', 'e1', expect.anything())
+  })
+
+  it('ends a drag whose capture is lost, so a later tap moves nothing', async () => {
+    m.displayPreview.mockResolvedValue(MONTH)
+    render(frame())
+    const chip = (await screen.findByText('Standup')).closest('.display-chip') as HTMLElement
+    const target = document.querySelector('[data-day="2026-11-09"]') as HTMLElement
+    document.elementFromPoint = vi.fn(() => target)
+    fireEvent.pointerDown(chip, { button: 0, pointerId: 1, clientX: 10, clientY: 10 })
+    fireEvent.pointerMove(chip, { pointerId: 1, clientX: 200, clientY: 10 })
+    fireEvent(chip, Object.assign(new Event('lostpointercapture', { bubbles: true }), { pointerId: 1 }))
+    await waitFor(() => expect(target).not.toHaveClass('is-over'))
+    fireEvent.pointerDown(chip, { button: 0, pointerId: 2, clientX: 10, clientY: 10 })
+    fireEvent.pointerUp(chip, { pointerId: 2, clientX: 10, clientY: 10 })
+    expect(m.patchEvent).not.toHaveBeenCalled()
   })
 
   it('treats a press that barely moves as a tap, and does not move a repeating event', async () => {

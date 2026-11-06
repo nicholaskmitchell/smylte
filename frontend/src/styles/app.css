@@ -4028,14 +4028,20 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
 }
 
 /* ---- display mode (displaymode.ts, DisplayModeFrame.tsx) ----
-   The app's own views with the frame taken away, on a tablet used as a
-   display. `.dmode` is the shell's only child then, a column like `.views`
-   so the view inside takes the height exactly as it does under the top bar.
+   The desk unit's faces on a tablet, signed in. `.dmode` is the shell's only
+   child then; the face inside is display.css's `.display`, fixed to the
+   viewport, so anything of the app's that must still show has to sit above it.
+   The offline bar is that: without a position and a z-index it painted under
+   the face, and a tablet that could not reach the server showed blank paper.
 
    The handle is the one piece of chrome left: faint, so it does not compete
    with the day, and 44px, the size a finger needs. It sits bottom right, inside
    the safe area, where none of the views put a control of their own. */
 .dmode { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.shell[data-display] .offline-bar {
+  position: fixed; z-index: 85; left: 0; right: 0; top: 0;
+  padding-top: calc(8px + env(safe-area-inset-top));
+}
 .dmode-handle {
   position: fixed; z-index: 80;
   right: calc(12px + env(safe-area-inset-right));

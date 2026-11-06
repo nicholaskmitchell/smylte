@@ -36,6 +36,11 @@ export const BAR_IDLE_MS = 10_000
  *  into a plan) have no event of their own. */
 export const REFRESH_MS = 60_000
 
+/** How old the face may get before it says so. Three missed refreshes, so one
+ *  dropped fetch on household wifi says nothing, while a tablet that lost the
+ *  network overnight does not go on showing yesterday as though it were today. */
+export const STALE_AFTER_MS = 3 * REFRESH_MS
+
 const MODE_LABELS: Record<DisplayMode, string> = {
   calendar: 'disp.mode.calendar',
   habits: 'disp.mode.habits',
@@ -53,6 +58,8 @@ export function DisplayModeFrame({ mode, onMode, onExit, onExpire, rev = 0 }: {
   const tr = useT()
   const guard = useMemo(() => makeGuard(onExpire), [onExpire])
   const [frame, setFrame] = useState<DisplayFrame | null>(null)
+  const [fetchedAt, setFetchedAt] = useState<number | null>(null)
+  const [now, setNow] = useState(() => Date.now())
   const [open, setOpen] = useState(false)
   const [full, setFull] = useState(() => isFullscreen())
   const [fullOk] = useState(() => canFullscreen())
@@ -70,6 +77,7 @@ export function DisplayModeFrame({ mode, onMode, onExit, onExpire, rev = 0 }: {
       // faces are about today, and the month says which month it is already.
       const name = mode === 'calendar' ? '' : tr('tab.today')
       setFrame({ ...next, display: { ...next.display, name } })
+      setFetchedAt(Date.now())
     } catch (e) {
       // Not through `guard`: a dropped fetch on household wifi is not worth a
       // toast on a wall, and the next tick tries again. An ended session is.
@@ -77,34 +85,58 @@ export function DisplayModeFrame({ mode, onMode, onExit, onExpire, rev = 0 }: {
     }
   }, [mode, tr, onExpire])
 
+  // The latest `load`, for the writes to refetch with when they settle: the
+  // one they closed over may be for the face that has since been switched
+  // away from, and its answer would be drawn under the new face's name.
+  const loadRef = useRef(load)
+  loadRef.current = load
+
   useEffect(() => { void load() }, [load, rev])
   useEffect(() => {
     const id = setInterval(() => { void load() }, REFRESH_MS)
     return () => clearInterval(id)
   }, [load])
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), REFRESH_MS)
+    return () => clearInterval(id)
+  }, [])
+  const stale = fetchedAt !== null && now - fetchedAt > STALE_AFTER_MS
 
+  // What is being written, so a second tap on the same row before the first
+  // has landed (and the face has caught up) is not a second write.
+  const busy = useRef(new Set<string>())
+  const once = (key: string, write: () => Promise<unknown>) => {
+    if (busy.current.has(key)) return
+    busy.current.add(key)
+    void (async () => {
+      try { await write() } finally {
+        busy.current.delete(key)
+        void loadRef.current()
+      }
+    })()
+  }
+
+  const day = frame?.day
   const actions = useMemo<DisplayActions>(() => ({
     toggleRow: (ref, done) => {
-      void (async () => {
-        if (ref.kind === 'task' && ref.list && ref.uid) {
-          await guard(() => api.complete(ref.list!, ref.uid!, done))
-        } else if (ref.entry && frame) {
-          await guard(() => api.patchDayEntry(frame.day, ref.entry!, { done }))
-        }
-        void load()
-      })()
+      if (ref.kind === 'task' && ref.list && ref.uid) {
+        once(`task:${ref.list}:${ref.uid}`,
+          () => guard(() => api.complete(ref.list!, ref.uid!, done)))
+      } else if (ref.entry && day) {
+        once(`entry:${ref.entry}`,
+          () => guard(() => api.patchDayEntry(day, ref.entry!, { done })))
+      }
     },
     moveEvent: (ref, fromDay, toDay) => {
       const delta = daysBetween(fromDay, toDay)
       if (!delta || !ref.start) return
       const body: Record<string, unknown> = { start: shiftIso(ref.start, delta) }
       if (ref.end) body.end = shiftIso(ref.end, delta)
-      void (async () => {
-        await guard(() => api.patchEvent(ref.calendar, ref.uid, body))
-        void load()
-      })()
+      once(`event:${ref.calendar}:${ref.uid}`,
+        () => guard(() => api.patchEvent(ref.calendar, ref.uid, body)))
     },
-  }), [guard, frame, load])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [guard, day])
 
   // Restarted by every tap on the bar, so it folds only once it is left alone.
   const poke = () => {
@@ -164,6 +196,7 @@ export function DisplayModeFrame({ mode, onMode, onExit, onExpire, rev = 0 }: {
         ) : (
           <div className="display__booting" aria-hidden="true" />
         )}
+        {stale ? <div className="display-label display__stale">{tr('display.stale')}</div> : null}
       </div>
       {open ? (
         <div className="dmode-bar" role="toolbar" aria-label={tr('dmode.controls')}
