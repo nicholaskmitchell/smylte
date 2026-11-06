@@ -1,17 +1,17 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest'
 import {
-  DISPLAY_MODE_KEY, DISPLAY_TABS, canFullscreen, isDisplayTab, readDisplayMode,
+  DISPLAY_MODE_KEY, DISPLAY_MODES, canFullscreen, isDisplayMode, readDisplayMode,
   toggleFullscreen, writeDisplayMode,
 } from './displaymode'
 
 beforeEach(() => localStorage.clear())
 
 describe('display mode, per device', () => {
-  it('is off until a view is stored', () => {
+  it('is off until a face is stored', () => {
     expect(readDisplayMode()).toBeNull()
-    writeDisplayMode('today')
-    expect(readDisplayMode()).toBe('today')
-    expect(localStorage.getItem(DISPLAY_MODE_KEY)).toBe('today')
+    writeDisplayMode('habits')
+    expect(readDisplayMode()).toBe('habits')
+    expect(localStorage.getItem(DISPLAY_MODE_KEY)).toBe('habits')
   })
 
   it('is cleared with null', () => {
@@ -21,23 +21,23 @@ describe('display mode, per device', () => {
     expect(localStorage.getItem(DISPLAY_MODE_KEY)).toBeNull()
   })
 
-  it('reads a value naming no display view as off', () => {
-    for (const v of ['scheduling', 'nope', '', '1']) {
+  it('reads a value naming no face as off, the app views it once stored included', () => {
+    for (const v of ['today', 'home', 'nope', '', '1']) {
       localStorage.setItem(DISPLAY_MODE_KEY, v)
       expect(readDisplayMode()).toBeNull()
     }
   })
 
-  it('offers no view outside the tab strip, and not Scheduling', () => {
-    expect(DISPLAY_TABS).not.toContain('scheduling')
-    for (const t of DISPLAY_TABS) expect(isDisplayTab(t)).toBe(true)
+  it('offers the desk unit\'s three faces', () => {
+    expect(DISPLAY_MODES).toEqual(['calendar', 'habits', 'now'])
+    for (const m of DISPLAY_MODES) expect(isDisplayMode(m)).toBe(true)
   })
 
   it('survives storage that throws', () => {
     const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked') })
     const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked') })
     expect(readDisplayMode()).toBeNull()
-    expect(() => writeDisplayMode('today')).not.toThrow()
+    expect(() => writeDisplayMode('now')).not.toThrow()
     get.mockRestore(); set.mockRestore()
   })
 })

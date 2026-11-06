@@ -2471,16 +2471,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         palette: str = Query(default="color"),
         hide_done_habits: bool = Query(default=True),
         hide_done_tasks: bool = Query(default=True),
+        refs: bool = Query(default=False),
+        name: str = Query(default="Preview", max_length=100),
     ):
         """The same preview as JSON, for the browser face and for reading the
         numbers the picture cannot show — how many items a day carries, what the
-        frame capped away."""
+        frame capped away.
+
+        Also the frame behind the signed-in display mode, which asks with
+        `refs=true` for what its taps and drags write to. Behind the session,
+        like everything under `api`; the token routes never carry refs."""
         try:
             return await _run(_svc(request).preview_display_frame, {
-                "name": "Preview", "mode": mode, "palette": palette,
+                "name": name, "mode": mode, "palette": palette,
                 "hide_done_habits": hide_done_habits,
                 "hide_done_tasks": hide_done_tasks,
-            })
+            }, refs=refs)
         except ValueError as e:
             raise HTTPException(422, str(e)) from None
 

@@ -2277,3 +2277,52 @@ def test_a_datetime_at_the_edge_of_the_calendar_does_not_500_the_display():
             assert S._event_day(value, is_date=False, zone=zone)[:4].isdigit()
     assert F.fmt_time("9999-12-31T23:59:59+00:00", all_day=False,
                       time_format="24h", zone=ZoneInfo("Pacific/Kiritimati")) in ("", "23:59")
+
+
+# ── refs: what the signed-in display mode writes to ─────────────────────────
+
+
+def _items(frame):
+    return [i for week in frame["calendar"]["weeks"] for cell in week for i in cell["items"]]
+
+
+def test_a_token_frame_carries_no_refs(svc):
+    """A paired display takes no input, so nothing in its body names what a
+    write would need. The key is absent, not null."""
+    _seed_task(svc._conn, LIST_A, "t1", "Invoice", due=DAY)
+    _seed_event(svc._conn, CAL_A, "e1", "Standup", start=f"{DAY}T09:00:00")
+    svc.open_day(DAY, create=True)
+    for mode in ("calendar", "habits", "now"):
+        made = svc.create_display({"name": "Wall", "mode": mode})
+        assert '"ref"' not in __import__("json").dumps(svc.display_frame(made["token"]))
+
+
+def test_the_preview_with_refs_names_events_and_rows(svc):
+    _seed_task(svc._conn, LIST_A, "t1", "Invoice", due=DAY)
+    _seed_event(svc._conn, CAL_A, "e1", "Standup", start=f"{DAY}T09:00:00",
+                end=f"{DAY}T09:30:00")
+    plan = svc.open_day(DAY, create=True)
+    entry = next(e for e in plan["entries"] if e.get("uid") == "t1")
+
+    month = svc.preview_display_frame({"mode": "calendar"}, refs=True)
+    (chip,) = [i for i in _items(month) if i["text"] == "Standup"]
+    assert chip["ref"] == {
+        "calendar": "cal-a", "uid": "e1", "start": f"{DAY}T09:00:00",
+        "end": f"{DAY}T09:30:00", "recurring": False,
+    }
+
+    day = svc.preview_display_frame({"mode": "habits"}, refs=True)
+    (row,) = day["habits"]["tasks"]
+    assert row["ref"] == {"kind": "task", "entry": entry["entry_id"], "planned": True,
+                          "list": LIST_A.rstrip("/").rsplit("/", 1)[-1], "uid": "t1"}
+
+    now = svc.preview_display_frame({"mode": "now"}, refs=True)
+    assert now["now"]["current"]["ref"]["uid"] == "t1"
+
+    assert "ref" not in _items(svc.preview_display_frame({"mode": "calendar"}))[0]
+
+
+def test_the_preview_route_gives_refs_only_when_asked(api):
+    assert api.get("/api/displays/preview?mode=habits&refs=true").status_code == 200
+    r = api.get("/api/displays/preview?mode=calendar&name=Kitchen")
+    assert r.status_code == 200 and r.json()["display"]["name"] == "Kitchen"

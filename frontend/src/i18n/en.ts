@@ -113,7 +113,7 @@ export const en = {
   // shows and every choice about it is made here.
   'dmode.row': 'Use this device as a display',
   'dmode.start': 'Start display mode',
-  'dmode.hint': 'Shows Today, Calendar, Home or Tasks full screen, signed in, so you can still check things off and drag events by touch. It keeps the screen awake where the browser allows it, and this device stays a display until you exit from the ⋯ button in the corner.',
+  'dmode.hint': 'Shows the same faces as a desk display (the month, habits + today, or now + next) full screen on this device, signed in, so you can tap to check things off and drag events to another day. It keeps the screen awake where the browser allows it, and this device stays a display until you exit from the ⋯ button in the corner.',
   'dmode.controls': 'Display controls',
   'dmode.hideControls': 'Hide display controls',
   'dmode.fullscreen': 'Full screen',

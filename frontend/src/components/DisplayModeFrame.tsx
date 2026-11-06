@@ -1,60 +1,110 @@
-// The frame display mode draws instead of the app's own (see displaymode.ts).
+// Display mode: the desk unit's faces on this device, signed in, with touch
+// (see displaymode.ts for why it is signed in rather than paired).
 //
-// Everything the views need is still here, because they are the app's real
-// views: a tap checks off a task, a drag moves an event, and the writes go
-// through the session like any other. What goes is the chrome around them —
-// the top bar or the app sidebar, the tab strip and the settings gear — which
-// on a screen across a room is only space taken from the day.
+// The faces are DisplayView's own — the month, habits + today, now + next — so
+// an iPad on a counter looks like the panel on the desk. The frame comes from
+// the session-backed preview route with refs, which a token never gets, and
+// the actions handed to the faces are what turn them from a poster into
+// something a finger can use: a tap ticks a row, a tap on the current item
+// finishes it, and a chip dragged to another day moves the event. Every write
+// is the app's ordinary one, and the frame is fetched again straight after,
+// so the face shows what the server now holds rather than a guess at it.
 //
-// What replaces it is one small button in the corner, faint so it does not
-// compete with the content, and big enough for a finger. It opens a bar with
-// the views on offer, full screen where the browser has it, and the way out.
-// The bar folds itself away again after a while, because a display is usually
-// left alone straight after someone has used it.
+// It refreshes on a minute's clock and whenever the app hears of a change
+// (`rev`, the same counter the views refetch on), so a task finished on a phone
+// leaves the wall as quickly as it leaves any other screen.
 //
-// The screen is kept awake for as long as this frame is up, which is what makes
-// a tablet usable as a display at all. A browser releases the lock whenever the
-// page is hidden, so it is asked for again on coming back. A browser without
-// the API (an older iPad) gets nothing, and the person sets Auto-Lock to Never.
+// One small button in the corner, faint so it does not compete with the day,
+// opens a bar with the three faces, full screen where the browser has it, and
+// the way out. The bar folds itself away again after a while. The screen is
+// kept awake for as long as this is up; a browser releases the lock whenever
+// the page is hidden, so it is asked for again on coming back.
 
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { layerDepth, onLayerDepth } from '../layers'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AuthError, api, type DisplayFrame, type DisplayMode } from '../api'
 import { useT } from '../i18n'
-import { TAB_LABELS, type Tab } from '../tabs'
-import { DISPLAY_TABS, canFullscreen, isFullscreen, toggleFullscreen } from '../displaymode'
+import { makeGuard } from '../util'
+import { daysBetween, shiftIso } from '../calendar'
+import { DISPLAY_MODES, canFullscreen, isFullscreen, toggleFullscreen } from '../displaymode'
+import { DisplayActionsProvider, DisplayFaces, type DisplayActions } from './DisplayView'
 
 /** How long the open bar waits for another tap before folding away. */
 export const BAR_IDLE_MS = 10_000
 
-export function DisplayModeFrame({ tab, onTab, onExit, children }: {
-  tab: Tab
-  onTab: (next: Tab) => void
+/** How often the face is fetched when nothing has said it changed. A minute,
+ *  because the clock-driven parts (the day rolling over, a preview turning
+ *  into a plan) have no event of their own. */
+export const REFRESH_MS = 60_000
+
+const MODE_LABELS: Record<DisplayMode, string> = {
+  calendar: 'disp.mode.calendar',
+  habits: 'disp.mode.habits',
+  now: 'disp.mode.now',
+}
+
+export function DisplayModeFrame({ mode, onMode, onExit, onExpire, rev = 0 }: {
+  mode: DisplayMode
+  onMode: (next: DisplayMode) => void
   onExit: () => void
-  children: ReactNode
+  onExpire: () => void
+  /** Bumped by App on every change the server announces. */
+  rev?: number
 }) {
   const tr = useT()
+  const guard = useMemo(() => makeGuard(onExpire), [onExpire])
+  const [frame, setFrame] = useState<DisplayFrame | null>(null)
   const [open, setOpen] = useState(false)
   const [full, setFull] = useState(() => isFullscreen())
   const [fullOk] = useState(() => canFullscreen())
   const idle = useRef<ReturnType<typeof setTimeout>>()
-  // Whether a view has a dialog or sheet up. The views draw theirs inline,
-  // inside `.views`, so the corner button would sit above the backdrop: a tap
-  // on it could switch views or exit with an editor half filled in, and on a
-  // phone-sized sheet it would cover Save. So it goes, and an open bar closes,
-  // until the layer does — the same rule that keeps the tab strip out of reach
-  // behind a backdrop in the ordinary app.
-  const [covered, setCovered] = useState(() => layerDepth() > 0)
+  // Which request is the latest, so a slow answer for the face that was just
+  // switched away from cannot land on top of the new one.
+  const seq = useRef(0)
+
+  const load = useCallback(async () => {
+    const mine = ++seq.current
+    try {
+      const next = await api.displayPreview(mode, 'Smylte')
+      if (mine !== seq.current) return
+      // The face's own heading, in place of a paired display's name: the day
+      // faces are about today, and the month says which month it is already.
+      const name = mode === 'calendar' ? '' : tr('tab.today')
+      setFrame({ ...next, display: { ...next.display, name } })
+    } catch (e) {
+      // Not through `guard`: a dropped fetch on household wifi is not worth a
+      // toast on a wall, and the next tick tries again. An ended session is.
+      if (e instanceof AuthError) onExpire()
+    }
+  }, [mode, tr, onExpire])
+
+  useEffect(() => { void load() }, [load, rev])
   useEffect(() => {
-    const off = onLayerDepth((depth) => {
-      setCovered(depth > 0)
-      if (depth > 0) setOpen(false)
-    })
-    // Read again once subscribed: a layer that closed in the commit that
-    // mounted this frame (Settings, where display mode is started from) did
-    // so before there was anyone listening.
-    setCovered(layerDepth() > 0)
-    return off
-  }, [])
+    const id = setInterval(() => { void load() }, REFRESH_MS)
+    return () => clearInterval(id)
+  }, [load])
+
+  const actions = useMemo<DisplayActions>(() => ({
+    toggleRow: (ref, done) => {
+      void (async () => {
+        if (ref.kind === 'task' && ref.list && ref.uid) {
+          await guard(() => api.complete(ref.list!, ref.uid!, done))
+        } else if (ref.entry && frame) {
+          await guard(() => api.patchDayEntry(frame.day, ref.entry!, { done }))
+        }
+        void load()
+      })()
+    },
+    moveEvent: (ref, fromDay, toDay) => {
+      const delta = daysBetween(fromDay, toDay)
+      if (!delta || !ref.start) return
+      const body: Record<string, unknown> = { start: shiftIso(ref.start, delta) }
+      if (ref.end) body.end = shiftIso(ref.end, delta)
+      void (async () => {
+        await guard(() => api.patchEvent(ref.calendar, ref.uid, body))
+        void load()
+      })()
+    },
+  }), [guard, frame, load])
 
   // Restarted by every tap on the bar, so it folds only once it is left alone.
   const poke = () => {
@@ -106,15 +156,23 @@ export function DisplayModeFrame({ tab, onTab, onExit, children }: {
 
   return (
     <div className="dmode">
-      <div className="views">{children}</div>
-      {covered ? null : open ? (
+      <div className="display display--color display--touch" data-mode={mode}>
+        {frame ? (
+          <DisplayActionsProvider value={actions}>
+            <DisplayFaces frame={frame} />
+          </DisplayActionsProvider>
+        ) : (
+          <div className="display__booting" aria-hidden="true" />
+        )}
+      </div>
+      {open ? (
         <div className="dmode-bar" role="toolbar" aria-label={tr('dmode.controls')}
           onPointerDown={poke}>
-          {DISPLAY_TABS.map((t) => (
-            <button key={t} className={`btn ghost dmode-bar__tab ${t === tab ? 'active' : ''}`}
-              aria-pressed={t === tab}
-              onClick={() => { onTab(t); poke() }}>
-              {tr(TAB_LABELS[t])}
+          {DISPLAY_MODES.map((m) => (
+            <button key={m} className={`btn ghost dmode-bar__tab ${m === mode ? 'active' : ''}`}
+              aria-pressed={m === mode}
+              onClick={() => { onMode(m); poke() }}>
+              {tr(MODE_LABELS[m])}
             </button>
           ))}
           <span className="dmode-bar__gap" />

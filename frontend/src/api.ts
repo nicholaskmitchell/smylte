@@ -411,6 +411,31 @@ export interface DisplayItem {
   all_day: boolean
   source: string | null
   continued: boolean               // a later day of a span
+  /** What a drag writes to. Only on the signed-in display mode's frame
+   *  (`displayPreview` with refs); never on a frame a token fetches. */
+  ref?: DisplayEventRef
+}
+
+/** An event, as the signed-in display mode moves it: the raw start and end the
+ *  shift is applied to, and whether it repeats (a repeating one is not moved
+ *  from a display, where there is no room to ask which occurrences). */
+export interface DisplayEventRef {
+  calendar: string
+  uid: string
+  start: string | null
+  end: string | null
+  recurring: boolean
+}
+
+/** A day row, as the signed-in display mode ticks it. A task is done on its
+ *  VTODO (`list` + `uid`); a note or a habit on its entry, which exists only
+ *  once the day is `planned`. */
+export interface DisplayRowRef {
+  kind: 'task' | 'note' | 'habit'
+  entry: string | null
+  planned: boolean
+  list?: string | null
+  uid?: string | null
 }
 
 export interface DisplayHabits {
@@ -448,6 +473,7 @@ export interface DisplayRow {
   kind: 'task' | 'note' | 'habit'
   source: string | null
   estimate_minutes: number | null
+  ref?: DisplayRowRef
 }
 
 /** The rolling face: the one thing you are on, the one after it, and a count.
@@ -481,6 +507,7 @@ export interface DisplayNowItem {
   source: string | null
   estimate: string                 // already formatted: "45m", "1h 30m", ""
   estimate_minutes: number | null
+  ref?: DisplayRowRef
 }
 
 /** A read-only link for a person who has no account here. Not a Display: an
@@ -1689,6 +1716,14 @@ export const api = {
    * display's own `last_seen_at`, which is a timestamp being overwritten with a
    * newer timestamp.
    */
+  /** The frame for the signed-in display mode: a display nobody paired, drawn
+   *  for this session, with the refs its taps and drags write to. Writes
+   *  nothing, like the developer preview it shares a route with. */
+  displayPreview: (mode: DisplayMode, name: string, signal?: AbortSignal) =>
+    j<DisplayFrame>('GET', `/api/displays/preview?${new URLSearchParams({
+      mode, name, refs: 'true',
+    })}`, undefined, signal),
+
   publicDisplayFrame: (token: string, signal?: AbortSignal) =>
     j<DisplayFrame>('GET', `/api/public/display/${encodeURIComponent(token)}`,
       undefined, signal),

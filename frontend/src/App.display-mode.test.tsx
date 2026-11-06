@@ -1,7 +1,7 @@
 // Display mode from the signed-in app: entered from Settings → Displays, held
-// per device across a reload, switched between views from its own bar, and
-// left the same way. The views are stubs, so these are about App's frame and
-// not about any view's rows.
+// per device across a reload, and left from its own bar. The frame itself is
+// stubbed, so these are about App's plumbing; DisplayModeFrame.test.tsx covers
+// the faces and the writes.
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -25,12 +25,13 @@ vi.mock('./desktop', async (importOriginal) => {
   }
 })
 
-vi.mock('./components/HomeView', () => ({
-  HomeView: (p: { onOpenSuggested?: () => void; onOpenSettings?: () => void }) => (
+vi.mock('./components/HomeView', () => ({ HomeView: () => <div>stub home</div> }))
+vi.mock('./components/DisplayModeFrame', () => ({
+  DisplayModeFrame: (p: { mode: string; onMode: (m: string) => void; onExit: () => void }) => (
     <div>
-      stub home
-      {p.onOpenSuggested ? <span>has suggested</span> : null}
-      {p.onOpenSettings ? <span>has settings</span> : null}
+      <output aria-label="face">{p.mode}</output>
+      <button onClick={() => p.onMode('now')}>stub now</button>
+      <button onClick={p.onExit}>stub exit</button>
     </div>
   ),
 }))
@@ -73,65 +74,52 @@ const startFromSettings = async () => {
 }
 
 describe('<App> display mode', () => {
-  it('is entered from Settings → Displays, on the view that was open', async () => {
+  it('is entered from Settings → Displays, on the month, with the app gone', async () => {
     render(<App />)
     expect(await screen.findByText('stub home')).toBeInTheDocument()
     await startFromSettings()
 
-    expect(screen.getByText('stub home')).toBeInTheDocument()
-    // The app's frame is gone: no gear, no tab strip, no settings panel.
+    expect(screen.getByLabelText('face')).toHaveTextContent('calendar')
+    expect(screen.queryByText('stub home')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Settings' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Tasks' })).toBeNull()
     expect(screen.queryByRole('tab', { name: 'Displays' })).toBeNull()
-    expect(screen.getByRole('button', { name: 'Display controls' })).toBeInTheDocument()
-    expect(localStorage.getItem(DISPLAY_MODE_KEY)).toBe('home')
-    // Home's ways into Settings and Tasks lead nowhere a display can show.
-    expect(screen.queryByText('has suggested')).toBeNull()
-    expect(screen.queryByText('has settings')).toBeNull()
+    expect(localStorage.getItem(DISPLAY_MODE_KEY)).toBe('calendar')
   })
 
-  it('comes back as a display after a reload, whatever the start tab says', async () => {
-    localStorage.setItem(DISPLAY_MODE_KEY, 'calendar')
+  it('comes back as a display after a reload', async () => {
+    localStorage.setItem(DISPLAY_MODE_KEY, 'habits')
     m.getSettings.mockResolvedValue({ start_tab: 'tasks' })
     render(<App />)
-    expect(await screen.findByText('stub calendar')).toBeInTheDocument()
+    expect(await screen.findByLabelText('face')).toHaveTextContent('habits')
     await waitFor(() => expect(m.getSettings).toHaveBeenCalled())
-    expect(screen.getByText('stub calendar')).toBeInTheDocument()
+    expect(screen.getByLabelText('face')).toHaveTextContent('habits')
     expect(screen.queryByText('stub tasks')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Settings' })).toBeNull()
   })
 
-  it('reads a stored value that names no display view as off', async () => {
-    localStorage.setItem(DISPLAY_MODE_KEY, 'scheduling')
+  it('reads a stored value that names no face as off', async () => {
+    localStorage.setItem(DISPLAY_MODE_KEY, 'today')
     render(<App />)
     expect(await screen.findByRole('button', { name: 'Settings' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Display controls' })).toBeNull()
+    expect(screen.queryByLabelText('face')).toBeNull()
   })
 
-  it('switches views from its bar and remembers the choice on this device', async () => {
+  it('remembers a face switched to on this device, and never in the account', async () => {
     localStorage.setItem(DISPLAY_MODE_KEY, 'calendar')
     render(<App />)
-    await userEvent.click(await screen.findByRole('button', { name: 'Display controls' }))
-    const bar = screen.getByRole('toolbar', { name: 'Display controls' })
-    expect(bar).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: 'Today' }))
-    expect(screen.getByText('stub today')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Today' })).toHaveAttribute('aria-pressed', 'true')
-    expect(localStorage.getItem(DISPLAY_MODE_KEY)).toBe('today')
-    // Nothing about display mode goes into the account's settings.
+    await userEvent.click(await screen.findByRole('button', { name: 'stub now' }))
+    expect(screen.getByLabelText('face')).toHaveTextContent('now')
+    expect(localStorage.getItem(DISPLAY_MODE_KEY)).toBe('now')
     for (const [patch] of m.putSettings.mock.calls) {
       expect(JSON.stringify(patch)).not.toContain('display')
     }
   })
 
-  it('exits onto the view it was showing, with the frame back', async () => {
+  it('exits back to the app', async () => {
     localStorage.setItem(DISPLAY_MODE_KEY, 'calendar')
     render(<App />)
-    await userEvent.click(await screen.findByRole('button', { name: 'Display controls' }))
-    await userEvent.click(screen.getByRole('button', { name: 'Exit display mode' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'stub exit' }))
     expect(await screen.findByRole('button', { name: 'Settings' })).toBeInTheDocument()
-    expect(screen.getByText('stub calendar')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Display controls' })).toBeNull()
+    expect(screen.getByText('stub home')).toBeInTheDocument()
     expect(localStorage.getItem(DISPLAY_MODE_KEY)).toBeNull()
   })
 })

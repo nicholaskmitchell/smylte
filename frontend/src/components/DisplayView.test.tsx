@@ -433,3 +433,17 @@ describe('<DisplayView> — the rolling face', () => {
       .toHaveLength(0)
   })
 })
+
+describe('<DisplayView> stays inert whatever the frame carries', () => {
+  it('offers nothing to tap even when a frame arrives with refs', async () => {
+    frameMock.mockResolvedValue({
+      ...DAY,
+      habits: { ...DAY.habits!, tasks: [{ ...DAY.habits!.tasks[0],
+        ref: { kind: 'task', entry: 'e', planned: true, list: 'work', uid: 't1' } }] },
+    })
+    render(<DisplayView token="tok" />)
+    expect(await screen.findByText('Invoice')).toBeInTheDocument()
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
+    expect(document.querySelector('.is-draggable')).toBeNull()
+  })
+})

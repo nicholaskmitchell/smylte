@@ -1,5 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { api, type DisplayFrame, type DisplayItem, type DisplaySource } from '../api'
+import {
+  createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState,
+} from 'react'
+import {
+  api, type DisplayEventRef, type DisplayFrame, type DisplayItem, type DisplayRowRef,
+  type DisplaySource,
+} from '../api'
 import { deviceLanguage, isLanguage } from '../lang'
 import { translate } from '../i18n/index'
 
@@ -55,6 +60,54 @@ const BOOT_RETRY_S = 15
  *  comparing whole bodies would repaint every poll — which on an eink browser
  *  (a Boox, a jailbroken Kindle) is a visible full-screen flash every five
  *  minutes for no new information. Same argument as the server's ETag. */
+// ── touch, for the signed-in display mode only ────────────────────────────
+//
+// The page at /display/<token> takes no input, and that is unchanged: nothing
+// below provides these actions there, so every face draws exactly as it did.
+// The signed-in display mode (DisplayModeFrame) draws the SAME faces — the
+// desk unit's look on a tablet — and provides them, along with a frame whose
+// items carry the refs the writes need. A face makes a row tappable or a chip
+// draggable only when both are present.
+export interface DisplayActions {
+  /** Tick or un-tick a day row. */
+  toggleRow: (ref: DisplayRowRef, done: boolean) => void
+  /** Move an event by the whole days between two cells of the month. */
+  moveEvent: (ref: DisplayEventRef, fromDay: string, toDay: string) => void
+}
+
+const ActionsCtx = createContext<DisplayActions | null>(null)
+export const DisplayActionsProvider = ActionsCtx.Provider
+
+/** A row's ref when it can be ticked here: a task always (its doneness is on
+ *  the VTODO), a note or a habit only once the day is planned and its entry
+ *  exists. */
+const tickable = (ref: DisplayRowRef | undefined): ref is DisplayRowRef =>
+  !!ref && (ref.kind === 'task' ? !!ref.list && !!ref.uid : ref.planned && !!ref.entry)
+
+/** The props that make an element a tap target, keyboard included. */
+const tapProps = (onTap: () => void, label: string) => ({
+  role: 'button' as const,
+  tabIndex: 0,
+  'aria-label': label,
+  onClick: onTap,
+  onKeyDown: (e: React.KeyboardEvent) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return
+    e.preventDefault()
+    onTap()
+  },
+})
+
+/** The three faces, for whichever mode the frame is in. */
+export function DisplayFaces({ frame }: { frame: DisplayFrame }) {
+  return (
+    <>
+      {frame.calendar ? <CalendarFace frame={frame} /> : null}
+      {frame.habits ? <HabitsFace frame={frame} /> : null}
+      {frame.now ? <NowFace frame={frame} /> : null}
+    </>
+  )
+}
+
 const stableOf = (frame: DisplayFrame) => {
   const { generated_at: _ignored, ...rest } = frame
   return JSON.stringify(rest)
@@ -166,9 +219,7 @@ export function DisplayView({ token }: { token: string }) {
         <div className="display__booting" aria-hidden="true" />
       ) : (
         <>
-          {frame.calendar ? <CalendarFace frame={frame} /> : null}
-          {frame.habits ? <HabitsFace frame={frame} /> : null}
-          {frame.now ? <NowFace frame={frame} /> : null}
+          <DisplayFaces frame={frame} />
           {stale ? <div className="display-label display__stale">{tr('display.stale')}</div> : null}
         </>
       )}
@@ -181,11 +232,18 @@ export function DisplayView({ token }: { token: string }) {
 const sourceOf = (frame: DisplayFrame, id: string | null): DisplaySource | undefined =>
   id ? frame.sources.find(s => s.id === id) : undefined
 
-function Chip({ frame, item }: { frame: DisplayFrame; item: DisplayItem }) {
+function Chip({ frame, item, drag }: {
+  frame: DisplayFrame; item: DisplayItem
+  drag?: { dragging: boolean } & Pick<React.HTMLAttributes<HTMLDivElement>,
+    'onPointerDown' | 'onPointerMove' | 'onPointerUp' | 'onPointerCancel'>
+}) {
   const src = sourceOf(frame, item.source)
   const eink = frame.display.palette === 'eink'
+  const { dragging, ...handlers } = drag ?? { dragging: false }
   return (
-    <div className={`display-chip display-chip--${src?.treatment ?? 'solid'}`}>
+    <div className={`display-chip display-chip--${src?.treatment ?? 'solid'}` +
+      `${drag ? ' is-draggable' : ''}${dragging ? ' is-dragging' : ''}`}
+      {...handlers}>
       <span
         className="display-chip__mark"
         // The colour is an inline style because it is DATA — the calendar's own
@@ -283,10 +341,55 @@ function useCellRoom(grid: React.RefObject<HTMLDivElement | null>, deps: unknown
   return room
 }
 
+/** How far a finger has to travel before a press on a chip is a drag. Below
+ *  it, a press is a tap, which on the month does nothing. */
+const DRAG_SLOP_PX = 8
+
+/** A drag in progress on the month: the event, the cell it was picked up from,
+ *  and the cell under the finger now. */
+interface CalDrag { ref: DisplayEventRef; key: string; from: string; over: string | null }
+
 function CalendarFace({ frame }: { frame: DisplayFrame }) {
   const cal = frame.calendar!
   const gridRef = useRef<HTMLDivElement>(null)
   const room = useCellRoom(gridRef, cal.month)
+  const actions = useContext(ActionsCtx)
+  // Pointer events rather than HTML5 drag and drop, because the thing doing the
+  // dragging is a finger: a tablet browser's native drag needs a long press
+  // first and draws its own ghost, and some never start one at all. The press
+  // is held until the finger has moved DRAG_SLOP_PX, so a resting thumb is
+  // not a move. The chip is `touch-action: none` (display.css), or the browser
+  // would take the gesture for a scroll.
+  const press = useRef<{ x: number; y: number; drag: CalDrag } | null>(null)
+  const [drag, setDrag] = useState<CalDrag | null>(null)
+  const cellAt = (x: number, y: number) =>
+    (document.elementFromPoint?.(x, y)?.closest('[data-day]') as HTMLElement | null)
+      ?.dataset.day ?? null
+  const dragProps = (item: DisplayItem, day: string, key: string) => {
+    const ref = item.ref
+    if (!actions || !ref || ref.recurring || !ref.start) return undefined
+    return {
+      dragging: drag?.key === key,
+      onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => {
+        if (e.button !== 0) return
+        e.currentTarget.setPointerCapture?.(e.pointerId)
+        press.current = { x: e.clientX, y: e.clientY, drag: { ref, key, from: day, over: day } }
+      },
+      onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => {
+        const p = press.current
+        if (!p) return
+        if (!drag && Math.hypot(e.clientX - p.x, e.clientY - p.y) < DRAG_SLOP_PX) return
+        setDrag({ ...p.drag, over: cellAt(e.clientX, e.clientY) })
+      },
+      onPointerUp: () => {
+        const d = drag
+        press.current = null
+        setDrag(null)
+        if (d?.over && d.over !== d.from) actions.moveEvent(d.ref, d.from, d.over)
+      },
+      onPointerCancel: () => { press.current = null; setDrag(null) },
+    }
+  }
   return (
     <div className="display-cal">
       {/* Rendered always, shown only by the one media query in display.css
@@ -331,9 +434,11 @@ function CalendarFace({ frame }: { frame: DisplayFrame }) {
               return (
                 <div
                   key={cell.day}
+                  data-day={cell.day}
                   className={
                     `display-cal__cell${cell.in_month ? '' : ' is-outside'}` +
-                    `${cell.today ? ' is-today' : ''}`
+                    `${cell.today ? ' is-today' : ''}` +
+                    `${drag && drag.over === cell.day && drag.from !== cell.day ? ' is-over' : ''}`
                   }
                 >
                   <div className="display-cal__daynum">
@@ -348,7 +453,8 @@ function CalendarFace({ frame }: { frame: DisplayFrame }) {
                   </div>
                   <div className="display-cal__items">
                     {shown.map((item, i) => (
-                      <Chip key={`${cell.day}-${i}`} frame={frame} item={item} />
+                      <Chip key={`${cell.day}-${i}`} frame={frame} item={item}
+                        drag={dragProps(item, cell.day, `${cell.day}-${i}`)} />
                     ))}
                   </div>
                 </div>
@@ -434,6 +540,11 @@ function useRowRoom(
 
 function HabitsFace({ frame }: { frame: DisplayFrame }) {
   const block = frame.habits!
+  const actions = useContext(ActionsCtx)
+  const tap = (row: { ref?: DisplayRowRef; done: boolean; text: string }) =>
+    actions && tickable(row.ref)
+      ? tapProps(() => actions.toggleRow(row.ref!, !row.done), row.text)
+      : {}
   const { counts } = block
   const nothing = block.habits.length === 0 && block.tasks.length === 0
   const finished = counts.habits_done > 0 || counts.tasks_done > 0
@@ -487,7 +598,9 @@ function HabitsFace({ frame }: { frame: DisplayFrame }) {
             <h2 className="display-label display-day__label">{block.heading}</h2>
             <ul className="display-day__rows">
               {habitRows.map((row, i) => (
-                <li key={`h-${i}`} className={`display-row${row.done ? ' is-done' : ''}`}>
+                <li key={`h-${i}`} className={`display-row${row.done ? ' is-done' : ''}`}
+                  aria-pressed={actions && tickable(row.ref) ? row.done : undefined}
+                  {...tap(row)}>
                   {/* A ring, filled once it is done — never a tick inside the
                       ring. A diagonal through a circle is the sign for "not
                       allowed", and the first version of this read as though every
@@ -505,7 +618,9 @@ function HabitsFace({ frame }: { frame: DisplayFrame }) {
             <h2 className="display-label display-day__label">{block.day_heading}</h2>
             <ul className="display-day__rows">
               {taskRows.map((row, i) => (
-                <li key={`t-${i}`} className={`display-row${row.done ? ' is-done' : ''}`}>
+                <li key={`t-${i}`} className={`display-row${row.done ? ' is-done' : ''}`}
+                  aria-pressed={actions && tickable(row.ref) ? row.done : undefined}
+                  {...tap(row)}>
                   <span className="display-row__box" aria-hidden="true" />
                   <span className="display-row__text">{row.text}</span>
                 </li>
@@ -693,6 +808,12 @@ function useNowFit(root: React.RefObject<HTMLDivElement | null>, deps: unknown) 
 function NowFace({ frame }: { frame: DisplayFrame }) {
   const block = frame.now!
   const { counts, current, next } = block
+  const actions = useContext(ActionsCtx)
+  // Tapping what you are on finishes it, and the face rolls to the next one on
+  // the refetch that follows — the same roll a completion anywhere else makes.
+  const finish = actions && current && tickable(current.ref)
+    ? tapProps(() => actions.toggleRow(current.ref!, true), current.text)
+    : {}
   const rootRef = useRef<HTMLDivElement>(null)
   // `null` is "not measured yet" — the face renders at the floor for one frame
   // and is corrected on the layout effect before paint, as on the other two.
@@ -757,7 +878,7 @@ function NowFace({ frame }: { frame: DisplayFrame }) {
             because `-webkit-line-clamp` does not survive being a flex item —
             Chromium blockifies it and the clamp stops working, silently. The
             box is the flex item; the title is a plain block child of it. */}
-        <div className="display-now__titlebox">
+        <div className="display-now__titlebox" {...finish}>
           <p className="display-title display-now__title"
             style={fit ? { fontSize: `${fit.size}px` } : undefined}>
             {/* Two different silences, worth telling apart: a day that had

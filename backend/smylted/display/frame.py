@@ -315,6 +315,17 @@ def month_grid(day: str) -> list[list[str]]:
     ]
 
 
+def _ref(record: dict[str, Any]) -> dict[str, Any]:
+    """An item's `ref`, when the caller asked for one, else nothing at all.
+
+    Only the signed-in display mode asks (see `_build_display_frame`): the key
+    is absent rather than null on every frame a token fetches, so a paired
+    display's body is byte-for-byte what it was.
+    """
+    ref = record.get("ref")
+    return {"ref": ref} if ref else {}
+
+
 def _day_items(
     events: list[dict[str, Any]], day: str, *, time_format: str,
     zone: ZoneInfo | None = None,
@@ -349,6 +360,7 @@ def _day_items(
         # event on all seven days and marks the continuations; a display does
         # the same, so a conference does not vanish after its first morning.
         "continued": bool(e.get("continued")),
+        **_ref(e),
     } for e in on_day[:MAX_ITEMS_PER_DAY]]
     return items, max(0, len(on_day) - MAX_ITEMS_PER_DAY)
 
@@ -418,6 +430,7 @@ def build_habits(
             "kind": row.get("kind"),
             "source": row.get("source_id"),
             "estimate_minutes": row.get("estimate_minutes"),
+            **_ref(row),
         }
         (habits if row.get("kind") == "habit" else tasks).append(item)
     counts = {
@@ -492,6 +505,7 @@ def build_now(
             # back out of "1h 30m".
             "estimate": fmt_duration(row.get("estimate_minutes")),
             "estimate_minutes": row.get("estimate_minutes"),
+            **_ref(row),
         }
 
     queue = [r for r in rows if not r.get("done")]

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   api, AuthError, HttpError, subscribe,
-  type DashboardModule, type Settings, type TaskGroup, type TasksViewMode,
+  type DashboardModule, type DisplayMode, type Settings, type TaskGroup, type TasksViewMode,
 } from './api'
 import { setErrorNotifier } from './util'
 import { DataProvider } from './data'
@@ -56,7 +56,7 @@ import { isAskingToDiscard } from './layers'
 import { SettingsMenu, type SettingsSection } from './components/SettingsMenu'
 import { AppNav, TabBar } from './components/AppNav'
 import { DisplayModeFrame } from './components/DisplayModeFrame'
-import { isDisplayTab, readDisplayMode, writeDisplayMode } from './displaymode'
+import { readDisplayMode, writeDisplayMode } from './displaymode'
 
 // 'offline' is NOT 'out'. A server that cannot be reached is not a session that
 // has gone away — the rule `api.ts`'s SSE loop already states and enforces ("a
@@ -238,10 +238,10 @@ export function App() {
   // a module constant so a test can vary it; read once, because the host
   // never navigates the window anywhere else.
   const [floating] = useState(() => isFloatWindow())
-  // Display mode (see displaymode.ts): the view this device shows with the
-  // app's frame taken away, or null. Per device and read once at boot, so a
-  // tablet left as a display comes back as one after a reload.
-  const [displayTab, setDisplayTab] = useState<Tab | null>(readDisplayMode)
+  // Display mode (see displaymode.ts): the desk unit's face this device shows
+  // instead of the app, or null. Per device and read once at boot, so a tablet
+  // left as a display comes back as one after a reload.
+  const [displayMode, setDisplayMode] = useState<DisplayMode | null>(readDisplayMode)
   const [focus, setFocus] = useState<FocusSettings>(DEFAULT_FOCUS)
   // A SECOND revision counter, for settings alone. `rev` drives the task and
   // event refetch, and bumping it on a preference change is the request storm
@@ -349,8 +349,8 @@ export function App() {
   // others changing — switching to Classic, or leaving the focus surface — and
   // on a phone that is a strip opening scrolled to its start with the tab you
   // are on off its right edge.
-  // `displayTab` for the same reason: leaving display mode mounts the strip.
-  }, [tab, tabOrder, layout, focusOpen, displayTab])
+  // `displayMode` for the same reason: leaving display mode mounts the strip.
+  }, [tab, tabOrder, layout, focusOpen, displayMode])
 
   // Failed saves/deletes anywhere in the app surface here (see makeGuard).
   useEffect(() => {
@@ -988,30 +988,22 @@ export function App() {
     saveSettings({ tasks_view: v })
   }, [])
 
-  // Into display mode on the view that is open, when it is one display mode
-  // offers, and on Today otherwise. Out of it onto the view it was showing,
-  // so the person lands where they were looking.
+  // Into display mode on the month, the face most people hang one for; the
+  // bar in its corner switches to the others. Out of it onto the app as it
+  // was, on the view that was open before.
   const enterDisplayMode = useCallback(() => {
-    const next: Tab = isDisplayTab(tab) ? tab : 'today'
-    writeDisplayMode(next)
-    setDisplayTab(next)
+    writeDisplayMode('calendar')
+    setDisplayMode('calendar')
     setSettingsOpen(false)
-  }, [tab])
-  const changeDisplayTab = useCallback((next: Tab) => {
+  }, [])
+  const changeDisplayMode = useCallback((next: DisplayMode) => {
     writeDisplayMode(next)
-    setDisplayTab(next)
+    setDisplayMode(next)
   }, [])
   const leaveDisplayMode = useCallback(() => {
     writeDisplayMode(null)
-    // A deliberate choice, like a tap on the strip: the first settings read
-    // must not pull the view to the start tab after this.
-    if (displayTab) {
-      tabTouched.current = true
-      setTab(displayTab)
-      cacheTab(displayTab)
-    }
-    setDisplayTab(null)
-  }, [displayTab])
+    setDisplayMode(null)
+  }, [])
 
   const toggleSide = useCallback(() => {
     const next = !sideCollapsed
@@ -1439,16 +1431,8 @@ export function App() {
   // What the views are told about the frame (see shell.tsx). The collapse flag
   // is the one the per-view sidebars read under Classic: one "sidebar is
   // folded" preference, whichever sidebar the layout draws.
-  //
-  // Display mode draws no app sidebar, so its views are told they are under
-  // Classic and draw their own collections, as they do in a component test.
-  const shell = useMemo(() => (displayTab
-    ? { layout: 'classic' as const, navSlot: null, navCollapsed: sideCollapsed }
-    : { layout, navSlot, navCollapsed: sideCollapsed }),
-  [layout, navSlot, sideCollapsed, displayTab])
-  // The view on screen: display mode's own while it is up, so the account's
-  // start tab and the tab restore below never pull a display off its view.
-  const shownTab = displayTab ?? tab
+  const shell = useMemo(() => ({ layout, navSlot, navCollapsed: sideCollapsed }),
+    [layout, navSlot, sideCollapsed])
 
   const settingsMenu = settingsOpen && (
     <SettingsMenu key={settingsKey} panelRef={settingsRef} initialSection={settingsAt}
@@ -1498,7 +1482,7 @@ export function App() {
   // the app sidebar (or above the tab bar on a phone).
   const views = (<>
     {booting && <div className="work"><div className="content" aria-busy="true" /></div>}
-    {!booting && shownTab === 'tasks' && (
+    {!booting && tab === 'tasks' && (
       <TasksView onExpire={onExpire} view={tasksView} onView={changeTasksView}
         sideCollapsed={sideCollapsed} onToggleSide={toggleSide}
         hiddenLists={hiddenLists} onHiddenListsChange={changeHiddenLists}
@@ -1508,7 +1492,7 @@ export function App() {
         showCompleted={showCompleted} mailRev={mailRev}
         ask={tasksAsk} onAskHandled={() => setTasksAsk(null)} />
     )}
-    {!booting && shownTab === 'calendar' && (
+    {!booting && tab === 'calendar' && (
       <CalendarView onExpire={onExpire} cursor={cursor} onCursorChange={setCursor}
         sideCollapsed={sideCollapsed} onToggleSide={toggleSide}
         hiddenCalendars={hiddenCals} onHiddenCalendarsChange={changeHiddenCals}
@@ -1517,8 +1501,8 @@ export function App() {
         calShowDone={calShowDone} onCalShowDoneChange={toggleCalShowDone}
         fit={calFit} />
     )}
-    {!booting && shownTab === 'scheduling' && <SchedulingView rev={rev} onExpire={onExpire} />}
-    {!booting && shownTab === 'today' && (
+    {!booting && tab === 'scheduling' && <SchedulingView rev={rev} onExpire={onExpire} />}
+    {!booting && tab === 'today' && (
       // The same two calendar-visibility sets the Home dashboard is handed,
       // and read-only here for the same reason: the Calendar tab owns editing
       // (and pruning) them. Passing them is not cosmetic — TodayView asks the
@@ -1531,16 +1515,12 @@ export function App() {
         staleOverdueDays={staleOverdue} planOnDueToday={planOnDueToday}
         onStartWorking={enterFocus} />
     )}
-    {!booting && shownTab === 'home' && (
+    {!booting && tab === 'home' && (
       <HomeView rev={rev} onExpire={onExpire} staleOverdueDays={staleOverdue}
         layout={dashboard} onLayoutChange={changeDashboard}
         hiddenCalendars={hiddenCals} archivedCalendars={archivedCals}
         mailRev={mailRev} sharesRev={sharesRev}
-        // Display mode draws no Settings and shows only its own view, so the
-        // buttons that would lead to either are not offered there (HomeView
-        // hides them when the callback is missing).
-        onOpenSuggested={displayTab ? undefined : openSuggested}
-        onOpenSettings={displayTab ? undefined : openSettingsAt} />
+        onOpenSuggested={openSuggested} onOpenSettings={openSettingsAt} />
     )}
   </>)
 
@@ -1581,8 +1561,8 @@ export function App() {
     // the boot markup away and mount a fresh tree — losing the very frame this
     // exists to paint (and any click already in flight against it).
     <ShellProvider value={shell}>
-    <div className="shell" data-layout={displayTab ? 'classic' : layout}
-      data-display={displayTab ? '' : undefined}>
+    <div className="shell" data-layout={layout}
+      data-display={displayMode ? '' : undefined}>
       {focusOpen ? (
         // A cold load of /focus — the floating window's whole life — must not
         // flash the tab strip for the one /api/me round trip: at 408px wide
@@ -1593,12 +1573,14 @@ export function App() {
           ? <div className="focus" aria-busy="true" />
           : <FocusView rev={rev} focusRev={focusRev} onExpire={onExpire} onLeave={leaveFocus}
               settings={focus} floating={floating} />
-      ) : displayTab ? (
-        // Display mode: the views and nothing around them. Its frame is
-        // checked before the layout's, because a display draws neither.
-        <DisplayModeFrame tab={displayTab} onTab={changeDisplayTab} onExit={leaveDisplayMode}>
-          {views}
-        </DisplayModeFrame>
+      ) : displayMode ? (
+        // Display mode: the desk unit's face and nothing of the app around
+        // it. Checked before the layout, because a display draws neither.
+        // Not while booting: the face needs a session to ask for its frame.
+        booting
+          ? <div className="dmode" aria-busy="true" />
+          : <DisplayModeFrame mode={displayMode} onMode={changeDisplayMode}
+              onExit={leaveDisplayMode} onExpire={onExpire} rev={rev} />
       ) : layout === 'sidebar' ? (
         // The settings menu is the frame's last child, not the nav's: inside
         // the nav it would inherit the nav's custom properties and control
@@ -1681,7 +1663,7 @@ export function App() {
           wallpaperAccent={wallpaperRamp ? { on: wallpaperAccent, onToggle: changeWallpaperAccent } : undefined}
           onClose={() => setAppearanceOpen(false)} />
       )}
-      {(layout === 'classic' || focusOpen || displayTab) && offlineBar}
+      {(layout === 'classic' || focusOpen || displayMode) && offlineBar}
       {/* The one "Discard changes?" dialog, for whichever layer Back asked
           about. Only the Android client's Back opens it. */}
       <DiscardPrompt />

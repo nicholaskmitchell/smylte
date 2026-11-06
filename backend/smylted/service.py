@@ -3931,12 +3931,21 @@ class SmylteService:
             store.touch_display(self._conn, token)
         return frame
 
-    def _build_display_frame(self, display: dict[str, Any]) -> dict[str, Any]:
+    def _build_display_frame(
+        self, display: dict[str, Any], *, refs: bool = False,
+    ) -> dict[str, Any]:
         """The frame one display's settings produce. Caller holds the lock.
 
         Shared by the token route and by the developer preview, so the thing
         being previewed is the thing that ships rather than a second renderer
         that agrees with it today.
+
+        `refs` adds to each item what a WRITE needs to name it — the event's
+        calendar and uid, the day entry's id, the task's list and uid. Only the
+        signed-in display mode asks for them (a tablet used as a display, where
+        a tap checks a row off and a drag moves an event). The token routes
+        never do: a paired display takes no input, and the identifiers have no
+        business in a body anyone holding its URL can read.
         """
         settings = store.get_settings(self._conn)
         day = self._today()
@@ -3954,10 +3963,10 @@ class SmylteService:
         # same list allowlist. Only the shape of the answer differs, and that is
         # decided in `frame.build_frame` rather than here.
         if display["mode"] in ("habits", "now"):
-            sources, rows, planned = self._display_day_rows(day, display)
+            sources, rows, planned = self._display_day_rows(day, display, refs=refs)
             events = None
         else:
-            sources, events = self._display_events(day, display, zone)
+            sources, events = self._display_events(day, display, zone, refs=refs)
             rows, planned = None, True
         return display_frame_mod.build_frame(
             display=display, day=day, generated_at=_stamp(),
@@ -3965,7 +3974,9 @@ class SmylteService:
             sources=sources, events=events, rows=rows, planned=planned,
         )
 
-    def preview_display_frame(self, fields: dict[str, Any]) -> dict[str, Any]:
+    def preview_display_frame(
+        self, fields: dict[str, Any], *, refs: bool = False,
+    ) -> dict[str, Any]:
         """A frame for a display that does not exist.
 
         For Settings → Developer, which draws every mode at every panel size so
@@ -3995,7 +4006,7 @@ class SmylteService:
             "rotation": settings.get("rotation") or 0,
         }
         with self._lock:
-            return self._build_display_frame(display)
+            return self._build_display_frame(display, refs=refs)
 
     def _display_calendars(self, display: dict[str, Any]) -> list:
         """The collections one display draws from, honouring its allowlist.
@@ -4022,6 +4033,7 @@ class SmylteService:
 
     def _display_events(
         self, day: str, display: dict[str, Any], zone: ZoneInfo | None,
+        *, refs: bool = False,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """The month grid's events, one record per day each one covers.
 
@@ -4064,6 +4076,11 @@ class SmylteService:
                 end_day = _event_last_day(ev, start_day, zone=zone)
                 cursor = max(start_day, first)
                 stop = min(end_day, last)
+                ref = {
+                    "calendar": _slug(href), "uid": ev.get("uid"),
+                    "start": ev.get("start"), "end": ev.get("end"),
+                    "recurring": bool(ev.get("is_recurring")),
+                } if refs else None
                 while cursor <= stop:
                     out.append({
                         "day": cursor,
@@ -4072,6 +4089,7 @@ class SmylteService:
                         "all_day": bool(ev.get("all_day")),
                         "source": _slug(href),
                         "continued": cursor != start_day,
+                        **({"ref": ref} if ref else {}),
                     })
                     cursor = (date.fromisoformat(cursor) + timedelta(days=1)).isoformat()
         return sources, out
@@ -4135,7 +4153,7 @@ class SmylteService:
         return out, planned
 
     def _display_day_rows(
-        self, day: str, display: dict[str, Any]
+        self, day: str, display: dict[str, Any], *, refs: bool = False,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
         """Today's rows as a wall draws them: `_resolved_day_rows` narrowed to
         the display's list allowlist and reduced to what a frame carries, plus
@@ -4156,11 +4174,22 @@ class SmylteService:
                 if wanted and source_id not in wanted:
                     continue
                 names.setdefault(row["href"], named.get(row["href"]) or source_id)
-            out.append({
+            item = {
                 "kind": kind, "title": row["title"], "done": row["done"],
                 "source_id": source_id if kind == "task" else None,
                 "estimate_minutes": row.get("estimate_minutes"),
-            })
+            }
+            if refs:
+                # A task's doneness lives on its VTODO and a note's or habit's
+                # on the entry (see `_resolved_day_rows`), so a tick needs the
+                # list and uid for one and the entry for the other. `planned`
+                # says whether the entry exists yet: a preview's ids are the
+                # ones an open WOULD write, and nothing can be ticked on them.
+                item["ref"] = {
+                    "kind": kind, "entry": row.get("entry_id"), "planned": planned,
+                    **({"list": source_id, "uid": row.get("uid")} if kind == "task" else {}),
+                }
+            out.append(item)
         sources = [{"id": _slug(h), "name": n, "color": None} for h, n in names.items()]
         return sources, out, planned
 

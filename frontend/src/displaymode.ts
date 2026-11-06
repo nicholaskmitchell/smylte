@@ -1,14 +1,14 @@
 // Display mode: this device, signed in, used as a screen for the day.
 //
-// Not the same thing as a paired display (Settings → Displays), and the two are
-// kept apart on purpose. A paired display reaches the calendar through a token
-// in its URL with no session, which is why it is read-only by design: anyone
-// holding that URL can see it, and letting the URL write as well would let
-// anyone holding it change the calendar. Display mode is the ordinary app,
-// signed in, with the app's own frame taken away — so a tablet propped on a
-// counter or hung on a wall can check off a task or drag an event with a
-// finger, through the same writes, the same undo and the same sync as
-// everywhere else.
+// It draws the desk unit's faces — the month, habits + today, now + next —
+// the same components the page at /display/<token> draws, so an iPad on the
+// counter looks like the panel on the desk. What it adds is touch: a tap ticks
+// a row off, a tap on what you are on finishes it, and an event can be dragged
+// to another day. That is why it is signed in rather than paired. A paired
+// display reaches the calendar through a token in its URL with no session, and
+// is read-only by design: anyone holding that URL can see it, and letting the
+// URL write as well would let anyone holding it change the calendar. Here the
+// writes go through the session like any other.
 //
 // The choice is PER DEVICE, in localStorage, and never in the account's
 // settings: the iPad in the kitchen is a display and the laptop is not, and a
@@ -20,36 +20,35 @@
 // React-free, like tabs.ts and session.ts, so what it stores can be tested
 // without a render.
 
-import { isTab, type Tab } from './tabs'
+import type { DisplayMode } from './api'
 
 export const DISPLAY_MODE_KEY = 'smylte-display-mode'
 
-/** The views display mode offers, in the order its control bar lists them.
- *  Scheduling is left out: it is a page for managing booking links, and
- *  nothing about it is worth leaving on a screen. */
-export const DISPLAY_TABS: readonly Tab[] = ['today', 'calendar', 'home', 'tasks']
+/** The faces display mode offers, in the order its control bar lists them —
+ *  the order Settings → Displays cycles a paired display's mode in. */
+export const DISPLAY_MODES: readonly DisplayMode[] = ['calendar', 'habits', 'now']
 
-export function isDisplayTab(v: unknown): v is Tab {
-  return isTab(v) && DISPLAY_TABS.includes(v)
+export function isDisplayMode(v: unknown): v is DisplayMode {
+  return typeof v === 'string' && (DISPLAY_MODES as readonly string[]).includes(v)
 }
 
-/** Which view this device shows in display mode, or null when it is not in
- *  display mode. A stored value that names no display view reads as off,
- *  rather than as a display of something it cannot show. */
-export function readDisplayMode(): Tab | null {
+/** Which face this device shows in display mode, or null when it is not in
+ *  display mode. A stored value that names no face reads as off, rather than
+ *  as a display of something it cannot show. */
+export function readDisplayMode(): DisplayMode | null {
   try {
     const v = localStorage.getItem(DISPLAY_MODE_KEY)
-    return isDisplayTab(v) ? v : null
+    return isDisplayMode(v) ? v : null
   } catch {
     return null
   }
 }
 
-/** Store the view, or clear display mode with null. */
-export function writeDisplayMode(tab: Tab | null): void {
+/** Store the face, or clear display mode with null. */
+export function writeDisplayMode(mode: DisplayMode | null): void {
   try {
-    if (tab === null) localStorage.removeItem(DISPLAY_MODE_KEY)
-    else localStorage.setItem(DISPLAY_MODE_KEY, tab)
+    if (mode === null) localStorage.removeItem(DISPLAY_MODE_KEY)
+    else localStorage.setItem(DISPLAY_MODE_KEY, mode)
   } catch {
     // Private mode or quota: display mode holds until this page is closed.
   }

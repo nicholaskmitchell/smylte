@@ -509,3 +509,18 @@
   margin: 0; flex: none; font-family: var(--d-mono); font-size-adjust: none; letter-spacing: 0;
   color: var(--d-muted); font-size: clamp(10px, 1.5vh, 15px);
 }
+
+/* ---- touch: the signed-in display mode only (DisplayModeFrame) ----
+   The one place this sheet's "nothing here responds" is lifted, and only for
+   the class that page adds — /display/<token> never carries it, so a paired
+   panel is exactly as inert as above. A row that can be ticked, the title of
+   the item you are on, and an event chip that can be dragged take a finger;
+   nothing else on the face does. No alpha, as everywhere in this sheet: the
+   chip being dragged is marked by a dashed outline and the cell under it by a
+   heavy rule, both of which a reader across the room can see. */
+.display--touch { pointer-events: auto; cursor: auto; }
+.display--touch [role="button"] { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.display--touch [role="button"]:focus-visible { outline: 2px solid var(--d-ink); outline-offset: 2px; }
+.display-chip.is-draggable { touch-action: none; cursor: grab; }
+.display-chip.is-dragging { outline: 2px dashed var(--d-ink); outline-offset: 1px; cursor: grabbing; }
+.display-cal__cell.is-over { box-shadow: inset 0 0 0 3px var(--d-ink); }
