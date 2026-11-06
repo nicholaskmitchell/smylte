@@ -25,7 +25,15 @@ vi.mock('./desktop', async (importOriginal) => {
   }
 })
 
-vi.mock('./components/HomeView', () => ({ HomeView: () => <div>stub home</div> }))
+vi.mock('./components/HomeView', () => ({
+  HomeView: (p: { onOpenSuggested?: () => void; onOpenSettings?: () => void }) => (
+    <div>
+      stub home
+      {p.onOpenSuggested ? <span>has suggested</span> : null}
+      {p.onOpenSettings ? <span>has settings</span> : null}
+    </div>
+  ),
+}))
 vi.mock('./components/TodayView', async (importOriginal) => {
   const mod = await importOriginal<typeof import('./components/TodayView')>()
   return { ...mod, TodayView: () => <div>stub today</div> }
@@ -77,6 +85,9 @@ describe('<App> display mode', () => {
     expect(screen.queryByRole('tab', { name: 'Displays' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Display controls' })).toBeInTheDocument()
     expect(localStorage.getItem(DISPLAY_MODE_KEY)).toBe('home')
+    // Home's ways into Settings and Tasks lead nowhere a display can show.
+    expect(screen.queryByText('has suggested')).toBeNull()
+    expect(screen.queryByText('has settings')).toBeNull()
   })
 
   it('comes back as a display after a reload, whatever the start tab says', async () => {

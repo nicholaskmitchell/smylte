@@ -1,6 +1,12 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { BAR_IDLE_MS, DisplayModeFrame } from './DisplayModeFrame'
+import { useLayer } from '../layers'
+
+function Dialog() {
+  useLayer(() => {})
+  return <div role="dialog">editor</div>
+}
 
 afterEach(() => {
   cleanup()
@@ -40,5 +46,20 @@ describe('<DisplayModeFrame>', () => {
     expect(screen.getByRole('toolbar')).toBeInTheDocument()
     act(() => { vi.advanceTimersByTime(1) })
     expect(screen.queryByRole('toolbar')).toBeNull()
+  })
+
+  it('steps out of the way while a view has a dialog up', () => {
+    const { rerender } = render(frame())
+    fireEvent.click(screen.getByRole('button', { name: 'Display controls' }))
+    expect(screen.getByRole('toolbar')).toBeInTheDocument()
+    rerender(
+      <DisplayModeFrame tab="today" onTab={() => {}} onExit={() => {}}>
+        <Dialog />
+      </DisplayModeFrame>,
+    )
+    expect(screen.queryByRole('toolbar')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Display controls' })).toBeNull()
+    rerender(frame())
+    expect(screen.getByRole('button', { name: 'Display controls' })).toBeInTheDocument()
   })
 })

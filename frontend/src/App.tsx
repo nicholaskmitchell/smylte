@@ -349,7 +349,8 @@ export function App() {
   // others changing — switching to Classic, or leaving the focus surface — and
   // on a phone that is a strip opening scrolled to its start with the tab you
   // are on off its right edge.
-  }, [tab, tabOrder, layout, focusOpen])
+  // `displayTab` for the same reason: leaving display mode mounts the strip.
+  }, [tab, tabOrder, layout, focusOpen, displayTab])
 
   // Failed saves/deletes anywhere in the app surface here (see makeGuard).
   useEffect(() => {
@@ -1002,7 +1003,13 @@ export function App() {
   }, [])
   const leaveDisplayMode = useCallback(() => {
     writeDisplayMode(null)
-    if (displayTab) setTab(displayTab)
+    // A deliberate choice, like a tap on the strip: the first settings read
+    // must not pull the view to the start tab after this.
+    if (displayTab) {
+      tabTouched.current = true
+      setTab(displayTab)
+      cacheTab(displayTab)
+    }
     setDisplayTab(null)
   }, [displayTab])
 
@@ -1529,7 +1536,11 @@ export function App() {
         layout={dashboard} onLayoutChange={changeDashboard}
         hiddenCalendars={hiddenCals} archivedCalendars={archivedCals}
         mailRev={mailRev} sharesRev={sharesRev}
-        onOpenSuggested={openSuggested} onOpenSettings={openSettingsAt} />
+        // Display mode draws no Settings and shows only its own view, so the
+        // buttons that would lead to either are not offered there (HomeView
+        // hides them when the callback is missing).
+        onOpenSuggested={displayTab ? undefined : openSuggested}
+        onOpenSettings={displayTab ? undefined : openSettingsAt} />
     )}
   </>)
 

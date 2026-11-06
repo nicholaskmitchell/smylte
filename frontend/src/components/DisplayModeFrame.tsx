@@ -18,6 +18,7 @@
 // the API (an older iPad) gets nothing, and the person sets Auto-Lock to Never.
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { layerDepth, onLayerDepth } from '../layers'
 import { useT } from '../i18n'
 import { TAB_LABELS, type Tab } from '../tabs'
 import { DISPLAY_TABS, canFullscreen, isFullscreen, toggleFullscreen } from '../displaymode'
@@ -36,6 +37,24 @@ export function DisplayModeFrame({ tab, onTab, onExit, children }: {
   const [full, setFull] = useState(() => isFullscreen())
   const [fullOk] = useState(() => canFullscreen())
   const idle = useRef<ReturnType<typeof setTimeout>>()
+  // Whether a view has a dialog or sheet up. The views draw theirs inline,
+  // inside `.views`, so the corner button would sit above the backdrop: a tap
+  // on it could switch views or exit with an editor half filled in, and on a
+  // phone-sized sheet it would cover Save. So it goes, and an open bar closes,
+  // until the layer does — the same rule that keeps the tab strip out of reach
+  // behind a backdrop in the ordinary app.
+  const [covered, setCovered] = useState(() => layerDepth() > 0)
+  useEffect(() => {
+    const off = onLayerDepth((depth) => {
+      setCovered(depth > 0)
+      if (depth > 0) setOpen(false)
+    })
+    // Read again once subscribed: a layer that closed in the commit that
+    // mounted this frame (Settings, where display mode is started from) did
+    // so before there was anyone listening.
+    setCovered(layerDepth() > 0)
+    return off
+  }, [])
 
   // Restarted by every tap on the bar, so it folds only once it is left alone.
   const poke = () => {
@@ -88,7 +107,7 @@ export function DisplayModeFrame({ tab, onTab, onExit, children }: {
   return (
     <div className="dmode">
       <div className="views">{children}</div>
-      {open ? (
+      {covered ? null : open ? (
         <div className="dmode-bar" role="toolbar" aria-label={tr('dmode.controls')}
           onPointerDown={poke}>
           {DISPLAY_TABS.map((t) => (
