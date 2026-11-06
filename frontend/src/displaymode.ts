@@ -28,6 +28,8 @@ export const DISPLAY_MODE_KEY = 'smylte-display-mode'
  *  the order Settings → Displays cycles a paired display's mode in. */
 export const DISPLAY_MODES: readonly DisplayMode[] = ['calendar', 'habits', 'now']
 
+const LEGACY_DAY_VIEWS = ['today', 'home', 'tasks']
+
 export function isDisplayMode(v: unknown): v is DisplayMode {
   return typeof v === 'string' && (DISPLAY_MODES as readonly string[]).includes(v)
 }
@@ -38,7 +40,11 @@ export function isDisplayMode(v: unknown): v is DisplayMode {
 export function readDisplayMode(): DisplayMode | null {
   try {
     const v = localStorage.getItem(DISPLAY_MODE_KEY)
-    return isDisplayMode(v) ? v : null
+    if (isDisplayMode(v)) return v
+    // The first display mode drew the app's views and stored a tab. A tablet
+    // left on one of those is still a display: the views about the day map to
+    // the day's face, and the Calendar tab was already stored as 'calendar'.
+    return v !== null && LEGACY_DAY_VIEWS.includes(v) ? 'habits' : null
   } catch {
     return null
   }

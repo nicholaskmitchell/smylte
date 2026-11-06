@@ -2322,7 +2322,18 @@ def test_the_preview_with_refs_names_events_and_rows(svc):
     assert "ref" not in _items(svc.preview_display_frame({"mode": "calendar"}))[0]
 
 
-def test_the_preview_route_gives_refs_only_when_asked(api):
+def test_the_preview_route_gives_refs_only_when_asked(api, monkeypatch):
+    seen: list[bool] = []
+    real = SmylteService.preview_display_frame
+
+    def spy(self, fields, *, refs=False):
+        seen.append(refs)
+        return real(self, fields, refs=refs)
+
+    monkeypatch.setattr(SmylteService, "preview_display_frame", spy)
     assert api.get("/api/displays/preview?mode=habits&refs=true").status_code == 200
     r = api.get("/api/displays/preview?mode=calendar&name=Kitchen")
     assert r.status_code == 200 and r.json()["display"]["name"] == "Kitchen"
+    # The picture never asks for them, whatever the query says.
+    assert api.get("/api/displays/preview.png?refs=true").status_code == 200
+    assert seen == [True, False, False]
