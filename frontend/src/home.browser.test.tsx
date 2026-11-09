@@ -109,3 +109,36 @@ describe.each(FRAMES)('the Home modules in %s', (_name, width, frame) => {
       .toBeLessThanOrEqual(body.clientWidth + 1)
   })
 })
+
+// The saved grid drawn at the width an upright iPad gave a 3-column module
+// (~125px), which is still what Arrange shows there. Before rows wrapped, a
+// suggestion's title was set one letter per line beside its date and an overdue
+// date ran out of the card with no title left at all.
+describe('a module as narrow as an upright iPad drew one', () => {
+  const narrow = (body: string) =>
+    `<div class="dash-grid">${section(body, 'position: static; height: auto; width: 125px')}</div>`
+
+  it('keeps a suggestion’s title readable beside a long date', async () => {
+    await viewport(820, 1180)
+    const host = await mount(narrow(SUGGESTED))
+    const title = host.querySelector('.dash-sug-title')!
+    expect(box(title).w, 'the title was squeezed to a letter a line').toBeGreaterThanOrEqual(80)
+  })
+
+  it('keeps an overdue row’s title and date inside the card', async () => {
+    await viewport(820, 1180)
+    const host = await mount(narrow(`
+      <ul class="dash-tasks">
+        <li class="dash-task">
+          <span class="list-dot"></span>
+          <span class="dash-task-title" id="t">Reply to the contractor</span>
+          <span class="dash-task-due mono overdue" id="due">Oct 30, 12:30 PM</span>
+        </li>
+      </ul>`))
+    const body = host.querySelector('#body')!
+    expect(box(host.querySelector('#t')!).w, 'the title vanished').toBeGreaterThanOrEqual(50)
+    expect(box(host.querySelector('#due')!).right, 'the date runs out of the card')
+      .toBeLessThanOrEqual(box(body).right + 0.5)
+    expect(body.scrollWidth).toBeLessThanOrEqual(body.clientWidth + 1)
+  })
+})

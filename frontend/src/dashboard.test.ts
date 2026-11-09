@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
   COLS, DEFAULT_LAYOUT, MODULE_KINDS, MODULE_SPECS,
-  addModule, clampToGrid, layoutRows, moveModule, overlaps, packDown,
+  addModule, clampToGrid, fitLayout, GAP, layoutRows, MIN_MODULE_PX, moveModule, overlaps, packDown,
   pxToCellDelta, removeModule, resizeModule, sanitizeLayout,
   type DashboardModule,
 } from './dashboard'
@@ -232,5 +232,55 @@ describe('module registry', () => {
     expect(block, 'DashboardModule.kind not found in app.py').toBeTruthy()
     const serverKinds = [...block![1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1])
     expect([...serverKinds].sort()).toEqual([...MODULE_KINDS].sort())
+  })
+})
+
+describe('fitLayout', () => {
+  // The board from the iPad report: four 3-column modules on the top row.
+  const board: DashboardModule[] = [
+    mod({ id: 'a', kind: 'today', x: 0, y: 0, w: 3, h: 6 }),
+    mod({ id: 'b', kind: 'day_plan', x: 3, y: 0, w: 3, h: 6 }),
+    mod({ id: 'c', kind: 'mini_calendar', x: 6, y: 0, w: 3, h: 6 }),
+    mod({ id: 'd', kind: 'suggested', x: 9, y: 0, w: 3, h: 6 }),
+    mod({ id: 'e', kind: 'overdue', x: 0, y: 6, w: 6, h: 5 }),
+  ]
+  const px = (m: DashboardModule, width: number) => (m.w / COLS) * width - GAP
+
+  it('leaves a board that already fits exactly as saved', () => {
+    expect(fitLayout(board, 1200)).toBe(board)
+  })
+
+  it('leaves the board alone before the grid has been measured', () => {
+    expect(fitLayout(board, 0)).toBe(board)
+  })
+
+  it.each([
+    ['an upright iPad', 560, 2],
+    ['an iPad on its side', 880, 3],
+    ['an iPad mini upright', 470, 2],
+    ['a split-screen sliver', 300, 1],
+  ])('on %s (%ipx) draws %i modules a row, none too narrow', (_n, width, perRow) => {
+    const out = fitLayout(board, width)
+    expect(noOverlaps(out)).toBe(true)
+    for (const m of out) {
+      expect(m.x + m.w).toBeLessThanOrEqual(COLS)
+      if (perRow > 1) expect(px(m, width)).toBeGreaterThanOrEqual(MIN_MODULE_PX)
+    }
+    expect(out.filter((m) => m.y === 0)).toHaveLength(perRow)
+    // Heights and kinds are the saved ones; only the geometry moves.
+    expect(out.map((m) => [m.id, m.kind, m.h])).toEqual(board.map((m) => [m.id, m.kind, m.h]))
+  })
+
+  it('keeps reading order: the first module saved is still first', () => {
+    const out = fitLayout(board, 560)
+    expect(out.find((m) => m.id === 'a')).toMatchObject({ x: 0, y: 0, w: 6 })
+    expect(out.find((m) => m.id === 'b')).toMatchObject({ x: 6, y: 0, w: 6 })
+    expect(out.find((m) => m.id === 'c')).toMatchObject({ x: 0, y: 6 })
+  })
+
+  it('does not change the layout it was given', () => {
+    const copy = structuredClone(board)
+    fitLayout(board, 560)
+    expect(board).toEqual(copy)
   })
 })

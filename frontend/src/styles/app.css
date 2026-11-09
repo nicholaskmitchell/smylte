@@ -1789,8 +1789,11 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
 .dash-grid { position: relative; margin: 8px var(--gutter) 40px; }
 .dash-grid.arranging { background-image:
     repeating-linear-gradient(to bottom, var(--rule-faint) 0 1px, transparent 1px 56px); }
+/* A module is a size container, so what is inside it can answer to the width it
+   was given rather than to the window's (the mini calendar below). */
 .dash-mod {
   position: absolute; display: flex; flex-direction: column; overflow: hidden;
+  container-type: inline-size;
   background: var(--bg-elev); border: 1px solid var(--rule-faint); border-radius: var(--r-md);
 }
 .dash-grid.arranging .dash-mod { border-color: var(--rule); }
@@ -1874,6 +1877,16 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
   border-bottom: 1px solid var(--rule-faint);
 }
 .dash-task:last-child { border-bottom: 0; }
+/* A row WRAPS rather than squeezing its title. The date is `flex: none`, so on
+   a narrow module it took every pixel and left the title three letters long, or
+   none at all with a long overdue date ("Oct 30 at 12:00") that then ran out of
+   the card. The title now asks for 6em before it shares a line, and when it
+   cannot have that the date drops under it, kept to the right edge. */
+.dash-task { flex-wrap: wrap; }
+.dash-task > .dash-task-title { flex: 1 1 6em; }
+/* …and a date longer than the whole card breaks at its spaces rather than run
+   out of it. */
+.dash-task > .dash-task-due { margin-left: auto; max-width: 100%; }
 .dash-task.done .dash-task-title { color: var(--fg-faint); text-decoration: line-through; }
 .dash-task-title { flex: 1; min-width: 0; font-size: calc(13px * var(--fs-scale));
   font-weight: var(--wght-content);   /* T9 · a task title; 13px, so untracked */
@@ -1888,8 +1901,11 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
    the module sideways. The title wraps instead of truncating: it is somebody
    else's subject line, and a decision made on half of it is a worse one. */
 .dash-sug-row { flex-direction: column; align-items: stretch; gap: 4px; }
-.dash-sug-head { display: flex; align-items: baseline; gap: 8px; }
-.dash-sug-title { flex: 1; min-width: 0; font-size: calc(13px * var(--fs-scale));
+/* Wraps for the reason `.dash-task` does: a `flex: none` date beside a
+   `min-width: 0` title on a narrow module set the title one letter per line. */
+.dash-sug-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.dash-sug-head > .dash-task-due { margin-left: auto; }
+.dash-sug-title { flex: 1 1 8em; min-width: 0; font-size: calc(13px * var(--fs-scale));
   font-weight: var(--wght-content); overflow-wrap: anywhere; }
 .dash-sug-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
 /* The same small mono label as the pane's kind badge. */
@@ -1910,8 +1926,11 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
    truncates as every task title does, while the view text is the longer of the
    two and wraps. Unlike the text-only rows the switch is a control, so the row
    centres on it, and the text column may shrink so neither pushes it out. */
-.dash-share-row { align-items: center; }
-.dash-share-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+/* The switch moves under the text, rather than squeezing it to a word a line,
+   when the module is too narrow for both. */
+.dash-share-row { align-items: center; row-gap: 6px; }
+.dash-share-row .menu-toggle { margin-left: auto; }
+.dash-share-info { flex: 1 1 8em; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .dash-share-meta { font-size: calc(11px * var(--fs-scale)); color: var(--fg-muted);
   overflow-wrap: anywhere; }
 .dash-share-note { font-size: calc(11px * var(--fs-scale)); color: var(--fg-faint); }
@@ -1963,6 +1982,13 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
 /* today's cell is a solid accent field — ring the dot rather than recoloring it,
    so the calendar's own color survives the highlight */
 .mini-day.today .mini-dot { box-shadow: 0 0 0 0.5px var(--bg); }
+/* A narrow module: seven columns of two mono digits ran together ("1011121314")
+   once a cell was narrower than the number. A size down, tighter digits and a
+   thinner inset keep a gap between days. */
+@container (max-width: 240px) {
+  .mini-cal { padding-inline: 4px; }
+  .mini-day { font-size: calc(10px * var(--fs-scale)); letter-spacing: -0.03em; }
+}
 
 /* mobile: modules stack full-width, read-only (arranging is desktop-only) */
 /* The `padding` shorthand here sits at the same (0,1,0) specificity as the

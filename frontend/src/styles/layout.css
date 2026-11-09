@@ -20,9 +20,15 @@
 /* ---- the frame -------------------------------------------------------- */
 /* The frame is what the settings menu hangs from (see `.set-frame > .menu`), so it
    is positioned, and it carries the column's width for the menu to clear:
-   236px, or the rail's 52px when folded (`data-nav`, set by App). */
+   236px (200px on an upright tablet), or the rail's 52px when folded (`data-nav`, set by App). */
 .frame { flex: 1; min-height: 0; display: flex; position: relative; --nav-w: 236px; }
 .frame[data-nav="folded"] { --nav-w: 52px; }
+/* A tablet held upright (an iPad is 744–834px across) gave the column nearly
+   30% of the screen. Its rows are short labels, so it narrows there and the
+   room goes to the view. */
+@media (min-width: 721px) and (max-width: 1023px) {
+  .frame:not([data-nav="folded"]) { --nav-w: 200px; }
+}
 /* The column the views are drawn in. Each view's root is the same `.work` or
    `.content` it is under Classic, and they already take `flex: 1` of a column,
    which is what this is. */

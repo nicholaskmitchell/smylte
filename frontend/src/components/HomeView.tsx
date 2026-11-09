@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import {
+  useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties,
+} from 'react'
 import {
   api, clientId, AuthError,
   type Booking, type BookingLink, type CalEvent, type DayEntry, type DayPlan,
@@ -24,7 +26,7 @@ import { readCachedDayPlan } from '../cache'
 import { useI18n, useT } from '../i18n'
 import { weekdayNames } from '../names'
 import {
-  COLS, DEFAULT_LAYOUT, GAP, MODULE_KINDS, MODULE_SPECS, ROW_H, addModule, layoutRows,
+  COLS, DEFAULT_LAYOUT, GAP, MODULE_KINDS, MODULE_SPECS, ROW_H, addModule, fitLayout, layoutRows,
   moveModule, pxToCellDelta, removeModule, resizeModule, sanitizeLayout,
   type DashboardModule, type ModuleKind,
 } from '../dashboard'
@@ -94,7 +96,28 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   // and no way to reach an empty dashboard at all.
   const committed = layout ?? DEFAULT_LAYOUT
   const mods = preview ?? committed
-  const rows = layoutRows(mods)
+
+  // The grid's own width, which is what decides whether the saved layout fits
+  // (`fitLayout`). Measured before paint, so a tablet never flashes the
+  // cramped board first, and watched for a turn of the tablet or a resize.
+  // Feature-detected for the same reason DisplayView gives: without a
+  // ResizeObserver the board is measured once rather than not drawn at all.
+  const [gridW, setGridW] = useState(0)
+  useLayoutEffect(() => {
+    const el = gridRef.current
+    if (!el) return
+    const measure = () => setGridW(el.clientWidth)
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [isMobile])
+  // Arranging draws the saved grid as it is, because that is what a drag edits
+  // and the pointer math works in its 12 columns. Reading draws it fitted.
+  const shown = useMemo(
+    () => (arranging ? mods : fitLayout(mods, gridW)), [arranging, mods, gridW])
+  const rows = layoutRows(shown)
 
   const commit = useCallback((next: DashboardModule[]) => {
     setPreview(null)
@@ -388,7 +411,7 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
         <div ref={gridRef} className={`dash-grid ${arranging ? 'arranging' : ''}`}
           style={{ height: rows * (ROW_H + GAP) }}
           onPointerMove={onPointerMove} onPointerUp={endDrag} onPointerCancel={cancelDrag}>
-          {mods.map((m) => (
+          {shown.map((m) => (
             // Cells are laid out as percentages of the grid's own width (so the
             // 12 columns stay proportional at any window size), with the gutter
             // subtracted off each module's width/height rather than added

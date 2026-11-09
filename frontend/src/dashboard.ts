@@ -229,3 +229,52 @@ export function pxToCellDelta(dx: number, dy: number, containerW: number): { dx:
     dy: Math.round(dy / (ROW_H + GAP)),
   }
 }
+
+// ── fitting a saved layout to a narrower window ─────────────────────────────
+
+/** The narrowest a module may be drawn, in px, before the board is reflowed. */
+export const MIN_MODULE_PX = 220
+
+/**
+ * The layout as it should be DRAWN in a grid `width` px wide. Never saved.
+ *
+ * The saved layout is laid out on a desktop, where a 3-column module is a
+ * comfortable 250px. On a tablet the same 3 columns are ~120px: titles cut to
+ * three letters and the mini calendar's numbers run together. When any module
+ * would be drawn narrower than `MIN_MODULE_PX`, the board is redrawn on as
+ * many equal tracks as fit at that width (1, 2, 3 or 4 of the 12 columns):
+ * every module's width rounds UP to whole tracks, and the modules are placed
+ * again in reading order, each in the first slot where it fits. Heights are
+ * kept. A board that already fits comes back unchanged, so a desktop never
+ * sees this.
+ */
+export function fitLayout(mods: DashboardModule[], width: number): DashboardModule[] {
+  if (!(width > 0) || !mods.length) return mods
+  const drawn = (w: number) => (w / COLS) * width - GAP
+  if (mods.every((m) => drawn(m.w) >= MIN_MODULE_PX)) return mods
+  // Tracks that divide the 12 columns evenly, so the columns still line up.
+  const fits = [4, 3, 2].find((t) => drawn(COLS / t) >= MIN_MODULE_PX) ?? 1
+  const unit = COLS / fits
+  const order = [...mods].sort((a, b) => (a.y - b.y) || (a.x - b.x))
+  const placed: DashboardModule[] = []
+  for (const m of order) {
+    const w = Math.min(COLS, Math.ceil(m.w / unit) * unit)
+    placed.push(firstFree(placed, m, w, unit))
+  }
+  // Back in the caller's order, so the DOM (and focus order) does not shuffle.
+  const byId = new Map(placed.map((p) => [p.id, p]))
+  return mods.map((m) => byId.get(m.id) ?? m)
+}
+
+/** The first slot, top to bottom then left to right, where `m` fits at width `w`. */
+function firstFree(
+  placed: DashboardModule[], m: DashboardModule, w: number, unit: number,
+): DashboardModule {
+  // Always ends: below every placed module there is a free row.
+  for (let y = 0; ; y++) {
+    for (let x = 0; x + w <= COLS; x += unit) {
+      const c = { ...m, x, y, w }
+      if (!placed.some((p) => overlaps(p, c))) return c
+    }
+  }
+}
