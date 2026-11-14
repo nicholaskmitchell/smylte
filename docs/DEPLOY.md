@@ -28,6 +28,9 @@ user is different, change it in `/etc/smylte/smylte.env` afterwards.
 - A Linux host with systemd, and Radicale already running on `127.0.0.1:5232`.
 - **Python 3.12 or 3.13.** CI tests exactly these (`.github/workflows/ci.yml`),
   and `setup.sh` refuses anything else.
+- **On a Raspberry Pi,** use Raspberry Pi OS Lite (64-bit) 2026-10-06 or later
+  (Debian 13, Python 3.13), not the Legacy image. Lite does not include `git` or
+  `sqlite3`: `sudo apt install git sqlite3`.
 - Node.js, to build the frontend.
 - Caddy (or another reverse proxy, see step 3), and `cloudflared` for a tunnel.
 
@@ -385,10 +388,12 @@ Pair a display in **Settings → Displays**. Each one has a token and these URLs
 | URL | For |
 | --- | --- |
 | `/display/<token>` | A browser: a Raspberry Pi kiosk, an old tablet, a Boox |
-| `/api/public/display/<token>.bin` | A microcontroller: the packed 1-bit framebuffer (see `firmware/README.md`) |
+| `/api/public/display/<token>.bin` | A microcontroller, or a panel on this box's own SPI header: the packed 1-bit framebuffer (see `firmware/README.md`) |
 | `/api/public/display/<token>.png`, `.bmp` | A board with an image decoder. `?w=&h=`, `?rotate=` and `?palette=` override per request |
 | `/api/public/display/<token>` | The frame as JSON (about 30 KB for a typical month, up to about 130 KB) |
 
+- A Raspberry Pi 5 server can drive a Waveshare 7.5" panel itself; see **Desk
+  panel on this box** below.
 - **Set a home timezone** in Settings → General if the server isn't in your
   zone. Without one, displays use the server's zone.
 - Renders are limited to 4,000,000 pixels. Larger requests get a 422.
@@ -415,6 +420,27 @@ Pair a display in **Settings → Displays**. Each one has a token and these URLs
 The renderer needs Pillow and the fonts in `backend/smylted/display/fonts/`.
 Rebuild them with `python -m dev.build_display_fonts` (needs `fonttools` and
 `brotli`) if the frontend's fonts change. Displays need no outbound network.
+
+### Desk panel on this box
+
+Optional, and separate from `setup.sh`. A Raspberry Pi 5 server can drive a
+Waveshare 7.5" e-Paper panel on its own SPI header, with no Pico.
+
+1. Turn SPI on: `sudo raspi-config nonint do_spi 0`, then reboot.
+2. Wire the panel to the header, with the Pi unplugged.
+3. In **Settings → Displays**, add a display (E-ink, 800 × 480).
+4. `sudo ~/smylte/deploy/panel-setup.sh`. It asks for the display's token.
+
+`firmware/README.md` has the wiring and the troubleshooting.
+
+- **Autopull never updates or restarts it.** The service runs a root-owned copy
+  in `/usr/local/lib/smylte-panel`. After pulling a change to
+  `firmware/pi_epaper_7in5/` or `deploy/smylte-panel.service`, re-run
+  `sudo ~/smylte/deploy/panel-setup.sh`.
+- **Moving machines:** the restored `displays` table keeps the token valid. Store
+  it again on the new box with `panel-setup.sh`.
+- **Migrations:** any future migration that touches the panel must be a no-op on
+  boxes without one.
 
 ### Shares
 
@@ -524,7 +550,8 @@ out.
 
 `sudo systemctl disable --now smylte.service`, remove the Caddy snippet and
 reload Caddy, delete the tunnel's public hostname, and remove the Radicale
-`hook` line and restart Radicale. None of this changes Radicale's data.
+`hook` line and restart Radicale. None of this changes Radicale's data. The desk panel, if you have one, is
+removed with `sudo ~/smylte/deploy/panel-setup.sh --uninstall`.
 
 ## Backups
 

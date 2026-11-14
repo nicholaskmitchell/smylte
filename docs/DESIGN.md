@@ -1003,7 +1003,7 @@ build and the desktop binaries keep publishing.
 
 ## Panel firmware
 
-`firmware/` is about sixty lines because the server does the hard part: `.bin`
+`firmware/` is short because the server does the hard part: `.bin`
 is the buffer the driver already holds. It doesn't vendor Waveshare's driver,
 since a stale copy of third-party code would be worse than none. A backend test
 parses `main.py` and checks its constants against the live endpoint, because CI
@@ -1013,10 +1013,60 @@ second copy of the 48,000-byte frame on a board with 520 KB of RAM.
 
 The directory is MIT while the rest is AGPL. The AGPL's distinguishing clause
 (§13) applies to software people reach over a network, and a panel only makes
-outbound requests. The example is meant to be copied and ported. Waveshare's
-driver is GPL-3.0, so what runs on the board is a GPL-3.0 combined work either
-way. MIT lets the fetch-to-buffer part be reused somewhere that driver isn't.
-The server side (`backend/smylted/display/`) stays AGPL.
+outbound requests. The example is meant to be copied and ported. For the Pico
+client, Waveshare's driver is GPL-3.0, so what runs on the board is a GPL-3.0
+combined work either way. MIT lets the fetch-to-buffer part be reused somewhere
+that driver isn't. The Pi client below runs no Waveshare code. The server side
+(`backend/smylted/display/`) stays AGPL.
+
+### The Raspberry Pi 5 client
+
+`firmware/pi_epaper_7in5/` is for a Pi 5 that runs the server and drives the
+panel on its own SPI header. It is not yet run on hardware; CI checks it against
+the server and against Waveshare's driver. These are the decisions, with the
+reasons the code's comments give.
+
+**A separate unit, not code inside smylted.** `smylte.service` keeps
+`PrivateDevices` and an empty capability set, and it is internet-facing. The panel
+needs `/dev/spidev0.0` and `/dev/gpiochip*`, and it holds the floor that protects
+the glass.
+
+**Loopback HTTP, not importing the renderer.** The client uses the same tested
+contract as every other panel. That keeps the MIT/AGPL split, and server restarts
+don't touch the panel.
+
+**Its own driver, not Waveshare's Pi driver.** Waveshare's `epdconfig.py` runs a
+shell and claims GPIOs at import, falls back to Jetson libraries, waits on BUSY
+without a bound, and its `init()` reopens SPI without closing it. gpiozero's
+lgpio backend needs a writable working directory. libgpiod finds the chip by
+label (`gpiochip0` or `gpiochip4`, depending on the kernel) and holds the lines
+exclusively. CI parses Waveshare's source as data and checks the command bytes
+match byte for byte.
+
+**Deep sleep between refreshes, power cut on exit.** This is how the Pico driver
+left this module. Cutting power while the kernel holds CE0 high would feed the
+panel through CS. RP1 keeps a GPIO output's level after its process dies, hence
+`ExecStopPost`.
+
+**DynamicUser, a root-owned copy and `LoadCredential`.** A compromised smylted
+can't signal or rewrite the process guarding the glass. The cost is re-running
+`panel-setup.sh` after a client change, because autopull doesn't.
+
+**The floor on CLOCK_BOOTTIME, with a write-ahead record.** The 180 s floor must
+hold across crashes and reboots, and boot time restarts from zero at every boot,
+so the rule is a lower bound on the real time since the last refresh ended. A
+time at or before this process's start may be from this boot or an earlier one,
+and either way waiting until it plus 180 s is enough. A time after the start must
+be from an earlier boot, so 180 s of this boot's uptime is enough. The refresh is
+recorded before it starts, so a crash halfway through still counts, and no record
+at all means unknown: wait the full floor.
+
+**Signals blocked and collected with `sigtimedwait`.** A stop can then never land
+mid-refresh.
+
+**The clock gate.** A Pi has no RTC battery unless one is fitted, and the server
+on the same box would render the wrong day before NTP answers. So the first fetch
+waits for the clock to sync, or for 300 s of uptime if the box is offline.
 
 ## Licence
 

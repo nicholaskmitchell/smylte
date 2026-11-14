@@ -53,9 +53,9 @@ The reasoning behind most of the design is in [`docs/DESIGN.md`](docs/DESIGN.md)
   approve it. Bulk mail is filtered in code before anything reaches the model.
   Secrets are write-only and kept out of the database.
 - **Displays.** Read-only screens: the month, habits and today, or now and
-  next. They work in a browser or on e-ink panels driven by a microcontroller,
-  which fetch a packed 1-bit framebuffer from `/api/public/display/<token>.bin`.
-  The display URL works as a password.
+  next. They work in a browser or on e-ink panels driven by a microcontroller
+  or by the server box itself over SPI, which fetch a packed 1-bit framebuffer
+  from `/api/public/display/<token>.bin`. The display URL works as a password.
 - **Shares.** A private, read-only link for someone else at `/share/<token>`:
   titles and times from the task lists and calendars you pick, how far ahead
   they see (today to four weeks), and, if you turn it on, whether you are
@@ -75,8 +75,9 @@ The reasoning behind most of the design is in [`docs/DESIGN.md`](docs/DESIGN.md)
 - **Android app.** The same idea on a phone, installed from the release rather
   than a store, and it updates itself. See
   [`android/README.md`](android/README.md).
-- **Panel firmware.** A MicroPython example for a Pico 2 W and a Waveshare 7.5"
-  e-paper panel. See [`firmware/README.md`](firmware/README.md).
+- **Panel firmware.** Two clients for a Waveshare 7.5" e-paper panel: a
+  MicroPython example for a Pico 2 W, and a Raspberry Pi 5 client that drives the
+  panel from the server box. See [`firmware/README.md`](firmware/README.md).
 
 Preferences (theme, layout, dashboard, views, hidden calendars and lists, clock,
 language) are saved to your account. The app supports English and German, and a
@@ -111,7 +112,7 @@ frontend/
     api.ts        typed API client and SSE subscription
     App.tsx       shell: frame, settings, theme, live refresh
     styles/       design tokens, app.css, layout.css, display.css
-firmware/         MicroPython example for a Pico 2 W + Waveshare 7.5"
+firmware/         Panel clients: Pico 2 W (MicroPython), Pi 5 (SPI)
 desktop/          Windows (WinForms, WebView2) and Linux (GTK 4, WebKitGTK) clients
 android/          Android client (Kotlin, Android System WebView)
 scratch/          disposable Radicale for development on :5233
