@@ -1,0 +1,116 @@
+# systemd unit for the Smylte desk panel: a Waveshare 7.5" e-Paper V2 on this
+# box's own SPI header, painted from smylted over loopback.
+#
+# Install with `sudo deploy/panel-setup.sh`, which copies this file and the
+# client into place and stores the display token. Do not symlink it from the
+# checkout: the client runs from a root-owned copy in /usr/local/lib/smylte-panel
+# (see "Identity and code" below), so autopull never changes it. After pulling a
+# change to firmware/pi_epaper_7in5/ or to this file, re-run panel-setup.sh.
+#
+# Deliberately NOT coupled to smylte.service (no After=, PartOf=, Requires=).
+# The client treats a server that is down as "keep the last frame and retry
+# in a minute", so it needs nothing from the server's lifecycle, and the server
+# needs nothing from it.
+#
+# ── Identity and code ────────────────────────────────────────────────────────
+# DynamicUser, not the server's user. The panel can be damaged by refreshing
+# too often or being left powered, and the 180 s floor lives in this process.
+# smylted is internet-reachable through the tunnel; run under its uid, a
+# compromise of it could signal or rewrite this process. A dynamic user shares
+# nothing with it, and the code it runs is root-owned and outside /home.
+#
+# ── Devices ──────────────────────────────────────────────────────────────────
+# No PrivateDevices: it would hide /dev/spidev0.0 and /dev/gpiochip*.
+# DevicePolicy=closed with exactly these two DeviceAllow lines instead. That also
+# keeps out /dev/gpiomem*, which group `gpio` would otherwise open: raw RP1
+# registers, every pin on the header. The names come from /proc/devices and are
+# resolved when the unit starts, so if spidev has not loaded yet at boot the
+# open fails, the client exits 1 and the restart a minute later succeeds.
+# No PrivateUsers: SupplementaryGroups would be unmapped inside it.
+#
+# ── Power ────────────────────────────────────────────────────────────────────
+# ExecStopPost is not optional. The Pi 5's GPIO block keeps an output at its
+# last level after the process that set it dies (pinctrl-rp1
+# persist_gpio_outputs, on by default). The client cuts the panel's power on
+# every exit it gets to run code for; this covers the ones it does not
+# (SIGKILL, the watchdog's SIGABRT, the OOM killer). The leading `-` keeps its
+# result out of the unit's.
+#
+# ── Timing ───────────────────────────────────────────────────────────────────
+# TimeoutStopSec covers a stop that lands mid-refresh: the client finishes the
+# refresh (at most the driver's PAINT_WORST_S, about 85 s with every BUSY wait
+# at its deadline), lets deep sleep settle for 2 s, then exits. CI checks this
+# value against those constants.
+# WatchdogSec: the client pings at least every 15 s while waiting and through
+# every refresh. A fetch whose headers trickle in can stall http.client
+# indefinitely; the watchdog is what ends that.
+# StartLimit: a panel fault exits 1 and is retried a minute later, five times
+# an hour, then the unit stays failed until `systemctl reset-failed`. Exit 78
+# (no token, bad token, bad setting) is not retried at all.
+#
+# If a first boot fails and the journal points at the sandbox rather than the
+# hardware, relax in this order: MemoryDenyWriteExecute, then SystemCallFilter.
+[Unit]
+Description=Smylte desk panel (Waveshare 7.5" e-Paper on SPI0)
+StartLimitIntervalSec=3600
+StartLimitBurst=5
+
+[Service]
+Type=notify
+NotifyAccess=main
+DynamicUser=yes
+SupplementaryGroups=gpio spi
+LoadCredential=display-token:/etc/credstore/smylte-panel-token
+StateDirectory=smylte-panel
+StateDirectoryMode=0700
+ExecStart=/usr/bin/python3 -I -B /usr/local/lib/smylte-panel/panel.py
+ExecStopPost=-/usr/bin/python3 -I -B /usr/local/lib/smylte-panel/panel.py --power-off
+Restart=on-failure
+RestartSec=60
+RestartPreventExitStatus=78
+TimeoutStartSec=30
+TimeoutStopSec=120
+WatchdogSec=60
+# A core dump would hold the token.
+LimitCORE=0
+MemoryMax=128M
+TasksMax=8
+
+DevicePolicy=closed
+DeviceAllow=char-spi rw
+DeviceAllow=char-gpiochip rw
+
+# Loopback only: the one host it talks to is smylted on 127.0.0.1:8080.
+# AF_UNIX is for sd_notify.
+IPAddressAllow=localhost
+IPAddressDeny=any
+RestrictAddressFamilies=AF_INET AF_UNIX
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+# Safe only because nothing in the client or driver reads /proc (Waveshare's
+# epdconfig.py reads /proc/cpuinfo at import; ours does not, and CI checks).
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
