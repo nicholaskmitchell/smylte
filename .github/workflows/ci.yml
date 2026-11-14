@@ -84,7 +84,12 @@ jobs:
           SCRATCH_REQUIRED: '1'
 
   frontend:
-    runs-on: ubuntu-latest
+    # PINNED, not ubuntu-latest. `ubuntu-latest` moved to 26.04, and
+    # Playwright 1.56 has no browser builds for it: `playwright install
+    # --with-deps` fails with "Playwright does not support chromium on
+    # ubuntu26.04-x64" after every unit test has passed. Move this to
+    # ubuntu-latest again together with a Playwright that supports it.
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: frontend
