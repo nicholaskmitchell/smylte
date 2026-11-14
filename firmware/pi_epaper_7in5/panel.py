@@ -732,6 +732,9 @@ def run(d: Deps) -> int:
             next_poll = now + ERROR_RETRY_S
 
         # Keep the 23-hour repaint on time even if the server advises 24 h.
+        # The clock is read again: after a paint, `now` (taken before it) is
+        # earlier than painted_end_bt, and the cap would be skipped.
+        now = d.boottime()
         if state.complete and state.painted_end_bt is not None \
                 and state.painted_end_bt <= now:
             force_at = state.painted_end_bt + FORCE_REPAINT_S
@@ -743,9 +746,10 @@ def clear(d: Deps) -> int:
     """Paint white, for storage, once the floor allows. Records it in state."""
     state = load_state(d.state_dir)
     floor_at = floor_ok_at(state, d.boottime())
-    while d.boottime() < floor_at:
+    if d.boottime() < floor_at:
         log.info("clearing in %d s (the 180 s floor)",
                  math.ceil(floor_at - d.boottime()))
+    while d.boottime() < floor_at:
         sig = d.wait(min(PING_SLICE_S, floor_at - d.boottime()))
         if sig in STOP_SIGNALS:
             return EX_OK
