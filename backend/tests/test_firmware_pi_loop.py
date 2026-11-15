@@ -473,6 +473,13 @@ def _daily(n, sent, clock):
     return P.NotModified(sent, 86400)
 
 
+def _daily_304(n, sent, clock):
+    """As _daily, but the first conditional fetch gets a 304, not a dedupe."""
+    if sent is None:
+        return P.Frame(frame(1), etag(1), 86400)
+    return P.NotModified(sent, 86400)
+
+
 def test_an_unchanged_frame_is_repainted_after_23_hours(tmp_path):
     """Waveshare asks for a refresh a day against ghosting, so the same
     picture is painted again, fetched without If-None-Match to get a body."""
@@ -809,8 +816,9 @@ def _late_sync_run(tmp_path, painted_age, responder, stop_after=3):
     return h, clock, painted_wall
 
 
-def test_a_clock_that_syncs_later_still_bounds_the_23_hour_repaint(tmp_path):
-    h, clock, painted_wall = _late_sync_run(tmp_path, 22 * 3600, _daily)
+@pytest.mark.parametrize("responder", [_daily, _daily_304], ids=["dedupe", "304"])
+def test_a_clock_that_syncs_later_still_bounds_the_23_hour_repaint(tmp_path, responder):
+    h, clock, painted_wall = _late_sync_run(tmp_path, 22 * 3600, responder)
     assert h.fetches[0][0] == 300.0 and h.fetches[0][1] is not None
     assert 400.0 <= h.fetches[1][0] < 460.0      # asked again once the clock synced
     forced = [t for t, sent in h.fetches if sent is None]
@@ -818,8 +826,9 @@ def test_a_clock_that_syncs_later_still_bounds_the_23_hour_repaint(tmp_path):
     assert clock.wall_offset + forced[0] <= painted_wall + P.FORCE_REPAINT_S + 60
 
 
-def test_a_clock_that_syncs_to_an_overdue_repaint_repaints_at_once(tmp_path):
-    h, clock, painted_wall = _late_sync_run(tmp_path, P.FORCE_REPAINT_S - 60, _daily)
+@pytest.mark.parametrize("responder", [_daily, _daily_304], ids=["dedupe", "304"])
+def test_a_clock_that_syncs_to_an_overdue_repaint_repaints_at_once(tmp_path, responder):
+    h, clock, painted_wall = _late_sync_run(tmp_path, P.FORCE_REPAINT_S - 60, responder)
     forced = [t for t, sent in h.fetches if sent is None]
     assert forced and forced[0] < 460.0, h.fetches
     assert h.panel.paints()
@@ -834,6 +843,96 @@ def test_a_clock_that_syncs_during_a_backoff_does_not_cut_it_short(tmp_path):
 
 
 W0 = 1.7e9      # Clock's default wall_offset
+
+
+def test_a_sync_that_lands_during_a_fetch_is_not_lost(tmp_path):
+    """The wall clock already says the repaint is overdue, and the clock syncs
+    while the first (conditional) fetch is in flight."""
+    clock = Clock(t=300.0)
+    clock.synced = False
+    painted_wall = clock.wall_offset + 300.0 - (P.FORCE_REPAINT_S + 600)
+    save(tmp_path, etag=etag(1), glass_sha256=sha(frame(1)), painted_end_bt=50_000.0,
+         painted_wall=painted_wall, attempt_start_bt=49_990.0, complete=True)
+
+    def responder(n, sent, c):
+        if n == 0:
+            c.synced = True
+        return _daily_304(n, sent, c)
+
+    h = Harness(tmp_path, clock, responder, stop_after=2)
+    assert h.run() == 0
+    assert h.fetches[0] == (300.0, etag(1))
+    assert h.fetches[1][1] is None, h.fetches
+    assert h.fetches[1][0] <= 300.0 + P.PING_SLICE_S + 1, h.fetches
+
+
+def test_a_repaint_that_comes_due_during_a_fetch_is_fetched_at_once(tmp_path):
+    """Same boot, no wall clock: the 23 h mark passes while a 304 is fetched.
+    Waiting out the advised hour would leave it late by that hour."""
+    clock = Clock(t=83_799.8)
+    clock.synced = False
+    save(tmp_path, etag=etag(1), glass_sha256=sha(frame(1)), painted_end_bt=1000.0,
+         painted_wall=None, attempt_start_bt=995.0, complete=True)
+
+    def responder(n, sent, c):
+        c.t += 0.5                  # the fetch takes time
+        if sent is None:
+            return P.Frame(frame(1), etag(1), 3600)
+        return P.NotModified(sent, 3600)
+
+    h = Harness(tmp_path, clock, responder, stop_after=2)
+    assert h.run() == 0
+    assert h.fetches[0][1] == etag(1)
+    assert h.fetches[1][1] is None, h.fetches
+    assert h.fetches[1][0] == pytest.approx(83_800.3, abs=0.01), h.fetches
+    assert h.panel.paints()
+
+
+@pytest.mark.parametrize("t, synced, saved", [
+    # the boot-time bound is 800 s into the backoff
+    (83_000.0, False, dict(painted_end_bt=1000.0, painted_wall=None)),
+    # the wall-clock bound is 800 s into the backoff, the boot bound far off
+    (83_000.0, True, dict(painted_end_bt=80_000.0,
+                          painted_wall=W0 + 83_000.0 - (P.FORCE_REPAINT_S - 800))),
+], ids=["boot-bound", "wall-bound"])
+def test_a_23_hour_bound_never_cuts_a_failure_backoff_short(tmp_path, t, synced, saved):
+    clock = Clock(t=t)
+    clock.synced = synced
+    save(tmp_path, etag=etag(1), glass_sha256=sha(frame(1)),
+         attempt_start_bt=saved["painted_end_bt"] - 5.0, complete=True, **saved)
+
+    def responder(n, sent, c):
+        assert n < 10, "fetched again without waiting"
+        return P.Throttled(3600)
+
+    h = Harness(tmp_path, clock, responder, stop_after=4)
+    assert h.run() == 0
+    times = [t for t, _ in h.fetches]
+    gaps = [b - a for a, b in zip(times, times[1:])]
+    assert gaps == pytest.approx([3600.0] * 3, abs=1), gaps
+
+
+def test_an_earlier_boot_record_that_fails_to_save_is_saved_later(tmp_path, monkeypatch):
+    """If the rewrite to boot time 0 does not reach the disk, a restart later
+    in this boot would read the old time as this boot's."""
+    clock = Clock(t=400.0)
+    clock.synced = False
+    save(tmp_path, etag=etag(1), glass_sha256=sha(frame(1)), painted_end_bt=50_000.0,
+         painted_wall=None, attempt_start_bt=49_990.0, complete=True)
+    real = P.save_state
+    calls = []
+
+    def flaky(state_dir, s):
+        calls.append(s)
+        return False if len(calls) == 1 else real(state_dir, s)
+
+    monkeypatch.setattr(P, "save_state", flaky)
+    h = Harness(tmp_path, clock, lambda n, sent, c: P.NotModified(sent, 300),
+                stop_after=2)
+    assert h.run() == 0
+    assert calls[0].painted_end_bt == 0.0
+    assert len(calls) >= 2
+    assert P.load_state(tmp_path).painted_end_bt == 0.0
 
 
 @pytest.mark.parametrize("t, synced, saved, answer, gap", [
