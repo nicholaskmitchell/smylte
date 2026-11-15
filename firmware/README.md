@@ -135,18 +135,24 @@ exist under CPython.
 ### What it is
 
 The Pi 5 inside the desk unit runs the Smylte server and drives the Waveshare
-7.5" e-Paper V2 (800×480) directly. The Pico is removed.
+7.5" e-Paper V2 (800×480) directly. The Pico is removed. One key, wired to the
+Pi's power-button pads, chooses the view and shuts the box down.
 
 | File | Job |
 | --- | --- |
-| `pi_epaper_7in5/panel.py` | The service: fetch, compare, paint, forever |
+| `pi_epaper_7in5/panel.py` | The service: fetch, compare, paint, read the key, forever |
 | `pi_epaper_7in5/epd7in5_v2.py` | The driver |
 | `deploy/smylte-panel.service` | The systemd unit |
+| `deploy/70-smylte-panel-key.rules` | udev: only the power key is readable by the unit |
+| `deploy/smylte-panel-poweroff.path` and `.service` | Power the box off when the panel asks |
+| `deploy/logind-smylte-panel.conf` | Tells logind to ignore the power key |
 | `deploy/panel-setup.sh` | Install, update, remove |
 
 It fetches the frame over loopback,
-`http://127.0.0.1:8080/api/public/display/<token>.bin?invert=1&w=800&h=480`. It
-needs no wifi and no TLS: the request never leaves the box.
+`http://127.0.0.1:8080/api/public/display/<token>.bin?invert=1&w=800&h=480`,
+with `&mode=…&tabs=1` for a view of the desk key and `&screen=…` for the
+shutdown screens. It needs no wifi and no TLS: the request never leaves the
+box.
 
 **Status:** tested in CI against the server and Waveshare's driver, **not yet
 run on hardware**.
@@ -157,15 +163,25 @@ run on hardware**.
 | --- | --- |
 | Board | Raspberry Pi 5. 2 GB is enough for the server plus the panel |
 | OS | Raspberry Pi OS Lite (64-bit) 2026-10-06 or later. That is Debian 13 "Trixie" with Python 3.13. Not the "Legacy" Bookworm image, whose Python 3.11 `setup.sh` refuses |
-| Panel | The Waveshare Pico-ePaper-7.5 module with the Pico 2 W unplugged from it, or an e-Paper Driver HAT Rev2.3 or later (see "Other boards") |
-| Leads | Female-female jumper leads, 20 cm or shorter |
+| Panel | The **Waveshare e-Paper Driver HAT (Rev2.3 or later)** with the 7.5" V2 panel, seated on the 40-pin header. The jumpered Pico-ePaper-7.5 module is the alternative (see "Pico module instead of the HAT") |
+| Key | One momentary key, wired across the Pi 5's J2 pads (the power-button breakout). The onboard power button is the same signal, so you can test before the case exists |
+| Leads | Female-female jumper leads, 20 cm or shorter, for the Pico module only |
 | Packages | `python3-libgpiod`, `python3-spidev` and `gpiod`: all already in the Lite image; `apt install` them if missing |
 
 ### Wiring
 
-Wire with the Pi unplugged, and take the Pico out of the module first. VSYS is
-the Pico's power input, and a seated Pico would boot and fight the Pi on the same
-wires.
+Wire with the Pi unplugged.
+
+**The HAT.** Seat it on the 40-pin header and set its switches: Display Config
+**B** and Interface **0** (4-wire SPI). Its power switch is BCM18, which is the
+default `SMYLTE_PANEL_PWR_PIN`, so there is nothing to configure.
+
+**The key.** Wire the key across the two J2 pads.
+
+#### Pico module instead of the HAT
+
+Take the Pico out of the module first. VSYS is the Pico's power input, and a
+seated Pico would boot and fight the Pi on the same wires.
 
 | Module (Pico socket pin) | Pi 5 header pin (BCM) |
 | --- | --- |
@@ -185,6 +201,8 @@ wires.
   unpowered.
 - Leave the module's switches as they are.
 - Keep leads short, and use crimped housings rather than loose Dupont.
+- GPIO18 is unconnected here, so the default `SMYLTE_PANEL_PWR_PIN=18` does
+  nothing. You may set it to `none`.
 
 ### Setting it up
 
@@ -196,31 +214,105 @@ wires.
 4. Check it: `ls -l /dev/spidev0.0` shows group `spi`, and `gpiodetect` shows one
    `[pinctrl-rp1]`.
 5. In Settings → Displays, add a display: **Screen** *E-ink*, **Panel size**
-   800 × 480. Copy its token, or the whole URL.
-6. `sudo ~/smylte/deploy/panel-setup.sh`. It checks the box, installs the client,
-   asks for the token, runs a self-test (power up and down, no refresh), then
-   enables and starts `smylte-panel.service`.
-7. `journalctl -u smylte-panel -f`. Expect `ready: …`, maybe `waiting for the
+   800 × 480, and **turn on "Desk key (Today · Now · Calendar)"**. Without it
+   the key cannot change the view. Today and Now read the display's lists,
+   Calendar its calendars. Copy its token, or the whole URL.
+6. `sudo ~/smylte/deploy/panel-setup.sh`. It checks the box, writes
+   `/etc/default/smylte-panel` (once: see "Settings"), installs the client, the
+   udev rule, the power-off units and the logind drop-in, asks for the token,
+   runs a self-test (power up and down, no refresh), then enables and starts
+   `smylte-panel.service`.
+7. Check the key: `sudo ~/smylte/deploy/panel-setup.sh --keytest`. See "Day to
+   day".
+8. `journalctl -u smylte-panel -f`. Expect `ready: …`, maybe `waiting for the
    clock to sync`, then `painted … in N s`, within about five minutes of the
    start.
-8. Look at the glass: dark ink on white paper. A negative means a polarity bug.
+9. Look at the glass: dark ink on white paper. A negative means a polarity bug.
    Stop the service and report it.
+
+### The key
+
+| You do | The panel does |
+| --- | --- |
+| Tap (press and let go within 0.6 s) | Shows the next view: Today, then Now, then Calendar, then Today again |
+| Hold about 1 s, then let go | Draws "Shut down?" |
+| Tap once "Shut down?" is fully drawn | Draws "Off", then the box shuts down |
+| Wait 10 s | "Shut down?" goes away and the view comes back |
+| Press while the Pi is off | The Pi boots, and the service draws Today |
+
+**Let go after about a second. Never hold the key to wait for the screen: at
+about 5 s the Pi cuts its own power, and that is not a clean shutdown.**
+
+- A press let go between 0.6 s and 1 s does nothing, and neither does one
+  shorter than 0.03 s.
+- The prompt comes 2–3 s after you let go, or later if a refresh or a fetch is
+  running. A tap counts for "Shut down?" only if it started after the prompt was
+  drawn and within 10 s of that.
+- Taps are coalesced. The tab strip along the bottom changes first (a partial
+  refresh), and the page follows 0.5 s after the last tap (a fast refresh).
+- The key has a budget: 12 view-change refreshes, refilled one per 50 s. A tap
+  needs two left, one for its strip and one for its page. When they run out,
+  taps are ignored and the Status line says `key resting; try again in N s`.
+  The confirming tap, the "Off" screen and the way back from the prompt cost
+  nothing.
+- After the "Off" screen the Pi powers off by itself, and the glass keeps the
+  screen with no power. A press boots it again. It takes a few minutes: the
+  panel draws Today as soon as the server answers.
+- logind is told to ignore the key, so **while the service is not running the
+  key does nothing**. Shut down over SSH, or hold the key for about 5 s for the
+  hardware cut, which is not clean.
+
+### Settings
+
+`panel-setup.sh` writes `/etc/default/smylte-panel` once, with the defaults, and
+never overwrites it. Change it with `sudoedit /etc/default/smylte-panel`. A bad
+value stops the service with exit 78 and no restarts; `panel-setup.sh` checks
+the values first.
+
+| Variable | Values | Default | Meaning |
+| --- | --- | --- | --- |
+| `SMYLTE_PANEL_PWR_PIN` | a free BCM pin, or `none` | `18` (also when unset or empty) | The Driver HAT's power switch. `none` uses no pin |
+| `SMYLTE_PANEL_REFRESH` | `fast` or `full` | `fast` | `fast`: partial and fast refreshes for the key. `full`: every refresh is full |
+| `SMYLTE_PANEL_IDLE_RETURN_S` | `0`, or 60–86400 | `0` (off) | Seconds with no key before the glass goes back to Today. It is a routine refresh, so the 180 s floor applies |
+| `SMYLTE_PANEL_KEY` | `auto` or `off` | `auto` | `off`: the service never opens the key, and `panel-setup.sh` leaves logind alone, so a press powers the box off |
+
+After changing `SMYLTE_PANEL_KEY`, re-run `sudo ~/smylte/deploy/panel-setup.sh`:
+it installs or removes the logind drop-in. After changing any other setting,
+`sudo systemctl restart smylte-panel`.
 
 ### What it does
 
-- The 180 s floor between refreshes holds across restarts, crashes and reboots.
-  The last refresh's time is kept on CLOCK_BOOTTIME in
+- The 180 s floor holds before every routine refresh (a new frame, the 23 h
+  repaint, the idle return), across restarts, crashes and reboots. The key's
+  refreshes are exempt from it, and the budget bounds them. The last refresh's
+  time, of any kind, is kept on CLOCK_BOOTTIME in
   `/var/lib/smylte-panel/state.json`, and is written before a refresh starts.
 - A stop never interrupts a refresh.
 - The panel is in deep sleep between refreshes and unpowered whenever the service
-  is not running.
+  is not running. On the HAT, deep sleep leaves PWR and RST high, on purpose.
 - It paints only a frame whose headers say exactly 800×480 `mono-hlsb-inverted`,
-  48,000 bytes.
-- It repaints at least every 23 h, even if nothing changed, and within 23 h of
-  the service's latest start even after a reboot. If the last refresh happened
-  with a synced clock and the clock syncs again after the boot, it keeps that
-  refresh's wall-clock time, give or take the 180 s floor and up to 15 s to
-  notice the sync.
+  48,000 bytes, and for a view the view it asked for.
+- The strip is a partial refresh. Its page and the prompt are fast refreshes. A
+  full refresh follows after every 5 fast or partial ones (`FULL_EVERY`), and
+  the "Off" screen, `--clear`, the 23 h repaint and the first paint after a
+  start are always full. With `SMYLTE_PANEL_REFRESH=full`, every refresh is full.
+- It repaints in full at least every 23 h, even if nothing changed, and within
+  23 h of the service's latest start even after a reboot. The 23 h are measured
+  from the last full refresh, so fast and partial ones do not reset them. If the
+  last full refresh happened with a synced clock and the clock syncs again after
+  the boot, it keeps that refresh's wall-clock time, give or take the 180 s floor
+  and up to 15 s to notice the sync.
+- The batch guard: a partial refresh that takes longer than 1.0 s
+  (`QUICK_PARTIAL_MAX_S`), or a fast refresh longer than 3.0 s
+  (`QUICK_FAST_MAX_S`), looks like a panel from before the 2023 batch. The
+  panel then turns quick refresh off, and draws everything in full. Setting
+  `SMYLTE_PANEL_REFRESH=fast` again does not clear it. Clear it with
+  `sudo ~/smylte/deploy/panel-setup.sh --reset-refresh`.
+- The "Off" screen persists with no power.
+- Without Desk key on the display, or with an old smylted, the panel works as a
+  plain display of the view stored for it, and the Status line says why. Taps do
+  nothing then; a hold still asks "Shut down?" once the screen is cached. Every 15 min it asks the server
+  for the views again.
 - A refresh it cannot first record in its state file is never started. It
   retries every minute, and the Status line says so.
 - It waits for the clock to sync after boot (at most 300 s of uptime), because
@@ -238,14 +330,28 @@ wires.
 - `sudo systemctl kill -s USR1 smylte-panel` forces a repaint at the next allowed
   time.
 - After **New URL** in Settings: `sudo ~/smylte/deploy/panel-setup.sh --rotate-token`.
-- **After pulling a change to `firmware/pi_epaper_7in5/` or
-  `deploy/smylte-panel.service`, re-run `sudo ~/smylte/deploy/panel-setup.sh`.**
+- **After pulling a change to `firmware/pi_epaper_7in5/`, `deploy/smylte-panel.service`
+  or the panel's udev, power-off and logind files in `deploy/`, re-run
+  `sudo ~/smylte/deploy/panel-setup.sh`.**
   Autopull does not update or restart the panel, because the service runs a
   root-owned copy in `/usr/local/lib/smylte-panel`. `--status` shows whether the
   copy differs.
+- `panel-setup.sh --keytest` listens to the key for 30 s and prints each press
+  and release with how long it lasted and what the panel would make of it (tap,
+  hold, noise or ignored). It prints "let go now" once the key has been down for 1 s.
+  It never touches the panel. It refuses to run until logind ignores the key
+  (an install does that), because the first press would power the box off. It
+  stops the service around itself and starts it again.
+- `panel-setup.sh --reset-refresh` turns fast and partial refresh back on after
+  the batch guard turned them off. It stops the service around itself and
+  starts it again.
+- `panel-setup.sh --status` also shows logind's `HandlePowerKey` settings, the
+  power-off path unit and the key's device node.
 - Before storing the panel: `--clear` paints it white and stops the service.
-- `--uninstall` removes everything, including any `systemctl edit` override and
-  `/etc/default/smylte-panel`. Then delete the display in Settings.
+- `--uninstall` removes everything, including any `systemctl edit` override,
+  `/etc/default/smylte-panel`, the udev rule, the `smylte-panel-key` group, the
+  power-off units and the logind drop-in. Then delete the display in Settings.
+  **After uninstall, the key powers the box off again (the OS default).**
 - After five failed starts in an hour the unit stays failed:
   `sudo systemctl reset-failed smylte-panel && sudo systemctl start smylte-panel`.
   Manual starts count towards the five; `panel-setup.sh` resets the count before
@@ -253,13 +359,26 @@ wires.
 
 ### Is it broken?
 
+A problem's Status line is its journal text followed by `; the glass keeps its
+last frame`.
+
 | The journal says | It means | Do this |
 | --- | --- | --- |
+| (nothing: the key does nothing) | The service is not running, and logind ignores the key meanwhile | `systemctl status smylte-panel`. Power off over SSH, or hold the key for about 5 s (the hardware cut, not clean) |
+| No journal line. `--keytest` says `no pwr_button input device (is gpio_keys loaded?)`, and `--status` says `no pwr_button input device (gpio_keys not loaded?)`. The journal may say `key: cannot open …` | The Pi has no `pwr_button` input device, or the unit cannot read it. The service looks again every 10 s | Check the key's wiring. `panel-setup.sh --status` shows the node and its group; re-run `panel-setup.sh` to install the udev rule |
+| `desk key off: turn on Desk key for this display in Settings → Displays` (the Status line ends `· desk key off: …`) | The server answered 422 `views-off`. The panel shows the display's stored view, and taps do nothing | Turn on Desk key for the display in Settings → Displays. The panel asks again every 15 min |
+| `desk key off: smylted is too old for the desk key — update it` | The server does not know the `mode` parameter | Pull and restart smylte |
+| `key resting; try again in N s` | The key's budget is spent (12, refilled one per 50 s). Taps are ignored | Wait |
+| `no confirm screen yet` | A hold was ignored: the "Shut down?" screen has not been fetched yet. It is fetched in the background after the first successful fetch, and kept in `/var/lib/smylte-panel` | Wait a minute and hold again. If it stays, smylted is probably too old |
+| `logind still powers off on a press — re-run panel-setup.sh`, or `the key does nothing — re-run panel-setup.sh` | The logind drop-in does not match `SMYLTE_PANEL_KEY`: with `auto` it is missing, with `off` it is present | `sudo ~/smylte/deploy/panel-setup.sh` |
+| `could not power off: failed: …` or `could not power off: nothing acted on the request within 120 s` | The panel could not write its request file, or the power-off path unit did not act on it. The glass goes back to the view | `systemctl status smylte-panel-poweroff.path`, re-run `panel-setup.sh`, and shut down over SSH meanwhile |
+| `waking: the server is not answering` | The Pi was started with the key, and 10 min later the server still does not answer. The glass keeps the "Off" screen | `systemctl status smylte` |
+| `fast refresh is off: this panel looks like a pre-2023 batch; see firmware/README.md` (later `· fast refresh is off (see firmware/README.md)`) | The batch guard turned quick refresh off | See "What it does". `panel-setup.sh --reset-refresh` clears it |
 | `/dev/spidev0.0: missing` | SPI is off | Enable it (setup step 3) and reboot |
 | `no GPIO chip labelled 'pinctrl-rp1'` | This is not a Pi 5 | Run `gpiodetect` to see what is there |
 | `held by another program` | Something else has the panel's GPIO lines | `gpioinfo` names it. Stop it |
 | `permission denied` | The service lacks the `gpio` or `spi` group, or the sandbox blocks the device | Re-run `panel-setup.sh`. See "Checks only hardware can settle" |
-| `BUSY stayed low for … during power-on` | The panel has no power, or BUSY is not wired | Check the 3V3 lead to pins 36 and 39, the RST lead, and BUSY |
+| `BUSY stayed low for … during power-on` | The panel has no power, or BUSY is not wired | On the HAT, check that it is fully seated and PWR is BCM18. On the Pico module, check the 3V3 lead to pins 36 and 39, the RST lead, and BUSY |
 | `BUSY stayed low … during refresh` | A cold room or a panel fault | Warm the room and try again. If it repeats, suspect the panel |
 | `is not a display token` | The stored token is wrong. Exit 78, no restarts | `sudo ~/smylte/deploy/panel-setup.sh --rotate-token` |
 | `Failed to set up credentials` (status `243/CREDENTIALS`) | `/etc/credstore/smylte-panel-token` is missing. No restarts | `sudo ~/smylte/deploy/panel-setup.sh --rotate-token` |
@@ -274,10 +393,15 @@ wires.
 
 Do these once, at bring-up.
 
-- `sudo systemctl stop smylte-panel; pinctrl get 17,25`: both low.
-- With the service stopped, measure the module's 3V3 rail. Near 0 V is right.
+- Run `sudo ~/smylte/deploy/panel-setup.sh --keytest`. Taps must show as taps, a
+  1.5 s hold as a hold, and both the press and the release must appear.
+- `sudo systemctl stop smylte-panel; pinctrl get 17,25`: both low. On the HAT,
+  `pinctrl get 18` is low too.
+- With the service stopped, measure the panel's 3V3 rail. Near 0 V is right.
   1–3 V means the panel is being fed through CS: the Pi's kernel holds CE0 high.
-  Report it. The options are wiring CS to a spare GPIO, or a Driver HAT.
+  Report it. On the Pico module the options are wiring CS to a spare GPIO, or
+  the Driver HAT. On the HAT, measure the panel side of its switch, with PWR
+  low.
 - The kill check. It only proves something if RST is high when the client dies,
   and RST is high only after a refresh in that run:
   1. `sudo systemctl start smylte-panel`, then
@@ -289,6 +413,12 @@ Do these once, at bring-up.
      systemd restarts it, `pinctrl get 17` must read low. That shows
      `ExecStopPost` ran. This matters because the Pi 5 keeps a GPIO output's
      level after its process dies.
+- Strip partials: tap five times, each after several idle minutes. The tab must
+  change cleanly with no ghost, and then a full refresh comes.
+- A clean shutdown with the key: hold, let go, tap. Then press the key once: the
+  Pi boots and Today is drawn.
+- With `POWER_OFF_ON_HALT=1` in the bootloader config (`sudo rpi-eeprom-config`),
+  check that a press still boots the halted Pi.
 - `systemd-analyze security smylte-panel.service`.
 - If the first start fails on the sandbox rather than the hardware, relax
   `MemoryDenyWriteExecute` first, then `SystemCallFilter`, with
@@ -308,11 +438,7 @@ The panel's life is only guaranteed between 0 and 40 °C. A Pi 5 gives off about
 
 ### Other boards
 
-- An e-Paper Driver HAT Rev2.3 or later has a real power switch on BCM18. Set
-  Display Config B and Interface 0, and before running `panel-setup.sh`:
-  `echo SMYLTE_PANEL_PWR_PIN=18 | sudo tee /etc/default/smylte-panel`. The
-  service, the self-test and `--clear` all read that file, and `--status` shows
-  the pin.
+- The Driver HAT is the main path now. The Pico module is the alternative.
 - Other Waveshare panels need a different command sequence. This driver is for
   the 7.5" V2 only.
 
@@ -323,7 +449,11 @@ The panel's life is only guaranteed between 0 and 40 °C. A Pi 5 gives off about
 - the contract against the live server routes;
 - the driver against Waveshare's own driver, read as source (never executed);
 - the loop, floor and signals on fakes;
-- the unit and script against the client's constants.
+- the unit and script against the client's constants;
+- `test_firmware_pi_key.py`: the gestures, the `Ui`, the key's budget and the
+  key input.
+
+The server's own tests cover the tab strip and the screens.
 
 ## Licence
 

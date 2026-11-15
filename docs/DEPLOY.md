@@ -388,7 +388,7 @@ Pair a display in **Settings → Displays**. Each one has a token and these URLs
 | URL | For |
 | --- | --- |
 | `/display/<token>` | A browser: a Raspberry Pi kiosk, an old tablet, a Boox |
-| `/api/public/display/<token>.bin` | A microcontroller, or a panel on this box's own SPI header: the packed 1-bit framebuffer (see `firmware/README.md`) |
+| `/api/public/display/<token>.bin` | A microcontroller, or a panel on this box's own SPI header: the packed 1-bit framebuffer (see `firmware/README.md`). `?mode=`, `?tabs=1` and `?screen=` are for the desk key: `mode` and `tabs` choose the view and draw its tab strip, and only on a display with Desk key on (any other gets a 422); `screen` is the shutdown prompt and the off screen, on any display |
 | `/api/public/display/<token>.png`, `.bmp` | A board with an image decoder. `?w=&h=`, `?rotate=` and `?palette=` override per request |
 | `/api/public/display/<token>` | The frame as JSON (about 30 KB for a typical month, up to about 130 KB) |
 
@@ -424,15 +424,32 @@ Rebuild them with `python -m dev.build_display_fonts` (needs `fonttools` and
 ### Desk panel on this box
 
 Optional, and separate from `setup.sh`. A Raspberry Pi 5 server can drive a
-Waveshare 7.5" e-Paper panel on its own SPI header, with no Pico.
+Waveshare 7.5" e-Paper panel on its own SPI header, with no Pico. The default
+board is the Waveshare e-Paper Driver HAT (Rev2.3 or later), seated on the
+header. A key wired across the Pi's J2 pads (the power-button breakout) changes
+the view and shuts the box down.
 
 1. Turn SPI on: `sudo raspi-config nonint do_spi 0`, then reboot.
-2. Wire the panel to the header, with the Pi unplugged.
-3. In **Settings → Displays**, add a display (E-ink, 800 × 480).
+2. Seat the HAT on the header (Display Config B, Interface 0) and wire the key,
+   with the Pi unplugged.
+3. In **Settings → Displays**, add a display (E-ink, 800 × 480) and turn on
+   **Desk key (Today · Now · Calendar)**. Without it the key cannot change the
+   view, and the panel shows the view stored for the display.
 4. `sudo ~/smylte/deploy/panel-setup.sh`. It asks for the display's token.
 
-`firmware/README.md` has the wiring and the troubleshooting.
+`firmware/README.md` has the wiring, the key and the troubleshooting.
 
+- **The settings file:** `/etc/default/smylte-panel` holds the PWR pin, the
+  refresh mode, the idle return and the key. `panel-setup.sh` writes it once and
+  never overwrites it. Change it with `sudoedit`, then
+  `sudo systemctl restart smylte-panel`, or re-run `panel-setup.sh` if you
+  changed `SMYLTE_PANEL_KEY`.
+- **What else `panel-setup.sh` installs:** a logind drop-in
+  (`/etc/systemd/logind.conf.d/50-smylte-panel.conf`) that makes logind ignore
+  the power key, a udev rule that lets the panel's unit read only that key, and
+  a power-off path unit. The panel service asks that unit to power the box off
+  after the key's confirmation. `--uninstall` removes all of them, and then a
+  press of the key powers the box off again.
 - **Autopull never updates or restarts it.** The service runs a root-owned copy
   in `/usr/local/lib/smylte-panel`. After pulling a change to
   `firmware/pi_epaper_7in5/` or `deploy/smylte-panel.service`, re-run

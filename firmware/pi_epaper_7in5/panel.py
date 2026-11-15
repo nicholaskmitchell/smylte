@@ -22,11 +22,14 @@
 #
 # What it guarantees, and how:
 #
-#   * At least 180 s between refreshes, across restarts, crash loops and
-#     reboots. Waveshare's spec: "Each update must be at least 180 s apart". The
-#     time of the last refresh is kept on CLOCK_BOOTTIME in a state file, and a
-#     refresh is recorded BEFORE it starts, so a crash halfway through still
-#     counts. See floor_ok_at().
+#   * At least 180 s between routine refreshes (a new frame, the 23-hour repaint,
+#     the idle return), across restarts, crash loops and reboots. Waveshare's
+#     spec: "Each update must be at least 180 s apart", with an exception for
+#     panels that do partial refresh. The time of the last refresh of any kind
+#     is kept on CLOCK_BOOTTIME in a state file, and a refresh is recorded
+#     BEFORE it starts, so a crash halfway through still counts. See
+#     floor_ok_at(). The key's refreshes are exempt from the floor, and are
+#     bounded instead by a budget (see "The key" below).
 #   * A stop never interrupts a refresh. SIGTERM/SIGINT/SIGHUP are blocked and
 #     only collected by one thread, and the loop reads them only between
 #     refreshes (see Collector). A stop that arrives
@@ -38,13 +41,26 @@
 #   * Nothing off-contract reaches the glass. A frame is painted only when every
 #     header says it is exactly the 800×480 inverted bitmap this panel takes,
 #     and the body is exactly 48,000 bytes.
-#   * A refresh at least once every 23 hours, because the spec asks for one a
-#     day against ghosting, even if the server's frame has not changed: never
-#     later than 23 hours after this process started, and by the wall clock
-#     when the last refresh recorded a synced one and the clock is synced now
-#     (give or take the floor and one PING_SLICE_S to notice a sync). Like any
-#     refresh it needs its write-ahead record, so none starts while the state
-#     file cannot be written.
+#   * A FULL refresh at least once every 23 hours, because the spec asks for one
+#     a day against ghosting, even if the server's frame has not changed. It is
+#     measured from the last full refresh: fast and partial ones do not count,
+#     and a full one is forced after every FULL_EVERY of them. Never later than
+#     23 hours after this process started, and by the wall clock when the last
+#     full refresh recorded a synced one and the clock is synced now (give or
+#     take the floor and one PING_SLICE_S to notice a sync). Like any refresh it
+#     needs its write-ahead record, so none starts while the state file cannot
+#     be written.
+#   * The key. The Pi 5's power button, read as an input device (logind is
+#     told to ignore it, so with this service stopped it does nothing). A tap
+#     shows the next view (Today, Now, Calendar): the tab strip first, as a
+#     partial refresh, then the page, as a fast one, once no tap has come for
+#     COALESCE_S. A hold (down for HOLD_S) asks "Shut down?"; a tap
+#     within PROMPT_S confirms, draws the off screen and has the box powered
+#     off through a request file; otherwise the view comes back. These
+#     refreshes skip the floor and are paid for from a bucket of KEY_BURST,
+#     refilled one per KEY_REFILL_S; the confirming tap and every way back are
+#     free. A panel that takes a partial or fast refresh too slowly (an old
+#     batch) gets quick refresh turned off in the state file.
 #
 # Run by deploy/smylte-panel.service. Install and update with
 # `sudo deploy/panel-setup.sh`; firmware/README.md has the wiring and the rest.

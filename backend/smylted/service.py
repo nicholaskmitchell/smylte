@@ -3693,7 +3693,10 @@ class SmylteService:
     # is not a convention to be careful about — it is the feature. A display
     # takes no input, so there is no write for a token to reach even if one
     # leaked, and the single write anywhere in the path (`touch_display`) writes
-    # a timestamp onto the display's own row.
+    # a timestamp onto the display's own row. That is still the one write a
+    # token can reach. A switchable display's desk key changes nothing about
+    # it: the key only chooses which read-only view the client asks for
+    # (`mode`, `tabs`), and only on a display with Desk key turned on.
     _DISPLAY_MODES = ("calendar", "habits", "now")
     _DISPLAY_PALETTES = ("color", "eink")
     # Under a minute is not a refresh rate, it is a fault: a browser page doing
