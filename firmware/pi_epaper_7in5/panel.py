@@ -38,7 +38,9 @@
 #     header says it is exactly the 800×480 inverted bitmap this panel takes,
 #     and the body is exactly 48,000 bytes.
 #   * A refresh at least once every 23 hours, because the spec asks for one a
-#     day against ghosting, even if the server's frame has not changed.
+#     day against ghosting, even if the server's frame has not changed. It is
+#     measured on the wall clock when the last refresh had a synced one, and
+#     otherwise on uptime, which a reboot restarts.
 #
 # Run by deploy/smylte-panel.service. Install and update with
 # `sudo deploy/panel-setup.sh`; firmware/README.md has the wiring and the rest.
@@ -456,7 +458,8 @@ def force_poll_at(s: State, now_bt: float, now_wall: float,
     forced_due()'s bounds: then the next fetch is forced whenever it comes, and
     pulling it earlier would only defeat the retry backoff. The boot-time bound
     alone is late after a reboot (it cannot see the time the box was down), so
-    the wall clock bounds it too once it is synced. run() records a paint time
+    the wall clock bounds it too once it is synced, if the paint recorded a
+    wall time (the clock was synced when it ended). run() records a paint time
     later than its own start, which must be from an earlier boot, as boot time
     0, so without a wall clock that one is due by 23 h of this boot's uptime.
     An earlier boot's paint at or before run()'s start cannot be told from this

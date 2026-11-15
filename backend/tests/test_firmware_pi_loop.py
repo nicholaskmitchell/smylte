@@ -129,6 +129,7 @@ class Harness:
         self.signals = list(signals)
         self.fetches: list[tuple[float, str | None]] = []
         self.notes: list[str] = []
+        self.unwaited = 0       # fetches since the last real wait
         self.waits: list[float] = []
         self.deps = P.Deps(state_dir=tmp_path, panel=self.panel, epd=E,
                            fetch=self.fetch, wait=self.wait,
@@ -136,12 +137,18 @@ class Harness:
                            synced=clock.synced_fn, notify=self.notify)
 
     def fetch(self, etag):
+        # A loop that fetches without ever waiting would spin here for ever;
+        # fail instead, so a regression turns CI red rather than hanging it.
+        self.unwaited += 1
+        assert self.unwaited <= 3, "fetched again and again without waiting"
         n = len(self.fetches)
         self.fetches.append((self.clock.t, etag))
         return self.responder(n, etag, self.clock)
 
     def wait(self, timeout):
         self.waits.append(timeout)
+        if timeout > 0:             # wait(0) is run()'s drain, not a wait
+            self.unwaited = 0
         if self.signals and self.signals[0][0] <= self.clock.t + timeout:
             at_t, signo = self.signals.pop(0)
             self.clock.t = max(self.clock.t, at_t)
@@ -886,6 +893,48 @@ def test_a_repaint_that_comes_due_during_a_fetch_is_fetched_at_once(tmp_path):
     assert h.fetches[1][1] is None, h.fetches
     assert h.fetches[1][0] == pytest.approx(83_800.3, abs=0.01), h.fetches
     assert h.panel.paints()
+
+
+def _due_mid_fetch(n, sent, c):
+    c.t += 0.5                      # the fetch takes time
+    if sent is None:
+        return P.Frame(frame(1), etag(1), 3600)
+    return P.NotModified(sent, 3600)
+
+
+def test_after_the_forced_repaint_the_next_fetches_are_conditional_again(tmp_path):
+    """force_next is for one fetch: once the overdue repaint is done, an
+    unchanged frame is not painted again."""
+    clock = Clock(t=83_799.8)
+    clock.synced = False
+    save(tmp_path, etag=etag(1), glass_sha256=sha(frame(1)), painted_end_bt=1000.0,
+         painted_wall=None, attempt_start_bt=995.0, complete=True)
+    h = Harness(tmp_path, clock, _due_mid_fetch, stop_after=6)
+    assert h.run() == 0
+    assert h.fetches[1][1] is None
+    assert len(h.panel.paints()) == 1
+    assert [s for _, s in h.fetches[2:]] == [etag(1)] * 4
+
+
+def test_a_repaint_due_by_the_wall_clock_mid_fetch_stays_forced_if_the_flag_drops(tmp_path):
+    """The wall clock says due at the end of the fetch; by the next fetch the
+    sync flag reads unsynced. The decision made at the end of the fetch holds."""
+    clock = Clock(t=50_000.0)
+    save(tmp_path, etag=etag(1), glass_sha256=sha(frame(1)), painted_end_bt=40_000.0,
+         painted_wall=W0 + 50_000.2 - P.FORCE_REPAINT_S, attempt_start_bt=39_995.0,
+         complete=True)
+
+    def responder(n, sent, c):
+        answer = _due_mid_fetch(n, sent, c)
+        if n == 0:
+            c.synced = False
+        return answer
+
+    h = Harness(tmp_path, clock, responder, stop_after=2)
+    assert h.run() == 0
+    assert h.fetches[0][1] == etag(1)
+    assert h.fetches[1][1] is None, h.fetches
+    assert h.fetches[1][0] == pytest.approx(50_000.5, abs=0.01)
 
 
 @pytest.mark.parametrize("t, synced, saved", [
