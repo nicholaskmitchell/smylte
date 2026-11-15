@@ -216,8 +216,9 @@ wires.
   is not running.
 - It paints only a frame whose headers say exactly 800×480 `mono-hlsb-inverted`,
   48,000 bytes.
-- It repaints at least every 23 h, even if nothing changed, and a reboot does not
-  push that back.
+- It repaints at least every 23 h, even if nothing changed. With a synced clock a
+  reboot does not push that back. On a box whose clock never syncs, a reboot
+  restarts the count, so the repaint can come later.
 - It waits for the clock to sync after boot (at most 300 s of uptime), because
   the server on the same box would otherwise draw the wrong day.
 - On a 404 it keeps the frame and retries every 15 min.

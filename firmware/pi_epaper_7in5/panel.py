@@ -456,9 +456,11 @@ def force_poll_at(s: State, now_bt: float, now_wall: float,
     forced_due()'s bounds: then the next fetch is forced whenever it comes, and
     pulling it earlier would only defeat the retry backoff. The boot-time bound
     alone is late after a reboot (it cannot see the time the box was down), so
-    the wall clock bounds it too once it is synced. run() records a paint from
-    an earlier boot as boot time 0, so without a wall clock it is due by 23 h
-    of this boot's uptime at the latest.
+    the wall clock bounds it too once it is synced. run() records a paint time
+    later than its own start, which must be from an earlier boot, as boot time
+    0, so without a wall clock that one is due by 23 h of this boot's uptime.
+    An earlier boot's paint at or before run()'s start cannot be told from this
+    boot's, and is due 23 h after it.
     """
     if not s.complete or s.painted_end_bt is None:
         return None
@@ -707,15 +709,20 @@ def run(d: Deps) -> int:
         # boot, so at least this boot's uptime has passed since it. Record it
         # as boot time 0, which stays a true lower bound as uptime grows and
         # across a restart later in this boot. (Compared each time instead,
-        # the paint would pass for this boot's once uptime overtook it.)
+        # the paint would pass for this boot's once uptime overtook it.) Only
+        # a paint time later than this start can be told from this boot's:
+        # without a synced clock, one at or before it is due 23 h after it.
         state = dataclasses.replace(state, painted_end_bt=0.0)
-        save_state(d.state_dir, state)
+        unsaved = not save_state(d.state_dir, state)
+    else:
+        unsaved = False     # retried after each fetch until it is on disk
     floor_at = floor_ok_at(state, start)
     next_poll = start
     problems = _Problems(d.notify)
     gate_logged = False
     healthy = False         # the last fetch was a 304, a dedupe or a paint
     cap_synced = False      # whether the 23-hour cap last saw a synced clock
+    force_next = False      # a healthy answer left the 23-hour repaint due
     if floor_at > start:
         log.info("first refresh allowed in %d s (the 180 s floor is kept across "
                  "restarts)", math.ceil(floor_at - start))
@@ -749,7 +756,11 @@ def run(d: Deps) -> int:
                 next_poll = d.boottime()
             continue
 
-        forced = forced_due(state, now, d.walltime(), d.synced())
+        # The sync flag is read once per fetch: a sync that lands during the
+        # fetch is then picked up by the wait branch, not lost in between.
+        synced = d.synced()
+        forced = force_next or forced_due(state, now, d.walltime(), synced)
+        force_next = False
         result = d.fetch(None if forced else state.etag)
         now = d.boottime()
         healthy = False
@@ -820,13 +831,24 @@ def run(d: Deps) -> int:
             problems.set("transient", f"server not answering ({reason})")
             next_poll = now + ERROR_RETRY_S
 
+        if unsaved:
+            unsaved = not save_state(d.state_dir, state)
+
         # Keep the 23-hour repaint on time even if the server advises 24 h,
-        # and across a reboot. The clock is read again: after a paint, `now`
-        # (taken before it) is earlier than painted_end_bt.
-        cap_synced = d.synced()
-        force_at = force_poll_at(state, d.boottime(), d.walltime(), cap_synced)
-        if force_at is not None:
-            next_poll = min(next_poll, force_at)
+        # and across a reboot, but only after a healthy answer: a failure's
+        # backoff is never cut short, and a forced fetch follows it anyway.
+        # The clocks are read again, since the fetch (or paint) took time.
+        cap_synced = synced
+        if healthy:
+            bt, wall = d.boottime(), d.walltime()
+            if forced_due(state, bt, wall, cap_synced):
+                # It came due during the fetch: fetch again now, forced.
+                force_next = True
+                next_poll = bt
+            else:
+                force_at = force_poll_at(state, bt, wall, cap_synced)
+                if force_at is not None:
+                    next_poll = min(next_poll, force_at)
 
 
 def clear(d: Deps) -> int:
