@@ -161,6 +161,26 @@ class Harness:
         return P.run(self.deps)
 
 
+class LateSync(Clock):
+    """A clock whose sync arrives at boot time `at`."""
+
+    def __init__(self, t: float, at: float):
+        super().__init__(t)
+        self.at = at
+
+    def synced_fn(self) -> bool:
+        return self.t >= self.at
+
+
+def _unsynced_at_boot() -> Clock:
+    c = Clock(t=0.0)
+    c.synced = False
+    return c
+
+
+TAG = '"deadbeef' + "0" * 24 + '"'      # a strong ETag; [1:9] is "deadbeef"
+
+
 def frame(n: int) -> bytes:
     return bytes([n % 256]) * P.BUF_BYTES
 
@@ -569,6 +589,23 @@ def test_the_forced_due_table(state, now_bt, synced, expected):
     assert P.forced_due(state, now_bt, NOW_WALL, synced) is expected
 
 
+@pytest.mark.parametrize("state, now_bt, synced, expected", [
+    (P.State(complete=False, attempt_start_bt=1.0), 2000.0, True, None),
+    (P.State(complete=True, painted_end_bt=1000.0), 2000.0, False, 83_800.0),
+    (P.State(complete=True, painted_end_bt=1000.0), 83_800.0, False, None),
+    (P.State(complete=True, painted_end_bt=500_000.0), 1000.0, False, 82_800.0),
+    (P.State(complete=True, painted_end_bt=1000.0, painted_wall=NOW_WALL - 82_000),
+     2000.0, True, 2800.0),
+    (P.State(complete=True, painted_end_bt=1000.0, painted_wall=NOW_WALL - 82_000),
+     2000.0, False, 83_800.0),
+    (P.State(complete=True, painted_end_bt=1000.0, painted_wall=NOW_WALL - 90_000),
+     2000.0, True, None),
+], ids=["nothing-painted", "boot-bound", "boot-overdue", "earlier-boot",
+        "wall-bound-first", "wall-ignored-unsynced", "wall-overdue"])
+def test_the_force_poll_at_table(state, now_bt, synced, expected):
+    assert P.force_poll_at(state, now_bt, NOW_WALL, synced) == expected
+
+
 def test_a_failed_refresh_logs_the_phase_it_failed_in(tmp_path, caplog):
     clock = Clock()
     panel = FakePanel(clock, fail={"display": E.BusyTimeout("refresh", 60.0)})
@@ -580,23 +617,28 @@ def test_a_failed_refresh_logs_the_phase_it_failed_in(tmp_path, caplog):
     assert not any("during off" in m for m in messages), messages
 
 
-@pytest.mark.parametrize("responder", [
-    lambda n, sent, clock: (P.Frame(frame(1), etag(1), 3600) if sent is None
-                            else P.NotModified(sent, 3600)),
-    lambda n, sent, clock: P.Gone(),
-    lambda n, sent, clock: P.Throttled(3600),
-], ids=["not-modified", "gone", "throttled"])
-def test_every_wait_is_a_short_slice_and_each_one_pings_the_watchdog(tmp_path, responder):
+@pytest.mark.parametrize("make_clock, responder", [
+    (Clock, lambda n, sent, clock: (P.Frame(frame(1), etag(1), 3600) if sent is None
+                                    else P.NotModified(sent, 3600))),
+    (Clock, lambda n, sent, clock: P.Gone()),
+    (Clock, lambda n, sent, clock: P.Throttled(3600)),
+    (_unsynced_at_boot, lambda n, sent, clock: P.Gone()),
+], ids=["not-modified", "gone", "throttled", "clock-gate"])
+def test_every_wait_is_a_short_slice_and_each_one_pings_the_watchdog(tmp_path, make_clock,
+                                                                     responder):
     """WatchdogSec=60: a wait longer than that with no ping gets the service
     killed. run() waits in slices of at most PING_SLICE_S and pings after
     each one."""
-    h = Harness(tmp_path, Clock(), responder, stop_after=3)
+    h = Harness(tmp_path, make_clock(), responder, stop_after=3)
     assert h.run() == 0
     positive = [t for t in h.waits if t > 0]
     assert positive
     assert max(positive) <= P.PING_SLICE_S
     assert sum(positive) > 4 * P.PING_SLICE_S       # long gaps, covered in slices
     assert h.notes.count("WATCHDOG=1") == len(positive)
+    if make_clock is _unsynced_at_boot:
+        # the wait for the clock, before the first fetch, pings too
+        assert positive.count(P.CLOCK_CHECK_S) >= P.CLOCK_SYNC_GRACE_S // P.CLOCK_CHECK_S
 
 
 def test_after_a_restart_an_unchanged_frame_still_says_what_is_on_the_glass(tmp_path):
@@ -624,6 +666,65 @@ def test_after_a_recovery_the_status_says_what_is_on_the_glass_again(tmp_path):
     statuses = [n for n in h.notes if n.startswith("STATUS=")]
     assert any("server not answering" in s for s in statuses), statuses
     assert statuses[-1].startswith("STATUS=showing " + etag(1)[1:9]), statuses
+
+
+def test_a_paint_says_what_it_painted_and_since_when(tmp_path):
+    h = Harness(tmp_path, Clock(), lambda n, sent, c: P.Frame(frame(7), TAG, 300),
+                stop_after=1)
+    assert h.run() == 0
+    s = P.load_state(tmp_path)
+    statuses = [n for n in h.notes if n.startswith("STATUS=")]
+    assert statuses == [f"STATUS=showing deadbeef since {P._hm(s.painted_wall)}"]
+
+
+def test_a_paint_before_the_clock_syncs_names_no_time(tmp_path):
+    clock = Clock()
+    clock.synced = False
+    h = Harness(tmp_path, clock, lambda n, sent, c: P.Frame(frame(7), TAG, 300),
+                stop_after=1)
+    assert h.run() == 0
+    statuses = [n for n in h.notes if n.startswith("STATUS=")]
+    assert statuses == ["STATUS=showing deadbeef"]
+
+
+def test_the_same_picture_under_a_new_etag_says_so_once(tmp_path):
+    save(tmp_path, etag=etag(1), glass_sha256=sha(frame(1)), painted_end_bt=10.0,
+         painted_wall=1.7e9 + 10.0, attempt_start_bt=5.0, complete=True)
+    h = Harness(tmp_path, Clock(), lambda n, sent, c: P.Frame(frame(1), TAG, 300),
+                stop_after=2)
+    assert h.run() == 0
+    assert "init" not in h.panel.names()
+    statuses = [n for n in h.notes if n.startswith("STATUS=")]
+    assert statuses == [f"STATUS=showing deadbeef since {P._hm(1.7e9 + 10.0)}"]
+
+
+@pytest.mark.parametrize("state, expected", [
+    (P.State(etag=TAG), "showing deadbeef"),
+    (P.State(etag=TAG, painted_wall=1.7e9), f"showing deadbeef since {P._hm(1.7e9)}"),
+    (P.State(glass_sha256=P.WHITE_SHA256), "showing white"),
+    (P.State(glass_sha256=sha(frame(3))), "showing the last frame"),
+], ids=["etag", "etag-and-time", "white", "unknown"])
+def test_the_showing_line(state, expected):
+    assert P._showing(state) == expected
+
+
+@pytest.mark.parametrize("first", ["frame", "outage"])
+def test_a_refresh_that_cannot_be_recorded_says_so_in_status(tmp_path, monkeypatch, first):
+    monkeypatch.setattr(P, "save_state", lambda *a, **k: False)
+
+    def responder(n, sent, c):
+        if first == "outage" and n == 0:
+            return P.Transient("down")
+        return P.Frame(frame(n), etag(n), 300)
+
+    h = Harness(tmp_path, Clock(), responder, stop_after=3)
+    assert h.run() == 0
+    assert "init" not in h.panel.names()
+    statuses = [n for n in h.notes if n.startswith("STATUS=")]
+    record = [s for s in statuses if "could not record the refresh" in s]
+    assert len(record) == 1, statuses               # once per episode
+    assert statuses[-1] == record[0]
+    assert statuses[-1].endswith("; the glass keeps its last frame")
 
 
 def test_after_a_reboot_the_23_hour_repaint_keeps_its_wall_clock_time(tmp_path):
@@ -658,17 +759,122 @@ def test_after_a_reboot_without_a_wall_clock_the_repaint_comes_by_23_hours_of_up
     assert h.panel.paints()
 
 
-def test_an_overdue_repaint_does_not_shorten_the_retry_backoff(tmp_path):
-    clock = Clock(t=1000.0)
-    save(tmp_path, etag=etag(1), glass_sha256=sha(frame(1)), painted_end_bt=10.0,
-         painted_wall=clock.walltime() - 30 * 3600, attempt_start_bt=5.0,
-         complete=True)
-    h = Harness(tmp_path, clock, lambda n, sent, c: P.Transient("down"), stop_after=4)
+def test_a_paint_from_an_earlier_boot_is_recorded_as_boot_time_zero(tmp_path):
+    clock = Clock(t=400.0)
+    clock.synced = False
+    save(tmp_path, etag=etag(1), glass_sha256=sha(frame(1)), painted_end_bt=50_000.0,
+         painted_wall=None, attempt_start_bt=49_990.0, complete=True)
+    seen = []
+
+    def responder(n, sent, c):
+        seen.append(P.load_state(tmp_path).painted_end_bt)
+        return P.NotModified(sent, 300)
+
+    h = Harness(tmp_path, clock, responder, stop_after=1)
+    assert h.run() == 0
+    assert seen == [0.0]
+    assert h.fetches[0][0] == 400.0         # the floor is not lengthened
+
+
+@pytest.mark.parametrize("responder, stop_after", [
+    (_daily, 3),
+    (lambda n, sent, c: (P.NotModified(sent, 300) if sent
+                         else P.Frame(frame(1), etag(1), 300)), 300),
+], ids=["daily", "every-5-min"])
+def test_after_a_reboot_an_early_paint_without_a_wall_clock_is_repainted_by_23_hours(
+        tmp_path, responder, stop_after):
+    """The paint ended at 50,000 s of the earlier boot's uptime. Compared with
+    each new uptime, it would pass for this boot's once uptime overtook it, and
+    the repaint would slip to 50,000 + 82,800 s."""
+    clock = Clock(t=400.0)
+    clock.synced = False
+    save(tmp_path, etag=etag(1), glass_sha256=sha(frame(1)), painted_end_bt=50_000.0,
+         painted_wall=None, attempt_start_bt=49_990.0, complete=True)
+    h = Harness(tmp_path, clock, responder, stop_after=stop_after)
+    assert h.run() == 0
+    forced = [t for t, sent in h.fetches if sent is None]
+    assert forced and forced[0] <= P.FORCE_REPAINT_S + 60, forced[:3]
+    assert h.panel.paints()
+
+
+def _late_sync_run(tmp_path, painted_age, responder, stop_after=3):
+    """Paint from an earlier boot, painted_age seconds of wall time before boot
+    time 300; the gate opens unsynced at 300 s, and the clock syncs at 400 s."""
+    clock = LateSync(300.0, 400.0)
+    painted_wall = clock.wall_offset + 300.0 - painted_age
+    save(tmp_path, etag=etag(1), glass_sha256=sha(frame(1)), painted_end_bt=50_000.0,
+         painted_wall=painted_wall, attempt_start_bt=49_990.0, complete=True)
+    h = Harness(tmp_path, clock, responder, stop_after=stop_after)
+    assert h.run() == 0
+    return h, clock, painted_wall
+
+
+def test_a_clock_that_syncs_later_still_bounds_the_23_hour_repaint(tmp_path):
+    h, clock, painted_wall = _late_sync_run(tmp_path, 22 * 3600, _daily)
+    assert h.fetches[0][0] == 300.0 and h.fetches[0][1] is not None
+    assert 400.0 <= h.fetches[1][0] < 460.0      # asked again once the clock synced
+    forced = [t for t, sent in h.fetches if sent is None]
+    assert forced, h.fetches
+    assert clock.wall_offset + forced[0] <= painted_wall + P.FORCE_REPAINT_S + 60
+
+
+def test_a_clock_that_syncs_to_an_overdue_repaint_repaints_at_once(tmp_path):
+    h, clock, painted_wall = _late_sync_run(tmp_path, P.FORCE_REPAINT_S - 60, _daily)
+    forced = [t for t, sent in h.fetches if sent is None]
+    assert forced and forced[0] < 460.0, h.fetches
+    assert h.panel.paints()
+
+
+def test_a_clock_that_syncs_during_a_backoff_does_not_cut_it_short(tmp_path):
+    h, clock, painted_wall = _late_sync_run(
+        tmp_path, 22 * 3600, lambda n, sent, c: P.Throttled(3600))
+    times = [t for t, _ in h.fetches]
+    assert times[0] == 300.0
+    assert times[1] == pytest.approx(300.0 + 3600, abs=1), times
+
+
+W0 = 1.7e9      # Clock's default wall_offset
+
+
+@pytest.mark.parametrize("t, synced, saved, answer, gap", [
+    # overdue by the wall clock only (boot bound far off)
+    (1000.0, True, dict(painted_end_bt=10.0, painted_wall=W0 + 1000.0 - 30 * 3600),
+     P.Transient("down"), None),
+    # same boot, overdue by boot time, no wall clock
+    (83_000.0, False, dict(painted_end_bt=10.0, painted_wall=None),
+     P.Transient("down"), None),
+    # an earlier boot, with this boot's uptime past 23 h
+    (83_000.0, False, dict(painted_end_bt=500_000.0, painted_wall=None),
+     P.Transient("down"), None),
+    # due by the wall clock, the boot bound still 800 s off
+    (83_000.0, True, dict(painted_end_bt=1000.0, painted_wall=W0 + 83_000.0 - 24 * 3600),
+     P.Throttled(3600), 3600),
+    # due by boot time, the wall bound still 360 s off
+    (83_810.0, True, dict(painted_end_bt=1000.0,
+                          painted_wall=W0 + 83_810.0 - (P.FORCE_REPAINT_S - 360)),
+     P.Throttled(3600), 3600),
+], ids=["wall-clock", "boot-clock", "earlier-boot", "wall-due-boot-not", "boot-due-wall-not"])
+def test_an_overdue_repaint_does_not_shorten_the_retry_backoff(tmp_path, t, synced, saved,
+                                                               answer, gap):
+    """Once any bound says the repaint is due, the next fetch is forced whenever
+    it comes, so the cap must not pull it inside the backoff."""
+    clock = Clock(t=t)
+    clock.synced = synced
+    save(tmp_path, etag=etag(1), glass_sha256=sha(frame(1)),
+         attempt_start_bt=saved["painted_end_bt"] - 5.0, complete=True, **saved)
+
+    def responder(n, sent, c):
+        assert n < 10, "fetched again without waiting"
+        return answer
+
+    h = Harness(tmp_path, clock, responder, stop_after=4)
     assert h.run() == 0
     times = [t for t, _ in h.fetches]
     gaps = [b - a for a, b in zip(times, times[1:])]
     assert len(gaps) == 3
     assert all(g >= P.ERROR_RETRY_S for g in gaps), gaps
+    if gap is not None:
+        assert gaps == pytest.approx([gap] * 3, abs=1), gaps
 
 
 # ── clock gate ───────────────────────────────────────────────────────────────

@@ -414,7 +414,7 @@ def test_every_start_the_script_makes_resets_the_start_count_first(tmp_path, scr
         code = line.split("#", 1)[0]
         if "echo" in code:
             continue
-        assert not re.search(r"\bsystemctl\s+(start|restart)\b", code), \
+        assert not re.search(r"\bsystemctl\s+(start|restart|enable\s+--now)\b", code), \
             f"starts the unit without start_service: {line!r}"
 
 
@@ -475,6 +475,24 @@ def test_rotate_token_restarts_only_a_unit_that_is_running_or_failed(script):
 def test_clear_claims_success_only_when_it_succeeded(script):
     arm = _case_arm(script, "--selftest|--clear")
     assert re.search(r'if \[ "\$rc" -eq 0 \]; then echo "  ✓ cleared to white"', arm), arm
+
+
+def test_clear_leaves_the_unit_inactive_so_rotate_token_keeps_it_stopped(script):
+    arm = _case_arm(script, "--selftest|--clear")
+    branch = arm[arm.index('if [ "$MODE" = --clear ]; then'):]
+    reset = branch.find('systemctl reset-failed "$UNIT_NAME"')
+    assert 0 < reset < branch.index('if [ "$rc" -eq 0 ]'), branch
+
+
+@pytest.mark.parametrize("label, before, after", [
+    ("install", "stop_service", "run_oneoff --selftest"),
+    ("--selftest|--clear", "stop_service", 'run_oneoff "$MODE"'),
+    ("--uninstall", "systemctl disable --now", "run_oneoff --clear"),
+])
+def test_every_one_off_runs_with_the_service_stopped(script, label, before, after):
+    arm = _case_arm(script, label)
+    assert before in arm and after in arm, arm
+    assert arm.index(before) < arm.index(after)
 
 
 @pytest.mark.parametrize("mode", [
