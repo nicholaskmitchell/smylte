@@ -1,0 +1,13 @@
+# Starts smylte-panel-poweroff.service when the desk panel asks to power the box
+# off: smylte-panel.service writes /run/smylte-panel/poweroff, a directory only
+# that unit can write to and that goes away when it stops. Installed and
+# enabled by panel-setup.sh.
+[Unit]
+Description=Power off when the Smylte desk panel asks
+
+[Path]
+PathExists=/run/smylte-panel/poweroff
+Unit=smylte-panel-poweroff.service
+
+[Install]
+WantedBy=multi-user.target

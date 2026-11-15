@@ -21,12 +21,23 @@
 #
 # ── Devices ──────────────────────────────────────────────────────────────────
 # No PrivateDevices: it would hide /dev/spidev0.0 and /dev/gpiochip*.
-# DevicePolicy=closed with exactly these two DeviceAllow lines instead. That also
+# DevicePolicy=closed with exactly the DeviceAllow lines below instead. That also
 # keeps out /dev/gpiomem*, which group `gpio` would otherwise open: raw RP1
 # registers, every pin on the header. The names come from /proc/devices and are
 # resolved when the unit starts, so if spidev has not loaded yet at boot the
 # open fails, the client exits 1 and the restart a minute later succeeds.
 # No PrivateUsers: SupplementaryGroups would be unmapped inside it.
+# char-input matches every input node, but plain file permissions narrow it:
+# 70-smylte-panel-key.rules gives ONLY the pwr_button node to group
+# smylte-panel-key (0640), so this unit can read the power key and no keyboard.
+# It never takes the `input` group.
+#
+# ── Power key and power-off ──────────────────────────────────────────────────
+# logind is told to ignore the key (50-smylte-panel.conf), so the key does
+# nothing unless this service runs.
+# This unit can power the box off, by design: it writes /run/smylte-panel/poweroff,
+# and smylte-panel-poweroff.path, a root unit, does the rest.
+# The run directory is removed whenever this unit stops, so no request outlives it.
 #
 # ── Power ────────────────────────────────────────────────────────────────────
 # ExecStopPost is not optional. The Pi 5's GPIO block keeps an output at its
@@ -52,11 +63,12 @@
 # 243/CREDENTIALS, because the credential's path is absolute.
 #
 # ── Settings ─────────────────────────────────────────────────────────────────
-# /etc/default/smylte-panel is optional and holds only SMYLTE_PANEL_PWR_PIN, for
-# an e-Paper Driver HAT Rev2.3 (firmware/README.md, "Other boards"). It is a
-# file rather than a drop-in so that panel-setup.sh's one-off runs read the
-# same setting, and so it can be written before the first install. Never the
-# token: that is the credential above.
+# /etc/default/smylte-panel holds four settings: the PWR pin, the refresh mode,
+# the idle return and the key (firmware/README.md). panel-setup.sh writes it
+# once, with the defaults, and never overwrites it. Edit it with sudoedit, then
+# re-run panel-setup.sh if KEY changed. It is a file rather than a drop-in so
+# that panel-setup.sh's one-off runs read the same settings. Never the token:
+# that is the credential above.
 #
 # If a first boot fails and the journal points at the sandbox rather than the
 # hardware, relax in this order: MemoryDenyWriteExecute, then SystemCallFilter.
@@ -69,11 +81,13 @@ StartLimitBurst=5
 Type=notify
 NotifyAccess=main
 DynamicUser=yes
-SupplementaryGroups=gpio spi
+SupplementaryGroups=gpio spi smylte-panel-key
 LoadCredential=display-token:/etc/credstore/smylte-panel-token
 EnvironmentFile=-/etc/default/smylte-panel
 StateDirectory=smylte-panel
 StateDirectoryMode=0700
+RuntimeDirectory=smylte-panel
+RuntimeDirectoryMode=0700
 ExecStart=/usr/bin/python3 -I -B /usr/local/lib/smylte-panel/panel.py
 ExecStopPost=-/usr/bin/python3 -I -B /usr/local/lib/smylte-panel/panel.py --power-off
 Restart=on-failure
@@ -90,6 +104,7 @@ TasksMax=8
 DevicePolicy=closed
 DeviceAllow=char-spi rw
 DeviceAllow=char-gpiochip rw
+DeviceAllow=char-input r
 
 # Loopback only: the one host it talks to is smylted on 127.0.0.1:8080.
 # AF_UNIX is for sd_notify.

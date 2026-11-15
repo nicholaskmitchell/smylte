@@ -1,0 +1,10 @@
+# udev rule for the Smylte desk panel: only the Pi 5's power key is readable by
+# smylte-panel.service, and no other input device is (see "Devices" in
+# smylte-panel.service). Installed by panel-setup.sh to /etc/udev/rules.d/.
+#
+# `:=` makes GROUP and MODE final. Raspberry Pi OS's 99-com.rules sets
+# GROUP="input" on every input node with a plain `=`; 70 sorts before 99, so
+# the file name does not win here, the final-assignment operator does.
+# ATTRS{name} matches the name of the parent input device (the gpio-keys node
+# the firmware calls pwr_button), not the event node itself.
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="pwr_button", GROUP:="smylte-panel-key", MODE:="0640"

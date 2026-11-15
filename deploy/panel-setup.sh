@@ -5,6 +5,8 @@
 #   sudo ~/smylte/deploy/panel-setup.sh --rotate-token  store a new display token
 #   sudo ~/smylte/deploy/panel-setup.sh --selftest      power the panel up and down, no refresh
 #   sudo ~/smylte/deploy/panel-setup.sh --clear         paint it white (for storage) and stop
+#   sudo ~/smylte/deploy/panel-setup.sh --keytest       print what the view key's presses would do
+#   sudo ~/smylte/deploy/panel-setup.sh --reset-refresh turn fast and partial refresh back on
 #   sudo ~/smylte/deploy/panel-setup.sh --status        checks, drift, service state
 #   sudo ~/smylte/deploy/panel-setup.sh --uninstall     stop, clear, and remove everything
 #   sudo ~/smylte/deploy/panel-setup.sh --no-selftest   install without the self-test
@@ -18,6 +20,11 @@
 # from this checkout, so autopull cannot change the code driving the glass. The
 # cost is this script: after pulling a change to firmware/pi_epaper_7in5/ or
 # deploy/smylte-panel.service, run it again. `--status` shows whether you need to.
+#
+# --keytest refuses until logind has been told to ignore the power key (an
+# install does that), because otherwise the first press would power the box
+# off. --keytest and --reset-refresh stop the service around themselves and
+# start it again if it was running, like --selftest and --clear.
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
@@ -28,30 +35,77 @@ UNIT_SRC=$REPO/deploy/$UNIT_NAME
 UNIT=/etc/systemd/system/$UNIT_NAME
 CREDSTORE=/etc/credstore
 CRED=$CREDSTORE/smylte-panel-token
-# Optional, and only for a Driver HAT: SMYLTE_PANEL_PWR_PIN=18. The unit reads
-# it as its EnvironmentFile, and the one-off runs below are given it too.
+# The four settings (PWR pin, refresh mode, idle return, key), written once with
+# their defaults. The unit reads it as its EnvironmentFile, and the one-off runs
+# below are given it too.
 PANEL_ENV=/etc/default/smylte-panel
+KEY_GROUP=smylte-panel-key
+RULES_SRC=$REPO/deploy/70-smylte-panel-key.rules
+RULES=/etc/udev/rules.d/70-smylte-panel-key.rules
+PATH_SRC=$REPO/deploy/smylte-panel-poweroff.path
+PATH_UNIT=/etc/systemd/system/smylte-panel-poweroff.path
+OFF_SRC=$REPO/deploy/smylte-panel-poweroff.service
+OFF_UNIT=/etc/systemd/system/smylte-panel-poweroff.service
+LOGIND_SRC=$REPO/deploy/logind-smylte-panel.conf
+LOGIND=/etc/systemd/logind.conf.d/50-smylte-panel.conf
 PY=/usr/bin/python3
 FILES="panel.py epd7in5_v2.py"
 
 die() { echo "panel-setup: $*" >&2; exit 1; }
 say() { echo "== $* =="; }
 
-# The PWR pin in $PANEL_ENV, read as the unit's EnvironmentFile= reads it: the
-# last assignment wins and quotes are dropped. Empty when there is none.
-pwr_setting() {
+# A setting in $PANEL_ENV, read as the unit's EnvironmentFile= reads it: the
+# last assignment wins and quotes and spaces are dropped. Empty or absent means
+# the default, which is what the client uses too.
+setting() {   # $1: NAME, $2: DEFAULT
   local v=
   if [ -r "$PANEL_ENV" ]; then
-    v=$(sed -n 's/^[[:space:]]*SMYLTE_PANEL_PWR_PIN[[:space:]]*=//p' "$PANEL_ENV" | tail -n 1)
+    v=$(sed -n "s/^[[:space:]]*$1[[:space:]]*=//p" "$PANEL_ENV" | tail -n 1)
   fi
   v=${v//[\"\'[:space:]]/}
-  printf '%s' "$v"
+  printf '%s' "${v:-$2}"
+}
+
+# The effective PWR pin: 18 (the Driver HAT) unless set; `none` passes through.
+pwr_setting() {
+  setting SMYLTE_PANEL_PWR_PIN 18
 }
 
 [ "$(id -u)" -eq 0 ] || die "run with sudo"
 
 # ── preflight ────────────────────────────────────────────────────────────────
 # Each check prints its fix. Nothing is written until all of them pass.
+
+# The four settings in $PANEL_ENV, each printed with its effective value.
+check_settings() {
+  local bad=0 v
+  v=$(pwr_setting)
+  if [ "${v,,}" = none ]; then
+    echo "  ✓ PWR pin: none (right for the Pico module)"
+  elif [[ $v =~ ^[0-9]{1,2}$ ]]; then
+    echo "  ✓ PWR pin: BCM$v"
+  else
+    echo "  ✗ SMYLTE_PANEL_PWR_PIN in $PANEL_ENV is '$v' — set none or a BCM pin number (sudoedit $PANEL_ENV)"; bad=1
+  fi
+  v=$(setting SMYLTE_PANEL_REFRESH fast)
+  case "$v" in
+    fast|full) echo "  ✓ refresh: $v" ;;
+    *) echo "  ✗ SMYLTE_PANEL_REFRESH in $PANEL_ENV is '$v' — set fast or full (sudoedit $PANEL_ENV)"; bad=1 ;;
+  esac
+  v=$(setting SMYLTE_PANEL_IDLE_RETURN_S 0)
+  if [[ $v =~ ^[0-9]{1,5}$ ]] && { [ $((10#$v)) -eq 0 ] || { [ $((10#$v)) -ge 60 ] && [ $((10#$v)) -le 86400 ]; }; }; then
+    echo "  ✓ idle return: $v s"
+  else
+    echo "  ✗ SMYLTE_PANEL_IDLE_RETURN_S in $PANEL_ENV is '$v' — set 0, or a number of seconds from 60 to 86400 (sudoedit $PANEL_ENV)"; bad=1
+  fi
+  v=$(setting SMYLTE_PANEL_KEY auto)
+  case "$v" in
+    auto|off) echo "  ✓ key: $v" ;;
+    *) echo "  ✗ SMYLTE_PANEL_KEY in $PANEL_ENV is '$v' — set auto or off (sudoedit $PANEL_ENV)"; bad=1 ;;
+  esac
+  return "$bad"
+}
+
 preflight() {
   local bad=0 v
   if [ ! -x "$PY" ]; then
@@ -92,14 +146,7 @@ preflight() {
   else
     echo "  ? gpiodetect not installed (sudo apt install gpiod) — chip not checked"
   fi
-  v=$(pwr_setting)
-  if [ -z "$v" ]; then
-    echo "  ✓ no PWR pin (right for the Pico module; a Driver HAT sets one in $PANEL_ENV)"
-  elif [[ $v =~ ^[0-9]{1,2}$ ]]; then
-    echo "  ✓ PWR pin BCM$v, from $PANEL_ENV"
-  else
-    echo "  ✗ SMYLTE_PANEL_PWR_PIN in $PANEL_ENV is '$v', not a BCM pin number"; bad=1
-  fi
+  check_settings || bad=1
   return "$bad"
 }
 
@@ -120,7 +167,9 @@ read_token() {
   TOKEN=$tok
 }
 
-# The token goes to Python on stdin, never on a command line.
+# The token goes to Python on stdin, never on a command line. The request is
+# the client's own view target, so the answer says whether Desk key is on for
+# this display and whether smylted is new enough to have it.
 probe_token() {
   local out
   out=$(printf '%s' "$TOKEN" | "$PY" -I -c '
@@ -128,16 +177,21 @@ import http.client, sys
 t = sys.stdin.read()
 c = http.client.HTTPConnection("127.0.0.1", 8080, timeout=10)
 try:
-    c.request("HEAD", "/api/public/display/%s.bin?invert=1&w=800&h=480" % t)
+    c.request("HEAD", "/api/public/display/%s.bin?invert=1&w=800&h=480&mode=habits&tabs=1" % t)
     r = c.getresponse()
-    print(r.status, r.getheader("X-Display-Format") or "-")
+    print(r.status, r.getheader("X-Display-Mode") or "-",
+          r.getheader("X-Display-Error") or "-",
+          r.getheader("X-Display-Format") or "-")
 except OSError as e:
     print("down", type(e).__name__)
 finally:
     c.close()
 ' 2>/dev/null || echo "down probe-failed")
+  # out is: status, X-Display-Mode, X-Display-Error, X-Display-Format
   case "$out" in
-    "200 mono-hlsb-inverted") echo "  ✓ the server knows ${TOKEN:0:4}… and serves this panel's format" ;;
+    "200 habits - mono-hlsb-inverted") echo "  ✓ the server knows ${TOKEN:0:4}… and serves this panel's format, and Desk key is on" ;;
+    "422 "*" views-off "*) echo "  ! Desk key is off for this display: turn it on in Settings → Displays (the panel shows the display's own view until then)" ;;
+    "200 - "*) echo "  ! smylted is too old for the desk key: pull and restart it ($out)" ;;
     404*) echo "  ! the server does not know ${TOKEN:0:4}… (404) — check Settings → Displays; the panel will keep retrying" ;;
     down*) echo "  ! smylted is not answering on 127.0.0.1:8080 ($out) — the panel will retry until it does" ;;
     *) echo "  ! unexpected answer from the server: $out" ;;
@@ -183,7 +237,25 @@ start_service() {   # $1: start or restart
   systemctl "$1" "$UNIT_NAME"
 }
 
-run_oneoff() {   # $1: --selftest or --clear
+# Every arm that stops the service sets a trap on this right after, so that a
+# failure or Ctrl-C does not leave a running panel stopped. An arm that starts
+# the service itself clears the trap first.
+restart_if_was_active() {
+  [ "$WAS_ACTIVE" = yes ] || return 0
+  systemctl is-active --quiet "$UNIT_NAME" || start_service start || true
+}
+
+# On a normal exit the EXIT trap restarts the panel. Ctrl-C or a TERM restart
+# it too and then END the script (130/143): a bash trap that returns would
+# otherwise let the arm run on after the signal.
+arm_restart_trap() {
+  trap 'restart_if_was_active' EXIT
+  trap 'restart_if_was_active; trap - EXIT; exit 130' INT
+  trap 'restart_if_was_active; trap - EXIT; exit 143' TERM
+}
+disarm_restart_trap() { trap - EXIT INT TERM; }
+
+run_oneoff() {   # $1: --selftest, --clear or --reset-refresh
   local rc=0
   systemd-run --quiet --wait --pipe --collect \
     --unit="smylte-panel-${1#--}" \
@@ -201,7 +273,83 @@ drift() {   # prints the files whose installed copy differs from the checkout
   local f out=
   for f in $FILES; do cmp -s "$SRC/$f" "$LIB/$f" || out="$out $f"; done
   cmp -s "$UNIT_SRC" "$UNIT" || out="$out $UNIT_NAME"
+  cmp -s "$RULES_SRC" "$RULES" || out="$out ${RULES##*/}"
+  cmp -s "$PATH_SRC" "$PATH_UNIT" || out="$out ${PATH_UNIT##*/}"
+  cmp -s "$OFF_SRC" "$OFF_UNIT" || out="$out ${OFF_UNIT##*/}"
+  if [ "$(setting SMYLTE_PANEL_KEY auto)" != off ]; then
+    cmp -s "$LOGIND_SRC" "$LOGIND" || out="$out ${LOGIND##*/}"
+  elif [ -e "$LOGIND" ]; then
+    out="$out ${LOGIND##*/}(present, but KEY is off)"
+  fi
   echo "${out# }"
+}
+
+# The last HandlePowerKey* line logind would read, from all of its configuration.
+logind_setting() {   # $1: HandlePowerKey or HandlePowerKeyLongPress
+  local v
+  v=$(systemd-analyze cat-config systemd/logind.conf 2>/dev/null \
+      | sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" | tail -n 1 || true)
+  printf '%s' "${v//[[:space:]]/}"
+}
+
+# Warns, never fails: the node can be missing on a board without the key.
+check_key_node() {
+  local d n dev g found=no
+  for d in /sys/class/input/event*/device/name; do
+    [ -r "$d" ] || continue
+    n=$(cat "$d" 2>/dev/null || true)
+    [ "$n" = pwr_button ] || continue
+    found=yes
+    dev=${d#/sys/class/input/}; dev=${dev%%/*}
+    g=$(stat -c %G "/dev/input/$dev" 2>/dev/null || echo unknown)
+    if [ "$g" = "$KEY_GROUP" ]; then
+      echo "  ✓ /dev/input/$dev (pwr_button) is group $KEY_GROUP"
+    else
+      echo "  ! /dev/input/$dev is group $g, not $KEY_GROUP — the udev rule did not apply"
+    fi
+  done
+  if [ "$found" = no ]; then
+    echo "  ! no pwr_button input device (gpio_keys not loaded?)"
+  fi
+  return 0
+}
+
+# Told to ignore the key, logind no longer powers the box off on a press. The
+# service is started after this, so a tap while it starts cannot power off.
+apply_logind() {
+  if systemctl reload systemd-logind; then
+    echo "  ✓ logind reloaded"
+  else
+    echo "  ✗ logind did not reload: a press may still power the box off until the next boot"
+  fi
+}
+
+# Only when the file is missing: it holds the owner's edits after that.
+write_settings() {
+  local tmp
+  if [ -e "$PANEL_ENV" ]; then
+    echo "  kept $PANEL_ENV (yours)"
+    return 0
+  fi
+  tmp=$(umask 077 && mktemp "$PANEL_ENV.XXXXXX")
+  cat >"$tmp" <<'EOF'
+# Smylte desk panel settings. Edit with: sudoedit /etc/default/smylte-panel
+# Then: sudo systemctl restart smylte-panel (and re-run panel-setup.sh if you change KEY).
+#
+# The e-Paper Driver HAT switches the panel's power on BCM18. The Pico module
+# ignores it (GPIO18 is unconnected there). `none` turns it off.
+SMYLTE_PANEL_PWR_PIN=18
+# fast: partial and fast refresh for the key (panels sold after Sept 2023). full: full refreshes only.
+SMYLTE_PANEL_REFRESH=fast
+# Seconds with no key before the screen goes back to Today. 0 is off; otherwise 60-86400.
+SMYLTE_PANEL_IDLE_RETURN_S=0
+# auto: use the key. off: leave it to the OS (a press powers the box off).
+SMYLTE_PANEL_KEY=auto
+EOF
+  chown root:root "$tmp"
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$PANEL_ENV"
+  echo "  wrote $PANEL_ENV (the defaults)"
 }
 
 show_service() {
@@ -210,11 +358,24 @@ show_service() {
 }
 
 install_files() {
+  say "group $KEY_GROUP, udev rule, power-off units, logind drop-in"
+  getent group "$KEY_GROUP" >/dev/null || groupadd --system "$KEY_GROUP"
+  install -m 0644 -o root -g root "$RULES_SRC" "$RULES"
+  udevadm control --reload
+  udevadm trigger --action=change --subsystem-match=input
+  udevadm settle
+  install -m 0644 -o root -g root "$PATH_SRC" "$PATH_UNIT"
+  install -m 0644 -o root -g root "$OFF_SRC" "$OFF_UNIT"
+  if [ "$(setting SMYLTE_PANEL_KEY auto)" != off ]; then
+    install -D -m 0644 -o root -g root "$LOGIND_SRC" "$LOGIND"
+  else
+    rm -f "$LOGIND"
+  fi
   say "code -> $LIB, unit -> $UNIT"
   install -d -m 0755 -o root -g root "$LIB"
   for f in $FILES; do install -m 0644 -o root -g root "$SRC/$f" "$LIB/$f"; done
   install -m 0644 -o root -g root "$UNIT_SRC" "$UNIT"
-  systemd-analyze verify "$UNIT" || echo "  ! systemd-analyze verify complained (above); continuing"
+  systemd-analyze verify "$UNIT" "$PATH_UNIT" "$OFF_UNIT" || echo "  ! systemd-analyze verify complained (above); continuing"
   systemctl daemon-reload
 }
 
@@ -227,28 +388,41 @@ case "$MODE" in
   install)
     say "preflight"
     preflight || die "fix the ✗ lines above, then run this again"
+    say "settings"
+    write_settings
     install_files
+    say "power key"
+    check_key_node
+    apply_logind
     say "display token"
     if [ -s "$CRED" ]; then
       echo "  ✓ $CRED exists (--rotate-token to replace it)"
+      TOKEN=$(tr -d '\r\n' <"$CRED")
+      probe_token
     else
       read_token; probe_token; store_token
     fi
     if [ "$NO_SELFTEST" = no ]; then
       say "self-test (power up, power down, no refresh)"
       stop_service
+      arm_restart_trap
       if ! run_oneoff --selftest; then
+        disarm_restart_trap
         echo "  ✗ self-test failed — the lines above say where. Wiring and power are in firmware/README.md."
         echo "    The service is installed but NOT started. Re-run this script once it is fixed,"
         echo "    or skip the test with --no-selftest."
         exit 1
       fi
     fi
+    say "power-off request unit"
+    systemctl enable smylte-panel-poweroff.path
+    systemctl start smylte-panel-poweroff.path
     say "service"
     # restart, not enable --now: on an update the unit is already running the
     # old code, and `start` on an active unit does nothing (see setup.sh).
     systemctl enable "$UNIT_NAME"
     start_service restart
+    disarm_restart_trap
     show_service
     echo
     echo "The first refresh comes once the clock has synced and the 180 s floor has"
@@ -272,18 +446,62 @@ case "$MODE" in
     [ -f "$LIB/panel.py" ] || die "not installed — run this script without options first"
     say "${MODE#--}"
     stop_service
+    arm_restart_trap
     rc=0; run_oneoff "$MODE" || rc=$?
     if [ "$MODE" = --clear ]; then
       # Stopped on purpose, so it should read "inactive" even if it had failed
       # before the clear: --rotate-token then leaves a stored panel stopped.
       systemctl reset-failed "$UNIT_NAME" 2>/dev/null || true
-      if [ "$rc" -eq 0 ]; then echo "  ✓ cleared to white"; else
-        echo "  ✗ the clear failed (above); the glass may still show a frame"; fi
-      echo "  The service is stopped and the panel is unpowered. It starts again at boot,"
-      echo "  or now with: sudo systemctl start $UNIT_NAME"
+      # A successful clear must stay stopped, so the trap must not restart it.
+      if [ "$rc" -eq 0 ]; then disarm_restart_trap; fi
+      if [ "$rc" -eq 0 ]; then echo "  ✓ cleared to white"
+        echo "  The service is stopped and the panel is unpowered. It starts again at boot,"
+        echo "  or now with: sudo systemctl start $UNIT_NAME"
+      else
+        echo "  ✗ the clear failed (above); the glass may still show a frame."
+        echo "  The service is started again if it was running before."
+      fi
     elif [ "$WAS_ACTIVE" = yes ]; then
       start_service start
+      disarm_restart_trap
     fi
+    exit "$rc"
+    ;;
+  --keytest)
+    [ -f "$LIB/panel.py" ] || die "not installed — run this script without options first"
+    say "keytest"
+    # The first press would power the box off if logind still handled the key.
+    if [ "$(logind_setting HandlePowerKey)" != ignore ]; then
+      echo "  ✗ logind would power the box off on the first press; run this script without options first"
+      exit 1
+    fi
+    stop_service
+    arm_restart_trap
+    # Reads the key and nothing else: no gpio or spi, no state directory.
+    rc=0
+    systemd-run --wait --pipe --collect \
+      --unit=smylte-panel-keytest \
+      -p DynamicUser=yes -p "SupplementaryGroups=$KEY_GROUP" \
+      -p DevicePolicy=closed -p "DeviceAllow=char-input r" \
+      -p NoNewPrivileges=yes -p ProtectSystem=strict -p ProtectHome=yes \
+      -p "EnvironmentFile=-$PANEL_ENV" \
+      "$PY" -I -B "$LIB/panel.py" --keytest || rc=$?
+    if [ "$WAS_ACTIVE" = yes ]; then
+      start_service start
+    fi
+    disarm_restart_trap
+    exit "$rc"
+    ;;
+  --reset-refresh)
+    [ -f "$LIB/panel.py" ] || die "not installed — run this script without options first"
+    say "reset-refresh"
+    stop_service
+    arm_restart_trap
+    rc=0; run_oneoff --reset-refresh || rc=$?
+    if [ "$WAS_ACTIVE" = yes ]; then
+      start_service start
+    fi
+    disarm_restart_trap
     exit "$rc"
     ;;
   --status)
@@ -298,6 +516,12 @@ case "$MODE" in
         echo "  ! differs from the checkout: $d — run this script to update"; fi
     fi
     if [ -s "$CRED" ]; then echo "  ✓ token stored"; else echo "  ✗ no token stored"; fi
+    say "power key"
+    echo "  logind HandlePowerKey=$(logind_setting HandlePowerKey | sed 's/^$/(unset)/')"
+    echo "  logind HandlePowerKeyLongPress=$(logind_setting HandlePowerKeyLongPress | sed 's/^$/(unset)/')"
+    echo "  smylte-panel-poweroff.path: enabled=$(systemctl is-enabled smylte-panel-poweroff.path 2>/dev/null || true)" \
+         "active=$(systemctl is-active smylte-panel-poweroff.path 2>/dev/null || true)"
+    check_key_node
     say "service"
     show_service
     ;;
@@ -308,8 +532,19 @@ case "$MODE" in
       say "clearing the glass to white"
       run_oneoff --clear || echo "  ! clear failed; continuing with the removal"
     fi
+    say "removing the power key's files"
+    systemctl disable --now smylte-panel-poweroff.path 2>/dev/null || true
+    rm -f "$PATH_UNIT" "$OFF_UNIT"
+    # With the drop-in gone, logind's default is back: a press powers the box off.
+    rm -f "$LOGIND"
+    apply_logind
+    rm -f "$RULES"
+    udevadm control --reload
+    udevadm trigger --action=change --subsystem-match=input
+    udevadm settle
+    groupdel "$KEY_GROUP" 2>/dev/null || true
     say "removing"
-    # Including what `systemctl edit` added and the PWR setting, so a later
+    # Including what `systemctl edit` added and the settings file, so a later
     # install starts from the shipped unit.
     rm -f "$UNIT" "$CRED" "$PANEL_ENV"
     rm -rf "$UNIT.d" "$LIB" /var/lib/private/smylte-panel

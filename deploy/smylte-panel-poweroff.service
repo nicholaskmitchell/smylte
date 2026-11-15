@@ -1,0 +1,14 @@
+# Powers the box off at the desk panel's request. Started by
+# smylte-panel-poweroff.path, runs as root, and is not enabled itself.
+#
+# The request file is deleted first: PathExists= is level-triggered, so a file
+# that outlived this run would start the unit again.
+# --no-block, because the poweroff job stops this unit too and would otherwise
+# wait for itself.
+[Unit]
+Description=Power off at the Smylte desk panel's request
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/rm -f /run/smylte-panel/poweroff
+ExecStart=/usr/bin/systemctl --no-block poweroff
