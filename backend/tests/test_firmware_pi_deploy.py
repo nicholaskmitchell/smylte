@@ -613,10 +613,26 @@ st=$(cat "$STATE_FILE")
 case "$1" in
   show) echo "$st" ;;
   is-active) [ "$st" = active ] || exit 3 ;;
-  stop) echo inactive > "$STATE_FILE" ;;
-  start|restart) echo active > "$STATE_FILE" ;;
+  stop) case "${2:-}" in
+          smylte-panel-*) rm -f "${MARKER:-/nonexistent}" ;;    # a one-off's own unit
+          *) echo inactive > "$STATE_FILE" ;;
+        esac ;;
+  start|restart) [ ! -e "${MARKER:-/nonexistent}" ] || echo "START-WHILE-ONEOFF-RUNNING" >> "$LOG"
+                 echo active > "$STATE_FILE" ;;
 esac
 exit 0
+""",
+    # Answers only for the exact call logind_running makes, so a wrong object,
+    # interface or a missing --value reads as a failure. RUNNING and RUNNING_LONG
+    # are what the running logind says; RUNNING_FAILS makes the call fail.
+    "busctl": """#!/bin/bash
+[ -z "${RUNNING_FAILS:-}" ] || exit 1
+[ "$1 $2 $3 $4 $5" = "--value get-property org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager" ] || exit 1
+case "$6" in
+  HandlePowerKey) printf '%s\\n' "${RUNNING-ignore}" ;;
+  HandlePowerKeyLongPress) printf '%s\\n' "${RUNNING_LONG-ignore}" ;;
+  *) exit 1 ;;
+esac
 """,
     "systemd-run": """#!/bin/bash
 echo "systemd-run $*" >> "$LOG"
@@ -663,7 +679,7 @@ def _arm_program(tmp_path, script, label, functions):
     lib.mkdir(exist_ok=True)
     (lib / "panel.py").write_text("")
     head = (f"UNIT_NAME=smylte-panel.service\nLIB={lib}\nPY={tmp_path / 'bin' / 'python3'}\n"
-            f"PANEL_ENV={tmp_path / 'panel.env'}\nKEY_GROUP={KEY_GROUP}\nWAS_ACTIVE=no\n"
+            f"PANEL_ENV={tmp_path / 'panel.env'}\nKEY_GROUP={KEY_GROUP}\nWAS_ACTIVE=no\nONEOFF=\n"
             'die() { echo "DIE:$*"; exit 3; }\nsay() { echo "== $* =="; }\n')
     return head + "".join(_function(script, f) for f in functions) + _case_arm(script, label) + "\n"
 
@@ -750,6 +766,20 @@ def test_preflight_refuses_a_bad_setting_and_names_it(tmp_path, script, content,
     assert any(l.startswith("  ✗") and name in l and "sudoedit" in l for l in out.splitlines()), out
 
 
+@pytest.mark.parametrize("value", ["", "none"] + [str(n) for n in range(100)]
+                         + ["02", "08", "007", "027", "028", "00", "None"])
+def test_preflight_accepts_a_pwr_pin_exactly_when_the_client_does(
+        tmp_path, script, monkeypatch, value):
+    out = _check_settings(tmp_path, script, f"SMYLTE_PANEL_PWR_PIN={value}\n")
+    monkeypatch.setenv(P.PWR_PIN_ENV, value)
+    try:
+        P.pwr_pin_from_env()
+        client_accepts = True
+    except P.ConfigError:
+        client_accepts = False
+    assert out.rstrip().endswith("rc=0" if client_accepts else "rc=1"), (value, out)
+
+
 def test_the_script_names_the_settings_the_client_reads(script):
     for const in (P.PWR_PIN_ENV, P.REFRESH_ENV, P.IDLE_ENV, P.KEY_ENV):
         assert const in _function(script, "check_settings") or const in _function(script, "pwr_setting")
@@ -789,12 +819,15 @@ def test_an_existing_settings_file_is_kept(tmp_path, script):
 
 # ── the install, in order ────────────────────────────────────────────────────
 
-def test_install_orders_settings_files_key_check_logind_token_path_unit_then_service(script):
+def test_install_orders_settings_files_key_check_logind_path_unit_token_selftest_then_service(script):
+    """The path unit is up before the trap or a failed self-test can start the
+    new service, which would otherwise run with nothing to act on a power-off."""
     arm = _case_arm(script, "install")
     steps = ["preflight ||", "write_settings", "install_files", "check_key_node",
-             "apply_logind", 'TOKEN=$(tr -d', "probe_token", "run_oneoff --selftest",
+             "apply_logind",
              "systemctl enable smylte-panel-poweroff.path",
              "systemctl start smylte-panel-poweroff.path",
+             'TOKEN=$(tr -d', "probe_token", "arm_restart_trap", "run_oneoff --selftest",
              'systemctl enable "$UNIT_NAME"', "start_service restart"]
     at = [arm.index(step) for step in steps]
     assert at == sorted(at), dict(zip(steps, at))
@@ -965,33 +998,42 @@ def test_drift_covers_the_rule_both_power_off_units_and_the_logind_drop_in(
 _CAT = "# /etc/systemd/logind.conf\n[Login]\n#HandlePowerKey=poweroff\n{lines}"
 
 
-@pytest.mark.parametrize("lines", [
-    "",                                                         # logind's own default
-    "HandlePowerKey=ignore\nHandlePowerKey=poweroff\n",         # a later file wins
-    "HandlePowerKey=poweroff\n",
-    "HandlePowerKeyLongPress=ignore\n",                         # the long press is not the press
-], ids=["default", "overridden-later", "poweroff", "only-long-press"])
-def test_keytest_refuses_unless_logind_last_says_ignore(tmp_path, script, lines):
+@pytest.mark.parametrize("env, cat_lines", [
+    ({"RUNNING": "poweroff"}, ""),
+    ({"RUNNING": "poweroff"}, "HandlePowerKey=ignore\n"),     # the files say ignore, logind has not reloaded
+    ({"RUNNING": "ignore-not"}, "HandlePowerKey=ignore\n"),
+    ({"RUNNING": ""}, "HandlePowerKey=ignore\n"),              # an empty answer
+    ({"RUNNING_FAILS": "1"}, "HandlePowerKey=ignore\n"),       # busctl failed
+], ids=["poweroff", "files-ignore-running-poweroff", "not-exactly-ignore", "empty", "busctl-fails"])
+def test_keytest_refuses_unless_the_running_logind_says_ignore(tmp_path, script, env, cat_lines):
     program = _arm_program(tmp_path, script, "--keytest",
-                           ["logind_setting", "stop_service", "start_service", "restart_if_was_active"])
-    result, calls = _run_fake(tmp_path, program, state="active", cat=_CAT.format(lines=lines))
+                           ["logind_running", "stop_service", "start_service", "restart_if_was_active"])
+    result, calls = _run_fake(tmp_path, program, state="active",
+                              cat=_CAT.format(lines=cat_lines), env=env)
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "✗ logind would power the box off on the first press; run this script without options first" \
-        in result.stdout
+    assert "✗ logind (running) would power the box off on the first press" in result.stdout
+    assert "systemctl reload systemd-logind" in result.stdout
     # Refused before anything is stopped or run.
     assert calls == [], calls
 
 
+def test_keytest_goes_ahead_when_the_running_logind_says_ignore_whatever_the_files_say(tmp_path, script):
+    result, calls = _run_fake(tmp_path, _keytest_arm(tmp_path, script), state="inactive",
+                              cat=_CAT.format(lines="HandlePowerKey=poweroff\n"),
+                              env={"RUNNING": "ignore", "RUNNING_LONG": "poweroff"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _index(calls, "systemd-run") >= 0
+
+
 def _keytest_arm(tmp_path, script):
     return _arm_program(tmp_path, script, "--keytest",
-                        ["logind_setting"] + _ONEOFF_FUNCTIONS)
+                        ["logind_running"] + _ONEOFF_FUNCTIONS)
 
 
 @pytest.mark.parametrize("state, restarts", [("active", True), ("inactive", False)])
 def test_keytest_runs_a_key_only_one_off_with_the_service_stopped_around_it(
         tmp_path, script, state, restarts):
-    cat = _CAT.format(lines="HandlePowerKey=poweroff\nHandlePowerKey=ignore\n")
-    result, calls = _run_fake(tmp_path, _keytest_arm(tmp_path, script), state=state, cat=cat)
+    result, calls = _run_fake(tmp_path, _keytest_arm(tmp_path, script), state=state)
     assert result.returncode == 0, result.stdout + result.stderr
     run = _index(calls, "systemd-run")
     line = calls[run]
@@ -1012,8 +1054,7 @@ def test_keytest_runs_a_key_only_one_off_with_the_service_stopped_around_it(
 
 
 def test_keytest_restarts_the_service_even_when_the_one_off_fails(tmp_path, script):
-    cat = _CAT.format(lines="HandlePowerKey=ignore\n")
-    result, calls = _run_fake(tmp_path, _keytest_arm(tmp_path, script), state="active", cat=cat,
+    result, calls = _run_fake(tmp_path, _keytest_arm(tmp_path, script), state="active",
                               env={"FAKE_RUN_RC": "7"})
     assert result.returncode == 7
     assert _index(calls, "systemctl start", _index(calls, "systemd-run")) > 0
@@ -1026,7 +1067,36 @@ def test_keytest_one_off_has_no_gpio_spi_or_state_in_the_script_text(script):
     assert "gpio" not in run and "spi" not in run and "StateDirectory" not in run
     assert "ProtectSystem=strict" in run and "NoNewPrivileges=yes" in run
     assert '"EnvironmentFile=-$PANEL_ENV"' in run
-    assert arm.index("logind_setting HandlePowerKey") < arm.index("stop_service") < arm.index("systemd-run")
+    assert arm.index("logind_running HandlePowerKey") < arm.index("stop_service") < arm.index("systemd-run")
+    assert "logind_setting" not in arm       # the files are not what acts on a press
+
+
+def _status_lines(tmp_path, script, *, cat, env):
+    """The --status arm's lines for the two HandlePowerKey settings, run."""
+    arm = _case_arm(script, "--status")
+    loop = arm[arm.index("for k in HandlePowerKey"):]
+    loop = loop[:loop.index("\n    done") + len("\n    done")]
+    program = (_function(script, "logind_setting") + _function(script, "logind_running") + loop + "\n")
+    result, _ = _run_fake(tmp_path, program, cat=cat, env=env)
+    assert result.returncode == 0, result.stderr
+    return result.stdout.splitlines()
+
+
+@pytest.mark.parametrize("cat_lines, env, expected", [
+    ("HandlePowerKey=ignore\n", {"RUNNING": "ignore"},
+     ["  logind HandlePowerKey=ignore (file) / ignore (running)",
+      "  logind HandlePowerKeyLongPress=(unset) (file) / ignore (running)"]),
+    # The drop-in is on disk but logind has not reloaded: both are shown.
+    ("HandlePowerKey=ignore\n", {"RUNNING": "poweroff", "RUNNING_LONG": "ignore"},
+     ["  logind HandlePowerKey=ignore (file) / poweroff (running)",
+      "  logind HandlePowerKeyLongPress=(unset) (file) / ignore (running)"]),
+    ("", {"RUNNING_FAILS": "1"},
+     ["  logind HandlePowerKey=(unset) (file) / unreadable (running)",
+      "  logind HandlePowerKeyLongPress=(unset) (file) / unreadable (running)"]),
+], ids=["both-ignore", "file-ahead-of-running", "nothing-set-busctl-fails"])
+def test_status_shows_loginds_file_and_running_values_and_unset_when_there_is_none(
+        tmp_path, script, cat_lines, env, expected):
+    assert _status_lines(tmp_path, script, cat=_CAT.format(lines=cat_lines), env=env) == expected
 
 
 @pytest.mark.parametrize("state", ["active", "inactive"])
@@ -1059,6 +1129,61 @@ def test_a_signal_during_a_one_off_still_restarts_the_service(tmp_path, script):
         _index(calls, "systemctl start")
 
 
+# systemd-run with --pipe and no tty does not pass a Ctrl-C on: it dies, and the
+# transient unit it started carries on. The fake leaves a marker for that unit,
+# which only `systemctl stop` on it removes, then interrupts the script.
+_FAKE_RUN_INTERRUPTED = """#!/bin/bash
+echo "systemd-run $*" >> "$LOG"
+touch "$MARKER"
+kill -INT "$PPID"
+sleep 0.2
+exit 130
+"""
+
+
+@pytest.mark.parametrize("label, extra, unit_name", [
+    ("--reset-refresh", "", "smylte-panel-reset-refresh.service"),
+    ("--selftest|--clear", "MODE=--selftest\n", "smylte-panel-selftest.service"),
+    ("--selftest|--clear", "MODE=--clear\n", "smylte-panel-clear.service"),
+    ("--keytest", "", "smylte-panel-keytest.service"),
+], ids=["reset-refresh", "selftest", "clear", "keytest"])
+def test_a_ctrl_c_during_a_one_off_stops_it_and_powers_off_before_the_service_starts(
+        tmp_path, script, label, extra, unit_name):
+    program = extra + _arm_program(tmp_path, script, label,
+                                   ["logind_running"] + _ONEOFF_FUNCTIONS)
+    result, calls = _run_fake(
+        tmp_path, program, state="active",
+        env={"MARKER": str(tmp_path / "transient")},
+        fakes={"systemd-run": _FAKE_RUN_INTERRUPTED})
+    assert result.returncode == 130, result.stdout + result.stderr
+    stop = _index(calls, f"systemctl stop {unit_name}")
+    power_off = _index(calls, "python3", stop)
+    assert calls[power_off].endswith("--power-off")
+    start = _index(calls, "systemctl start smylte-panel.service", power_off)
+    assert stop < power_off < start
+    assert "START-WHILE-ONEOFF-RUNNING" not in calls, calls
+
+
+def test_a_finished_one_off_is_not_stopped_or_powered_off_again_by_the_exit_trap(tmp_path, script):
+    """A failed --clear leaves the trap armed; it restarts the panel at exit
+    and must not stop the unit that has already finished."""
+    program = "MODE=--clear\n" + _arm_program(tmp_path, script, "--selftest|--clear", _ONEOFF_FUNCTIONS)
+    result, calls = _run_fake(tmp_path, program, state="active", env={"FAKE_RUN_RC": "1"})
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert [c for c in calls if c.startswith("systemctl stop")] == ["systemctl stop smylte-panel.service"]
+    assert len([c for c in calls if c.endswith("--power-off")]) == 1      # run_oneoff's own
+    assert _index(calls, "systemctl start smylte-panel.service") > 0
+
+
+def test_the_one_offs_get_a_stop_timeout_that_outlasts_a_refresh(tmp_path, script):
+    """The default 90 s could kill a one-off that a stop caught mid-refresh."""
+    unit_timeout = int(re.search(r"^TimeoutStopSec=(\d+)$",
+                                 F.UNIT.read_text(encoding="utf-8"), re.M).group(1))
+    program = _arm_program(tmp_path, script, "--reset-refresh", _ONEOFF_FUNCTIONS)
+    _, calls = _run_fake(tmp_path, program, state="inactive")
+    assert f"-p TimeoutStopSec={unit_timeout}" in calls[_index(calls, "systemd-run")]
+
+
 @pytest.mark.parametrize("was_active, state, starts", [
     ("yes", "inactive", True),
     ("yes", "failed", True),
@@ -1067,7 +1192,7 @@ def test_a_signal_during_a_one_off_still_restarts_the_service(tmp_path, script):
 ])
 def test_the_trap_restarts_only_a_panel_that_was_running_and_is_not(
         tmp_path, script, was_active, state, starts):
-    program = ("UNIT_NAME=smylte-panel.service\n" f"WAS_ACTIVE={was_active}\n"
+    program = ("UNIT_NAME=smylte-panel.service\nONEOFF=\n" f"WAS_ACTIVE={was_active}\n"
                + _function(script, "start_service") + _function(script, "restart_if_was_active")
                + "restart_if_was_active\n")
     _, calls = _run_fake(tmp_path, program, state=state)
@@ -1077,14 +1202,16 @@ def test_the_trap_restarts_only_a_panel_that_was_running_and_is_not(
         assert "systemctl reset-failed smylte-panel.service" in calls
 
 
-def test_every_arm_that_stops_the_service_sets_the_trap_right_after(script):
+def test_every_arm_that_stops_the_service_sets_the_trap_right_before(script):
+    """A Ctrl-C while `systemctl stop` waits for a refresh must still restart
+    the panel, so the trap is armed before the stop, not after it returns."""
     trap = "arm_restart_trap"
     for label in ("install", "--selftest|--clear", "--keytest", "--reset-refresh"):
         arm = _case_arm(script, label)
         stop = arm.index("stop_service")
-        assert arm.index(trap) > stop, label
-        # Nothing runs between the stop and the trap but the trap's own line.
-        assert arm[stop:arm.index(trap)].strip().splitlines() == ["stop_service"], label
+        assert arm.index(trap) < stop, label
+        # Nothing runs between the trap and the stop but the stop's own line.
+        assert arm[arm.index(trap):stop].strip().splitlines() == ["arm_restart_trap"], label
         assert "disarm_restart_trap" in arm, label
         assert arm.index("disarm_restart_trap") > arm.index(trap), label
     assert "stop_service" not in _case_arm(script, "--status")
@@ -1188,7 +1315,7 @@ def test_the_firmware_is_mit_licensed_and_each_client_file_says_so():
 def test_a_signal_ends_the_script_after_restarting_the_service(tmp_path, script):
     """A bash trap that returns lets the script run on; the INT/TERM traps
     restart the panel and then exit, so nothing after the signal runs."""
-    program = ("UNIT_NAME=smylte-panel.service\nWAS_ACTIVE=yes\n"
+    program = ("UNIT_NAME=smylte-panel.service\nONEOFF=\nWAS_ACTIVE=yes\n"
                + _function(script, "start_service") + _function(script, "restart_if_was_active")
                + _function(script, "arm_restart_trap") + _function(script, "disarm_restart_trap")
                + "arm_restart_trap\nkill -TERM $$\necho after-the-signal\n")

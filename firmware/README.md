@@ -237,7 +237,7 @@ seated Pico would boot and fight the Pi on the same wires.
 | Tap (press and let go within 0.6 s) | Shows the next view: Today, then Now, then Calendar, then Today again |
 | Hold about 1 s, then let go | Draws "Shut down?" |
 | Tap once "Shut down?" is fully drawn | Draws "Off", then the box shuts down |
-| Wait 10 s | "Shut down?" goes away and the view comes back |
+| Wait 10 s | "Shut down?" goes away and the view comes back. If the service has drawn nothing since it started (a restart onto an unchanged view), the glass goes white instead, and the view follows once the 3-minute floor allows |
 | Press while the Pi is off | The Pi boots, and the service draws Today |
 
 **Let go after about a second. Never hold the key to wait for the screen: at
@@ -272,7 +272,7 @@ the values first.
 | Variable | Values | Default | Meaning |
 | --- | --- | --- | --- |
 | `SMYLTE_PANEL_PWR_PIN` | a free BCM pin, or `none` | `18` (also when unset or empty) | The Driver HAT's power switch. `none` uses no pin |
-| `SMYLTE_PANEL_REFRESH` | `fast` or `full` | `fast` | `fast`: partial and fast refreshes for the key. `full`: every refresh is full |
+| `SMYLTE_PANEL_REFRESH` | `fast` or `full` | `fast` | `fast`: the key's tab strip is a partial refresh, and every other refresh that allows one (pages, the prompt, leave paints, the wake paint and routine new frames) is fast, with a full refresh after every 5 (`FULL_EVERY`). `full`: every refresh is full |
 | `SMYLTE_PANEL_IDLE_RETURN_S` | `0`, or 60–86400 | `0` (off) | Seconds with no key before the glass goes back to Today. It is a routine refresh, so the 180 s floor applies |
 | `SMYLTE_PANEL_KEY` | `auto` or `off` | `auto` | `off`: the service never opens the key, and `panel-setup.sh` leaves logind alone, so a press powers the box off |
 
@@ -292,10 +292,13 @@ it installs or removes the logind drop-in. After changing any other setting,
   is not running. On the HAT, deep sleep leaves PWR and RST high, on purpose.
 - It paints only a frame whose headers say exactly 800×480 `mono-hlsb-inverted`,
   48,000 bytes, and for a view the view it asked for.
-- The strip is a partial refresh. Its page and the prompt are fast refreshes. A
+- The strip is a partial refresh. The key's pages, the prompt, leave paints, the
+  wake paint and routine new frames are fast refreshes. A
   full refresh follows after every 5 fast or partial ones (`FULL_EVERY`), and
   the "Off" screen, `--clear`, the 23 h repaint and the first paint after a
-  start are always full. With `SMYLTE_PANEL_REFRESH=full`, every refresh is full.
+  start are always full, except that the prompt is always fast, even when it is
+  the first paint after a start (the way back from it is then full). With
+  `SMYLTE_PANEL_REFRESH=full`, every refresh is full.
 - It repaints in full at least every 23 h, even if nothing changed, and within
   23 h of the service's latest start even after a reboot. The 23 h are measured
   from the last full refresh, so fast and partial ones do not reset them. If the
@@ -311,8 +314,11 @@ it installs or removes the logind drop-in. After changing any other setting,
 - The "Off" screen persists with no power.
 - Without Desk key on the display, or with an old smylted, the panel works as a
   plain display of the view stored for it, and the Status line says why. Taps do
-  nothing then; a hold still asks "Shut down?" once the screen is cached. Every 15 min it asks the server
-  for the views again.
+  nothing then; a hold still asks "Shut down?" once the screen is cached. It
+  asks the server for the views again at its next routine fetch once 15 min have
+  passed since the last check: every 15 min with a refresh interval of 15 min or
+  less, and at each refresh with a longer one (hourly with "Every hour").
+  `sudo systemctl restart smylte-panel` asks at once.
 - A refresh it cannot first record in its state file is never started. It
   retries every minute, and the Status line says so.
 - It waits for the clock to sync after boot (at most 300 s of uptime), because
@@ -366,7 +372,7 @@ last frame`.
 | --- | --- | --- |
 | (nothing: the key does nothing) | The service is not running, and logind ignores the key meanwhile | `systemctl status smylte-panel`. Power off over SSH, or hold the key for about 5 s (the hardware cut, not clean) |
 | No journal line. `--keytest` says `no pwr_button input device (is gpio_keys loaded?)`, and `--status` says `no pwr_button input device (gpio_keys not loaded?)`. The journal may say `key: cannot open …` | The Pi has no `pwr_button` input device, or the unit cannot read it. The service looks again every 10 s | Check the key's wiring. `panel-setup.sh --status` shows the node and its group; re-run `panel-setup.sh` to install the udev rule |
-| `desk key off: turn on Desk key for this display in Settings → Displays` (the Status line ends `· desk key off: …`) | The server answered 422 `views-off`. The panel shows the display's stored view, and taps do nothing | Turn on Desk key for the display in Settings → Displays. The panel asks again every 15 min |
+| `desk key off: turn on Desk key for this display in Settings → Displays` (the Status line ends `· desk key off: …`) | The server answered 422 `views-off`. The panel shows the display's stored view, and taps do nothing | Turn on Desk key for the display in Settings → Displays. The panel asks again at its next fetch at least 15 min after the last check (later with a refresh interval over 15 min), or at once after `sudo systemctl restart smylte-panel` |
 | `desk key off: smylted is too old for the desk key — update it` | The server does not know the `mode` parameter | Pull and restart smylte |
 | `key resting; try again in N s` | The key's budget is spent (12, refilled one per 50 s). Taps are ignored | Wait |
 | `no confirm screen yet` | A hold was ignored: the "Shut down?" screen has not been fetched yet. It is fetched in the background after the first successful fetch, and kept in `/var/lib/smylte-panel` | Wait a minute and hold again. If it stays, smylted is probably too old |
