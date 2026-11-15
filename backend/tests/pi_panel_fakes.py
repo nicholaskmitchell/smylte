@@ -64,8 +64,9 @@ def load_driver():
 class FakeClock:
     """Monotonic seconds; sleep() advances time instead of waiting."""
 
-    def __init__(self, t: float = 1000.0):
+    def __init__(self, t: float = 1000.0, rec: "Recorder | None" = None):
         self.t = float(t)
+        self.rec = rec
         self.sleeps: list[float] = []
 
     def monotonic(self) -> float:
@@ -74,6 +75,8 @@ class FakeClock:
     def sleep(self, s: float) -> None:
         self.sleeps.append(s)
         self.t += s
+        if self.rec is not None:
+            self.rec.events.append(("sleep", s))
 
 
 class Recorder:
@@ -85,7 +88,7 @@ class Recorder:
       ("spi", dc, payload_bytes)    one transfer, with DC's level at the time
       ("spi-open",) / ("spi-close",)
       ("release",)                  the GPIO request released
-      ("sleep", seconds)            only from the Waveshare fake's delay_ms
+      ("sleep", seconds)            the fake clock's sleep(), when make_panel wires it
     """
 
     def __init__(self):
@@ -194,7 +197,7 @@ def make_panel(*, busy=1, pwr_pin=None, cut_between=False, tick=None):
     rec = Recorder()
     lines = FakeLines(rec, busy=busy, busy_pin=epd.BUSY_PIN)
     factory = SpiFactory(rec, lines)
-    clock = FakeClock()
+    clock = FakeClock(rec=rec)
     panel = epd.Panel(lines, factory, pwr_pin=pwr_pin, cut_between=cut_between,
                       clock=clock.monotonic, sleep=clock.sleep, tick=tick)
     return panel, rec, lines, factory, clock

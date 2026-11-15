@@ -74,6 +74,7 @@ class FakePanel:
         self.fail = dict(fail or {})
         self.calls: list[tuple] = []
         self.phase = "idle"
+        self.aborted_in = None
 
     def _step(self, name: str, extra=None) -> None:
         if name in self.PHASES:
@@ -93,7 +94,10 @@ class FakePanel:
         self._step("sleep")
 
     def abort(self, busy_stuck: bool = False) -> None:
+        # As epd.Panel: remember where it failed, then power down to "off".
+        self.aborted_in = self.phase
         self._step("abort", busy_stuck)
+        self.phase = "off"
 
     def close(self) -> None:
         self._step("close")
@@ -125,6 +129,7 @@ class Harness:
         self.signals = list(signals)
         self.fetches: list[tuple[float, str | None]] = []
         self.notes: list[str] = []
+        self.waits: list[float] = []
         self.deps = P.Deps(state_dir=tmp_path, panel=self.panel, epd=E,
                            fetch=self.fetch, wait=self.wait,
                            boottime=clock.boottime, walltime=clock.walltime,
@@ -136,6 +141,7 @@ class Harness:
         return self.responder(n, etag, self.clock)
 
     def wait(self, timeout):
+        self.waits.append(timeout)
         if self.signals and self.signals[0][0] <= self.clock.t + timeout:
             at_t, signo = self.signals.pop(0)
             self.clock.t = max(self.clock.t, at_t)
@@ -563,6 +569,108 @@ def test_the_forced_due_table(state, now_bt, synced, expected):
     assert P.forced_due(state, now_bt, NOW_WALL, synced) is expected
 
 
+def test_a_failed_refresh_logs_the_phase_it_failed_in(tmp_path, caplog):
+    clock = Clock()
+    panel = FakePanel(clock, fail={"display": E.BusyTimeout("refresh", 60.0)})
+    h = Harness(tmp_path, clock, new_frames(), panel=panel)
+    with caplog.at_level(logging.ERROR):
+        assert h.run() == 1
+    messages = [r.getMessage() for r in caplog.records]
+    assert any(m.startswith("refresh failed during refresh") for m in messages), messages
+    assert not any("during off" in m for m in messages), messages
+
+
+@pytest.mark.parametrize("responder", [
+    lambda n, sent, clock: (P.Frame(frame(1), etag(1), 3600) if sent is None
+                            else P.NotModified(sent, 3600)),
+    lambda n, sent, clock: P.Gone(),
+    lambda n, sent, clock: P.Throttled(3600),
+], ids=["not-modified", "gone", "throttled"])
+def test_every_wait_is_a_short_slice_and_each_one_pings_the_watchdog(tmp_path, responder):
+    """WatchdogSec=60: a wait longer than that with no ping gets the service
+    killed. run() waits in slices of at most PING_SLICE_S and pings after
+    each one."""
+    h = Harness(tmp_path, Clock(), responder, stop_after=3)
+    assert h.run() == 0
+    positive = [t for t in h.waits if t > 0]
+    assert positive
+    assert max(positive) <= P.PING_SLICE_S
+    assert sum(positive) > 4 * P.PING_SLICE_S       # long gaps, covered in slices
+    assert h.notes.count("WATCHDOG=1") == len(positive)
+
+
+def test_after_a_restart_an_unchanged_frame_still_says_what_is_on_the_glass(tmp_path):
+    save(tmp_path, etag=etag(1), glass_sha256=sha(frame(1)), painted_end_bt=10.0,
+         painted_wall=1.7e9 + 10.0, attempt_start_bt=5.0, complete=True)
+    h = Harness(tmp_path, Clock(), lambda n, sent, clock: P.NotModified(sent, 300),
+                stop_after=3)
+    assert h.run() == 0
+    assert all(sent == etag(1) for _, sent in h.fetches)
+    statuses = [n for n in h.notes if n.startswith("STATUS=")]
+    assert len(statuses) == 1, statuses        # once, not on every 304
+    assert statuses[0].startswith("STATUS=showing " + etag(1)[1:9])
+
+
+def test_after_a_recovery_the_status_says_what_is_on_the_glass_again(tmp_path):
+    def responder(n, sent, clock):
+        if n == 0:
+            return P.Frame(frame(1), etag(1), 300)
+        if n == 1:
+            return P.Transient("down")
+        return P.NotModified(sent, 300)
+
+    h = Harness(tmp_path, Clock(), responder, stop_after=3)
+    assert h.run() == 0
+    statuses = [n for n in h.notes if n.startswith("STATUS=")]
+    assert any("server not answering" in s for s in statuses), statuses
+    assert statuses[-1].startswith("STATUS=showing " + etag(1)[1:9]), statuses
+
+
+def test_after_a_reboot_the_23_hour_repaint_keeps_its_wall_clock_time(tmp_path):
+    """Painted 22 h ago by the wall clock, late in an earlier boot; this boot
+    is young, and the server advises a day. The boot clock alone would put
+    the repaint a day out."""
+    clock = Clock(t=200.0)
+    painted_wall = clock.walltime() - 22 * 3600
+    save(tmp_path, etag=etag(1), glass_sha256=sha(frame(1)),
+         painted_end_bt=50_000.0, painted_wall=painted_wall,
+         attempt_start_bt=49_990.0, complete=True)
+    h = Harness(tmp_path, clock, _daily, stop_after=3)
+    assert h.run() == 0
+    forced = [t for t, sent in h.fetches if sent is None]
+    assert forced, h.fetches
+    assert clock.wall_offset + forced[0] <= painted_wall + P.FORCE_REPAINT_S + 60
+    assert h.panel.paints()
+
+
+def test_after_a_reboot_without_a_wall_clock_the_repaint_comes_by_23_hours_of_uptime(tmp_path):
+    """No synced clock, and a paint time from an earlier boot: at least this
+    boot's uptime has passed since it, so 23 h of uptime is enough."""
+    clock = Clock(t=400.0)
+    clock.synced = False
+    save(tmp_path, etag=etag(1), glass_sha256=sha(frame(1)),
+         painted_end_bt=500_000.0, painted_wall=None,
+         attempt_start_bt=499_990.0, complete=True)
+    h = Harness(tmp_path, clock, _daily, stop_after=3)
+    assert h.run() == 0
+    forced = [t for t, sent in h.fetches if sent is None]
+    assert forced and forced[0] <= P.FORCE_REPAINT_S + 60, h.fetches
+    assert h.panel.paints()
+
+
+def test_an_overdue_repaint_does_not_shorten_the_retry_backoff(tmp_path):
+    clock = Clock(t=1000.0)
+    save(tmp_path, etag=etag(1), glass_sha256=sha(frame(1)), painted_end_bt=10.0,
+         painted_wall=clock.walltime() - 30 * 3600, attempt_start_bt=5.0,
+         complete=True)
+    h = Harness(tmp_path, clock, lambda n, sent, c: P.Transient("down"), stop_after=4)
+    assert h.run() == 0
+    times = [t for t, _ in h.fetches]
+    gaps = [b - a for a, b in zip(times, times[1:])]
+    assert len(gaps) == 3
+    assert all(g >= P.ERROR_RETRY_S for g in gaps), gaps
+
+
 # ── clock gate ───────────────────────────────────────────────────────────────
 
 def test_no_fetch_before_the_clock_gate_opens(tmp_path):
@@ -730,6 +838,27 @@ def valid_env(tmp_path, monkeypatch):
     return creds
 
 
+def _fake_driver(monkeypatch, busy=1):
+    """P.open_driver replaced by the real driver's Panel on fakes, with a fake
+    clock so close()'s 2 s settle costs nothing. Returns the fakes."""
+    rec = F.Recorder()
+    lines = F.FakeLines(rec, busy=busy, busy_pin=E.BUSY_PIN)
+    factory = F.SpiFactory(rec, lines)
+    clock = F.FakeClock(rec=rec)
+
+    def panel(lines_, spi_factory, *, pwr_pin=None, tick=None):
+        return E.Panel(lines_, spi_factory, pwr_pin=pwr_pin, tick=tick,
+                       clock=clock.monotonic, sleep=clock.sleep)
+
+    driver = types.SimpleNamespace(
+        open_hardware=lambda pwr: (lines, factory, "/dev/gpiochip0"),
+        Panel=panel, PanelError=E.PanelError, BusyTimeout=E.BusyTimeout,
+        HardwareMissing=E.HardwareMissing,
+        SPI_BUS=E.SPI_BUS, SPI_DEVICE=E.SPI_DEVICE, SPI_HZ=E.SPI_HZ)
+    monkeypatch.setattr(P, "open_driver", lambda: driver)
+    return types.SimpleNamespace(rec=rec, lines=lines, factory=factory, clock=clock)
+
+
 @pytest.mark.parametrize("content", [
     b"",
     b"\n",
@@ -827,6 +956,68 @@ def test_missing_hardware_exits_1_so_systemd_restarts_it(valid_env, monkeypatch,
     monkeypatch.setattr(P, "open_driver", lambda: types.SimpleNamespace(
         open_hardware=raiser, HardwareMissing=E.HardwareMissing))
     assert guarded_main([]) == 1
+
+
+def test_main_blocks_every_signal_it_waits_for_before_the_loop(valid_env, monkeypatch,
+                                                              guarded_main):
+    """Without the block, SIGTERM's default action would kill a refresh, and
+    USR1 would kill the service outright."""
+    monkeypatch.setattr(P.os, "geteuid", lambda: 1000)
+    _fake_driver(monkeypatch)
+    before = set(signal.pthread_sigmask(signal.SIG_BLOCK, []))
+    assert not before & set(P.WAIT_SIGNALS), "blocked already: the test proves nothing"
+    seen = []
+
+    def fake_run(d):
+        seen.append(set(signal.pthread_sigmask(signal.SIG_BLOCK, [])))
+        return 0
+
+    monkeypatch.setattr(P, "run", fake_run)
+    assert guarded_main([]) == 0
+    (mask,) = seen
+    assert set(P.WAIT_SIGNALS) <= mask
+
+
+def test_main_says_ready_and_powers_the_panel_off_on_the_way_out(valid_env, monkeypatch,
+                                                                guarded_main):
+    monkeypatch.setattr(P.os, "geteuid", lambda: 1000)
+    hw = _fake_driver(monkeypatch)
+    hw.lines.levels[E.RST_PIN] = 1      # as a refresh leaves it
+    monkeypatch.setattr(P, "run", lambda d: 0)
+    name = "smylte-ready-" + str(os.getpid())
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as server:
+        server.bind("\0" + name)
+        server.settimeout(2)
+        monkeypatch.setenv("NOTIFY_SOCKET", "@" + name)
+        assert guarded_main([]) == 0
+        assert server.recv(4096).startswith(b"READY=1")
+    assert hw.lines.released is True
+    assert hw.lines.levels[E.RST_PIN] == 0
+
+
+def test_selftest_powers_up_and_down_without_a_refresh(valid_env, monkeypatch,
+                                                      guarded_main):
+    monkeypatch.setattr(P.os, "geteuid", lambda: 1000)
+    hw = _fake_driver(monkeypatch)
+    assert guarded_main(["--selftest"]) == 0
+    cmds = [p for dc, p in hw.rec.spi(drop_status_polls=True) if dc == 0]
+    assert bytes([E.POWER_ON]) in cmds
+    assert bytes([E.DEEP_SLEEP]) in cmds
+    assert bytes([E.DATA_START_NEW]) not in cmds
+    assert bytes([E.DISPLAY_REFRESH]) not in cmds
+    assert hw.lines.released is True
+    assert hw.lines.levels[E.RST_PIN] == 0
+
+
+def test_a_failed_selftest_names_the_phase_it_failed_in(valid_env, monkeypatch,
+                                                       guarded_main, capsys):
+    """abort() leaves `phase` at "off"; the log must say where it failed."""
+    monkeypatch.setattr(P.os, "geteuid", lambda: 1000)
+    _fake_driver(monkeypatch, busy=0)
+    assert guarded_main(["--selftest"]) == 1
+    err = capsys.readouterr().err
+    assert "self-test failed during power-on" in err
+    assert "during off" not in err
 
 
 DISTINCT = "Xy" + "w" * 41      # 43 characters

@@ -220,21 +220,61 @@ def test_the_token_is_read_without_echo(script):
     assert "IFS= read -rsp" in script
 
 
+_TOKEN_ALLOWED = [
+    re.compile(r"^\s*printf '%s\\n' \"\$TOKEN\" >\"\$tmp\"\s*$"),
+    re.compile(r"printf '%s' \"\$TOKEN\" \| \"\$PY\""),
+    re.compile(r"^\s*TOKEN=\$tok\s*$"),
+    re.compile(r"^\s*TOKEN=\s*$"),
+]
+# read_token()'s own copies of the secret, and the only lines that may use them.
+_LOCAL_OK = {
+    'case "$raw" in',
+    '*/display/*) tok=${raw#*/display/}; tok=${tok%%[.?/#]*} ;;',
+    '*) tok=$raw ;;',
+    'tok=${tok//[[:space:]]/}',
+    '[[ $tok =~ ^[A-Za-z0-9_-]{22,128}$ ]] || die "that is not a display token (22–128 of A–Z a–z 0–9 _ -)"',
+    'TOKEN=$tok',
+}
+
+
+def _token_expansions(text: str) -> tuple[int, list[str]]:
+    """(lines that expand $TOKEN, lines that expand the token anywhere they
+    should not). Every expansion form counts: $TOKEN, ${TOKEN}, ${TOKEN:...},
+    ${TOKEN:-...}, and read_token()'s $raw and $tok. Only ${TOKEN:0:4} may be
+    printed."""
+    token = re.compile(r"\$\{?TOKEN\b")
+    local = re.compile(r"\$\{?(raw|tok)\b")
+    seen, bad = 0, []
+    for line in text.splitlines():
+        rest = line.replace("${TOKEN:0:4}", "")
+        if token.search(rest):
+            seen += 1
+            if not any(r.search(rest) for r in _TOKEN_ALLOWED):
+                bad.append(line)
+        if local.search(line) and line.strip() not in _LOCAL_OK:
+            bad.append(line)
+    return seen, bad
+
+
 def test_the_token_is_printed_only_as_its_first_four_characters(script):
-    allowed = [
-        re.compile(r"^\s*printf '%s\\n' \"\$TOKEN\" >\"\$tmp\"\s*$"),
-        re.compile(r"printf '%s' \"\$TOKEN\" \| \"\$PY\""),
-        re.compile(r"^\s*TOKEN=\$tok\s*$"),
-        re.compile(r"^\s*TOKEN=\s*$"),
-    ]
-    expands = re.compile(r"\$TOKEN\b|\$\{TOKEN\}")
-    seen = 0
-    for line in script.splitlines():
-        if not expands.search(line):
-            continue
-        seen += 1
-        assert any(r.search(line) for r in allowed), f"the token is expanded here: {line!r}"
+    seen, bad = _token_expansions(script)
     assert seen, "no line expands the token: the check is looking at the wrong thing"
+    assert bad == [], f"the token is expanded here: {bad!r}"
+
+
+@pytest.mark.parametrize("old, new", [
+    ("stored ${TOKEN:0:4}…", "stored ${TOKEN:0:43}…"),
+    ("stored ${TOKEN:0:4}…", "stored ${TOKEN:-}…"),
+    ("stored ${TOKEN:0:4}…", "stored ${TOKEN}…"),
+    ("stored ${TOKEN:0:4}…", "stored ${TOKEN:0:4}${TOKEN:4}…"),
+    ("  TOKEN=$tok\n}", '  echo "  read $tok" >&2\n  TOKEN=$tok\n}'),
+    ('  IFS= read -rsp "Token: " raw; echo',
+     '  IFS= read -rsp "Token: " raw; echo "got $raw"'),
+], ids=["slice", "default", "braces", "two-slices", "tok-to-stderr", "raw-echoed"])
+def test_the_token_check_catches_every_way_of_printing_it(script, old, new):
+    assert script.count(old) == 1, old
+    seen, bad = _token_expansions(script.replace(old, new))
+    assert bad, f"{new!r} printed the token and the check missed it"
 
 
 @pytest.mark.parametrize("line", [
@@ -289,6 +329,38 @@ def _run_read_token(script: str, value: str):
                           capture_output=True, text=True)
 
 
+def _function(script: str, name: str) -> str:
+    m = re.search(rf"^{name}\(\) \{{.*?\n\}}\n", script, re.S | re.M)
+    assert m, f"{name}() not found"
+    return m.group(0)
+
+
+_FAKE_SYSTEMCTL = """#!/bin/bash
+echo "$*" >> "$LOG"
+if [ "$1" = show ]; then echo "$FAKE_STATE"; fi
+exit 0
+"""
+
+
+def _run_with_systemctl(tmp_path, program: str, state: str = "inactive"):
+    if shutil.which("bash") is None:
+        pytest.skip("no bash")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    fake = bin_dir / "systemctl"
+    fake.write_text(_FAKE_SYSTEMCTL)
+    fake.chmod(0o755)
+    log = tmp_path / "systemctl.log"
+    log.write_text("")
+    result = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\nUNIT_NAME=smylte-panel.service\n" + program],
+        env={"PATH": f"{bin_dir}:{os.environ['PATH']}", "LOG": str(log),
+             "FAKE_STATE": state},
+        capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    return result, log.read_text().splitlines()
+
+
 @pytest.mark.parametrize("value", [
     _TOK,
     f"https://box.example/display/{_TOK}",
@@ -312,6 +384,97 @@ def test_something_that_is_not_a_token_is_refused(script, value):
     result = _run_read_token(script, value)
     assert result.returncode == 3, result.stdout + result.stderr
     assert "DIE:" in result.stdout
+
+
+@pytest.mark.parametrize("state, stops, was_active", [
+    ("active", True, "yes"),
+    ("activating", True, "yes"),      # waiting out RestartSec after a fault
+    ("reloading", True, "yes"),
+    ("deactivating", True, "no"),
+    ("inactive", False, "no"),
+    ("failed", False, "no"),
+])
+def test_a_one_off_stops_any_unit_that_could_still_take_the_lines(
+        tmp_path, script, state, stops, was_active):
+    program = ("WAS_ACTIVE=no\n" + _function(script, "stop_service")
+               + 'stop_service >/dev/null\necho "WAS_ACTIVE=$WAS_ACTIVE"\n')
+    result, calls = _run_with_systemctl(tmp_path, program, state)
+    assert calls[0] == "show -P ActiveState smylte-panel.service"
+    assert ("stop smylte-panel.service" in calls) is stops, calls
+    assert result.stdout.strip().endswith(f"WAS_ACTIVE={was_active}")
+
+
+def test_every_start_the_script_makes_resets_the_start_count_first(tmp_path, script):
+    program = _function(script, "start_service") + "start_service restart\n"
+    _, calls = _run_with_systemctl(tmp_path, program)
+    assert calls == ["reset-failed smylte-panel.service",
+                     "restart smylte-panel.service"]
+    body = _function(script, "start_service")
+    for line in script.replace(body, "").splitlines():
+        code = line.split("#", 1)[0]
+        if "echo" in code:
+            continue
+        assert not re.search(r"\bsystemctl\s+(start|restart)\b", code), \
+            f"starts the unit without start_service: {line!r}"
+
+
+@pytest.mark.parametrize("content, expected", [
+    (None, ""),
+    ("", ""),
+    ("SMYLTE_PANEL_PWR_PIN=18\n", "18"),
+    ('SMYLTE_PANEL_PWR_PIN="18"\n', "18"),
+    ("# a comment\nSMYLTE_PANEL_PWR_PIN=17\n  SMYLTE_PANEL_PWR_PIN = '18' \n", "18"),
+    ("OTHER=1\n", ""),
+], ids=["no-file", "empty", "plain", "quoted", "last-wins", "other"])
+def test_the_pwr_setting_is_read_as_the_unit_reads_it(tmp_path, script, content, expected):
+    env = tmp_path / "panel.env"
+    if content is not None:
+        env.write_text(content)
+    program = (f"PANEL_ENV={env}\n" + _function(script, "pwr_setting")
+               + 'printf "[%s]" "$(pwr_setting)"\n')
+    result, _ = _run_with_systemctl(tmp_path, program)
+    assert result.stdout == f"[{expected}]"
+    assert P.PWR_PIN_ENV in _function(script, "pwr_setting")
+
+
+def test_the_one_off_runs_get_the_services_pwr_setting(script, unit):
+    body = _function(script, "run_oneoff")
+    assert '-p "EnvironmentFile=-$PANEL_ENV"' in body
+    assert f'{P.PWR_PIN_ENV}=$(pwr_setting) "$PY" -I -B "$LIB/panel.py" --power-off' in body
+    assert unit.values("Service", "EnvironmentFile") == [
+        "-" + re.search(r"^PANEL_ENV=(\S+)$", script, re.M).group(1)]
+
+
+def _case_arm(script: str, label: str) -> str:
+    m = re.search(rf"^\s*{re.escape(label)}\)\n(.*?)\n\s*;;\n", script, re.S | re.M)
+    assert m, f"no case arm {label})"
+    return m.group(1)
+
+
+def test_uninstall_removes_the_drop_ins_and_the_pwr_file_after_the_clear(script):
+    arm = _case_arm(script, "--uninstall")
+    clear = arm.index("run_oneoff --clear")
+    rm_env = re.search(r'^\s*rm -f .*"\$PANEL_ENV"', arm, re.M)
+    rm_dropins = re.search(r'^\s*rm -rf .*"\$UNIT\.d"', arm, re.M)
+    reload_ = arm.index("systemctl daemon-reload")
+    assert rm_env and rm_dropins
+    assert clear < rm_env.start() < reload_
+    assert clear < rm_dropins.start() < reload_
+
+
+def test_rotate_token_restarts_only_a_unit_that_is_running_or_failed(script):
+    arm = _case_arm(script, "--rotate-token")
+    assert "is-enabled" not in arm
+    assert "show -P ActiveState" in arm
+    m = re.search(r"^\s*([a-z|]+)\)\n\s*start_service restart", arm, re.M)
+    assert m, arm
+    assert set(m.group(1).split("|")) == {"active", "activating", "reloading",
+                                          "refreshing", "failed"}
+
+
+def test_clear_claims_success_only_when_it_succeeded(script):
+    arm = _case_arm(script, "--selftest|--clear")
+    assert re.search(r'if \[ "\$rc" -eq 0 \]; then echo "  ✓ cleared to white"', arm), arm
 
 
 @pytest.mark.parametrize("mode", [

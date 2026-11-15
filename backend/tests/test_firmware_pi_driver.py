@@ -124,6 +124,25 @@ def test_the_settle_delays_are_waveshares():
     assert E.DEEP_SLEEP_SETTLE_S * 1000 == 2000
 
 
+def test_the_settle_delays_sit_where_the_driver_needs_them():
+    """After POWER ON and after DISPLAY REFRESH the controller needs time to
+    pull BUSY low before the first status poll, and each BUSY release is
+    followed by the release settle. Checked in the event stream, not as
+    constants."""
+    panel, rec, lines, factory, clock = F.make_panel()
+    _run_cycle(panel)
+    ev = [e for e in rec.events if e[0] in ("spi", "sleep", "read")]
+    for cmd in (E.POWER_ON, E.DISPLAY_REFRESH):
+        i = ev.index(("spi", 0, bytes([cmd])))
+        assert ev[i + 1] == ("sleep", E.CMD_SETTLE_S), (hex(cmd), ev[i:i + 3])
+        assert ev[i + 2] == ("spi", 0, bytes([E.GET_STATUS])), (hex(cmd), ev[i:i + 3])
+    released = [i for i, e in enumerate(ev)
+                if e[0] == "read" and e[1] == E.BUSY_PIN and e[2] == 1]
+    assert len(released) == 3       # power-on, refresh, power-off
+    for i in released:
+        assert ev[i + 1] == ("sleep", E.BUSY_RELEASE_S)
+
+
 def test_the_panel_is_left_powered_in_deep_sleep_where_waveshare_cuts_power():
     """Waveshare's sleep() ends with module_exit(), which cuts power. Ours does
     not by default: the Pico driver also leaves RST high after a refresh. On the
@@ -359,12 +378,14 @@ class FakeRequest:
     def __init__(self):
         self.sets = []
         self.releases = 0
+        self.values = {}        # offset -> Value: as last set, or as a test scripts it
 
     def set_value(self, pin, v):
         self.sets.append((pin, v))
+        self.values[pin] = v
 
     def get_value(self, pin):
-        return self.value_active
+        return self.values.get(pin, self.value_active)
 
     def release(self):
         self.releases += 1
@@ -373,10 +394,11 @@ class FakeRequest:
 class FakeGpiod:
     """A `gpiod` (and `gpiod.line`) as the driver touches them."""
 
-    def __init__(self, devices=(), labels=None, denied=()):
+    def __init__(self, devices=(), labels=None, denied=(), denied_errno=13):
         self.devices = set(devices)
         self.labels = dict(labels or {})
         self.denied = set(denied)
+        self.denied_errno = denied_errno
         self.requests = []          # (path, consumer, config)
         self.request = None
         self.request_error = None  # an OSError to raise from request_lines
@@ -398,7 +420,7 @@ class FakeGpiod:
 
     def _chip(self, path):
         if path in self.denied:
-            raise OSError(13, "denied")
+            raise OSError(self.denied_errno, "denied")
         labels = self.labels
 
         class _Chip:
@@ -509,11 +531,24 @@ def test_find_chip_skips_a_denied_chip_listed_before_the_right_one(tmp_path):
     assert E.find_chip(g.module, paths=[a, b]) == b
 
 
-def test_find_chip_with_only_a_denied_chip_says_so(tmp_path):
+@pytest.mark.parametrize("err", [errno.EACCES, errno.EPERM], ids=["EACCES", "EPERM"])
+def test_find_chip_with_only_a_denied_chip_says_so(tmp_path, err):
     (a,) = _chips(tmp_path, "gpiochip0")
-    g = FakeGpiod(devices={a}, labels={a: "pinctrl-rp1"}, denied={a})
-    with pytest.raises(E.HardwareMissing, match="denied"):
+    g = FakeGpiod(devices={a}, labels={a: "pinctrl-rp1"}, denied={a},
+                  denied_errno=err)
+    with pytest.raises(E.HardwareMissing, match=r"permission denied opening .*group `gpio`"):
         E.find_chip(g.module, paths=[a])
+
+
+def test_find_chip_with_a_chip_that_fails_otherwise_is_not_called_a_permission_problem(tmp_path):
+    (a,) = _chips(tmp_path, "gpiochip0")
+    g = FakeGpiod(devices={a}, labels={a: "pinctrl-rp1"}, denied={a},
+                  denied_errno=errno.EIO)
+    with pytest.raises(E.HardwareMissing) as info:
+        E.find_chip(g.module, paths=[a])
+    assert "no GPIO chip labelled" in str(info.value)
+    assert "could not open" in str(info.value)
+    assert "permission denied" not in str(info.value)
 
 
 def test_find_chip_skips_a_path_that_is_not_a_gpio_chip_device(tmp_path):
@@ -550,6 +585,26 @@ def test_open_hardware_requests_the_lines_and_probes_spi(hardware):
     lines.set(17, 1)
     assert g.request.sets == [(17, gl.Value.ACTIVE)]
     assert lines.get(24) == 1
+
+
+def test_the_lines_adapter_maps_both_levels_both_ways(hardware):
+    """The one seam between the tested sequencing and real GPIO: low must be
+    INACTIVE going out, and INACTIVE must read as 0 coming back."""
+    g, s = hardware
+    Value = g.line.Value
+    lines, factory, chip = E.open_hardware(None)
+    lines.set(17, 1)
+    lines.set(17, 0)
+    lines.set(25, True)
+    lines.set(25, False)
+    assert g.request.sets == [(17, Value.ACTIVE), (17, Value.INACTIVE),
+                              (25, Value.ACTIVE), (25, Value.INACTIVE)]
+    g.request.values[24] = Value.INACTIVE
+    assert lines.get(24) == 0
+    g.request.values[24] = Value.ACTIVE
+    assert lines.get(24) == 1
+    lines.release()
+    assert g.request.releases == 1
 
 
 def test_open_hardware_with_a_power_pin_adds_it_to_the_outputs(hardware):
