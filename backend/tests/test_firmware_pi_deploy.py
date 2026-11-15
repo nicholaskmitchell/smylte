@@ -19,6 +19,7 @@ import pathlib
 import re
 import shutil
 import signal
+import struct
 import subprocess
 import time
 
@@ -1458,6 +1459,8 @@ def test_the_updater_the_units_the_setup_script_and_the_client_agree(updater, sc
     assert P.UPDATE_MAX_S >= 30 * 60 + int(svc.one("Service", "TimeoutStopSec"))
     # The watch outlasts the new client's first paint and its watchdog.
     assert int(g["WATCH_S"]) == P.PAINT_MAX_S + int(unit.one("Service", "WatchdogSec"))
+    # A request made during the last run's watch waits for that run to end.
+    assert P.UPDATE_WATCH_S == int(g["WATCH_S"])
     assert int(g["BUDGET_S"]) + int(g["WATCH_S"]) < 30 * 60
     assert g["HEALTH_URL"] == "http://127.0.0.1:8080/healthz" and g["HEALTH_S"] == "300"
 
@@ -1907,6 +1910,49 @@ def test_a_run_out_of_time_stops_before_the_panel_step(upd):
     assert not [c for c in upd.calls() if c.startswith(("flock", "panel-setup"))]
 
 
+def test_a_lock_wait_that_runs_out_the_budget_stops_before_the_panel_step(upd):
+    # The wait for a run by hand can be long: past the budget, the watch could
+    # end in TimeoutStartSec and roll a good update back.
+    r = upd.run(extra='take_setup_lock() { echo "flock (waited)" >> "$LOG"; SECONDS=$((BUDGET_S + 1)); }\n')
+    assert r.returncode == 1
+    _says(r, "ran out of time before the panel step")
+    calls = upd.calls()
+    assert "flock (waited)" in calls
+    assert calls.count(f"git -C {upd.repo} rev-parse HEAD") == 1              # no HEAD check
+    assert "systemctl show -P InvocationID smylte-panel.service" not in calls  # no snapshot
+    assert not [c for c in calls if c.startswith("panel-setup")]
+    assert upd.result().state == "update-failed"
+
+
+@pytest.mark.parametrize("existed", [False, True], ids=["new", "left-at-0644"])
+def test_the_setup_lock_is_root_only_and_the_umask_is_put_back(upd, existed):
+    """Any account that can open the lock can hold it, and flock(2) does not
+    care how it was opened. A file left at 0644 is tightened in place: a new
+    one would not conflict with whoever holds the old."""
+    lock = upd.root / "setup.lock"
+    if existed:
+        lock.write_text("")
+        lock.chmod(0o644)
+        inode = lock.stat().st_ino
+    r = upd.run(call="umask 022\ntake_setup_lock\numask")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout == "0022\n"
+    assert lock.stat().st_mode & 0o777 == 0o600
+    if existed:
+        assert lock.stat().st_ino == inode
+    assert "flock -w 600 8" in upd.calls()
+
+
+def test_what_runs_as_the_owner_does_not_hold_the_setup_lock(upd):
+    if not os.path.isdir("/proc/self/fd"):
+        pytest.skip("no /proc/self/fd to look for the lock in")
+    (upd.bin / "runuser").write_text(
+        '#!/bin/bash\nif [ -e /proc/self/fd/8 ]; then echo "owner has fd 8"; else echo "owner has no fd 8"; fi\n')
+    r = upd.run(call='exec 8>>"$SETUP_LOCK"\n[ ! -e /proc/self/fd/8 ] || echo "root has fd 8"\n'
+                     "OWNER=owner\nas_owner true")
+    assert r.stdout == "root has fd 8\nowner has no fd 8\n", r.stdout + r.stderr
+
+
 def test_a_setup_run_by_hand_holding_the_lock_fails_the_update(upd):
     r = upd.run(FAKE_FLOCK_RC="1")
     assert r.returncode == 1
@@ -2067,6 +2113,16 @@ _CHECKOUT_FAILS = {
     "root-world-writable": (lambda u: u.stat("/", "0 0 777"), "/ is writable by everyone"),
     "ancestor-group-other": (lambda u: u.stat(str(u.home), "0 50 775"),
                              "{home} is group-writable, and its group is not owner's own"),
+    # What panel-setup.sh installs as root, and its directories.
+    "updater-world-writable": (lambda u: ((u.repo / "deploy" / "smylte-panel-update.sh").write_text("x\n"),
+                                          u.stat(f"{u.repo}/deploy/smylte-panel-update.sh", "1000 1000 666")),
+                               "{repo}/deploy/smylte-panel-update.sh is writable by everyone"),
+    "firmware-group-shared": (lambda u: ((u.repo / "firmware").mkdir(),
+                                         u.stat(f"{u.repo}/firmware", "1000 1000 775"),
+                                         u.env.update(FAKE_GROUP="owner:x:1000:owner,mallory")),
+                              "{repo}/firmware is group-writable, and its group has mallory in it too"),
+    "deploy-acl": (lambda u: setattr(u, "overrides", 'has_acl() { [ "$1" = "$REPO/deploy" ]; }\n'),
+                   "{repo}/deploy has an ACL"),
 }
 
 
@@ -2079,6 +2135,41 @@ def test_every_checkout_check_fails_before_anything_runs_as_the_owner(upd, name)
     _says(r, (says or said).format(repo=upd.repo, home=upd.home))
     assert not [c for c in upd.calls() if c.startswith("runuser")], upd.calls()
     assert upd.result().state == "update-failed"
+
+
+def test_the_checkout_is_checked_again_under_the_lock_before_the_snapshot(upd):
+    """The pull can bring in new files, so what panel-setup.sh will install is
+    checked again once the lock is held and HEAD is known."""
+    updater_src = f"{upd.repo}/deploy/smylte-panel-update.sh"
+    (upd.repo / "deploy" / "smylte-panel-update.sh").write_text("x\n")
+    r = upd.run(extra='check_owned() { echo "check_owned $1" >> "$LOG"; }\n')
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = upd.calls()
+    assert calls.count(f"check_owned {updater_src}") == 2
+    head = _after(calls, f"git -C {upd.repo} rev-parse HEAD", _after(calls, "flock -w 600 8"))
+    again = _after(calls, f"check_owned {upd.repo}", head)
+    assert _after(calls, f"check_owned {updater_src}", again) \
+        < _after(calls, "systemctl show -P InvocationID smylte-panel.service", head)
+
+
+def test_a_real_acl_on_the_checkout_is_refused(upd):
+    """stat shows an ACL's mask as the group bits, so only the attribute itself
+    says that someone else may write."""
+    if shutil.which("python3") is None:
+        pytest.skip("no python3")
+    deploy = upd.repo / "deploy"
+    every = 0xFFFFFFFF
+    # user::rwx, user:65534:rwx, group::r-x, mask::rwx, other::r-x
+    entries = [(0x01, 7, every), (0x02, 7, 65534), (0x04, 5, every), (0x10, 7, every), (0x20, 5, every)]
+    blob = struct.pack("<I", 2) + b"".join(struct.pack("<HHI", *e) for e in entries)
+    try:
+        os.setxattr(deploy, "system.posix_acl_access", blob)
+    except OSError as e:
+        pytest.skip(f"this filesystem takes no ACL: {e}")
+    r = upd.run()
+    assert r.returncode == 1, r.stdout + r.stderr
+    _says(r, f"{deploy} has an ACL")
+    assert not [c for c in upd.calls() if c.startswith("runuser")], upd.calls()
 
 
 @pytest.mark.parametrize("members", ["", "owner"])
@@ -2337,6 +2428,20 @@ def test_take_lock_holds_the_setup_lock_until_exit(tmp_path, script):
     lock, program = _take_lock(tmp_path, script)
     result, _ = _run_fake(tmp_path, program)
     assert (result.returncode, result.stdout) == (0, "held\n")
+
+
+@pytest.mark.parametrize("existed", [False, True], ids=["new", "left-at-0644"])
+def test_take_lock_leaves_the_lock_root_only_and_the_umask_as_it_was(tmp_path, script, existed):
+    lock, program = _take_lock(tmp_path, script)
+    if existed:
+        lock.write_text("")
+        lock.chmod(0o644)
+        inode = lock.stat().st_ino
+    result, _ = _run_fake(tmp_path, "umask 022\n" + program + "umask\n")
+    assert (result.returncode, result.stdout) == (0, "held\n0022\n"), result.stderr
+    assert lock.stat().st_mode & 0o777 == 0o600
+    if existed:
+        assert lock.stat().st_ino == inode       # tightened, not replaced
 
 
 def test_take_lock_refuses_while_the_key_update_holds_it(tmp_path, script):

@@ -10,10 +10,14 @@ npm, sudo and curl are faked as exported bash functions rather than files on
 PATH: the script puts /usr/local/bin:/usr/bin:/bin before PATH, so a fake there
 would lose to a real sudo or npm. A function wins over any PATH lookup.
 
-Cron mode must not have changed at all, so it is checked against the script as
-it was at HEAD (`git show HEAD:deploy/smylte-autopull.sh`), run on an identical
-fixture: the same exit code, the same log lines and the same calls, and nothing
-on stdout.
+Cron mode must not have changed at all, so it is checked against a frozen copy
+of the script from before the desk key's changes (`git show
+951e289:deploy/smylte-autopull.sh`, checked in as
+tests/data/smylte-autopull.cron-baseline.sh and never run in place), run on an
+identical fixture: the same exit code, the same log lines and the same calls,
+and nothing on stdout. A copy rather than HEAD, which holds the script under
+test once it is committed; and rather than a commit id, which a shallow clone
+does not have.
 """
 from __future__ import annotations
 
@@ -31,6 +35,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 AUTOPULL = REPO / "deploy" / "smylte-autopull.sh"
+CRON_BASELINE = Path(__file__).resolve().parent / "data" / "smylte-autopull.cron-baseline.sh"
 
 if shutil.which("bash") is None or shutil.which("git") is None:
     pytest.skip("needs bash and git", allow_module_level=True)
@@ -169,11 +174,7 @@ def _outcome(r: subprocess.CompletedProcess) -> str:
 
 @pytest.fixture(scope="module")
 def old_script() -> str:
-    r = subprocess.run(["git", "show", "HEAD:deploy/smylte-autopull.sh"], cwd=REPO,
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        pytest.skip("the script at HEAD cannot be read: " + r.stderr.strip())
-    return r.stdout
+    return CRON_BASELINE.read_text(encoding="utf-8")
 
 
 # ── cron mode: unchanged ─────────────────────────────────────────────────────
@@ -245,6 +246,17 @@ def test_nothing_new_is_current(box):
     r = _report(box)
     assert (_outcome(r), r.returncode) == ("current", 0)
     assert not [c for c in box.called() if c.startswith("sudo")]
+
+
+def test_a_checkout_ahead_of_origin_is_current(box):
+    # LOCAL differs from REMOTE, but the pull finds nothing to bring in: HEAD
+    # does not move, so nothing was updated.
+    (box.clone / "README").write_text("ours\n")
+    box.git(box.clone, "commit", "-q", "-am", "local")
+    head = box.head()
+    r = _report(box, SMYLTE_AUTOPULL_NO_RESTART="1")
+    assert (_outcome(r), r.returncode) == ("current", 0)
+    assert box.head() == head
 
 
 def test_a_pull_is_updated_and_restarts_unless_told_not_to(make_box):
@@ -388,9 +400,25 @@ def test_the_oldest_base_wins(box):
 
 
 @pytest.mark.parametrize("content", ["garbage\n", "0" * 40 + "\n", ""],
-                         ids=["not-a-sha", "not-an-ancestor", "empty"])
+                         ids=["not-a-sha", "unknown-sha", "empty"])
 def test_a_marker_that_is_not_an_ancestor_sha_is_deleted(box, content):
     box.pending.write_text(content)
     r = _report(box)
     assert _outcome(r) == "current"
     assert not box.pending.exists()
+
+
+def test_a_marker_naming_a_real_commit_outside_heads_history_is_deleted(box):
+    # A commit that exists but is not an ancestor of HEAD (after a reset to
+    # another line, say) is no base to rebuild from.
+    (box.clone / "frontend" / "src" / "main.js").write_text("elsewhere\n")
+    box.git(box.clone, "add", "-A")
+    tree = box.git(box.clone, "write-tree")
+    other = box.git(box.clone, "commit-tree", tree, "-m", "x")
+    box.git(box.clone, "reset", "-q")
+    box.git(box.clone, "checkout", "--", ".")
+    box.pending.write_text(other + "\n")
+    r = _report(box, SMYLTE_AUTOPULL_NO_RESTART="1")
+    assert _outcome(r) == "current"
+    assert not box.pending.exists()
+    assert box.called() == ["migrate.sh --auto"]

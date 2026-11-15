@@ -24,8 +24,10 @@
 #
 # The desk key can do that too: smylte-panel-update.service runs autopull, then
 # this script's --update, which installs only what drifted and never prompts.
-# It exits 3 when it refuses before changing anything. While the key's update
-# runs, every option but --status refuses to start.
+# It exits 3 when it refuses before changing anything. From the key update's
+# snapshot of the panel to the end of its watch, every option but --status
+# refuses to start; earlier in the run, the updater waits up to 10 min for a
+# run started by hand.
 #
 # --keytest refuses until logind has been told to ignore the power key (an
 # install does that), because otherwise the first press would power the box
@@ -91,10 +93,18 @@ pwr_setting() {
 # One run at a time, the key's update included. The updater holds this lock
 # from its snapshot of the panel to the end of its watch, and runs --update
 # under it with SMYLTE_PANEL_SETUP_LOCKED=1. A run by hand inside that window
-# could be undone by the update's rollback, so it refuses instead.
+# could be undone by the update's rollback, so it refuses instead. The lock
+# file is root's alone, as the updater makes it: an account that could open it
+# could hold it. It is never replaced, since a new one would not conflict with
+# a holder of the old.
 take_lock() {
+  local um
   if [ "${SMYLTE_PANEL_SETUP_LOCKED:-}" = 1 ]; then return 0; fi
+  um=$(umask)
+  umask 077
   exec 8>>"$SETUP_LOCK"
+  umask "$um"
+  chmod 0600 -- "$SETUP_LOCK" || true
   flock -n 8 || die "an update from the key is running (journalctl -u smylte-panel-update -f); run this again when it is done"
 }
 

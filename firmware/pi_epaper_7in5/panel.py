@@ -216,6 +216,7 @@ UPDATE_UNIT = "/etc/systemd/system/smylte-panel-update.path"
 UPDATE_POLL_S = 2
 UPDATE_START_S = 60                # no answer for the request by then → failed
 UPDATE_MAX_S = 2100                # a running update past this → failed (> the unit's 30 min start + 180 s stop)
+UPDATE_WATCH_S = 150               # the updater's WATCH_S: a run that wrote its final result is still active this long
 NOTICE_S = 60
 FAILED_NOTE = "the last update failed: sudo ~/smylte/deploy/panel-setup.sh --status"
 KEYTEST_S = 30                  # how long --keytest listens
@@ -2330,6 +2331,14 @@ class _Runner:
         if answers and res.state == "running" and not self.update_running:
             self.update_running = True
             self.update_deadline = now + UPDATE_MAX_S
+        # Another request's final result, written less than a watch ago: that
+        # run is still active, so the path unit starts this request's run only
+        # when it ends. Wait for that rather than give up after UPDATE_START_S.
+        if (res is not None and self.update_rid is not None and res.rid != self.update_rid
+                and not self.update_running and res.state in NOTICES
+                and now < res.at + UPDATE_WATCH_S):
+            self.update_deadline = max(self.update_deadline,
+                                       res.at + UPDATE_WATCH_S + UPDATE_START_S)
         # Every result that is not final, a repeated "running" too, is held
         # to the deadline: an updater killed outright leaves "running" behind.
         if now >= self.update_deadline:

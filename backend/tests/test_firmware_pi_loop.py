@@ -1933,11 +1933,13 @@ def checks(*hs: Harness) -> None:
         if first is not None and first.exempt:
             allowed.add(id(first))
         # So is the first view paint after a notice left with nothing to
-        # repaint: it stands in for that leave's own paint (F5).
+        # repaint: it stands in for that leave's own paint (F5). Only when it
+        # is the very next paint: a notice left with a repaint has had its
+        # leave paint already.
         for i, n in enumerate(h.painted):
             if n.purpose == "notice":
-                after = next((p for p in h.painted[i + 1:]
-                              if p.purpose in ("routine", "page")), None)
+                nxt = h.painted[i + 1:i + 2]
+                after = nxt[0] if nxt and nxt[0].purpose in ("routine", "page") else None
                 if after is not None and after.exempt:
                     allowed.add(id(after))
     for h in hs:
@@ -3585,4 +3587,63 @@ def test_u16_usr1_during_a_notice_redraws_the_view_in_full_when_it_ends(tmp_path
     assert notice.t0 < 460.0 < notice.t1 + P.NOTICE_S
     assert (routine.kind, routine.exempt) == ("full", True)
     assert routine.t0 == pytest.approx(notice.t1 + P.NOTICE_S + Server().render_s, abs=0.01)
+    checks(h)
+
+
+def test_u17_a_notice_left_with_a_repaint_keeps_the_floor_for_the_next_view(tmp_path):
+    """F5's allowance is only for a notice left with nothing to repaint. Here
+    the way back repaints the view from before the prompts, and that leave
+    paint was the allowance: the routine paint after it, with the view
+    changed soon after and a short refresh, still waits for the floor."""
+    server = Server(refresh_s=60)
+    server.version = lambda view, t: 1 if t < 500 else 2       # the view changes at 500
+    h = desk(tmp_path, keys=update_keys(400), until=700, server=server,
+             update_present=True, update=updater(final="up-to-date", final_after=10))
+    assert h.run() == 0
+    assert after(h) == [("prompt", "confirm-update"), ("prompt", "update"),
+                        ("update", "updating"), ("notice", "up-to-date"),
+                        ("leave", "view:habits"), ("routine", "view:habits")]
+    leave, routine = h.painted[5:7]
+    assert not routine.exempt
+    assert routine.t0 >= leave.t1 + P.MIN_REFRESH_S
+    checks(h)
+
+
+def test_u18_an_update_asked_for_during_the_last_ones_watch_waits_for_it(tmp_path):
+    """F4: the first update's result is written before its watch, so a second
+    request made soon after its notice finds that run still active, and the
+    path unit starts the second run only once it ends. The request waits for
+    that (UPDATE_WATCH_S after the first result, then UPDATE_START_S), instead
+    of failing UPDATE_START_S after it was sent."""
+    first = updater(final_after=10)
+
+    def script(now, requests):
+        if len(requests) < 2:
+            return first(now, requests)
+        (t1, _), (_, rid2) = requests
+        done = t1 + 10                      # when the first run wrote `updated`
+        if now >= done + 180:
+            return P.UpdateResult(rid2, done + 180, "updated")
+        if now >= done + 170:
+            return P.UpdateResult(rid2, done + 170, "running")
+        return first(now, requests[:1])
+
+    keys = update_keys(400) + tap(440) + update_keys(484)
+    h = desk(tmp_path, keys=keys, until=760, update_present=True, update=script)
+    h.at(480, set_tokens(h, P.KEY_BURST))
+    assert h.run() == 0
+    assert after(h) == [
+        ("prompt", "confirm-update"), ("prompt", "update"), ("update", "updating"),
+        ("notice", "updated"), ("leave", "view:habits"),
+        ("prompt", "confirm-update"), ("prompt", "update"), ("update", "updating"),
+        ("notice", "updated"), ("leave", "view:habits")]
+    (t1, _), (t2, _) = h.updater.requests
+    done = t1 + 10
+    # Without the wait, this request would have failed before its run began.
+    assert t2 + P.UPDATE_START_S < done + 170 < done + P.UPDATE_WATCH_S + P.UPDATE_START_S
+    [second] = [p for p in h.painted if p.purpose == "notice" and p.t0 > t2]
+    assert done + 180 <= second.t0 <= done + 180 + P.UPDATE_POLL_S + 0.01
+    assert not [t for t in h.updater.cleared if t > 300]      # the request was never withdrawn
+    assert not [s for s in h.statuses() if "could not update" in s]
+    assert P.FAILED_NOTE not in h.runner.notes
     checks(h)

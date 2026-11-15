@@ -4,7 +4,11 @@
 # (/etc/smylte) are gitignored / out-of-tree, so a pull only touches source.
 #
 # Cron runs it with none of these set, and then it prints nothing and logs as
-# it always has. The desk key's updater (deploy/smylte-panel-update.sh) sets:
+# it always has, except that the rebuild diffs the range actually pulled
+# (LOCAL..HEAD) rather than LOCAL..REMOTE. The two differ only when the pull
+# does not land on origin/$BRANCH: a checkout ahead of origin, or a push between
+# the fetch and the pull. The desk key's updater (deploy/smylte-panel-update.sh)
+# sets:
 #   SMYLTE_AUTOPULL_REPO=<checkout>   the checkout, instead of ~/smylte or ~/tasks
 #   SMYLTE_AUTOPULL_NO_RESTART=1      leave the restart to the caller
 #   SMYLTE_AUTOPULL_REPORT=1          wait for the lock, and print the outcome as
@@ -188,7 +192,10 @@ fi
 OUTCOME=current
 [ "$PULLED" = 1 ] || exit 0
 
-OUTCOME=updated
+# A checkout ahead of origin "pulls" without moving HEAD: nothing was updated.
+if [ "$REPORT" != 1 ] || [ "$RETRY" = 1 ] || [ "$(git rev-parse HEAD)" != "$LOCAL" ]; then
+  OUTCOME=updated
+fi
 [ "$REPORT" != 1 ] || rm -f "$PENDING"
 # Restart the app (allowed passwordless via /etc/sudoers.d/smylte-autopull),
 # unless the caller restarts it itself.

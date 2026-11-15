@@ -289,9 +289,10 @@ What runs, as root, once you tap "Update?":
 1. The panel draws "Updating…" and writes a request file. `smylte-panel-update.path`
    sees it and starts `smylte-panel-update.service`.
 2. The updater takes the checkout from `smylte.service` (its `User=` and its
-   `WorkingDirectory=` minus `/backend`), never from the panel. It refuses a
-   checkout, or a directory above it, that anyone else could write, and a
-   symlink in the way.
+   `WorkingDirectory=` minus `/backend`), never from the panel. It refuses
+   the checkout if anyone else could write it, a directory above it, or any
+   file `panel-setup.sh` installs from it (by mode bits or an ACL), or if a
+   symlink is in the way. It checks again under its lock, after the pull.
 3. As that user it runs the checkout's `deploy/smylte-autopull.sh`: a
    fast-forward pull of the branch the checkout is on, `pip install` if
    `requirements.txt` changed, a frontend rebuild if `frontend/` changed, and
@@ -306,7 +307,7 @@ What runs, as root, once you tap "Update?":
 | Screen | Means |
 | --- | --- |
 | Updated | Something new was pulled, or the panel's code changed |
-| Up to date | Nothing new. A push reaches the box about a minute after it lands on GitLab, because the GitHub mirror lags |
+| Up to date | Nothing new, or cron autopull already pulled it. A push reaches the box about a minute after it lands on GitLab, because the GitHub mirror lags |
 | Update failed | Something went wrong. The glass says `sudo ~/smylte/deploy/panel-setup.sh --status`, which shows why |
 
 - **Rollback.** If `panel-setup.sh --update` fails after it began, or the new
@@ -330,8 +331,9 @@ What runs, as root, once you tap "Update?":
 - **While "Updating…" is up the key does nothing**, for at most 35 min
   (`UPDATE_MAX_S`). A tap or a hold is ignored. **Don't unplug the box, and
   don't hold the key: at about 5 s the Pi cuts its own power.** If the updater
-  never answers, the panel gives up after 60 s (`UPDATE_START_S`); if its result
-  stays `running`, after 35 min. Routine refreshes wait meanwhile.
+  never answers, the panel gives up after 60 s (`UPDATE_START_S`), or 60 s
+  after the previous update's 150 s watch if you asked during it; if its
+  result stays `running`, after 35 min. Routine refreshes wait meanwhile.
 - **One at a time.** The updater waits up to 15 min for a cron autopull and up
   to 10 min for a `panel-setup.sh` you started by hand. From the updater's
   snapshot of the panel to the end of its watch, every `panel-setup.sh` option
@@ -341,9 +343,10 @@ What runs, as root, once you tap "Update?":
   after 60 s (`NOTICE_S`), and the view comes back. A hold does nothing. A panel
   the update restarted has no view to go back to: it draws Today as soon as the
   server answers, without waiting for the 180 s floor.
-- **Logs.** `journalctl -u smylte-panel-update` (every line starts `update: `,
-  and the autopull log lines it added start `update: autopull log: `) and
-  `~/smylte-autopull.log`. `panel-setup.sh --status` shows the update path's
+- **Logs.** `journalctl -u smylte-panel-update` (the updater's own lines start
+  `update: `, and the autopull log lines it adds start `update: autopull log: `;
+  autopull's outcome line and `panel-setup.sh --update`'s output appear as those
+  scripts print them) and `~/smylte-autopull.log`. `panel-setup.sh --status` shows the update path's
   state, the last result line, the last 15 journal lines and the last 20 lines
   of the log.
 - **Trust.** The key runs the pulled `panel-setup.sh` as root, as you would by
@@ -477,12 +480,13 @@ last frame`.
 | (nothing, or `the update is not offered yet: its screens are not cached`, once per start). "Shut down?" has no "To update instead…" line, and a second hold does nothing | The update is not on offer. Either smylted has not served the update's screens (it is too old, or has not been restarted since the pull), or the key has fewer than three refreshes left, or the units are missing (next row) | Pull and `sudo systemctl restart smylte`, wait a minute for the background fetch, and hold again once the budget has refilled (one per 50 s) |
 | `the key cannot update: the update units are not installed — re-run panel-setup.sh` (the Status line ends `· the key cannot update: …`) | `/etc/systemd/system/smylte-panel-update.path` is missing, so the update is never offered | `sudo ~/smylte/deploy/panel-setup.sh` |
 | `update failed (see sudo ~/smylte/deploy/panel-setup.sh --status)`. The glass says "Update failed", and later Status lines end `· the last update failed: sudo ~/smylte/deploy/panel-setup.sh --status` | The updater ran and failed. The updater's own lines say where. Typical ones: `a migration needs root: sudo …/deploy/migrate.sh`, `autopull failed: … (see above)`, `smylted did not answer /healthz within 300 s`, `panel-setup.sh refused: …`, `the new panel code stopped within 150 s` (the panel's code and unit were put back) | `sudo ~/smylte/deploy/panel-setup.sh --status` shows the result line, the updater's journal and the end of `~/smylte-autopull.log`. Fix it, then update again. The note goes away after an update that succeeds |
-| `could not update: failed: …` (for example `failed: no run directory`), or `could not update: the Updating screen could not be recorded` | The panel could not write its request file, or could not record the "Updating…" paint, so nothing was asked of the updater. The glass says "Update failed" | Check that `/run/smylte-panel` (the unit's `RuntimeDirectory`) is writable by the panel's user, or the state file as for `could not record the refresh`, and try again |
+| `could not update: failed: …` (for example `failed: no run directory`), or `could not update: the Updating screen could not be recorded` | The panel could not write its request file, or could not record the "Updating…" paint, so nothing was asked of the updater. For a request-file failure the glass says "Update failed". If the "Updating…" paint could not be recorded and the state file stays unwritable, nothing more is painted and the glass keeps "Update?" (see `could not record the refresh`) | Check that `/run/smylte-panel` (the unit's `RuntimeDirectory`) is writable by the panel's user, or the state file as for `could not record the refresh`, and try again |
 | `could not update: nothing acted on the request within 60 s` | The updater did not write a result for the request within 60 s: the update path unit is not enabled or not running, or the updater could not start. The glass says "Update failed" | `systemctl status smylte-panel-update.path smylte-panel-update.service`, `journalctl -u smylte-panel-update`, and re-run `panel-setup.sh` |
 | `could not update: still running after 35 min` | The updater wrote `running` and then no final result for 35 min (`UPDATE_MAX_S`). The glass says "Update failed" | `journalctl -u smylte-panel-update` shows where it stopped. Check the box before updating again: the pull or the restart may be half done |
 | `could not update: lost track of the request` | "Updating…" was on the glass, with no request out and none waiting. This should not happen | Report it, with `journalctl -u smylte-panel` |
 | "Updating…" stays on the glass and the key does nothing | An update is running, which can take several minutes (a frontend rebuild, a slow `npm`). The panel gives up on its own: after 60 s if the updater never answers, after 35 min at the latest, whatever the updater did | Don't hold the key. Over SSH: `journalctl -u smylte-panel-update -f` |
-| "Up to date" although you pushed | The push has not reached the box yet: the GitHub mirror lags GitLab by about a minute. Or the checkout is on another branch than the one you pushed to | Wait a minute and update again. `git -C ~/smylte status` shows the branch |
+| "Updating…" stays up for a few minutes when you update again just after an update | The previous update is still in its 150 s watch of the new panel, and the next run starts only when that one ends. The panel waits for it, until 60 s after that watch ends, instead of failing at 60 s | Wait. `journalctl -u smylte-panel-update -f` shows the second run start |
+| "Up to date" although you pushed | Cron autopull already pulled it and restarted smylted, so the box is current. Or the push has not reached the box yet: the GitHub mirror lags GitLab by about a minute. Or the checkout is on another branch than the one you pushed to | `tail ~/smylte-autopull.log` or `git -C ~/smylte log -1` shows whether it arrived. If not, wait a minute and update again. `git -C ~/smylte status` shows the branch |
 | `waking: the server is not answering` | The Pi was started with the key, and 10 min later the server still does not answer. The glass keeps the "Off" screen | `systemctl status smylte` |
 | `fast refresh is off: this panel looks like a pre-2023 batch; see firmware/README.md` (later `· fast refresh is off (see firmware/README.md)`) | The batch guard turned quick refresh off | See "What it does". `panel-setup.sh --reset-refresh` clears it |
 | `/dev/spidev0.0: missing` | SPI is off | Enable it (setup step 3) and reboot |
@@ -533,7 +537,10 @@ Do these once, at bring-up.
   - With nothing new: "Updating…", then "Up to date". The journal ends
     `update: done: up-to-date`, and the panel was not restarted.
   - With a server change pushed: "Updated". smylted has restarted
-    (`systemctl status smylte`), and the panel has not.
+    (`systemctl status smylte`), and the panel has not. With cron autopull on,
+    comment out its crontab line first, or cron pulls the change within a
+    minute and the key then says "Up to date", which is correct:
+    `~/smylte-autopull.log` shows `applied + restarted smylte.service`.
   - With a change to `panel.py` pushed (a comment will do): "Updating…", then
     the panel restarts, and the restarted panel draws "Updated" as its first
     paint, within 150 s. A tap, or 60 s, and it draws Today. `panel-setup.sh

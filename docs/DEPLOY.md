@@ -195,6 +195,12 @@ nothing:
 | `SMYLTE_AUTOPULL_NO_RESTART=1` | Skips the `sudo -n systemctl restart`, so the caller restarts. No sudoers rule is needed |
 | `SMYLTE_AUTOPULL_REPORT=1` | Waits up to 900 s for the lock instead of exiting, and prints `autopull: <outcome>` as its last line: `current`, `updated`, `blocked` (a root migration is pending), or `failed cd`, `failed fetch`, `failed pull`, `failed pip`, `failed npm`, `failed migrate` or `failed busy` |
 
+In every mode the rebuild diffs the range actually pulled (`LOCAL..HEAD`), where
+it used to diff `LOCAL..REMOTE`. The two differ only when the pull does not land
+on `origin/<branch>`: a checkout ahead of origin, or a push between the fetch
+and the pull. `REPORT` says `updated` only when the pull moved `HEAD` (or a
+rebuild is retried, below), so a checkout ahead of origin is `current`.
+
 With `REPORT`, a failed `pip` or `npm` after a pull writes the commit the pull
 started from to `~/.smylte-autopull-pending` and stops before the migrations,
 because the next run would otherwise find nothing new and skip the rebuild for
@@ -488,8 +494,10 @@ the view, shuts the box down and can update Smylte.
   failed". Root migrations still need SSH (`sudo ~/smylte/deploy/migrate.sh`),
   and the owner's git credentials must work with no prompt, as for cron. The
   updater logs to `journalctl -u smylte-panel-update` and
-  `~/smylte-autopull.log`, and `panel-setup.sh --status` shows both. While it
-  runs, `panel-setup.sh` refuses every option but `--status`. Since it runs the
+  `~/smylte-autopull.log`, and `panel-setup.sh --status` shows both. From the
+  updater's snapshot of the panel to the end of its watch, `panel-setup.sh`
+  refuses every option but `--status`; earlier in the run, the updater waits up
+  to 10 min for a run you started by hand. Since it runs the
   pulled script as root, anyone who can push to the checkout's branch decides
   what root runs, as with a run by hand. `firmware/README.md` has the details.
 - **Moving machines:** the restored `displays` table keeps the token valid. Store

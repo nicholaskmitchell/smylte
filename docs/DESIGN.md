@@ -319,9 +319,11 @@ is 1-bit by construction and rejects a palette parameter.
 `tabs=1` adds a three-tab strip (Today, Now, Calendar) along the bottom edge,
 with the page above it drawn at the reduced height. Both need *Desk key* on for
 the display; any other display answers 422 with `X-Display-Error: views-off`,
-the stored mode included. `screen` (`confirm` or `off`) is a static screen, the
-shutdown prompt or the notice that the unit is off. It works on every display,
-reads nothing of the owner's, and cannot be combined with `mode` or `tabs`.
+the stored mode included. `screen` (one of `confirm`, `off`, `confirm-update`,
+`update`, `updating`, `updated`, `up-to-date`, `update-failed`) is a static
+screen: the shutdown prompt, the off notice, or one of the key update's
+screens. It works on every display, reads nothing of the owner's, and cannot be
+combined with `mode` or `tabs`.
 Four headers describe the answer: `X-Display-Mode` (the view drawn, on every
 `.bin` view response), `X-Display-Screen` (on screens), `X-Display-Tab-Strip`
 (the strip's half-open rows in the buffer, such as `440-480`, present only when

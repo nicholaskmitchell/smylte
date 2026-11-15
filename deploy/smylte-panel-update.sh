@@ -12,8 +12,10 @@
 # $RESULT. It is written `running` first and rewritten at every end, a crash
 # included (the EXIT trap), so the glass never waits on a run that is gone.
 #
-# Every line goes to stdout, which is the journal, prefixed "update: ". The
-# display token is never read here.
+# Everything goes to stdout, which is the journal. Its own lines start
+# "update: ", and the autopull log lines it adds start "update: autopull log: ".
+# Autopull's outcome line and panel-setup.sh --update's output appear as those
+# scripts print them. The display token is never read here.
 #
 # panel-setup.sh --update replaces this very file while it runs. bash reads a
 # script as it goes, so everything is in functions and the last line calls
@@ -88,12 +90,31 @@ system_state() {
   systemctl is-system-running 2>/dev/null
 }
 
+# Without fd 8, the setup lock: nothing the owner runs holds it.
 as_owner() {
-  runuser -u "$OWNER" -- "$@"
+  runuser -u "$OWNER" -- "$@" 8>&-
 }
 
 stat_of() {   # prints "<uid> <gid> <octal mode>"
   stat -c '%u %g %a' -- "$1" 2>/dev/null
+}
+
+# Whether $1 carries a POSIX ACL. stat shows an ACL's mask as the group bits,
+# so the mode check cannot see who else it lets write. The kernel drops the
+# attribute when an ACL comes down to the mode bits, so its presence means more
+# entries. A filesystem without extended attributes (ENOTSUP) has no ACL.
+has_acl() {   # $1: path
+  python3 -I -c '
+import os, stat, sys
+p = sys.argv[1]
+try:
+    names = os.listxattr(p, follow_symlinks=False)
+    is_dir = stat.S_ISDIR(os.lstat(p).st_mode)
+except OSError:
+    sys.exit(1)
+sys.exit(0 if "system.posix_acl_access" in names
+         or (is_dir and "system.posix_acl_default" in names) else 1)
+' "$1" 2>/dev/null
 }
 
 uid_of() { id -u -- "$1" 2>/dev/null; }
@@ -185,6 +206,33 @@ check_owned() {   # $1: path, $2: uid, $3: dir or file
   read -r owner group mode <<<"$st"
   [ "$owner" = "$2" ] || fail "$1 is owned by uid $owner, not $OWNER ($2)"
   check_writable "$1" "$group" "$mode"
+  ! has_acl "$1" || fail "$1 has an ACL"
+}
+
+# Everything in the checkout that root runs or installs: the five paths the
+# update itself needs, then whatever of panel-setup.sh's sources exists. The
+# pull can bring in new files, so this runs again under the setup lock.
+check_sources() {
+  local f
+  check_owned "$REPO" "$OWNER_UID" dir
+  check_owned "$REPO/.git" "$OWNER_UID" dir
+  check_owned "$REPO/deploy" "$OWNER_UID" dir
+  check_owned "$REPO/deploy/panel-setup.sh" "$OWNER_UID" file
+  check_owned "$REPO/deploy/smylte-autopull.sh" "$OWNER_UID" file
+  for f in firmware firmware/pi_epaper_7in5; do
+    if [ -e "$REPO/$f" ] || [ -L "$REPO/$f" ]; then
+      check_owned "$REPO/$f" "$OWNER_UID" dir
+    fi
+  done
+  for f in firmware/pi_epaper_7in5/panel.py firmware/pi_epaper_7in5/epd7in5_v2.py \
+      deploy/smylte-panel.service deploy/70-smylte-panel-key.rules \
+      deploy/smylte-panel-poweroff.path deploy/smylte-panel-poweroff.service \
+      deploy/smylte-panel-update.path deploy/smylte-panel-update.service \
+      deploy/smylte-panel-update.sh deploy/logind-smylte-panel.conf; do
+    if [ -e "$REPO/$f" ] || [ -L "$REPO/$f" ]; then
+      check_owned "$REPO/$f" "$OWNER_UID" file
+    fi
+  done
 }
 
 # Every directory above the checkout, from / down: one that someone else could
@@ -228,11 +276,7 @@ find_checkout() {
   esac
   [ ! -L "$REPO" ] || fail "$REPO is a symlink"
   [ "$(realpath -e -- "$REPO" 2>/dev/null)" = "$REPO" ] || fail "$REPO is not its own real path"
-  check_owned "$REPO" "$OWNER_UID" dir
-  check_owned "$REPO/.git" "$OWNER_UID" dir
-  check_owned "$REPO/deploy" "$OWNER_UID" dir
-  check_owned "$REPO/deploy/panel-setup.sh" "$OWNER_UID" file
-  check_owned "$REPO/deploy/smylte-autopull.sh" "$OWNER_UID" file
+  check_sources
   check_ancestors "$OWNER_UID"
   say "checkout $REPO, owner $OWNER"
 }
@@ -292,9 +336,21 @@ restart_server() {
 
 # Held until exit, so that panel-setup.sh by hand cannot run between the
 # snapshot and the end of the watch, where the rollback would undo it.
+# flock(2) does not care how the file was opened, so an account that could
+# open it could hold it: it is root's alone. The file is never replaced, since
+# a new one would not conflict with a holder of the old. The wait ends with
+# the time budget.
 take_setup_lock() {
-  exec 8>>"$SETUP_LOCK" || fail "cannot open $SETUP_LOCK"
-  flock -w 600 8 || fail "panel-setup.sh is running by hand; press again when it is done"
+  local um left
+  um=$(umask)
+  umask 077
+  exec 8>>"$SETUP_LOCK" || { umask "$um"; fail "cannot open $SETUP_LOCK"; }
+  umask "$um"
+  chmod 0600 -- "$SETUP_LOCK" || true
+  left=$((BUDGET_S - SECONDS))
+  (( left > 0 )) || fail "ran out of time before the panel step"
+  flock -w "$(( left < 600 ? left : 600 ))" 8 \
+    || fail "panel-setup.sh is running by hand; press again when it is done"
 }
 
 check_head() {
@@ -428,7 +484,10 @@ main() {
     fail "ran out of time before the panel step"
   fi
   take_setup_lock
+  # Again: the lock may have been waited for.
+  (( SECONDS > BUDGET_S )) && fail "ran out of time before the panel step"
   check_head
+  check_sources
   snapshot
   install_panel
   if [ "$PULL" = updated ] || [ "$PANEL_CHANGED" = yes ]; then
