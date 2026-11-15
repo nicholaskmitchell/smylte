@@ -1465,6 +1465,22 @@ def test_the_updater_the_units_the_setup_script_and_the_client_agree(updater, sc
     assert g["HEALTH_URL"] == "http://127.0.0.1:8080/healthz" and g["HEALTH_S"] == "300"
 
 
+def test_the_updater_checks_every_source_panel_setup_installs_as_root(updater, script):
+    # A unit or a file added to install_files must be checked before root
+    # installs it, or another account's write would reach root unseen.
+    checked = _function(updater, "check_sources")
+    sources = re.findall(r'^[A-Z_]+_SRC=\$REPO/(\S+)$', script, re.M)
+    assert len(sources) >= 8, sources
+    unit_name = _globals(script)["UNIT_NAME"]
+    for src in sources:
+        src = src.replace("$UNIT_NAME", unit_name)
+        assert src in checked, f"{src} is installed by panel-setup.sh but not checked"
+    [files] = re.findall(r'^FILES="([^"]*)"$', script, re.M)
+    assert files.split()
+    for f in files.split():
+        assert f"firmware/pi_epaper_7in5/{f}" in checked
+
+
 # ── the key's update: update.sh as text ──────────────────────────────────────
 
 def test_the_updater_passes_bash_syntax_check():
@@ -1924,6 +1940,14 @@ def test_a_lock_wait_that_runs_out_the_budget_stops_before_the_panel_step(upd):
     assert upd.result().state == "update-failed"
 
 
+def test_the_lock_wait_is_bounded_by_what_is_left_of_the_budget(upd):
+    upd.overrides = "BUDGET_S=30\n"
+    r = upd.run(call="take_setup_lock")
+    assert r.returncode == 0, r.stdout + r.stderr
+    [wait] = [c for c in upd.calls() if c.startswith("flock -w ")]
+    assert 25 <= int(wait.split()[2]) <= 30, wait
+
+
 @pytest.mark.parametrize("existed", [False, True], ids=["new", "left-at-0644"])
 def test_the_setup_lock_is_root_only_and_the_umask_is_put_back(upd, existed):
     """Any account that can open the lock can hold it, and flock(2) does not
@@ -2121,6 +2145,8 @@ _CHECKOUT_FAILS = {
                                          u.stat(f"{u.repo}/firmware", "1000 1000 775"),
                                          u.env.update(FAKE_GROUP="owner:x:1000:owner,mallory")),
                               "{repo}/firmware is group-writable, and its group has mallory in it too"),
+    "ancestor-acl": (lambda u: setattr(u, "overrides", f'has_acl() {{ [ "$1" = "{u.home}" ]; }}\n'),
+                     "{home} has an ACL"),
     "deploy-acl": (lambda u: setattr(u, "overrides", 'has_acl() { [ "$1" = "$REPO/deploy" ]; }\n'),
                    "{repo}/deploy has an ACL"),
 }
@@ -2150,6 +2176,18 @@ def test_the_checkout_is_checked_again_under_the_lock_before_the_snapshot(upd):
     again = _after(calls, f"check_owned {upd.repo}", head)
     assert _after(calls, f"check_owned {updater_src}", again) \
         < _after(calls, "systemctl show -P InvocationID smylte-panel.service", head)
+
+
+def test_the_directories_above_are_walked_again_under_the_lock(upd):
+    # Swapping the checkout needs only a writable directory above it, so the
+    # walk is as late as the check of the files themselves.
+    r = upd.run(extra='check_ancestors() { echo "check_ancestors $1" >> "$LOG"; }\n')
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = upd.calls()
+    assert calls.count("check_ancestors 1000") == 2
+    lock = _after(calls, "flock -w 600 8")
+    assert _after(calls, "check_ancestors 1000", lock) \
+        < _after(calls, "systemctl show -P InvocationID smylte-panel.service", lock)
 
 
 def test_a_real_acl_on_the_checkout_is_refused(upd):

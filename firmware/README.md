@@ -331,9 +331,11 @@ What runs, as root, once you tap "Update?":
 - **While "Updating…" is up the key does nothing**, for at most 35 min
   (`UPDATE_MAX_S`). A tap or a hold is ignored. **Don't unplug the box, and
   don't hold the key: at about 5 s the Pi cuts its own power.** If the updater
-  never answers, the panel gives up after 60 s (`UPDATE_START_S`), or 60 s
-  after the previous update's 150 s watch if you asked during it; if its
-  result stays `running`, after 35 min. Routine refreshes wait meanwhile.
+  never answers, the panel gives up after 60 s (`UPDATE_START_S`). If an
+  earlier update ended less than 150 s before (it may still be watching the
+  panel), the wait runs to 60 s after that 150 s, and the message says how long
+  it waited. If its result stays `running`, it gives up after 35 min. Routine
+  refreshes wait meanwhile.
 - **One at a time.** The updater waits up to 15 min for a cron autopull and up
   to 10 min for a `panel-setup.sh` you started by hand. From the updater's
   snapshot of the panel to the end of its watch, every `panel-setup.sh` option

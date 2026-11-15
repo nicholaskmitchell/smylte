@@ -1815,6 +1815,7 @@ class _Runner:
         self.update_rid: str | None = None
         self.update_since: float | None = None
         self.update_deadline: float | None = None
+        self.update_asked: float | None = None
         self.update_running = False
         self.next_update_poll: float | None = None
         self.update_screens_logged = False
@@ -1895,11 +1896,15 @@ class _Runner:
         self.update_wait = True
         self.update_rid, self.update_since = rid, since
         self.update_running, self.update_deadline = running, deadline
+        # Where the deadline was counted from, so a failure can say how long
+        # the wait really was once a previous run's watch has extended it.
+        self.update_asked = deadline - (UPDATE_MAX_S if running else UPDATE_START_S)
         self.next_update_poll = self.d.boottime()
 
     def _end_wait(self) -> None:
         self.update_wait = False
         self.update_rid = self.update_since = self.update_deadline = None
+        self.update_asked = None
         self.update_running = False
         self.next_update_poll = None
 
@@ -2346,8 +2351,9 @@ class _Runner:
             if self.update_running:
                 problem = f"could not update: still running after {UPDATE_MAX_S // 60} min"
             else:
+                waited = round(self.update_deadline - self.update_asked)
                 problem = ("could not update: nothing acted on the request within "
-                           f"{UPDATE_START_S} s")
+                           f"{waited} s")
             self._finish("update-failed", now, problem=problem)
 
     def _finish(self, kind: str, now: float, problem: str | None = None) -> None:

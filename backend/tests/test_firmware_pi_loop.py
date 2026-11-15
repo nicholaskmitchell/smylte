@@ -3647,3 +3647,26 @@ def test_u18_an_update_asked_for_during_the_last_ones_watch_waits_for_it(tmp_pat
     assert not [s for s in h.statuses() if "could not update" in s]
     assert P.FAILED_NOTE not in h.runner.notes
     checks(h)
+
+
+def test_u18b_an_extended_wait_that_nothing_answers_says_how_long_it_waited(tmp_path):
+    """The same request as u18, but no second run ever answers: the failure
+    names the wait it really had, not UPDATE_START_S."""
+    first = updater(final_after=10)
+
+    def script(now, requests):
+        return first(now, requests[:1])
+
+    keys = update_keys(400) + tap(440) + update_keys(484)
+    h = desk(tmp_path, keys=keys, until=900, update_present=True, update=script)
+    h.at(480, set_tokens(h, P.KEY_BURST))
+    assert h.run() == 0
+    (t1, _), (t2, _) = h.updater.requests
+    done = t1 + 10
+    [failed] = [p for p in h.painted if p.purpose == "notice" and p.t0 > t2]
+    assert failed.t0 >= done + P.UPDATE_WATCH_S + P.UPDATE_START_S
+    [said] = {s for s in h.statuses() if "nothing acted on the request" in s}
+    waited = int(said.split("within ")[1].split(" s")[0])
+    assert waited > P.UPDATE_START_S
+    assert abs(waited - (done + P.UPDATE_WATCH_S + P.UPDATE_START_S - t2)) <= 1
+    checks(h)

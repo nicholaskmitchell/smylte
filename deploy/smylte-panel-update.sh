@@ -236,7 +236,7 @@ check_sources() {
 }
 
 # Every directory above the checkout, from / down: one that someone else could
-# write could have the checkout swapped for theirs.
+# write, by its mode or an ACL, could have the checkout swapped for theirs.
 check_ancestors() {   # $1: uid
   local part parts st owner group mode p=
   IFS=/ read -ra parts <<<"${REPO#/}"
@@ -247,6 +247,7 @@ check_ancestors() {   # $1: uid
     read -r owner group mode <<<"$st"
     [ "$owner" = 0 ] || [ "$owner" = "$1" ] || fail "$p is owned by uid $owner, not root or $OWNER"
     check_writable "$p" "$group" "$mode"
+    ! has_acl "$p" || fail "$p has an ACL"
   done
 }
 
@@ -488,6 +489,7 @@ main() {
   (( SECONDS > BUDGET_S )) && fail "ran out of time before the panel step"
   check_head
   check_sources
+  check_ancestors "$OWNER_UID"
   snapshot
   install_panel
   if [ "$PULL" = updated ] || [ "$PANEL_CHANGED" = yes ]; then
