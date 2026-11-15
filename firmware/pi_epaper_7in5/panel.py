@@ -52,8 +52,13 @@
 #   panel.py --selftest    power the controller up and down; no refresh
 #   panel.py --clear       paint white (for storage), respecting the floor
 #   panel.py --power-off   drive RST/DC/PWR low; for ExecStopPost
+#   panel.py --keytest     print what the key's presses would do, for 30 s
+#   panel.py --reset-refresh   turn fast and partial refresh back on
 
+import collections
 import dataclasses
+import errno
+import fcntl
 import hashlib
 import http.client
 import importlib.util
@@ -63,9 +68,12 @@ import math
 import os
 import pathlib
 import re
+import select
 import signal
 import socket
+import struct
 import sys
+import threading
 import time
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -94,12 +102,22 @@ REQUIRED_HEADERS = (
     "x-display-refresh-seconds",
 )
 USER_AGENT = "smylte-panel/1"
+# The desk key's views, in the order a tap cycles them: Today, Now, Calendar.
+# These are the server's `mode` values (`?mode=`, X-Display-Mode).
+VIEWS = ("habits", "now", "calendar")
+TODAY = "habits"            # the view a wake or the idle return shows
+SCREENS = ("confirm", "off")    # the server's `?screen=` values
 
 # ── the glass ────────────────────────────────────────────────────────────────
 MIN_REFRESH_S = 180         # Waveshare: never sooner. Not configurable.
 MAX_REFRESH_S = 86_400
 FORCE_REPAINT_S = 82_800    # 23 h: repaint even an unchanged frame
 PAINT_MAX_S = 90            # >= the driver's PAINT_WORST_S (checked in CI)
+FULL_EVERY = 5              # a full refresh after this many fast or partial ones
+# A panel from before Waveshare's 2023 batch takes far longer than this for a
+# partial or a fast refresh; past these, quick refresh is turned off for good.
+QUICK_PARTIAL_MAX_S = 1.0
+QUICK_FAST_MAX_S = 3.0
 
 # ── the network ──────────────────────────────────────────────────────────────
 SOCKET_TIMEOUT_S = 10       # per connect/recv
@@ -110,6 +128,12 @@ GONE_RETRY_S = 900          # 404 (token rotated, display disabled or deleted),
 THROTTLE_MIN_S = 60
 THROTTLE_MAX_S = 3600
 THROTTLE_DEFAULT_S = 300
+STARTUP_RETRY_S = 5         # a Transient before the first paint retries this soon,
+STARTUP_WINDOW_S = 600      # for at most this long into the process's life
+BG_GAP_S = 2                # background fetches: at least this far apart,
+BG_RETRY_S = 60             # a failed item no sooner than this again,
+SCREEN_REVALIDATE_S = 3600  # and the cached screens refetched this often
+VIEWS_RECHECK_S = 900       # while the server will not switch views, ask again
 
 # ── the box ──────────────────────────────────────────────────────────────────
 # A Pi 5 has no RTC battery unless one is fitted, so after a power cut its
@@ -124,13 +148,42 @@ CREDENTIAL = "display-token"    # LoadCredential= name in the unit
 TOKEN_MAX_BYTES = 512
 STATE_FILE = "state.json"
 STATE_MAX_BYTES = 4096
-STATE_VERSION = 1
-# Only for an e-Paper Driver HAT Rev2.3 or later, which switches the panel's
-# power on BCM18. The Pico module has no such pin. Set it in
-# /etc/default/smylte-panel (SMYLTE_PANEL_PWR_PIN=18): the unit reads that file
-# as its EnvironmentFile, and panel-setup.sh hands the same file to its
-# --selftest and --clear runs and to its own --power-off.
+STATE_VERSION = 2           # version 1 files are migrated; see parse_state()
+# 18 is the Driver HAT's power switch; harmless on the Pico module, where
+# GPIO18 is unconnected. `none` turns it off. Set in /etc/default/smylte-panel:
+# the unit reads that file as its EnvironmentFile, and panel-setup.sh hands the
+# same file to its --selftest and --clear runs and to its own --power-off.
 PWR_PIN_ENV = "SMYLTE_PANEL_PWR_PIN"
+REFRESH_ENV = "SMYLTE_PANEL_REFRESH"        # fast (default) | full
+IDLE_ENV = "SMYLTE_PANEL_IDLE_RETURN_S"     # 0 (default, off) | 60–86400
+KEY_ENV = "SMYLTE_PANEL_KEY"                # auto (default) | off
+
+# The key: the Pi 5's power button, read as an input device. logind is told to
+# leave it alone by this drop-in, which panel-setup.sh installs.
+LOGIND_DROPIN = "/etc/systemd/logind.conf.d/50-smylte-panel.conf"
+SYSFS_INPUT = "/sys/class/input"
+KEY_DEVICE_NAME = "pwr_button"      # the Pi 5 firmware's gpio-keys node
+EV_SYN = 0                          # <linux/input-event-codes.h>
+EV_KEY = 1
+SYN_DROPPED = 3
+KEY_POWER = 116
+EVIOCSCLOCKID = 0x400445A0          # _IOW('E', 0xa0, int): event times' clock
+INPUT_EVENT = struct.Struct("llHHi")    # 24 bytes on aarch64 and x86_64
+KEY_RETRY_S = 10                    # look for a missing key device this often
+# Gestures, from the key's own event times.
+DEBOUNCE_S = 0.03       # a release sooner than this is noise
+TAP_MAX_S = 0.6         # a release by this is a tap
+HOLD_S = 1.0            # held this long is a hold
+STUCK_S = 10            # held this long is a stuck key: forget the press
+COALESCE_S = 0.5        # the page follows once no tap has come for this long
+PROMPT_S = 10           # the "Shut down?" screen waits this long for a tap
+# The key's budget of exempt refreshes: a burst, refilled one at a time.
+KEY_BURST = 12
+KEY_REFILL_S = 50
+HOLD_EMPTY_GAP_S = 60   # an empty bucket still allows a hold this long after a prompt
+POWEROFF_NAME = "poweroff"      # the request file in $RUNTIME_DIRECTORY
+POWEROFF_GRACE_S = 120          # how long a request waits for the stop
+KEYTEST_S = 30                  # how long --keytest listens
 
 EX_OK = 0
 EX_FAIL = 1         # restartable: hardware, panel, anything unexpected
@@ -165,6 +218,8 @@ class Frame:
     body: bytes
     etag: str
     refresh_s: int
+    strip: tuple[int, int] | None = None    # the tab strip's rows [y0, y1)
+    mode: str | None = None                 # the view, for a view request
 
 
 @dataclasses.dataclass(frozen=True)
@@ -187,6 +242,7 @@ class Throttled:
 class Refused:
     reason: str
     status: int | None = None
+    code: str | None = None     # a 422's X-Display-Error, e.g. "views-off"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -236,18 +292,48 @@ def load_token(cred_dir: str | None) -> str:
                       f"{hint} — run `sudo deploy/panel-setup.sh --rotate-token`")
 
 
-def request_target(token: str) -> str:
-    return PATH_FMT % token + "?" + QUERY
+def request_target(token: str, *, mode: str | None = None, tabs: bool = False,
+                   screen: str | None = None) -> str:
+    target = PATH_FMT % token + "?" + QUERY
+    if mode:
+        target += "&mode=" + mode
+    if tabs:
+        target += "&tabs=1"
+    if screen:
+        target += "&screen=" + screen
+    return target
+
+
+TAB_STRIP_RE = re.compile(r"([0-9]{1,4})-([0-9]{1,4})")
+
+
+def parse_tab_strip(value: str) -> tuple[int, int] | None:
+    """X-Display-Tab-Strip's half-open rows, or None if it is not two rows of
+    this panel at least 2 apart."""
+    m = TAB_STRIP_RE.fullmatch(value)
+    if m is None:
+        return None
+    y0, y1 = int(m.group(1)), int(m.group(2))
+    if not (0 <= y0 < y1 <= HEIGHT and y1 - y0 >= 2):
+        return None
+    return y0, y1
 
 
 def check_headers(status: int, items, *, chunked: bool = False,
-                  length: int | None = None) -> str | None:
+                  length: int | None = None, want_mode: str | None = None,
+                  want_screen: str | None = None,
+                  want_tabs: bool = False) -> str | None:
     """None if a 200's headers describe exactly this panel's frame, else the
     name of the first check that failed.
 
     `items` is the response's (name, value) pairs, so a header sent twice is
     seen twice: two Content-Lengths are how a body gets smuggled past a check
     of one. Everything is decided before the body is read.
+
+    A view request (`want_mode`) needs X-Display-Mode to name that view, and
+    may have an X-Display-Tab-Strip, once and well formed, only if it asked for
+    tabs. A screen request needs X-Display-Screen to name it, and no view
+    headers. A legacy request (neither) ignores all three.
     """
     if status != 200:
         return f"status-{status}"
@@ -281,6 +367,20 @@ def check_headers(status: int, items, *, chunked: bool = False,
         return "x-display-stride"
     if not ETAG_RE.fullmatch(one("etag")):
         return "etag"
+    if want_mode is not None:
+        if seen.get("x-display-mode") != [want_mode]:
+            return "mode"
+        strips = seen.get("x-display-tab-strip", [])
+        if want_tabs:
+            if len(strips) > 1 or (strips and parse_tab_strip(strips[0]) is None):
+                return "tab strip"
+        elif strips:
+            return "tab strip"
+    elif want_screen is not None:
+        if seen.get("x-display-screen") != [want_screen]:
+            return "screen"
+        if "x-display-mode" in seen or "x-display-tab-strip" in seen:
+            return "screen"
     return None
 
 
@@ -305,6 +405,11 @@ class State:
     Times ending `_bt` are CLOCK_BOOTTIME seconds: they never jump with NTP,
     and they restart from zero at boot, which floor_ok_at() accounts for.
     `complete` is false from the moment a refresh starts until it has ended.
+    `painted_*` is the last refresh of any kind (the floor's), `full_*` the
+    last full one (the 23-hour repaint's). `view` is the view whose whole
+    frame is on the glass, if one is; `fast_count` counts the fast and partial
+    refreshes since the last full one; `off` says the off screen is on the
+    glass; `quick_disabled` is the batch guard's verdict.
     """
     etag: str | None = None
     glass_sha256: str | None = None
@@ -312,6 +417,12 @@ class State:
     painted_wall: float | None = None
     attempt_start_bt: float | None = None
     complete: bool = False
+    view: str | None = None
+    fast_count: int = 0
+    off: bool = False
+    full_end_bt: float | None = None
+    full_wall: float | None = None
+    quick_disabled: bool = False
 
 
 def _time_field(v, limit: float) -> bool:
@@ -320,14 +431,22 @@ def _time_field(v, limit: float) -> bool:
 
 
 def parse_state(raw: bytes) -> State | None:
-    """A State from the file's bytes, or None if anything about it is off."""
+    """A State from the file's bytes, or None if anything about it is off.
+
+    A version 1 file (no view, no refresh kinds) is migrated: no view, a full
+    refresh due next (fast_count = FULL_EVERY), and its last refresh taken as
+    the last full one, since version 1 only ever refreshed in full.
+    """
     if len(raw) > STATE_MAX_BYTES:
         return None
     try:
         data = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
         return None
-    if not isinstance(data, dict) or data.get("version") != STATE_VERSION:
+    if not isinstance(data, dict):
+        return None
+    version = data.get("version")
+    if isinstance(version, bool) or version not in (1, STATE_VERSION):
         return None
     s = State(
         etag=data.get("etag"),
@@ -337,6 +456,21 @@ def parse_state(raw: bytes) -> State | None:
         attempt_start_bt=data.get("attempt_start_bt"),
         complete=data.get("complete"),
     )
+    if version == STATE_VERSION:
+        s = dataclasses.replace(
+            s, view=data.get("view"), fast_count=data.get("fast_count"),
+            off=data.get("off"), full_end_bt=data.get("full_end_bt"),
+            full_wall=data.get("full_wall"),
+            quick_disabled=data.get("quick_disabled"))
+        if s.view is not None and s.view not in VIEWS:
+            return None
+        if not (isinstance(s.fast_count, int) and not isinstance(s.fast_count, bool)
+                and 0 <= s.fast_count <= 1000):
+            return None
+        if not (isinstance(s.off, bool) and isinstance(s.quick_disabled, bool)):
+            return None
+        if not (_time_field(s.full_end_bt, 1e10) and _time_field(s.full_wall, 1e11)):
+            return None
     if not isinstance(s.complete, bool):
         return None
     if s.etag is not None and not (isinstance(s.etag, str)
@@ -350,6 +484,12 @@ def parse_state(raw: bytes) -> State | None:
         return None
     if s.complete and s.painted_end_bt is None:
         return None
+    if version == 1:
+        done = s.complete
+        s = dataclasses.replace(
+            s, view=None, fast_count=FULL_EVERY, off=False,
+            full_end_bt=s.painted_end_bt if done else None,
+            full_wall=s.painted_wall if done else None, quick_disabled=False)
     return s
 
 
@@ -437,52 +577,379 @@ def floor_ok_at(s: State, start_bt: float) -> float:
 
 
 def forced_due(s: State, now_bt: float, now_wall: float, synced: bool) -> bool:
-    """True once the glass has shown the same picture for 23 hours.
+    """True once 23 hours have passed since the last FULL refresh.
 
-    Each test is a lower bound on the real time since the paint, as in
-    floor_ok_at(): a paint time later than `now_bt` is from an earlier boot, so
-    at least `now_bt` has passed since it.
+    Fast and partial refreshes do not count: only a full one clears the glass
+    of ghosting. Each test is a lower bound on the real time since that
+    refresh, as in floor_ok_at(): a time later than `now_bt` is from an earlier
+    boot, so at least `now_bt` has passed since it.
     """
-    if not s.complete or s.painted_end_bt is None:
+    if not s.complete or s.full_end_bt is None:
         return False
-    if s.painted_end_bt <= now_bt and now_bt - s.painted_end_bt >= FORCE_REPAINT_S:
+    if s.full_end_bt <= now_bt and now_bt - s.full_end_bt >= FORCE_REPAINT_S:
         return True
-    if s.painted_end_bt > now_bt and now_bt >= FORCE_REPAINT_S:
+    if s.full_end_bt > now_bt and now_bt >= FORCE_REPAINT_S:
         return True
-    return (synced and s.painted_wall is not None
-            and now_wall - s.painted_wall >= FORCE_REPAINT_S)
+    return (synced and s.full_wall is not None
+            and now_wall - s.full_wall >= FORCE_REPAINT_S)
 
 
 def force_poll_at(s: State, now_bt: float, now_wall: float,
                   synced: bool) -> float | None:
     """The CLOCK_BOOTTIME by which to fetch so the 23-hour repaint is on time.
 
-    None when nothing is painted, or when the repaint is already due by any of
-    forced_due()'s bounds: then the next fetch is forced whenever it comes, and
-    pulling it earlier would only defeat the retry backoff. The boot-time bound
-    alone is late after a reboot (it cannot see the time the box was down), so
-    the wall clock bounds it too once it is synced, if the paint recorded a
-    wall time (the clock was synced when it ended). run() records a paint time
-    later than its own start, which must be from an earlier boot, as boot time
-    0, so without a wall clock that one is due by 23 h of this boot's uptime.
-    An earlier boot's paint at or before run()'s start cannot be told from this
-    boot's, and is due 23 h after it.
+    The 23 hours are measured from the last FULL refresh (full_end_bt and
+    full_wall). None when no full refresh is recorded, or when the repaint is
+    already due by any of forced_due()'s bounds: then the next fetch is forced
+    whenever it comes, and pulling it earlier would only defeat the retry
+    backoff. The boot-time bound alone is late after a reboot (it cannot see
+    the time the box was down), so the wall clock bounds it too once it is
+    synced, if the refresh recorded a wall time (the clock was synced when it
+    ended). run() records a time later than its own start, which must be from
+    an earlier boot, as boot time 0, so without a wall clock that one is due by
+    23 h of this boot's uptime. An earlier boot's refresh at or before run()'s
+    start cannot be told from this boot's, and is due 23 h after it.
     """
-    if not s.complete or s.painted_end_bt is None:
+    if not s.complete or s.full_end_bt is None:
         return None
     if forced_due(s, now_bt, now_wall, synced):
         return None
     at = []
-    if s.painted_end_bt <= now_bt:
-        if s.painted_end_bt + FORCE_REPAINT_S > now_bt:
-            at.append(s.painted_end_bt + FORCE_REPAINT_S)
+    if s.full_end_bt <= now_bt:
+        if s.full_end_bt + FORCE_REPAINT_S > now_bt:
+            at.append(s.full_end_bt + FORCE_REPAINT_S)
     elif FORCE_REPAINT_S > now_bt:
         at.append(float(FORCE_REPAINT_S))
-    if synced and s.painted_wall is not None:
-        left = s.painted_wall + FORCE_REPAINT_S - now_wall
+    if synced and s.full_wall is not None:
+        left = s.full_wall + FORCE_REPAINT_S - now_wall
         if left > 0:
             at.append(now_bt + left)
     return min(at) if at else None
+
+
+def parse_bitmap(text: str) -> int:
+    """A sysfs capability bitmap ("10000000000000 0") as one int, bit n for bit n.
+
+    The kernel prints it as hex words of the C long's width, most significant
+    first, separated by spaces, without zero padding.
+    """
+    width = struct.calcsize("L") * 8
+    value = 0
+    for word in text.split():
+        value = (value << width) | int(word, 16)
+    return value
+
+
+# ── what Events.wait() returns ───────────────────────────────────────────────
+
+@dataclasses.dataclass(frozen=True)
+class Stop:
+    sig: int
+
+
+@dataclasses.dataclass(frozen=True)
+class Repaint:
+    pass
+
+
+@dataclasses.dataclass(frozen=True)
+class Key:
+    value: int      # 1 pressed, 0 released
+    t: float        # the kernel's time of the edge, on CLOCK_BOOTTIME
+
+
+@dataclasses.dataclass(frozen=True)
+class KeyReset:
+    t: float        # events were lost, or the device went away or came back
+
+
+Item = Stop | Repaint | Key | KeyReset
+
+
+def decode_events(data: bytes) -> list[Item]:
+    """The power key's edges and SYN_DROPPED from whole input_event records.
+
+    Autorepeat (value 2) and every other event is dropped, and so is a
+    trailing part of a record.
+    """
+    out: list[Item] = []
+    for off in range(0, len(data) - INPUT_EVENT.size + 1, INPUT_EVENT.size):
+        sec, usec, etype, code, value = INPUT_EVENT.unpack_from(data, off)
+        t = sec + usec / 1e6
+        if etype == EV_KEY and code == KEY_POWER and value in (0, 1):
+            out.append(Key(value, t))
+        elif etype == EV_SYN and code == SYN_DROPPED:
+            out.append(KeyReset(t))
+    return out
+
+
+# ── the key's gestures and what they do ──────────────────────────────────────
+
+class Gestures:
+    """Taps and holds from the key's edges. Pure: every time is a parameter.
+
+    A release decides a tap (DEBOUNCE_S to TAP_MAX_S) or a hold (HOLD_S or
+    longer, if poll() has not already seen it); poll() sees a hold while the
+    key is still down, and forgets a press held STUCK_S. Each gesture comes
+    back as (kind, press_t).
+    """
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self) -> None:
+        self.down = False
+        self.press_t: float | None = None
+        self.hold_emitted = False
+
+    @property
+    def pressed(self) -> bool:
+        """Down, and no hold seen yet: no fetch and no paint starts meanwhile."""
+        return self.down and not self.hold_emitted
+
+    def press(self, t: float) -> list:
+        if not self.down:
+            self.down, self.press_t, self.hold_emitted = True, t, False
+        return []
+
+    def release(self, t: float) -> list:
+        if not self.down:
+            return []
+        dt, press_t, held = t - self.press_t, self.press_t, self.hold_emitted
+        self.down = False
+        if dt < DEBOUNCE_S:
+            return []
+        if dt <= TAP_MAX_S:
+            return [("tap", press_t)]
+        if dt >= HOLD_S and not held:
+            return [("hold", press_t)]
+        return []
+
+    def poll(self, now: float) -> list:
+        out = []
+        if self.down and not self.hold_emitted and now - self.press_t >= HOLD_S:
+            self.hold_emitted = True
+            out.append(("hold", self.press_t))
+        if self.down and now - self.press_t >= STUCK_S:
+            log.warning("key: down for %d s; taking it as stuck", STUCK_S)
+            self.reset()
+        return out
+
+    def next_deadline(self) -> float | None:
+        if not self.down:
+            return None
+        return self.press_t + (STUCK_S if self.hold_emitted else HOLD_S)
+
+
+@dataclasses.dataclass(frozen=True)
+class Strip:
+    view: str
+
+
+@dataclasses.dataclass(frozen=True)
+class Page:
+    view: str
+
+
+@dataclasses.dataclass(frozen=True)
+class Prompt:
+    pass
+
+
+@dataclasses.dataclass(frozen=True)
+class Off:
+    pass
+
+
+@dataclasses.dataclass(frozen=True)
+class Leave:
+    why: str        # "timeout", "resume" or "failed"
+
+
+@dataclasses.dataclass(frozen=True)
+class Idle:
+    pass
+
+
+class Ui:
+    """The view the key has chosen, and the shutdown prompt. Pure: it knows
+    nothing of tokens or the network, and every time is a parameter.
+
+    `mode` is browse, prompt_pending (the prompt is being drawn), prompt (it is
+    drawn and armed) or off. Every method returns one-shot actions, never
+    re-emitted. `page_needed` says a tap moved the tab since the last
+    whole-view paint; `page_due` is when that page is to be fetched.
+    """
+
+    def __init__(self, view: str, start: float, idle_s: float):
+        self.view = view
+        self.mode = "browse"
+        self.page_due: float | None = None
+        self.page_needed = False
+        self.prompt_shown_bt: float | None = None
+        self.prompt_deadline: float | None = None
+        self.last_key = start
+        self.idle_s = idle_s
+        # The earliest the idle return can happen: the floor, and the clock
+        # gate while it is closed. Kept from the last tick() for next_deadline().
+        self._idle_not_before: float | None = None
+
+    def _leave_prompt(self) -> None:
+        self.prompt_shown_bt = self.prompt_deadline = None
+
+    def tap(self, press_t: float, now: float) -> list:
+        if self.mode == "browse":
+            self.view = VIEWS[(VIEWS.index(self.view) + 1) % len(VIEWS)]
+            self.page_needed = True
+            self.page_due = now + COALESCE_S
+            self.last_key = now
+            return [Strip(self.view)]
+        if self.mode == "prompt":
+            # The press decides, however late the release came.
+            if self.prompt_shown_bt <= press_t <= self.prompt_deadline:
+                self.mode = "off"
+                self._leave_prompt()
+                return [Off()]
+        return []
+
+    def hold(self, press_t: float, now: float) -> list:
+        if self.mode == "browse":
+            self.mode = "prompt_pending"
+            self.page_due = None
+            self.last_key = now
+            return [Prompt()]
+        return []
+
+    def shown_prompt(self, end_bt: float) -> list:
+        if self.mode == "prompt_pending":
+            self.mode = "prompt"
+            self.prompt_shown_bt = end_bt
+            self.prompt_deadline = end_bt + PROMPT_S
+            self.last_key = end_bt
+        return []
+
+    def prompt_failed(self, now: float) -> list:
+        if self.mode == "prompt_pending":
+            self.mode = "browse"
+            if self.page_needed:
+                self.page_due = now
+        return []
+
+    def tick(self, now: float, *, gate_open: bool, floor_at: float) -> list:
+        self._idle_not_before = max(floor_at,
+                                    0.0 if gate_open else float(CLOCK_SYNC_GRACE_S))
+        if self.mode == "prompt" and now >= self.prompt_deadline:
+            self.mode = "browse"
+            self._leave_prompt()
+            self.last_key = now
+            return [Leave("timeout")]
+        if self.mode != "browse":
+            return []
+        if self.page_due is not None and now >= self.page_due:
+            self.page_due = None
+            return [Page(self.view)]
+        if (self.idle_s > 0 and self.view != TODAY and self.page_due is None
+                and now - self.last_key >= self.idle_s and gate_open
+                and now >= floor_at):
+            self.view = TODAY
+            self.last_key = now
+            return [Idle()]
+        return []
+
+    def painted_view(self, v: str) -> list:
+        if v == self.view:
+            self.page_needed = False
+        return []
+
+    def leave_done(self, now: float) -> list:
+        """After a Leave's repaint: a page a tap still owes is fetched now."""
+        if self.mode == "browse" and self.page_needed:
+            self.page_due = now
+        return []
+
+    def resume(self, now: float, *, why: str = "resume") -> list:
+        if self.mode == "off":
+            self.mode = "browse"
+            self.last_key = now
+            return [Leave(why)]
+        return []
+
+    def _idle_deadline(self) -> float | None:
+        if not (self.idle_s > 0 and self.view != TODAY and self.mode == "browse"
+                and self.page_due is None):
+            return None
+        at = self.last_key + self.idle_s
+        if self._idle_not_before is not None:
+            at = max(at, self._idle_not_before)
+        return at
+
+    def next_deadline(self, pressed: bool) -> float | None:
+        """When tick() next has something to do; None while the key is down."""
+        if pressed:
+            return None
+        times = [t for t in (self.page_due,
+                             self.prompt_deadline if self.mode == "prompt" else None,
+                             self._idle_deadline()) if t is not None]
+        return min(times) if times else None
+
+
+class Bucket:
+    """The key's budget of floor-exempt refreshes: KEY_BURST tokens, one more
+    each KEY_REFILL_S, never above KEY_BURST. Pure: every time is a parameter."""
+
+    def __init__(self, tokens: int, now: float):
+        self.tokens = min(KEY_BURST, tokens)
+        self.last = now
+
+    def refill(self, now: float) -> None:
+        if self.tokens >= KEY_BURST:
+            self.last = now     # a full bucket banks no time
+            return
+        n = int((now - self.last) // KEY_REFILL_S)
+        if n <= 0:
+            return
+        self.tokens = min(KEY_BURST, self.tokens + n)
+        self.last = now if self.tokens >= KEY_BURST else self.last + n * KEY_REFILL_S
+
+    def take(self, n: int = 1) -> bool:
+        if self.tokens < n:
+            return False
+        self.tokens -= n
+        return True
+
+    def give(self, n: int = 1) -> None:
+        self.tokens = min(KEY_BURST, self.tokens + n)
+
+    def next_at(self, n: int) -> float:
+        """The CLOCK_BOOTTIME at which the bucket holds n tokens (n <= KEY_BURST)."""
+        if n > KEY_BURST:
+            raise ValueError(f"the bucket never holds {n} tokens")
+        if self.tokens >= n:
+            return self.last
+        return self.last + (n - self.tokens) * KEY_REFILL_S
+
+
+def start_tokens(s: State, start: float) -> int:
+    """The bucket at process start, from the state as loaded: full after a
+    reboot or with no record, else what a bucket emptied at the last refresh
+    would have refilled to, so a crash loop starts nearly empty.
+
+    "The last refresh" is the same lower bound floor_ok_at() uses: a
+    completed paint's end, or for an attempt that never recorded its end
+    (a crash mid-refresh, the very case this guards) the latest it can have
+    ended. A time later than `start` is from an earlier boot.
+    """
+    if s.complete and s.painted_end_bt is not None:
+        ended = s.painted_end_bt
+    elif s.attempt_start_bt is not None:
+        if s.attempt_start_bt > start:
+            return KEY_BURST
+        ended = min(s.attempt_start_bt + PAINT_MAX_S, start)
+    else:
+        return KEY_BURST
+    if ended > start:
+        return KEY_BURST
+    return min(KEY_BURST, int((start - ended) // KEY_REFILL_S))
 
 
 # ── I/O ──────────────────────────────────────────────────────────────────────
@@ -506,10 +973,16 @@ def _read_body(resp, deadline: float, clock, tick) -> bytes | None:
     return bytes(buf)
 
 
-def fetch(token: str, etag: str | None, *, host: str = HOST, port: int = PORT,
-          timeout: float = SOCKET_TIMEOUT_S, deadline_s: float = FETCH_DEADLINE_S,
-          clock=time.monotonic, tick=lambda: None):
+def fetch(token: str, etag: str | None, *, mode: str | None = None,
+          tabs: bool = False, screen: str | None = None, host: str = HOST,
+          port: int = PORT, timeout: float = SOCKET_TIMEOUT_S,
+          deadline_s: float = FETCH_DEADLINE_S, clock=time.monotonic,
+          tick=lambda: None):
     """One GET of this panel's frame. Never raises; returns a result class.
+
+    With `mode` it is that view (with the tab strip if `tabs`); with `screen`
+    it is that static screen; with neither it is the display's stored view, as
+    a legacy client asks. check_headers() holds each to its own headers.
 
     Plain HTTP to a numeric loopback address: no DNS, no proxy (http.client
     never reads the proxy variables) and no redirects. Never sends X-Real-IP;
@@ -526,13 +999,15 @@ def fetch(token: str, etag: str | None, *, host: str = HOST, port: int = PORT,
     start = clock()
     conn = http.client.HTTPConnection(host, port, timeout=timeout)
     try:
-        conn.request("GET", request_target(token), headers=headers)
+        conn.request("GET", request_target(token, mode=mode, tabs=tabs,
+                                            screen=screen), headers=headers)
         resp = conn.getresponse()
         items = resp.getheaders()
         status = resp.status
         if status == 200:
             bad = check_headers(status, items, chunked=bool(resp.chunked),
-                                length=resp.length)
+                                length=resp.length, want_mode=mode,
+                                want_screen=screen, want_tabs=tabs)
             if bad:
                 return Refused(bad, status)
             body = _read_body(resp, start + deadline_s, clock, tick)
@@ -540,8 +1015,15 @@ def fetch(token: str, etag: str | None, *, host: str = HOST, port: int = PORT,
                 return Transient(f"body took longer than {deadline_s:g} s")
             if len(body) != BUF_BYTES:
                 return Transient(f"body ended at {len(body)} of {BUF_BYTES} bytes")
+            strip = None
+            if mode is not None and tabs:
+                value = _single(items, "x-display-tab-strip")
+                strip = None if value is None else parse_tab_strip(value)
             return Frame(body, _single(items, "etag"),
-                         clamp_refresh(_single(items, "x-display-refresh-seconds")))
+                         clamp_refresh(_single(items, "x-display-refresh-seconds")),
+                         strip=strip,
+                         mode=_single(items, "x-display-mode") if mode is not None
+                         else None)
         if status == 304:
             got = _single(items, "etag")
             if etag is None or got != etag:
@@ -554,6 +1036,9 @@ def fetch(token: str, etag: str | None, *, host: str = HOST, port: int = PORT,
             return Throttled(parse_retry_after(_single(items, "retry-after")))
         if status >= 500:
             return Transient(f"HTTP {status}")
+        if status == 422:
+            return Refused(f"HTTP {status}", status,
+                           code=_single(items, "x-display-error"))
         return Refused(f"HTTP {status}", status)
     except (OSError, http.client.HTTPException) as e:
         return Transient(type(e).__name__ + (f": {e}" if str(e) else ""))
@@ -599,6 +1084,270 @@ def clock_synced() -> bool:
 
 def _hm(wall: float) -> str:
     return time.strftime("%H:%M", time.localtime(wall))
+
+
+class Collector:
+    """The one place signals are taken: a thread that sigwait()s for them and
+    hands them over through a deque, with a byte down a pipe so the loop can
+    select() on signals and the key together.
+
+    main() must block the signals first, in every thread, which is what makes
+    sigwait() the only taker; the thread checks, and exits the process if not.
+    """
+
+    def __init__(self, sigset):
+        self._r, self._w = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+        self._items: collections.deque[int] = collections.deque()
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(target=self._run, args=(sigset,),
+                                        name="smylte-panel-signals", daemon=True)
+        self._thread.start()
+
+    def _run(self, sigset) -> None:
+        if not set(sigset) <= set(signal.pthread_sigmask(signal.SIG_BLOCK, [])):
+            # A signal that is not blocked would be delivered, not collected:
+            # SIGTERM's default action would kill a refresh halfway.
+            os._exit(EX_FAIL)
+        while True:
+            sig = signal.sigwait(sigset)
+            with self._lock:
+                self._items.append(int(sig))
+            try:
+                os.write(self._w, b"\0")
+            except BlockingIOError:
+                pass        # the pipe is full, so the loop is woken anyway
+
+    @property
+    def fd(self) -> int:
+        return self._r
+
+    def pop(self) -> list[int]:
+        """Every signal collected so far, in order."""
+        # The pipe is emptied BEFORE the deque is taken: a signal that lands
+        # in between then leaves its byte in the pipe, and the next select()
+        # wakes for it. The other way round could eat its byte and leave it
+        # in the deque with nothing to wake the loop.
+        while True:
+            try:
+                if not os.read(self._r, 4096):
+                    break
+            except BlockingIOError:
+                break
+        with self._lock:
+            items = list(self._items)
+            self._items.clear()
+        return items
+
+    def alive(self) -> bool:
+        return self._thread.is_alive()
+
+
+def start_collector(sigset) -> Collector:
+    return Collector(sigset)
+
+
+_many_keys_logged = False
+
+
+def find_key_device(root: pathlib.Path) -> str | None:
+    """/dev/input/eventN of the one input device that is the power key, or None.
+
+    It is the one named KEY_DEVICE_NAME with EV_KEY events and KEY_POWER among
+    its keys. None if there is none or more than one; a candidate that cannot
+    be read is skipped.
+    """
+    global _many_keys_logged
+    found = []
+    for node in sorted(root.glob("event*")):
+        dev = node / "device"
+        try:
+            name = (dev / "name").read_text(encoding="utf-8", errors="replace")
+            if name.strip() != KEY_DEVICE_NAME:
+                continue
+            caps = dev / "capabilities"
+            ev = parse_bitmap((caps / "ev").read_text(encoding="ascii"))
+            keys = parse_bitmap((caps / "key").read_text(encoding="ascii"))
+        except (OSError, ValueError):
+            continue
+        if ev >> EV_KEY & 1 and keys >> KEY_POWER & 1:
+            found.append(node.name)
+    if len(found) == 1:
+        return "/dev/input/" + found[0]
+    if len(found) > 1 and not _many_keys_logged:
+        log.error("key: %d input devices are %r (%s); using none of them",
+                  len(found), KEY_DEVICE_NAME, ", ".join(found))
+        _many_keys_logged = True
+    return None
+
+
+def open_key(path: str) -> int:
+    """The key's event node, non-blocking, with event times on CLOCK_BOOTTIME."""
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        fcntl.ioctl(fd, EVIOCSCLOCKID, struct.pack("i", time.CLOCK_BOOTTIME))
+    except OSError:
+        os.close(fd)
+        raise
+    return fd
+
+
+class Events:
+    """Everything the loop waits for: the collector's signals and the key.
+
+    It finds and opens the key itself, again every KEY_RETRY_S while there is
+    none, and never with key_enabled False.
+    """
+
+    def __init__(self, collector, *, sysfs_root, open_key, boottime, key_enabled):
+        self.collector = collector
+        self._sysfs_root = sysfs_root
+        self._open_key = open_key
+        self._boottime = boottime
+        self.key_enabled = key_enabled
+        self._fd: int | None = None
+        self._retry_at = boottime()
+        self._open_failed_logged = False
+
+    @property
+    def key_open(self) -> bool:
+        return self._fd is not None
+
+    def next_retry(self) -> float | None:
+        return self._retry_at if self.key_enabled and self._fd is None else None
+
+    def _discover(self) -> None:
+        now = self._boottime()
+        if not (self.key_enabled and self._fd is None and now >= self._retry_at):
+            return
+        path = find_key_device(self._sysfs_root)
+        if path is not None:
+            try:
+                self._fd = self._open_key(path)
+            except OSError as e:
+                if not self._open_failed_logged:
+                    log.error("key: cannot open %s: %s", path, e)
+                    self._open_failed_logged = True
+            else:
+                log.info("key: %s", path)
+        if self._fd is None:
+            self._retry_at = now + KEY_RETRY_S
+
+    def wait(self, timeout: float) -> list[Item]:
+        """Up to `timeout` s for anything; then everything pending, signals
+        first. 0 polls."""
+        self._discover()
+        fds = [self.collector.fd] + ([self._fd] if self._fd is not None else [])
+        select.select(fds, [], [], max(0.0, timeout))
+        out: list[Item] = [Repaint() if s == REPAINT_SIGNAL else Stop(s)
+                           for s in self.collector.pop()]
+        if self._fd is not None:
+            data = b""
+            try:
+                while True:
+                    chunk = os.read(self._fd, INPUT_EVENT.size * 64)
+                    if not chunk:
+                        break
+                    data += chunk
+            except BlockingIOError:
+                pass
+            except OSError as e:
+                if e.errno not in (errno.ENODEV, errno.EIO):
+                    raise
+                log.warning("key: the device went away (%s)", e.strerror)
+                os.close(self._fd)
+                self._fd = None
+                now = self._boottime()
+                self._retry_at = now
+                out.extend(decode_events(data))
+                out.append(KeyReset(now))
+                return out
+            out.extend(decode_events(data))
+        return out
+
+
+def request_poweroff(run_dir: str | None, start_bt: float) -> str:
+    """Ask the power-off units to shut the box down: "ok", or why not."""
+    if run_dir is None or not (os.path.isdir(run_dir) and os.access(run_dir, os.W_OK)):
+        return "failed: no run directory"
+    path = os.path.join(run_dir, POWEROFF_NAME)
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_CLOEXEC, 0o600)
+        try:
+            os.write(fd, f"{start_bt:.3f}\n".encode("ascii"))
+        finally:
+            os.close(fd)
+    except FileExistsError:
+        return "ok"
+    except OSError as e:
+        return "failed: " + errno.errorcode.get(e.errno, str(e.errno))
+    return "ok"
+
+
+def clear_poweroff(run_dir: str | None) -> None:
+    if run_dir is None:
+        return
+    path = os.path.join(run_dir, POWEROFF_NAME)
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        log.error("cannot remove %s: %s", path, e)
+
+
+def load_screen(state_dir: pathlib.Path, kind: str) -> bytes | None:
+    """A cached screen: its frame, if the file is the frame, a newline, the
+    frame's sha256 in hex and a newline. Anything else is no screen."""
+    size = BUF_BYTES + 1 + 64 + 1
+    path = state_dir / f"{kind}.bin"
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(size + 1)
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        log.warning("cannot read %s (%s); fetching it again", path, e.strerror)
+        return None
+    if len(raw) != size or raw[BUF_BYTES:BUF_BYTES + 1] != b"\n" or raw[-1:] != b"\n":
+        return None
+    frame, digest = raw[:BUF_BYTES], raw[BUF_BYTES + 1:-1]
+    if not SHA256_RE.fullmatch(digest.decode("ascii", errors="replace")):
+        return None
+    if digest.decode("ascii") != hashlib.sha256(frame).hexdigest():
+        return None
+    return frame
+
+
+def save_screen(state_dir: pathlib.Path, kind: str, frame: bytes) -> bool:
+    """Write atomically and durably: temp file, fsync, rename, fsync the dir."""
+    path = state_dir / f"{kind}.bin"
+    tmp = state_dir / f"{kind}.bin.tmp"
+    data = frame + b"\n" + hashlib.sha256(frame).hexdigest().encode("ascii") + b"\n"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_CLOEXEC,
+                     0o600)
+        try:
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+        dfd = os.open(state_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+        return True
+    except OSError as e:
+        log.error("cannot write %s: %s", path, e)
+        return False
+
+
+def logind_dropin_present(path: str = LOGIND_DROPIN) -> bool:
+    """Whether logind has been told to leave the power key to this service."""
+    return os.path.exists(path)
 
 
 @dataclasses.dataclass
@@ -674,34 +1423,54 @@ def _drain(d: Deps) -> int | None:
             stop = sig
 
 
-def _paint(d: Deps, frame: bytes, *, etag: str | None) -> tuple[State | None, float]:
+def _paint(d: Deps, prev: State, frame: bytes, *, etag: str | None,
+           view: str | None, kind: str, off: bool = False,
+           old: bytes | None = None) -> tuple[State | None, float]:
     """Write-ahead, then init/display/sleep. Returns (new state, end time).
+
+    `kind` is "full", "fast" or "partial"; a partial needs `old`, the bytes on
+    the glass. Every field of `prev` that outlives one refresh is carried
+    forward: the last refresh and the last full one, and the batch guard's
+    verdict. fast_count is counted in the write-ahead record, as if the
+    refresh will complete, so a crash cannot hide one.
 
     (None, 0) means the write-ahead record could not be saved and nothing was
     sent to the panel. A panel failure raises after abort() has powered the
     panel down.
     """
+    if kind == "partial" and old is None:
+        raise ValueError("a partial refresh needs the bytes on the glass")
     start = d.boottime()
-    attempt = State(attempt_start_bt=start, complete=False)
+    attempt = dataclasses.replace(
+        prev, attempt_start_bt=start, complete=False, etag=None, view=None,
+        glass_sha256=None, off=False,
+        fast_count=0 if kind == "full" else min(prev.fast_count + 1, 1000))
     if not save_state(d.state_dir, attempt):
         return None, 0.0
     try:
-        d.panel.init()
-        d.panel.display(frame)
+        d.panel.init(kind)
+        if kind == "partial":
+            d.panel.display_partial(old, frame)
+        else:
+            d.panel.display(frame)
         d.panel.sleep()
     except BaseException as e:
         d.panel.abort(busy_stuck=isinstance(e, d.epd.BusyTimeout))
         raise
     end = d.boottime()
     synced = d.synced()
-    done = State(etag=etag, glass_sha256=hashlib.sha256(frame).hexdigest(),
-                 painted_end_bt=end,
-                 painted_wall=d.walltime() if synced else None,
-                 attempt_start_bt=start, complete=True)
+    wall = d.walltime() if synced else None
+    done = dataclasses.replace(
+        attempt, complete=True, painted_end_bt=end, painted_wall=wall,
+        etag=etag, view=view, glass_sha256=hashlib.sha256(frame).hexdigest(),
+        off=off)
+    if kind == "full":
+        done = dataclasses.replace(done, full_end_bt=end, full_wall=wall)
     if not save_state(d.state_dir, done):
         log.error("refreshed, but could not record it — a restart will wait "
                   "the full floor before the next refresh")
-    log.info("painted %s in %.1f s", etag[1:9] if etag else "white", end - start)
+    log.info("painted %s (%s) in %.1f s", etag[1:9] if etag else "white", kind,
+             end - start)
     return done, end
 
 
@@ -709,16 +1478,22 @@ def run(d: Deps) -> int:
     """The service loop. Returns an exit code; never returns mid-refresh."""
     state = load_state(d.state_dir)
     start = d.boottime()
+    # A paint time later than this process's start is from an earlier boot, so
+    # at least this boot's uptime has passed since it. Record it as boot time
+    # 0, which stays a true lower bound as uptime grows and across a restart
+    # later in this boot. (Compared each time instead, the paint would pass for
+    # this boot's once uptime overtook it.) Only a paint time later than this
+    # start can be told from this boot's: without a synced clock, one at or
+    # before it is due 23 h after it. The last refresh and the last full one
+    # are each rewritten on their own.
+    rewritten = state
     if state.complete and state.painted_end_bt is not None \
             and state.painted_end_bt > start:
-        # A paint time later than this process's start is from an earlier
-        # boot, so at least this boot's uptime has passed since it. Record it
-        # as boot time 0, which stays a true lower bound as uptime grows and
-        # across a restart later in this boot. (Compared each time instead,
-        # the paint would pass for this boot's once uptime overtook it.) Only
-        # a paint time later than this start can be told from this boot's:
-        # without a synced clock, one at or before it is due 23 h after it.
-        state = dataclasses.replace(state, painted_end_bt=0.0)
+        rewritten = dataclasses.replace(rewritten, painted_end_bt=0.0)
+    if state.full_end_bt is not None and state.full_end_bt > start:
+        rewritten = dataclasses.replace(rewritten, full_end_bt=0.0)
+    if rewritten is not state:
+        state = rewritten
         unsaved = not save_state(d.state_dir, state)
     else:
         unsaved = False     # retried after each fetch until it is on disk
@@ -792,7 +1567,8 @@ def run(d: Deps) -> int:
                     next_poll = floor_at
                     continue
                 try:
-                    done, end = _paint(d, result.body, etag=result.etag)
+                    done, end = _paint(d, state, result.body, etag=result.etag,
+                                       view=None, kind="full", off=False)
                 except Exception as e:
                     phase = _failed_in(d.panel)
                     if isinstance(e, d.epd.PanelError):
@@ -869,7 +1645,8 @@ def clear(d: Deps) -> int:
         if sig in STOP_SIGNALS:
             return EX_OK
     try:
-        done, _ = _paint(d, WHITE, etag=None)
+        done, _ = _paint(d, state, WHITE, etag=None, view=None, kind="full",
+                         off=False)
     except Exception as e:
         log.error("clear failed during %s: %s", _failed_in(d.panel), e)
         return EX_FAIL
@@ -916,12 +1693,50 @@ def setup_logging() -> _Formatter:
 
 def pwr_pin_from_env() -> int | None:
     raw = os.environ.get(PWR_PIN_ENV, "").strip()
-    if not raw or raw.lower() == "none":
+    if not raw:
+        return 18
+    if raw.lower() == "none":
         return None
     reserved = {17, 24, 25, 7, 8, 9, 10, 11}    # RST, BUSY, DC, SPI0
-    if not raw.isdigit() or not 2 <= int(raw) <= 27 or int(raw) in reserved:
+    # ASCII digits only: str.isdigit() also accepts "²", which int() refuses.
+    if not re.fullmatch(r"[0-9]{1,2}", raw) or not 2 <= int(raw) <= 27 \
+            or int(raw) in reserved:
         raise ConfigError(f"{PWR_PIN_ENV}={raw!r} is not a free BCM pin")
     return int(raw)
+
+
+def refresh_from_env() -> str:
+    """fast (partial and fast refreshes allowed) or full (every refresh full)."""
+    raw = os.environ.get(REFRESH_ENV, "").strip()
+    if not raw:
+        return "fast"
+    if raw not in ("fast", "full"):
+        raise ConfigError(f"{REFRESH_ENV}={raw!r} is not fast or full")
+    return raw
+
+
+IDLE_RE = re.compile(r"[0-9]{1,5}")
+
+
+def idle_from_env() -> int:
+    """Seconds with no key before the glass goes back to Today; 0 is never."""
+    raw = os.environ.get(IDLE_ENV, "").strip()
+    if not raw:
+        return 0
+    if IDLE_RE.fullmatch(raw) and (int(raw) == 0 or 60 <= int(raw) <= 86_400):
+        return int(raw)
+    raise ConfigError(f"{IDLE_ENV}={raw!r} is not 0 or a number of seconds "
+                      "from 60 to 86400")
+
+
+def key_from_env() -> str:
+    """auto (use the key if there is one) or off (never open it)."""
+    raw = os.environ.get(KEY_ENV, "").strip()
+    if not raw:
+        return "auto"
+    if raw not in ("auto", "off"):
+        raise ConfigError(f"{KEY_ENV}={raw!r} is not auto or off")
+    return raw
 
 
 def state_dir_from_env() -> pathlib.Path:
@@ -954,13 +1769,95 @@ def code_id() -> str:
     return h.hexdigest()[:8]
 
 
-USAGE = "usage: panel.py [--selftest | --clear | --power-off]"
+def keytest() -> int:
+    """Print what the key does for KEYTEST_S seconds. Touches no panel or GPIO."""
+    path = find_key_device(pathlib.Path(SYSFS_INPUT))
+    if path is None:
+        print("no pwr_button input device (is gpio_keys loaded?)", flush=True)
+        return EX_FAIL
+    try:
+        fd = open_key(path)
+    except OSError as e:
+        print(f"cannot open {path}: {e.strerror}", flush=True)
+        return EX_FAIL
+    g = Gestures()
+    end = boottime() + KEYTEST_S
+    print(f"{path}: press the key; listening for {KEYTEST_S} s", flush=True)
+    try:
+        while True:
+            now = boottime()
+            if now >= end:
+                break
+            deadline = g.next_deadline()
+            select.select([fd], [], [],
+                          max(0.0, min(end, deadline if deadline is not None else end)
+                              - now))
+            data = b""
+            try:
+                while True:
+                    chunk = os.read(fd, INPUT_EVENT.size * 64)
+                    if not chunk:
+                        break
+                    data += chunk
+            except BlockingIOError:
+                pass
+            except OSError as e:
+                if e.errno not in (errno.ENODEV, errno.EIO):
+                    raise
+                print(f"the key device went away ({e.strerror})", flush=True)
+                return EX_FAIL
+            for item in decode_events(data):
+                if isinstance(item, KeyReset):
+                    g.reset()
+                elif item.value == 1:
+                    if not g.down:
+                        print("press", flush=True)
+                    g.press(item.t)
+                elif not g.down:
+                    print("release with no press seen → ignored", flush=True)
+                else:
+                    dt, held = item.t - g.press_t, g.hold_emitted
+                    got = g.release(item.t)
+                    if got:
+                        verdict = got[0][0]
+                    elif held:
+                        verdict = "hold"
+                    elif dt < DEBOUNCE_S:
+                        verdict = "noise"
+                    else:
+                        verdict = "ignored"
+                    print(f"release after {dt:.2f} s → {verdict}", flush=True)
+            for kind, _ in g.poll(boottime()):
+                if kind == "hold":
+                    print("let go now", flush=True)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        os.close(fd)
+    return EX_OK
+
+
+def reset_refresh(state_dir: pathlib.Path) -> int:
+    """Clear the batch guard's verdict, so fast and partial refreshes resume."""
+    if not (state_dir / STATE_FILE).exists():
+        log.info("no state file in %s; quick refresh is not disabled", state_dir)
+        return EX_OK
+    s = load_state(state_dir)
+    if not save_state(state_dir, dataclasses.replace(s, quick_disabled=False)):
+        return EX_FAIL
+    log.info("quick refresh re-enabled")
+    return EX_OK
+
+
+USAGE = ("usage: panel.py [--selftest | --clear | --power-off | --keytest | "
+         "--reset-refresh]")
 
 
 def main(argv=None) -> int:
     args = sys.argv[1:] if argv is None else list(argv)
     mode = args[0] if args else "run"
-    if len(args) > 1 or mode not in ("run", "--selftest", "--clear", "--power-off"):
+    if len(args) > 1 or mode not in ("run", "--selftest", "--clear", "--power-off",
+                                     "--keytest", "--reset-refresh"):
         print(USAGE, file=sys.stderr)
         return EX_USAGE
 
@@ -979,6 +1876,12 @@ def main(argv=None) -> int:
             log.warning("power-off: %s", e)
         return EX_OK
 
+    if mode == "--keytest":
+        # Before the signals are blocked, so Ctrl-C ends it. It reads the key
+        # and nothing else: no panel, no GPIO, no state.
+        setup_logging()
+        return keytest()
+
     # Before anything else can take a signal: from here on, stops are only
     # ever collected by wait_for_signal().
     signal.pthread_sigmask(signal.SIG_BLOCK, WAIT_SIGNALS)
@@ -992,11 +1895,18 @@ def main(argv=None) -> int:
         pwr = pwr_pin_from_env()
         token = load_token(os.environ.get("CREDENTIALS_DIRECTORY")) \
             if mode == "run" else None
-        state_dir = state_dir_from_env() if mode in ("run", "--clear") else None
+        state_dir = state_dir_from_env() \
+            if mode in ("run", "--clear", "--reset-refresh") else None
+        # Read now, so a bad value stops the unit before the hardware is touched.
+        refresh_from_env()
+        idle_from_env()
+        key_from_env()
     except ConfigError as e:
         log.critical("%s", e)
         return EX_CONFIG
     fmt.token = token
+    if mode == "--reset-refresh":
+        return reset_refresh(state_dir)
 
     epd = None
     try:

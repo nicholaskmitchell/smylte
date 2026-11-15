@@ -73,6 +73,7 @@ class FakePanel:
         self.clock = clock
         self.fail = dict(fail or {})
         self.calls: list[tuple] = []
+        self.modes: list[str] = []
         self.phase = "idle"
         self.aborted_in = None
 
@@ -84,11 +85,15 @@ class FakePanel:
             raise self.fail[name]
         self.clock.t += self.COSTS.get(name, 0.0)
 
-    def init(self) -> None:
+    def init(self, mode: str = "full") -> None:
+        self.modes.append(mode)
         self._step("init")
 
     def display(self, frame: bytes) -> None:
         self._step("display", hashlib.sha256(frame).hexdigest())
+
+    def display_partial(self, old: bytes, new: bytes) -> None:
+        self._step("display", hashlib.sha256(new).hexdigest())
 
     def sleep(self) -> None:
         self._step("sleep")
@@ -212,6 +217,11 @@ def read_state_file(tmp_path) -> dict:
 
 
 def save(tmp_path, **kwargs) -> None:
+    # A complete record that names no full refresh is saved as the version 1
+    # client left it, every refresh full: its last refresh is its last full one.
+    if kwargs.get("complete"):
+        kwargs.setdefault("full_end_bt", kwargs.get("painted_end_bt"))
+        kwargs.setdefault("full_wall", kwargs.get("painted_wall"))
     assert P.save_state(tmp_path, P.State(**kwargs))
 
 
@@ -579,24 +589,33 @@ EARLY_BT = 1_000.0      # an uptime well under 23 h
 
 @pytest.mark.parametrize("state, now_bt, synced, expected", [
     (P.State(complete=False, attempt_start_bt=1.0), NOW_BT, True, False),
-    (P.State(complete=True, painted_end_bt=NOW_BT - 82800), NOW_BT, True, True),
-    (P.State(complete=True, painted_end_bt=NOW_BT - 82799), NOW_BT, True, False),
+    (P.State(complete=True, painted_end_bt=NOW_BT - 82800,
+             full_end_bt=NOW_BT - 82800), NOW_BT, True, True),
+    (P.State(complete=True, painted_end_bt=NOW_BT - 82799,
+             full_end_bt=NOW_BT - 82799), NOW_BT, True, False),
     # A paint time later than now is from an earlier boot, so at least `now`
     # has passed since it: 23 h of this boot's uptime is enough on its own.
-    (P.State(complete=True, painted_end_bt=NOW_BT + 5, painted_wall=None),
+    (P.State(complete=True, painted_end_bt=NOW_BT + 5, painted_wall=None,
+             full_end_bt=NOW_BT + 5, full_wall=None),
      NOW_BT, False, True),
-    (P.State(complete=True, painted_end_bt=82800 + 5, painted_wall=None),
+    (P.State(complete=True, painted_end_bt=82800 + 5, painted_wall=None,
+             full_end_bt=82800 + 5, full_wall=None),
      82800, False, True),
-    (P.State(complete=True, painted_end_bt=82799 + 5, painted_wall=None),
+    (P.State(complete=True, painted_end_bt=82799 + 5, painted_wall=None,
+             full_end_bt=82799 + 5, full_wall=None),
      82799, False, False),
     # Early in a boot, only the synced wall clock can tell.
     (P.State(complete=True, painted_end_bt=EARLY_BT + 5,
-             painted_wall=NOW_WALL - 82800), EARLY_BT, True, True),
+             painted_wall=NOW_WALL - 82800, full_end_bt=EARLY_BT + 5,
+             full_wall=NOW_WALL - 82800), EARLY_BT, True, True),
     (P.State(complete=True, painted_end_bt=EARLY_BT + 5,
-             painted_wall=NOW_WALL - 82800), EARLY_BT, False, False),
+             painted_wall=NOW_WALL - 82800, full_end_bt=EARLY_BT + 5,
+             full_wall=NOW_WALL - 82800), EARLY_BT, False, False),
     (P.State(complete=True, painted_end_bt=EARLY_BT + 5,
-             painted_wall=NOW_WALL - 82799), EARLY_BT, True, False),
-    (P.State(complete=True, painted_end_bt=EARLY_BT + 5, painted_wall=None),
+             painted_wall=NOW_WALL - 82799, full_end_bt=EARLY_BT + 5,
+             full_wall=NOW_WALL - 82799), EARLY_BT, True, False),
+    (P.State(complete=True, painted_end_bt=EARLY_BT + 5, painted_wall=None,
+             full_end_bt=EARLY_BT + 5, full_wall=None),
      EARLY_BT, True, False),
 ])
 def test_the_forced_due_table(state, now_bt, synced, expected):
@@ -605,14 +624,20 @@ def test_the_forced_due_table(state, now_bt, synced, expected):
 
 @pytest.mark.parametrize("state, now_bt, synced, expected", [
     (P.State(complete=False, attempt_start_bt=1.0), 2000.0, True, None),
-    (P.State(complete=True, painted_end_bt=1000.0), 2000.0, False, 83_800.0),
-    (P.State(complete=True, painted_end_bt=1000.0), 83_800.0, False, None),
-    (P.State(complete=True, painted_end_bt=500_000.0), 1000.0, False, 82_800.0),
-    (P.State(complete=True, painted_end_bt=1000.0, painted_wall=NOW_WALL - 82_000),
-     2000.0, True, 2800.0),
-    (P.State(complete=True, painted_end_bt=1000.0, painted_wall=NOW_WALL - 82_000),
+    (P.State(complete=True, painted_end_bt=1000.0, full_end_bt=1000.0),
      2000.0, False, 83_800.0),
-    (P.State(complete=True, painted_end_bt=1000.0, painted_wall=NOW_WALL - 90_000),
+    (P.State(complete=True, painted_end_bt=1000.0, full_end_bt=1000.0),
+     83_800.0, False, None),
+    (P.State(complete=True, painted_end_bt=500_000.0, full_end_bt=500_000.0),
+     1000.0, False, 82_800.0),
+    (P.State(complete=True, painted_end_bt=1000.0, painted_wall=NOW_WALL - 82_000,
+             full_end_bt=1000.0, full_wall=NOW_WALL - 82_000),
+     2000.0, True, 2800.0),
+    (P.State(complete=True, painted_end_bt=1000.0, painted_wall=NOW_WALL - 82_000,
+             full_end_bt=1000.0, full_wall=NOW_WALL - 82_000),
+     2000.0, False, 83_800.0),
+    (P.State(complete=True, painted_end_bt=1000.0, painted_wall=NOW_WALL - 90_000,
+             full_end_bt=1000.0, full_wall=NOW_WALL - 90_000),
      2000.0, True, None),
 ], ids=["nothing-painted", "boot-bound", "boot-overdue", "earlier-boot",
         "wall-bound-first", "wall-ignored-unsynced", "wall-overdue"])
@@ -1251,7 +1276,8 @@ def test_root_is_refused(valid_env, monkeypatch, no_driver, guarded_main):
 
 
 @pytest.mark.parametrize("pin_env, expected", [
-    (None, None),
+    (None, 18),         # the Driver HAT's power switch, the default
+    ("none", None),
     ("18", 18),
     ("8", None),        # reserved (CE0): ignored, never fatal
 ])
@@ -1410,7 +1436,7 @@ def test_load_token_refuses_what_is_not_a_token_without_echoing_it(
 
 
 @pytest.mark.parametrize("value, expected", [
-    (None, None), ("", None), ("none", None), ("18", 18),
+    (None, 18), ("", 18), ("none", None), ("18", 18),
     ("17", P.ConfigError), ("8", P.ConfigError), ("24", P.ConfigError),
     ("abc", P.ConfigError), ("40", P.ConfigError), ("1", P.ConfigError),
 ])
