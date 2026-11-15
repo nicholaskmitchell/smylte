@@ -452,14 +452,17 @@ def force_poll_at(s: State, now_bt: float, now_wall: float,
                   synced: bool) -> float | None:
     """The CLOCK_BOOTTIME by which to fetch so the 23-hour repaint is on time.
 
-    None when nothing is painted, or when the repaint is already due: then the
-    next fetch is forced anyway, and pulling it earlier would only defeat the
-    retry backoff. The boot-time bound alone is late after a reboot (it cannot
-    see the time the box was down), so the wall clock bounds it too once it is
-    synced, and a paint from an earlier boot is due by 23 h of this boot's
-    uptime at the latest.
+    None when nothing is painted, or when the repaint is already due by any of
+    forced_due()'s bounds: then the next fetch is forced whenever it comes, and
+    pulling it earlier would only defeat the retry backoff. The boot-time bound
+    alone is late after a reboot (it cannot see the time the box was down), so
+    the wall clock bounds it too once it is synced. run() records a paint from
+    an earlier boot as boot time 0, so without a wall clock it is due by 23 h
+    of this boot's uptime at the latest.
     """
     if not s.complete or s.painted_end_bt is None:
+        return None
+    if forced_due(s, now_bt, now_wall, synced):
         return None
     at = []
     if s.painted_end_bt <= now_bt:
@@ -698,10 +701,21 @@ def run(d: Deps) -> int:
     """The service loop. Returns an exit code; never returns mid-refresh."""
     state = load_state(d.state_dir)
     start = d.boottime()
+    if state.complete and state.painted_end_bt is not None \
+            and state.painted_end_bt > start:
+        # A paint time later than this process's start is from an earlier
+        # boot, so at least this boot's uptime has passed since it. Record it
+        # as boot time 0, which stays a true lower bound as uptime grows and
+        # across a restart later in this boot. (Compared each time instead,
+        # the paint would pass for this boot's once uptime overtook it.)
+        state = dataclasses.replace(state, painted_end_bt=0.0)
+        save_state(d.state_dir, state)
     floor_at = floor_ok_at(state, start)
     next_poll = start
     problems = _Problems(d.notify)
     gate_logged = False
+    healthy = False         # the last fetch was a 304, a dedupe or a paint
+    cap_synced = False      # whether the 23-hour cap last saw a synced clock
     if floor_at > start:
         log.info("first refresh allowed in %d s (the 180 s floor is kept across "
                  "restarts)", math.ceil(floor_at - start))
@@ -725,11 +739,20 @@ def run(d: Deps) -> int:
                 log.info("repaint requested; it happens at the next allowed time")
                 state = dataclasses.replace(state, etag=None, glass_sha256=None)
                 next_poll = d.boottime()
+            elif healthy and not cap_synced and d.synced():
+                # The clock synced after the next fetch was scheduled without
+                # it. Ask now, once, so the wall-clock bound on the 23-hour
+                # repaint applies, or a repaint it says is overdue happens.
+                # Never after a failure: that would cut its backoff short.
+                log.info("clock synced; checking the 23-hour repaint against it")
+                cap_synced = True
+                next_poll = d.boottime()
             continue
 
         forced = forced_due(state, now, d.walltime(), d.synced())
         result = d.fetch(None if forced else state.etag)
         now = d.boottime()
+        healthy = False
 
         if isinstance(result, Frame):
             sha = hashlib.sha256(result.body).hexdigest()
@@ -741,6 +764,7 @@ def run(d: Deps) -> int:
                     save_state(d.state_dir, state)
                 problems.ok(_showing(state))
                 next_poll = now + result.refresh_s
+                healthy = True
             else:
                 if _drain(d) is not None:
                     log.info("stopping before the refresh it would have started")
@@ -761,18 +785,21 @@ def run(d: Deps) -> int:
                                      exc_info=True)
                     return EX_FAIL
                 if done is None:
-                    log.error("could not record the refresh before starting it, "
-                              "so it was not started (the floor would not "
-                              "survive a crash); retrying in %d s", ERROR_RETRY_S)
+                    problems.set("state", "could not record the refresh before "
+                                          "starting it, so it was not started "
+                                          "(the floor would not survive a "
+                                          f"crash); retrying every {ERROR_RETRY_S} s")
                     next_poll = now + ERROR_RETRY_S
                     continue
                 state = done
                 floor_at = end + MIN_REFRESH_S
                 next_poll = end + result.refresh_s
                 problems.ok(_showing(state))
+                healthy = True
         elif isinstance(result, NotModified):
             problems.ok(_showing(state))
             next_poll = now + result.refresh_s
+            healthy = True
         elif isinstance(result, Gone):
             problems.set("gone", "the server does not know this display (404): "
                                  "token rotated, or display disabled or deleted "
@@ -796,7 +823,8 @@ def run(d: Deps) -> int:
         # Keep the 23-hour repaint on time even if the server advises 24 h,
         # and across a reboot. The clock is read again: after a paint, `now`
         # (taken before it) is earlier than painted_end_bt.
-        force_at = force_poll_at(state, d.boottime(), d.walltime(), d.synced())
+        cap_synced = d.synced()
+        force_at = force_poll_at(state, d.boottime(), d.walltime(), cap_synced)
         if force_at is not None:
             next_poll = min(next_poll, force_at)
 

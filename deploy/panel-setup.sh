@@ -274,6 +274,9 @@ case "$MODE" in
     stop_service
     rc=0; run_oneoff "$MODE" || rc=$?
     if [ "$MODE" = --clear ]; then
+      # Stopped on purpose, so it should read "inactive" even if it had failed
+      # before the clear: --rotate-token then leaves a stored panel stopped.
+      systemctl reset-failed "$UNIT_NAME" 2>/dev/null || true
       if [ "$rc" -eq 0 ]; then echo "  ✓ cleared to white"; else
         echo "  ✗ the clear failed (above); the glass may still show a frame"; fi
       echo "  The service is stopped and the panel is unpowered. It starts again at boot,"
