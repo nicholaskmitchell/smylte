@@ -1360,8 +1360,9 @@ def render_screen(
     as `render_frame(fmt="raw")`. Laid out on the canvas a reader sees (the panel
     transposed at a quarter turn) and rotated at the end, like a frame: line 0 is
     a heading, line 1 under it, and an optional line 2 smaller still, all centred
-    horizontally with the block centred vertically. Each line is shortened with an
-    ellipsis rather than overrunning the panel.
+    horizontally with the block centred vertically. The type is sized by the narrow
+    side of the layout; the heading steps down in size before it is shortened
+    with an ellipsis, and the lines under it are wrapped rather than cut.
     """
     if rotation not in (0, 90, 180, 270):
         raise ValueError("rotation must be 0, 90, 180 or 270")
@@ -1371,21 +1372,42 @@ def render_screen(
             "render may cover")
     canvas = (height, width) if rotation in (90, 270) else (width, height)
     layout_w, layout_h = canvas
-    scale = _scale(layout_h)
+    # By the narrow side as well as the height: at a quarter turn the layout is
+    # 480 wide and 800 high, and a scale taken from the height alone (1.67)
+    # draws type the width cannot hold.
+    scale = min(_scale(layout_h), _scale(layout_w * 480 // 800))
     pad = int(20 * scale)
     gap = round(24 * scale)
     img = Image.new("L", canvas, 255)
     draw = ImageDraw.Draw(img)
-    fonts = (_font("serif", round(96 * scale)),
-             _font("sans", round(30 * scale)),
-             _font("sans", round(22 * scale)))
+    room = layout_w - 2 * pad
+    sizes = (round(96 * scale), round(30 * scale), round(22 * scale))
     placed = []
-    for line, font in zip(lines, fonts):
-        shown = _fit(draw, line, font, layout_w - 2 * pad)
+
+    def place(shown: str, font) -> None:
         # The ink box, so the block is centred on what is drawn rather than on
         # the font's line height.
         left, top, right, bottom = draw.textbbox((0, 0), shown, font=font)
         placed.append((shown, font, right - left, bottom - top, left, top))
+
+    for index, line in enumerate(lines[:3]):
+        if index == 0:
+            # The heading is made smaller before it is cut, down to the size of
+            # the line under it; `_fit` is the last resort below that.
+            size = sizes[0]
+            while (_text_width(draw, line, _font("serif", size)) > room
+                   and size > sizes[1]):
+                size -= 2
+            font = _font("serif", size)
+            place(_fit(draw, line, font, room), font)
+        else:
+            # The instructions are sentences: wrapped, not cut, so the cancel
+            # and confirm wording and the wait-before-unplugging warning
+            # survive a narrow layout.
+            font = _font("sans", sizes[index])
+            rows, _ = _wrap(draw, line, font, room, 3)
+            for row in rows:
+                place(row, font)
     block = (sum(p[3] for p in placed) + gap * max(0, len(placed) - 1))
     y = (layout_h - block) // 2
     for shown, font, tw, th, left, top in placed:

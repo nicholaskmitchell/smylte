@@ -2498,12 +2498,33 @@ def test_tabs_are_not_drawn_at_a_quarter_turn(api):
     assert asked.content == _bin(api, upright, "&mode=now&rotate=270").content
 
 
-def test_tabs_none_is_the_render_it_always_was():
-    for mode in ("calendar", "habits", "now"):
-        frame = _frame(mode)
-        for kw in ({"fmt": "raw"}, {"fmt": "png"}, {"fmt": "raw", "rotation": 90}):
-            assert R.render_frame(frame, width=800, height=480, tabs=None, **kw) \
-                == R.render_frame(frame, width=800, height=480, **kw)
+# The composition `render_frame` had before the `tabs` parameter existed (as at
+# 7a33ddc), rebuilt here from the renderers it called. A call with `tabs=None`
+# compared with a call without the argument would be one call compared with
+# itself; this is an independent path, and unlike a golden hash it does not move
+# when a Pillow or FreeType release changes how a glyph is rasterised.
+def _pre_strip_raw(frame, *, width, height, rotation):
+    from PIL import Image
+    canvas = (height, width) if rotation in (90, 270) else (width, height)
+    img = Image.new("L", canvas, 255)
+    colors = {k: (0 if v == (0, 0, 0) else 255) for k, v in R._EINK.items()}
+    mode = frame["display"]["mode"]
+    draw = {"habits": R._render_habits, "now": R._render_now}.get(mode, R._render_calendar)
+    draw(img, frame, eink=True, colors=colors)
+    if rotation:
+        img = img.rotate(-rotation, expand=True)
+    return img.convert("1", dither=Image.Dither.NONE).tobytes()
+
+
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+@pytest.mark.parametrize("mode", ["calendar", "habits", "now"])
+def test_tabs_none_is_the_render_it_always_was(mode, rotation):
+    body, _ = R.render_frame(_frame(mode), width=800, height=480, fmt="raw",
+                             rotation=rotation, tabs=None)
+    assert body == _pre_strip_raw(_frame(mode), width=800, height=480, rotation=rotation)
+    # And leaving the parameter out is the same call.
+    assert R.render_frame(_frame(mode), width=800, height=480, fmt="raw",
+                          rotation=rotation)[0] == body
 
 
 def test_the_strip_helpers_and_their_refusals():
@@ -2556,6 +2577,31 @@ def test_a_screen_is_a_raw_framebuffer_with_no_view_headers(api, kind):
     # The two screens are different pictures.
     other = "off" if kind == "confirm" else "confirm"
     assert _bin(api, token, f"&screen={other}").content != de.content
+
+
+def test_a_screen_advises_at_least_the_eink_floor_on_a_colour_display(api):
+    # The colour palette's own floor is 60 s, so only the screen branch's
+    # max(..., eink floor) can make this 180.
+    made = api.post("/api/displays", json={
+        "name": "Tablet", "panel_width": 800, "panel_height": 480,
+        "refresh_seconds": 60}).json()
+    assert made["palette"] == "color" and made["refresh_seconds"] == 60
+    token = made["token"]
+    assert _bin(api, token, "&screen=confirm").headers[
+        "x-display-refresh-seconds"] == "180"
+
+
+def test_a_screen_fetch_stamps_last_seen(api):
+    token = api.post("/api/displays", json={
+        "name": "Hallway", "panel_width": 800, "panel_height": 480}).json()["token"]
+
+    def last_seen():
+        return next(d for d in api.get("/api/displays").json()
+                    if d["token"] == token)["last_seen_at"]
+
+    assert last_seen() is None
+    assert _bin(api, token, "&screen=off").status_code == 200
+    assert last_seen() is not None
 
 
 def test_a_screen_follows_the_stored_rotation_and_the_asked_one(api):
@@ -2640,6 +2686,36 @@ def test_render_screen_is_one_bit_at_the_panel_size_and_refuses_what_it_cannot()
         R.render_screen(lines, width=800, height=480, rotation=45)
     with pytest.raises(ValueError):
         R.render_screen(lines, width=4000, height=4000)
+
+
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+@pytest.mark.parametrize("language", ["en", "de"])
+@pytest.mark.parametrize("kind", ["confirm", "off"])
+def test_no_screen_line_is_shortened_at_the_stock_panel_size(
+        monkeypatch, kind, language, rotation):
+    # The prompt's instructions (how to cancel, to wait before unplugging) must
+    # all be on the glass, at a quarter turn as well as upright.
+    cut = []
+    real_fit, real_wrap = R._fit, R._wrap
+
+    def fit(draw, s, font, width):
+        shown = real_fit(draw, s, font, width)
+        if shown != s:
+            cut.append((s, shown))
+        return shown
+
+    def wrap(draw, s, font, width, lines):
+        rows, dropped = real_wrap(draw, s, font, width, lines)
+        if dropped:
+            cut.append((s, rows))
+        return rows, dropped
+
+    monkeypatch.setattr(R, "_fit", fit)
+    monkeypatch.setattr(R, "_wrap", wrap)
+    body, _ = R.render_screen(F.screen_lines(kind, language),
+                              width=800, height=480, rotation=rotation)
+    assert len(body) == 48_000
+    assert cut == []
 
 
 def test_panel_too_small_for_a_switchable_display_is_judged_without_the_strip(api):
