@@ -253,6 +253,45 @@ class RecordingRunner(P._Runner):
         return end
 
 
+class FakeUpdater:
+    """The root updater, as the client sees it: the request it is sent, and
+    the result line it leaves.
+
+    `script(now, requests)` is the updater: from the fake time and the
+    requests so far, as (t, rid), it gives what the result file holds, an
+    UpdateResult, a raw line (str) or None for no file. Each read writes that
+    to a real file in the updater's own format and reads it back with the
+    client's read_update_result(), so every timeline goes through the real
+    reader.
+    """
+
+    def __init__(self, clock: Clock, path, script=None, request="ok"):
+        self.clock = clock
+        self.path = path
+        self.script = script or (lambda now, requests: None)
+        self.request = request
+        self.requests: list[tuple[float, str]] = []
+        self.cleared: list[float] = []
+        self.reads: list[float] = []
+
+    def request_update(self, rid):
+        self.requests.append((self.clock.t, rid))
+        return self.request
+
+    def clear_update(self):
+        self.cleared.append(self.clock.t)
+
+    def update_result(self):
+        self.reads.append(self.clock.t)
+        got = self.script(self.clock.t, list(self.requests))
+        if got is None:
+            self.path.unlink(missing_ok=True)
+        else:
+            self.path.write_text(got if isinstance(got, str)
+                                 else f"{got.rid} {got.at:.3f} {got.state}\n")
+        return P.read_update_result(str(self.path))
+
+
 class Harness:
     """P.Deps on fakes: a scripted fetch and Events that advance the clock.
 
@@ -260,12 +299,13 @@ class Harness:
     nothing of views. A view or screen fetch to it is refused as an old server
     would be. `server(n, sent, clock, mode, tabs, screen)` answers every fetch.
     The key is off unless a test says otherwise, so the routine loop runs as
-    it did before the key existed.
+    it did before the key existed. `update` is the FakeUpdater's script, and
+    `update_request` what its request answers.
     """
 
     def __init__(self, tmp_path, clock: Clock, responder=None, *, server=None, panel=None,
                  stop_after=None, signals=(), keys=(), key_open=False, poweroff="ok",
-                 path_unit=True, **deps):
+                 path_unit=True, update=None, update_request="ok", **deps):
         self.clock = clock
         self.responder = responder
         self.server = server
@@ -286,13 +326,17 @@ class Harness:
         self.keys = list(keys)
         self.runner = None
         self.events = FakeEvents(self, keys, key_open)
+        self.updater = FakeUpdater(clock, tmp_path / "update-result", update, update_request)
         deps.setdefault("key", "off")
         self.deps = P.Deps(state_dir=tmp_path, panel=self.panel, epd=E,
                            fetch=self.fetch, events=self.events,
                            boottime=clock.boottime, walltime=clock.walltime,
                            synced=clock.synced_fn, notify=self.notify,
                            request_poweroff=self.request_poweroff,
-                           clear_poweroff=lambda: self.cleared.append(clock.t), **deps)
+                           clear_poweroff=lambda: self.cleared.append(clock.t),
+                           request_update=self.updater.request_update,
+                           clear_update=self.updater.clear_update,
+                           update_result=self.updater.update_result, **deps)
 
     @property
     def fetches(self) -> list[tuple[float, str | None]]:
@@ -365,10 +409,16 @@ def etag(n: int) -> str:
     return '"%032x"' % n
 
 
-# The server's two static screens, as the desk key's tests cache and serve them.
+# The server's static screens, one distinct frame per kind, as the desk key's
+# tests cache and serve them.
 CONFIRM = bytes([0xC1]) * P.BUF_BYTES
 OFF = bytes([0xC2]) * P.BUF_BYTES
-SCREEN_FRAMES = (CONFIRM, OFF)
+CONFIRM_UPDATE, UPDATE_PROMPT, UPDATING, UPDATED, UP_TO_DATE, UPDATE_FAILED = (
+    bytes([0xD0 + i]) * P.BUF_BYTES for i in range(1, 7))
+SCREEN_BODIES = dict(zip(P.SCREENS, (CONFIRM, OFF, CONFIRM_UPDATE, UPDATE_PROMPT, UPDATING,
+                                     UPDATED, UP_TO_DATE, UPDATE_FAILED), strict=True))
+SCREEN_FRAMES = tuple(SCREEN_BODIES.values())
+assert len(set(SCREEN_FRAMES)) == len(P.SCREENS)
 
 
 def sha(data: bytes) -> str:
@@ -1768,7 +1818,7 @@ def what(body: bytes | None) -> str | None:
     """What a frame shows, as the timelines name it."""
     if body is None:
         return None
-    names = {CONFIRM: "confirm", OFF: "off", P.WHITE: "white"}
+    names = {**{body: kind for kind, body in SCREEN_BODIES.items()}, P.WHITE: "white"}
     if body in names:
         return names[body]
     if 0x60 <= body[0] < 0x70:
@@ -1779,7 +1829,7 @@ def what(body: bytes | None) -> str | None:
 
 class Server:
     """smylted for the desk key: three views, each a page and its tab strip;
-    the two screens; and the stored view for a legacy request."""
+    the screens; and the stored view for a legacy request."""
 
     def __init__(self, *, switchable=True, old=False, render_s=0.4, refresh_s=3600,
                  rotation=0, refuse_screens=()):
@@ -1798,7 +1848,9 @@ class Server:
             clock.t += 0.05
             if self.old or screen in self.refuse_screens:
                 return P.Refused("screen", 200)
-            body = CONFIRM if screen == "confirm" else OFF
+            if screen not in SCREEN_BODIES:
+                return P.Refused("HTTP 422", 422)
+            body = SCREEN_BODIES[screen]
             return P.Frame(body, tag(body), self.refresh_s)
         clock.t += self.render_s
         strip = None
@@ -1846,7 +1898,7 @@ def desk(tmp_path, *, keys=(), until=None, start=20.0, clock=None, screens=SCREE
          state=None, server=None, signals=(), **kw) -> Harness:
     """A Harness for the desk key: KEY=auto, a Server, the screens on disk."""
     clock = clock or Clock(start)
-    for kind, body in zip(P.SCREENS, (CONFIRM, OFF)):
+    for kind, body in SCREEN_BODIES.items():
         if body in screens:
             assert P.save_screen(tmp_path, kind, body)
     if state is not None:
@@ -1880,16 +1932,32 @@ def checks(*hs: Harness) -> None:
         first = next((p for p in h.painted if p.purpose in ("routine", "page")), None)
         if first is not None and first.exempt:
             allowed.add(id(first))
+        # So is the first view paint after a notice left with nothing to
+        # repaint: it stands in for that leave's own paint (F5).
+        for i, n in enumerate(h.painted):
+            if n.purpose == "notice":
+                after = next((p for p in h.painted[i + 1:]
+                              if p.purpose in ("routine", "page")), None)
+                if after is not None and after.exempt:
+                    allowed.add(id(after))
     for h in hs:
         assert not h.stale, f"a screen on the glass while Ui browses: {h.stale}"
         prompts = [p for p in h.painted if p.purpose == "prompt"]
         presses = [t for t, v in h.keys if v == 1]
         for t_req, _ in h.poweroffs:
-            before = [p for p in prompts if p.t1 <= t_req]
+            before = [p for p in prompts if p.t1 <= t_req and p.frame in (CONFIRM, CONFIRM_UPDATE)]
             assert before, f"a power-off at {t_req} with no prompt drawn"
             shown = before[-1].t1
             assert any(shown <= t <= shown + P.PROMPT_S and t <= t_req for t in presses), \
                 f"a power-off at {t_req} that no tap during the prompt confirmed"
+        for t_req, rid in h.updater.requests:
+            before = [p for p in prompts if p.t1 <= t_req and p.frame == UPDATE_PROMPT]
+            assert before, f"an update request at {t_req} with no Update? drawn"
+            shown = before[-1].t1
+            assert any(shown <= t <= shown + P.PROMPT_S and t <= t_req for t in presses), \
+                f"an update request at {t_req} that no tap during Update? confirmed"
+            assert any(p.purpose == "update" and f"{p.t1:.3f}" == rid for p in h.painted), \
+                f"an update request {rid} that is not the end of an Updating paint"
         if h.stop_seen is not None:
             after = [p for p in h.painted if p.t0 >= h.stop_seen]
             assert len(after) <= 1, f"{len(after)} paints after the stop at {h.stop_seen}"
@@ -2054,8 +2122,8 @@ def test_t4d_no_confirm_screen_means_no_prompt(tmp_path):
     assert h.run() == 0
     assert [p.purpose for p in h.painted] == ["routine"]
     assert any("no confirm screen yet" in s for s in h.statuses())
-    # ...and the background fetches both screens, for next time.
-    assert [f.screen for f in h.requests if f.screen] == ["confirm", "off"]
+    # ...and the background fetches every screen, for next time.
+    assert [f.screen for f in h.requests if f.screen] == list(P.SCREENS)
     assert P.load_screen(tmp_path, "confirm") == CONFIRM
     checks(h)
 
@@ -2879,8 +2947,8 @@ def test_background_fetches_are_one_at_a_time_apart_and_never_paint(tmp_path):
     h = desk(tmp_path, screens=(), until=260)
     assert h.run() == 0
     bg = h.requests[1:]
-    assert [(f.screen, f.mode) for f in bg] == [("confirm", None), ("off", None),
-                                                (None, "now"), (None, "calendar")]
+    assert [(f.screen, f.mode) for f in bg] == [(k, None) for k in P.SCREENS] + [
+        (None, "now"), (None, "calendar")]
     ends = [f.t + (0.05 if f.screen else 0.4) for f in h.requests]
     assert all(f.t - end >= P.BG_GAP_S for f, end in zip(bg, ends))
     assert [p.purpose for p in h.painted] == ["routine"]
@@ -3008,7 +3076,7 @@ def test_the_real_events_find_a_key_that_appears_late(tmp_path, monkeypatch, cap
 
     monkeypatch.setattr(P, "select", types.SimpleNamespace(select=select))
     monkeypatch.setattr(P, "_many_keys_logged", False)
-    for kind, body in zip(P.SCREENS, SCREEN_FRAMES):
+    for kind, body in SCREEN_BODIES.items():
         P.save_screen(tmp_path, kind, body)
     h = Harness(tmp_path, clock, server=Server(), key="auto")
     real = P.Events(collector, sysfs_root=sysfs, open_key=open_key,
@@ -3146,4 +3214,375 @@ def test_a_key_page_that_finds_desk_key_off_falls_back_at_once_inside_a_429(tmp_
     page = next(f for f in fetched(h, 399) if f.mode == "now")
     legacy = [f for f in fetched(h, page.t) if f.mode is None and f.screen is None]
     assert legacy and legacy[0].t - page.t < 2.0, fetched(h, 380)
+    checks(h)
+
+
+# ── updating from the key ────────────────────────────────────────────────────
+#
+# Design §3 and §6, on the real run(): the desk as above, the update units
+# installed (update_present) and a FakeUpdater for the root updater, whose
+# result goes through a real file and the client's own reader. A hold at 400
+# draws "Shut down?" with the update hint (401.0–404.2), a second hold at 405
+# draws "Update?" (406.0–409.2) and a tap at 410 draws Updating… and sends
+# the request (about 413.3). Each test ends with checks(), which also holds
+# every update request to a tap on a drawn "Update?" and to the end of an
+# Updating paint.
+
+def update_keys(t: float) -> list[tuple[float, int]]:
+    """Hold, hold again once "Shut down?" is drawn, tap once "Update?" is."""
+    return hold(t) + hold(t + 5) + tap(t + 10)
+
+
+def updater(running_after: float = 3.0, final_after: float = 40.0, final="updated"):
+    """An updater that writes running a little after each request, then its
+    outcome (`final`, or one per request). Like the real file, the result is
+    the latest one written, so an earlier request's outcome stays until the
+    next request's updater writes."""
+    def script(now, requests):
+        out = None
+        for i, (t, rid) in enumerate(requests):
+            outcome = final if isinstance(final, str) else final[i]
+            if now >= t + final_after:
+                out = P.UpdateResult(rid, t + final_after, outcome)
+            elif now >= t + running_after:
+                out = P.UpdateResult(rid, t + running_after, "running")
+        return out
+    return script
+
+
+def after(h: Harness, t: float = 300.0) -> list[tuple[str, str | None]]:
+    return [(p.purpose, what(p.frame)) for p in h.painted if p.t0 > t]
+
+
+@pytest.mark.parametrize("outcome", P.NOTICES)
+def test_u1_an_update_draws_updating_then_its_outcome_then_the_view(tmp_path, outcome):
+    """§1: the two prompts, Updating… with the request sent at its end, the
+    outcome once the updater writes it, and after NOTICE_S the view from
+    before the first prompt. A tap or a hold during Updating… and a hold
+    during the notice do nothing."""
+    keys = update_keys(400) + tap(420) + hold(425) + hold(470)
+    h = desk(tmp_path, keys=keys, until=600, update_present=True,
+             update=updater(final=outcome))
+    assert h.run() == 0
+    assert after(h) == [("prompt", "confirm-update"), ("prompt", "update"),
+                        ("update", "updating"), ("notice", outcome), ("leave", "view:habits")]
+    updating, notice, leave = h.painted[3:6]
+    [(t_req, rid)] = h.updater.requests
+    assert rid == f"{updating.t1:.3f}" and t_req == pytest.approx(updating.t1)
+    assert t_req + 40 <= notice.t0 <= t_req + 40 + P.UPDATE_POLL_S + 0.01
+    assert leave.t0 == pytest.approx(notice.t1 + P.NOTICE_S, abs=0.01)
+    assert leave.frame == view_frame("habits")
+    assert h.runner.ui.mode == "browse"
+    statuses = h.statuses()
+    assert any(s.startswith("STATUS=updating (asked for with the key)") for s in statuses)
+    if outcome == "update-failed":
+        assert P.FAILED_NOTE in h.runner.notes
+        assert "update failed" in statuses[-1]
+    else:
+        assert P.FAILED_NOTE not in h.runner.notes
+        assert statuses[-1].startswith("STATUS=showing")
+    checks(h)
+
+
+@pytest.mark.parametrize("press", [402.0, 403.5])
+def test_u2_a_second_hold_pressed_while_shut_down_is_drawn_asks_update(tmp_path, press):
+    """§3.3: its press came after the first hold's; the loop takes the hold
+    only once the draw is over, whether it was let go during the draw or not."""
+    h = desk(tmp_path, keys=hold(400) + hold(press) + tap(415), until=480,
+             update_present=True, update=updater())
+    assert h.run() == 0
+    assert after(h)[:3] == [("prompt", "confirm-update"), ("prompt", "update"),
+                            ("update", "updating")]
+    first, second = h.painted[1:3]
+    assert first.t0 < press < first.t1
+    assert len(h.updater.requests) == 1
+    checks(h)
+
+
+def test_u3_a_tap_pressed_before_update_was_drawn_is_ignored(tmp_path):
+    h = desk(tmp_path, keys=hold(400) + hold(405) + tap(407.0), until=440,
+             update_present=True, update=updater())
+    assert h.run() == 0
+    assert after(h) == [("prompt", "confirm-update"), ("prompt", "update"),
+                        ("leave", "view:habits")]
+    prompt, leave = h.painted[2:4]
+    assert leave.t0 == pytest.approx(prompt.t1 + P.PROMPT_S, abs=0.01)
+    assert h.updater.requests == [] and h.poweroffs == []
+    checks(h)
+
+
+@pytest.mark.parametrize("why", ["tokens", "units", "unknown", "screens"])
+def test_u4_without_the_offer_a_hold_asks_plain_shut_down_and_a_second_does_nothing(
+        tmp_path, caplog, why):
+    """§3.4: the update is offered only with holds, the units, every update
+    screen cached and UPDATE_TOKENS. Otherwise the hold draws the plain
+    "Shut down?", which a second hold does nothing to."""
+    kw = dict(update_present={"units": False, "unknown": None}.get(why, True),
+              update=updater())
+    screens = SCREEN_FRAMES
+    if why == "screens":
+        screens = (CONFIRM, OFF, UPDATE_PROMPT, UPDATING)
+        kw["server"] = Server(refuse_screens=set(P.UPDATE_SCREENS))
+    h = desk(tmp_path, keys=hold(400) + hold(405) + hold(430), screens=screens,
+             until=480, **kw)
+    if why == "tokens":
+        h.at(390, set_tokens(h, P.UPDATE_TOKENS - 1))
+    with caplog.at_level(logging.INFO, logger="smylte-panel"):
+        assert h.run() == 0
+    assert after(h) == [("prompt", "confirm"), ("leave", "view:habits"),
+                        ("prompt", "confirm"), ("leave", "view:habits")]
+    assert h.updater.requests == [] and h.poweroffs == []
+    said = [m for m in caplog.messages if "the update is not offered yet" in m]
+    assert len(said) == (why == "screens")
+    assert any("the key cannot update: the update units are not installed" in s
+               for s in h.statuses()) == (why == "units")
+    checks(h)
+
+
+@pytest.mark.parametrize("tokens", [2, 3, P.KEY_BURST])
+def test_u5_the_update_is_offered_only_with_its_three_tokens_and_takes_them(tmp_path,
+                                                                           tokens):
+    """The budget: "Shut down?", "Update?" and Updating… cost three tokens,
+    taken at the two holds. With fewer the hold draws plain "Shut down?", and
+    the tap then shuts down, as it does on either."""
+    h = desk(tmp_path, keys=update_keys(400), until=600, update_present=True,
+             update=updater())
+    h.at(390, set_tokens(h, tokens))
+    left = []
+    h.at(409.5, lambda: left.append(h.runner.bucket.tokens))
+    assert h.run() == 0
+    if tokens < 3:
+        assert after(h) == [("prompt", "confirm"), ("off", "off")]
+        assert len(h.poweroffs) == 1 and h.updater.requests == []
+        assert left == [tokens - 1]
+    else:
+        assert after(h)[:4] == [("prompt", "confirm-update"), ("prompt", "update"),
+                                ("update", "updating"), ("notice", "updated")]
+        assert len(h.updater.requests) == 1 and h.poweroffs == []
+        assert left == [tokens - 3]
+    checks(h)
+
+
+def test_u6_a_second_update_in_the_same_process_waits_for_its_own_result(tmp_path):
+    """F1: the first update's outcome is still in the result file when the
+    second is asked for. It does not answer the second's wait: only the
+    second request's own result does."""
+    keys = update_keys(400) + tap(460) + update_keys(700)
+    h = desk(tmp_path, keys=keys, until=900, update_present=True,
+             update=updater(final=["up-to-date", "updated"]))
+    assert h.run() == 0
+    assert after(h) == [
+        ("prompt", "confirm-update"), ("prompt", "update"), ("update", "updating"),
+        ("notice", "up-to-date"), ("leave", "view:habits"),
+        ("prompt", "confirm-update"), ("prompt", "update"), ("update", "updating"),
+        ("notice", "updated"), ("leave", "view:habits")]
+    (_, rid1), (t2, rid2) = h.updater.requests
+    assert rid1 != rid2
+    [second] = [p for p in h.painted if p.purpose == "notice" and p.t0 > t2]
+    assert t2 + 40 <= second.t0 <= t2 + 40 + P.UPDATE_POLL_S + 0.01
+    checks(h)
+
+
+@pytest.mark.parametrize("stop_at", [410.12, 411.0])
+def test_u7_a_stop_as_the_update_is_confirmed_or_drawn_still_draws_and_requests_it(
+        tmp_path, stop_at):
+    """§3.4: a stop with the Update queued or being drawn lets Updating… be
+    drawn and the request be sent, and then ends the process with EX_OK. The
+    new process takes the wait over (§3.5)."""
+    h = desk(tmp_path, keys=update_keys(400), signals=[(stop_at, signal.SIGTERM)],
+             update_present=True, update=updater())
+    assert h.run() == 0
+    assert after(h) == [("prompt", "confirm-update"), ("prompt", "update"),
+                        ("update", "updating")]
+    [(t_req, _)] = h.updater.requests
+    assert h.clock.t == pytest.approx(t_req, abs=0.01)
+    assert h.runner.ui.mode == "updating"
+    checks(h)
+
+
+def test_u8_a_request_that_cannot_be_sent_shows_update_failed_at_once(tmp_path):
+    h = desk(tmp_path, keys=update_keys(400), until=600, update_present=True,
+             update=updater(), update_request="failed: no run directory")
+    assert h.run() == 0
+    assert after(h) == [("prompt", "confirm-update"), ("prompt", "update"),
+                        ("update", "updating"), ("notice", "update-failed"),
+                        ("leave", "view:habits")]
+    updating, notice = h.painted[3:5]
+    assert notice.t0 == pytest.approx(updating.t1, abs=0.01)
+    assert any("could not update: failed: no run directory" in s for s in h.statuses())
+    assert P.FAILED_NOTE in h.runner.notes
+    checks(h)
+
+
+@pytest.mark.parametrize("line", [
+    None,                                   # nothing acts on the request
+    "{rid} {at:.3f} running",               # no newline
+    "{rid} {at:.1f} updated\n",
+    "{rid} {at:.3f} finished\n",
+    "garbage\n",
+], ids=["absent", "no-newline", "short-at", "unknown-state", "garbage"])
+def test_u9_with_no_answer_the_update_fails_after_update_start_s(tmp_path, line):
+    """A result that is absent or malformed answers nothing; at UPDATE_START_S
+    the request is withdrawn and Update failed is shown."""
+    def script(now, requests):
+        if line is None or not requests:
+            return None
+        t, rid = requests[-1]
+        return line.format(rid=rid, at=t + 3)
+
+    h = desk(tmp_path, keys=update_keys(400), until=600, update_present=True,
+             update=script)
+    assert h.run() == 0
+    assert after(h)[3:] == [("notice", "update-failed"), ("leave", "view:habits")]
+    [(t_req, _)] = h.updater.requests
+    notice = h.painted[4]
+    assert t_req + P.UPDATE_START_S <= notice.t0 <= t_req + P.UPDATE_START_S + P.UPDATE_POLL_S
+    assert h.updater.cleared[-1] == pytest.approx(notice.t0, abs=0.01)
+    assert any(f"nothing acted on the request within {P.UPDATE_START_S} s" in s
+               for s in h.statuses())
+    checks(h)
+
+
+def test_u10_an_update_that_stays_running_fails_after_update_max_s(tmp_path):
+    """F2: a repeated "running" is held to the deadline too, so an updater
+    killed outright does not leave Updating… on the glass for ever."""
+    def script(now, requests):
+        if not requests or now < requests[-1][0] + 3:
+            return None
+        t, rid = requests[-1]
+        return P.UpdateResult(rid, t + 3, "running")
+
+    h = desk(tmp_path, keys=update_keys(400), until=400 + P.UPDATE_MAX_S + 300,
+             update_present=True, update=script)
+    assert h.run() == 0
+    assert after(h)[3:] == [("notice", "update-failed"), ("leave", "view:habits")]
+    [(t_req, _)] = h.updater.requests
+    notice = h.painted[4]
+    first_running = next(t for t in h.updater.reads if t >= t_req + 3)
+    assert first_running + P.UPDATE_MAX_S <= notice.t0 \
+        <= first_running + P.UPDATE_MAX_S + P.UPDATE_POLL_S
+    assert any(f"still running after {P.UPDATE_MAX_S // 60} min" in s for s in h.statuses())
+    # Nothing else was fetched or drawn while it waited.
+    assert not [f for f in h.requests if t_req < f.t < notice.t0]
+    checks(h)
+
+
+UPDATING_STATE = P.State(glass_sha256=sha(UPDATING), painted_end_bt=500.0,
+                         attempt_start_bt=496.0, complete=True, fast_count=2,
+                         full_end_bt=200.0)
+
+
+@pytest.mark.parametrize("result, notice, notice_at", [
+    (None, "update-failed", 530.0 + P.UPDATE_START_S),
+    ("running", "updated", 600.0),
+    ("final", "updated", 530.0),
+])
+def test_u11_a_start_onto_updating_takes_the_wait_over(tmp_path, result, notice,
+                                                      notice_at):
+    """§3.5: the panel restarted by the update (or by a crash) finds Updating…
+    on the glass. It waits for a result written after that paint, or fails
+    after UPDATE_START_S with none; the notice goes back to Today, at once."""
+    def script(now, requests):
+        if result is None:
+            return None
+        if result == "running" and now < 600.0:
+            return P.UpdateResult("500.000", 505.0, "running")
+        return P.UpdateResult("500.000", 520.0 if result == "final" else 600.0, "updated")
+
+    h = desk(tmp_path, start=530.0, state=UPDATING_STATE, until=800,
+             update_present=True, update=script)
+    assert h.run() == 0
+    assert after(h, 0) == [("notice", notice), ("routine", "view:habits")]
+    first, routine = h.painted
+    assert notice_at <= first.t0 <= notice_at + P.UPDATE_POLL_S
+    assert routine.t0 == pytest.approx(first.t1 + P.NOTICE_S + Server().render_s, abs=0.01)
+    assert not [f for f in h.requests if f.t < first.t1 + P.NOTICE_S]
+    checks(h)
+
+
+def test_u12_a_start_onto_a_rollback_shows_update_failed(tmp_path):
+    """§3.5: the new code drew its notice, then was rolled back; the old code
+    starts onto that notice with the result rewritten after it."""
+    state = dataclasses.replace(UPDATING_STATE, glass_sha256=sha(UPDATED))
+    h = desk(tmp_path, start=530.0, state=state, keys=tap(560), until=700,
+             update_present=True,
+             update=lambda now, requests: P.UpdateResult("450.000", 520.0, "update-failed"))
+    assert h.run() == 0
+    assert after(h, 0) == [("notice", "update-failed"), ("routine", "view:habits")]
+    notice, routine = h.painted
+    assert notice.t0 == pytest.approx(530.0)
+    assert routine.t0 == pytest.approx(560.12 + Server().render_s, abs=0.01)
+    assert P.FAILED_NOTE in h.runner.notes
+    checks(h)
+
+
+@pytest.mark.parametrize("glass", ["view", "updating"])
+def test_u13_a_result_from_before_the_last_paint_is_stale_at_start(tmp_path, glass):
+    """§3.5: a result written before the glass's last paint answers nothing:
+    a view stays as it is, and Updating… waits for a fresh one."""
+    if glass == "view":
+        body = view_frame("habits")
+        state = dataclasses.replace(UPDATING_STATE, glass_sha256=sha(body), etag=tag(body),
+                                    view="habits")
+    else:
+        state = UPDATING_STATE
+    h = desk(tmp_path, start=530.0, state=state, until=700, update_present=True,
+             update=lambda now, requests: P.UpdateResult("300.000", 450.0, "updated"))
+    assert h.run() == 0
+    if glass == "view":
+        assert h.painted == []          # the 304, and no notice
+        assert h.runner.ui.mode == "browse"
+    else:
+        assert after(h, 0) == [("notice", "update-failed"), ("routine", "view:habits")]
+        assert h.painted[0].t0 >= 530.0 + P.UPDATE_START_S
+    checks(h)
+
+
+def test_u14_a_start_onto_the_off_screen_stays_in_browse(tmp_path):
+    """The off screen is not Updating…: no wait, the view at once (F9's
+    byte-equal screens would have taken the update path)."""
+    state = dataclasses.replace(OFF_STATE, painted_end_bt=500.0, attempt_start_bt=495.0,
+                                full_end_bt=500.0)
+    h = desk(tmp_path, start=530.0, state=state, until=700, update_present=True)
+    assert h.run() == 0
+    assert h.runner.ui.mode == "browse" and not h.runner.update_wait
+    assert after(h, 0) == [("routine", "view:habits")]
+    assert h.painted[0].t0 == pytest.approx(530.0 + Server().render_s)
+    checks(h)
+
+
+def test_u15_a_notice_with_nothing_to_go_back_to_brings_the_view_at_once(tmp_path):
+    """F5: a restart onto an unchanged view has drawn nothing, so the notice's
+    way back has no glass to repaint. The view follows the tap at once,
+    skipping the floor once, as the leave paint it replaces would have."""
+    clock = Clock(20.0)
+    h1 = desk(tmp_path, clock=clock, until=400)
+    assert h1.run() == 0
+    clock.t = 1000.0
+    h2 = desk(tmp_path, clock=clock, keys=update_keys(1100) + tap(1160), until=1300,
+              update_present=True, update=updater())
+    assert h2.run() == 0
+    assert after(h2, 0) == [("prompt", "confirm-update"), ("prompt", "update"),
+                            ("update", "updating"), ("notice", "updated"),
+                            ("routine", "view:habits")]
+    notice, routine = h2.painted[3:5]
+    assert routine.exempt
+    assert routine.t0 == pytest.approx(1160.12 + Server().render_s, abs=0.01)
+    assert routine.t0 < notice.t1 + P.MIN_REFRESH_S
+    checks(h1, h2)
+
+
+def test_u16_usr1_during_a_notice_redraws_the_view_in_full_when_it_ends(tmp_path):
+    """USR1 forgets the glass, the one before the prompts too, so the notice's
+    way back is the routine fetch, at once and in full."""
+    h = desk(tmp_path, keys=update_keys(400), signals=[(460.0, signal.SIGUSR1)], until=600,
+             update_present=True, update=updater(final="up-to-date"))
+    assert h.run() == 0
+    assert after(h) == [("prompt", "confirm-update"), ("prompt", "update"),
+                        ("update", "updating"), ("notice", "up-to-date"),
+                        ("routine", "view:habits")]
+    notice, routine = h.painted[4:6]
+    assert notice.t0 < 460.0 < notice.t1 + P.NOTICE_S
+    assert (routine.kind, routine.exempt) == ("full", True)
+    assert routine.t0 == pytest.approx(notice.t1 + P.NOTICE_S + Server().render_s, abs=0.01)
     checks(h)

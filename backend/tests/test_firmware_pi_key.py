@@ -1065,6 +1065,228 @@ def test_no_idle_return_when_it_is_off():
     assert tick(ui, 1e6) == [] and ui.next_deadline(False) is None
 
 
+# ── Ui: updating from the key ────────────────────────────────────────────────
+
+def _offered(idle_s=0):
+    """"Shut down?" with the update on offer: held at 1.0, drawn by 4.5,
+    armed until 14.5."""
+    ui = P.Ui("now", 0.0, idle_s)
+    assert ui.hold(1.0, 2.0, offer_update=True) == [P.Prompt("confirm-update")]
+    ui.shown_prompt(4.5)
+    return ui
+
+
+def _update_prompt():
+    """"Update?", asked for at 6.0 and drawn by 9.0, armed until 19.0."""
+    ui = _offered()
+    assert ui.hold(5.0, 6.0) == [P.Prompt("update")]
+    ui.shown_prompt(9.0)
+    return ui
+
+
+def _updating():
+    ui = _update_prompt()
+    assert ui.tap(10.0, 10.1) == [P.Update()]
+    return ui
+
+
+def test_a_hold_asks_for_the_prompt_the_offer_names():
+    ui = P.Ui("now", 0.0, 0)
+    assert ui.hold(2.0, 3.0) == [P.Prompt("confirm")] == [P.Prompt()]
+    assert (ui.mode, ui.prompt_kind, ui.confirm_press_t) == ("prompt_pending", "confirm", 2.0)
+    ui = P.Ui("now", 0.0, 0)
+    ui.tap(1.0, 1.1)
+    assert ui.hold(2.0, 3.0, offer_update=True) == [P.Prompt("confirm-update")]
+    assert (ui.mode, ui.prompt_kind, ui.confirm_press_t) == (
+        "prompt_pending", "confirm-update", 2.0)
+    assert (ui.page_due, ui.last_key) == (None, 3.0)
+
+
+@pytest.mark.parametrize("press_t", [
+    1.01,       # just after the first hold's press
+    3.0,        # while "Shut down?" was still being drawn
+    4.5, 14.5,  # the armed window's edges
+])
+def test_a_second_hold_on_the_offered_prompt_asks_update(press_t):
+    ui = _offered()
+    assert ui.hold(press_t, 15.0) == [P.Prompt("update")]
+    assert (ui.mode, ui.prompt_kind, ui.last_key) == ("prompt_pending", "update", 15.0)
+    # "Shut down?" stays armed until "Update?" replaces it.
+    assert (ui.prompt_shown_bt, ui.prompt_deadline) == (4.5, 14.5)
+
+
+@pytest.mark.parametrize("press_t", [
+    1.0,        # the first hold's own press: strictly after it, or nothing
+    0.5, 14.51,
+])
+def test_a_second_hold_outside_its_window_is_ignored(press_t):
+    ui = _offered()
+    assert ui.hold(press_t, 15.0) == []
+    assert (ui.mode, ui.prompt_kind) == ("prompt", "confirm-update")
+
+
+def test_a_second_hold_on_plain_shut_down_or_on_update_does_nothing():
+    ui = _prompt()
+    assert ui.prompt_kind == "confirm"
+    assert ui.hold(5.0, 6.0) == [] and ui.mode == "prompt"
+    ui = _update_prompt()
+    assert ui.hold(10.0, 11.0) == []
+    assert (ui.mode, ui.prompt_kind) == ("prompt", "update")
+
+
+def test_update_is_armed_for_prompt_s_from_its_own_draw():
+    ui = _update_prompt()
+    assert (ui.mode, ui.prompt_shown_bt, ui.prompt_deadline) == ("prompt", 9.0, 19.0)
+    assert ui.last_key == 9.0
+    assert ui.next_deadline(False) == 19.0
+
+
+@pytest.mark.parametrize("press_t", [4.5, 14.5])
+def test_a_tap_on_the_offered_prompt_still_shuts_down(press_t):
+    ui = _offered()
+    assert ui.tap(press_t, press_t + 0.1) == [P.Off()]
+    assert (ui.mode, ui.prompt_kind, ui.confirm_press_t) == ("off", None, None)
+
+
+@pytest.mark.parametrize("press_t, now", [(9.0, 9.1), (19.0, 19.1), (18.9, 19.9)])
+def test_a_tap_on_update_inside_its_window_starts_updating(press_t, now):
+    ui = _update_prompt()
+    assert ui.tap(press_t, now) == [P.Update()]
+    assert ui.mode == "updating"
+    assert (ui.prompt_shown_bt, ui.prompt_deadline, ui.prompt_kind, ui.confirm_press_t) == (
+        None, None, None, None)
+    assert ui.next_deadline(False) is None
+
+
+@pytest.mark.parametrize("press_t, now", [(8.99, 9.1), (7.0, 9.2), (19.01, 19.1)])
+def test_a_tap_on_update_outside_its_window_is_ignored(press_t, now):
+    ui = _update_prompt()
+    assert ui.tap(press_t, now) == []
+    assert (ui.mode, ui.prompt_kind) == ("prompt", "update")
+
+
+def test_update_times_out_back_to_browse_and_forgets_both_prompts():
+    ui = _update_prompt()
+    assert tick(ui, 18.9) == []
+    assert tick(ui, 19.0) == [P.Leave("timeout")]
+    assert (ui.mode, ui.prompt_kind, ui.confirm_press_t, ui.prompt_deadline) == (
+        "browse", None, None, None)
+
+
+def test_an_update_prompt_that_was_not_drawn_leaves_shut_down_armed():
+    ui = _offered()
+    ui.hold(5.0, 6.0)
+    assert ui.prompt_failed(7.0) == []
+    assert (ui.mode, ui.prompt_kind) == ("prompt", "confirm-update")
+    assert (ui.prompt_shown_bt, ui.prompt_deadline) == (4.5, 14.5)
+    assert ui.hold(8.0, 9.0) == [P.Prompt("update")]     # a hold still asks for it
+    ui.prompt_failed(9.5)
+    assert ui.tap(10.0, 10.1) == [P.Off()]               # and a tap still shuts down
+
+
+def test_shut_down_left_armed_by_a_failed_update_prompt_still_times_out():
+    ui = _offered()
+    ui.hold(5.0, 6.0)
+    ui.prompt_failed(7.0)
+    assert tick(ui, 14.4) == []
+    assert tick(ui, 14.5) == [P.Leave("timeout")]
+
+
+def test_an_offered_prompt_that_was_not_drawn_goes_back_to_browse():
+    ui = P.Ui("now", 0.0, 0)
+    ui.hold(1.0, 2.0, offer_update=True)
+    assert ui.prompt_failed(3.0) == []
+    assert (ui.mode, ui.prompt_kind, ui.confirm_press_t) == ("browse", None, None)
+
+
+def test_while_updating_only_the_outcome_counts():
+    ui = _updating()
+    for now in (12.0, 100.0, 5000.0):
+        assert ui.tap(now - 0.1, now) == []
+        assert ui.hold(now - 1, now) == []
+        assert tick(ui, now) == []
+        assert ui.shown_prompt(now) == [] and ui.prompt_failed(now) == []
+        assert ui.shown_notice(now) == [] and ui.notice_skipped(now) == []
+        assert ui.resume(now) == []
+        assert ui.mode == "updating"
+        assert ui.next_deadline(False) is None
+    assert ui.update_done("updated", 5001.0) == [P.Notice("updated")]
+    assert (ui.mode, ui.notice_shown_bt, ui.notice_deadline) == ("notice", None, None)
+    assert ui.update_done("updated", 5002.0) == []
+
+
+def test_awaiting_update_is_updating_with_no_page_due():
+    ui = P.Ui("now", 0.0, 60)
+    ui.tap(1.0, 1.1)
+    assert ui.awaiting_update() == []
+    assert (ui.mode, ui.page_due) == ("updating", None)
+    assert ui.update_done("up-to-date", 2.0) == [P.Notice("up-to-date")]
+
+
+@pytest.mark.parametrize("make", [lambda: P.Ui("now", 0.0, 0), _prompt, _offered,
+                                  _update_prompt])
+def test_an_outcome_outside_updating_is_ignored(make):
+    ui = make()
+    mode = ui.mode
+    assert ui.update_done("updated", 30.0) == []
+    assert ui.shown_notice(30.0) == [] and ui.notice_skipped(30.0) == []
+    assert ui.mode == mode and ui.notice_deadline is None
+
+
+def _notice():
+    ui = _updating()
+    ui.update_done("updated", 50.0)
+    return ui
+
+
+def test_a_notice_waits_for_its_draw_before_anything_ends_it():
+    ui = _notice()
+    assert ui.tap(50.5, 50.6) == []
+    assert ui.hold(50.5, 51.0) == []
+    assert tick(ui, 1e6) == []
+    assert ui.next_deadline(False) is None and ui.mode == "notice"
+
+
+def test_a_drawn_notice_ends_after_notice_s():
+    ui = _notice()
+    assert ui.shown_notice(53.0) == []
+    assert (ui.notice_shown_bt, ui.notice_deadline, ui.last_key) == (
+        53.0, 53.0 + P.NOTICE_S, 53.0)
+    assert ui.next_deadline(False) == 53.0 + P.NOTICE_S
+    assert ui.next_deadline(True) is None
+    assert tick(ui, 53.0 + P.NOTICE_S - 0.1) == []
+    assert tick(ui, 53.0 + P.NOTICE_S) == [P.Leave("notice")]
+    assert (ui.mode, ui.notice_shown_bt, ui.notice_deadline, ui.last_key) == (
+        "browse", None, None, 53.0 + P.NOTICE_S)
+    assert tick(ui, 200.0) == []
+
+
+@pytest.mark.parametrize("press_t, ends", [(52.9, False), (53.0, True), (60.0, True)])
+def test_a_tap_pressed_once_the_notice_is_drawn_ends_it(press_t, ends):
+    ui = _notice()
+    ui.shown_notice(53.0)
+    got = ui.tap(press_t, press_t + 0.1)
+    if ends:
+        assert got == [P.Leave("notice")]
+        assert (ui.mode, ui.notice_deadline, ui.last_key) == ("browse", None, press_t + 0.1)
+    else:
+        assert got == [] and ui.mode == "notice"
+
+
+def test_a_hold_during_a_notice_does_nothing():
+    ui = _notice()
+    ui.shown_notice(53.0)
+    assert ui.hold(55.0, 56.0) == []
+    assert ui.mode == "notice" and ui.notice_deadline == 53.0 + P.NOTICE_S
+
+
+def test_a_notice_that_cannot_be_drawn_goes_back_at_once():
+    ui = _notice()
+    assert ui.notice_skipped(51.0) == [P.Leave("notice")]
+    assert (ui.mode, ui.last_key, ui.notice_shown_bt) == ("browse", 51.0, None)
+    assert ui.notice_skipped(52.0) == []
+
+
 # ── the key's budget ─────────────────────────────────────────────────────────
 
 def test_the_bucket_refills_one_token_per_key_refill_s_and_keeps_the_rest():
@@ -1179,6 +1401,153 @@ def test_clear_poweroff(tmp_path, caplog):
     with caplog.at_level(logging.ERROR):
         P.clear_poweroff(str(tmp_path))
     assert any(r.levelno == logging.ERROR for r in caplog.records)
+
+
+# ── the update request and its result ────────────────────────────────────────
+
+def test_request_update_writes_the_request_once(tmp_path):
+    assert P.request_update(str(tmp_path), "413.320") == "ok"
+    path = tmp_path / P.UPDATE_NAME
+    assert path.read_text() == "413.320\n"
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert not (tmp_path / (P.UPDATE_NAME + ".tmp")).exists()
+    assert P.request_update(str(tmp_path), "999.000") == "ok"     # one is already out
+    assert path.read_text() == "413.320\n"
+    assert not (tmp_path / (P.UPDATE_NAME + ".tmp")).exists()
+
+
+def test_request_update_links_a_complete_file_into_place(tmp_path, monkeypatch):
+    """F6: the path unit starts the updater the moment the name exists, so the
+    name must arrive with the id already in it."""
+    linked = []
+    real_link = os.link
+
+    def link(src, dst, *a, **kw):
+        with open(src, "rb") as f:
+            linked.append((src, dst, f.read(), os.path.lexists(dst)))
+        return real_link(src, dst, *a, **kw)
+
+    monkeypatch.setattr(P.os, "link", link)
+    assert P.request_update(str(tmp_path), "413.320") == "ok"
+    path = str(tmp_path / P.UPDATE_NAME)
+    assert linked == [(path + ".tmp", path, b"413.320\n", False)]
+    assert (tmp_path / P.UPDATE_NAME).read_text() == "413.320\n"
+
+
+@pytest.mark.parametrize("which", ["none", "missing", "file", "not-writable"])
+def test_request_update_needs_a_writable_run_directory(tmp_path, monkeypatch, which):
+    run_dir = {"none": None, "missing": str(tmp_path / "missing"),
+               "file": str(tmp_path / "f"), "not-writable": str(tmp_path)}[which]
+    (tmp_path / "f").write_text("")
+    if which == "not-writable":
+        monkeypatch.setattr(P.os, "access", lambda p, mode: False)
+    assert P.request_update(run_dir, "1.000") == "failed: no run directory"
+    assert not (tmp_path / P.UPDATE_NAME).exists()
+
+
+def test_request_update_names_any_other_error_and_leaves_no_temp_file(tmp_path, monkeypatch):
+    def refuse(src, dst, *a, **kw):
+        raise PermissionError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr(P.os, "link", refuse)
+    assert P.request_update(str(tmp_path), "1.000") == "failed: EACCES"
+    assert sorted(os.listdir(tmp_path)) == []
+
+
+def test_request_update_never_writes_through_a_symlink(tmp_path):
+    target = tmp_path / "elsewhere"
+    target.write_text("untouched\n")
+    (tmp_path / (P.UPDATE_NAME + ".tmp")).symlink_to(target)
+    assert P.request_update(str(tmp_path), "1.000") == "failed: ELOOP"
+    assert target.read_text() == "untouched\n"
+    assert not (tmp_path / P.UPDATE_NAME).exists()
+
+
+def test_clear_update(tmp_path, caplog):
+    (tmp_path / P.UPDATE_NAME).write_text("1.000\n")
+    (tmp_path / (P.UPDATE_NAME + ".tmp")).write_text("1.000\n")
+    P.clear_update(str(tmp_path))
+    assert os.listdir(tmp_path) == []
+    P.clear_update(str(tmp_path))       # already gone
+    P.clear_update(None)
+    (tmp_path / P.UPDATE_NAME).mkdir()
+    with caplog.at_level(logging.ERROR):
+        P.clear_update(str(tmp_path))
+    assert any(r.levelno == logging.ERROR for r in caplog.records)
+
+
+def _result(tmp_path, raw: bytes) -> str:
+    path = tmp_path / "result"
+    path.write_bytes(raw)
+    return str(path)
+
+
+@pytest.mark.parametrize("state", ["running", *P.NOTICES])
+def test_read_update_result_reads_the_updaters_line(tmp_path, state):
+    path = _result(tmp_path, f"413.320 1234567890.125 {state}\n".encode())
+    assert P.read_update_result(path) == P.UpdateResult("413.320", 1234567890.125, state)
+
+
+def test_no_result_is_none_and_says_nothing(tmp_path, caplog):
+    with caplog.at_level(logging.DEBUG, logger="smylte-panel"):
+        assert P.read_update_result(str(tmp_path / "result")) is None
+    assert caplog.records == []
+
+
+def test_a_result_behind_a_symlink_is_not_read(tmp_path):
+    good = _result(tmp_path, b"413.320 420.000 updated\n")
+    (tmp_path / "link").symlink_to(good)
+    assert P.read_update_result(str(tmp_path / "link")) is None
+
+
+def test_a_result_that_is_a_fifo_is_not_read_and_does_not_block(tmp_path):
+    fifo = tmp_path / "result"
+    os.mkfifo(fifo)
+    got = []
+    t = threading.Thread(target=lambda: got.append(P.read_update_result(str(fifo))),
+                         daemon=True)
+    t.start()
+    t.join(timeout=5)
+    assert not t.is_alive(), "read_update_result blocked on a FIFO"
+    assert got == [None]
+
+
+def test_a_result_that_is_a_directory_is_not_read(tmp_path):
+    (tmp_path / "result").mkdir()
+    assert P.read_update_result(str(tmp_path / "result")) is None
+
+
+@pytest.mark.parametrize("raw", [
+    b"",
+    b"413.320 420.000 updated",                     # no newline
+    b"413.320 420.000 updated\n" + b" " * 80,       # oversized
+    b"413.320 420.000 updated\n\n",
+    b"413.320 420.000 updated\r\n",
+    b" 413.320 420.000 updated\n",
+    b"413.320  420.000 updated\n",
+    b"413.32 420.000 updated\n",                    # rid: three decimals
+    b"413 420.000 updated\n",
+    b"12345678901.320 420.000 updated\n",           # rid: at most ten digits
+    b"-13.320 420.000 updated\n",
+    b"413.320 420.0 updated\n",                     # at: three decimals
+    b"413.320 420 updated\n",
+    b"413.320 12345678901.000 updated\n",
+    b"413.320 4e2.000 updated\n",
+    b"413.320 420.000 done\n",                      # state: one of four
+    b"413.320 420.000 Updated\n",
+    b"413.320 420.000\n",
+    b"413.320\n",
+    "٤١٣.٣٢٠ 420.000 updated\n".encode(),           # not ASCII digits
+    b"413.320 420.000 updated\xff\n",
+])
+def test_a_result_that_is_not_exactly_the_updaters_line_is_none(tmp_path, raw):
+    assert P.read_update_result(_result(tmp_path, raw)) is None
+
+
+def test_update_present(tmp_path):
+    assert P.update_present(str(tmp_path / "smylte-panel-update.path")) is False
+    (tmp_path / "smylte-panel-update.path").write_text("[Path]\n")
+    assert P.update_present(str(tmp_path / "smylte-panel-update.path")) is True
 
 
 def test_a_screen_round_trips_in_its_exact_format(tmp_path):

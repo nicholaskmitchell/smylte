@@ -15,9 +15,12 @@ from __future__ import annotations
 
 import ast
 import os
+import pathlib
 import re
 import shutil
+import signal
 import subprocess
+import time
 
 import pytest
 
@@ -288,8 +291,10 @@ def test_the_token_check_catches_every_way_of_printing_it(script, old, new):
     'install -d -m 0700 -o root -g root "$CREDSTORE"',
     'chmod 0600 "$tmp"',
     'chown root:root "$tmp"',
-    'install -m 0644 -o root -g root "$SRC/$f" "$LIB/$f"',
-    'install -m 0644 -o root -g root "$UNIT_SRC" "$UNIT"',
+    'install -m "$1" -o root -g root -- "$2" "$3.new" && mv -f -- "$3.new" "$3"',
+    'put 0644 "$SRC/$f" "$LIB/$f"',
+    'put 0644 "$UNIT_SRC" "$UNIT"',
+    'put 0644 "$UPDATER_SRC" "$UPDATER"',
 ])
 def test_the_script_sets_root_owned_modes_on_what_it_writes(script, line):
     assert line in script
@@ -511,13 +516,15 @@ def test_every_one_off_runs_with_the_service_stopped(script, label, before, afte
 
 @pytest.mark.parametrize("mode", [
     "--rotate-token", "--selftest", "--clear", "--keytest", "--reset-refresh",
-    "--status", "--uninstall", "--no-selftest",
+    "--update", "--status", "--uninstall", "--no-selftest",
 ])
 def test_every_mode_the_header_documents_is_handled(script, mode):
     lines = script.splitlines()
     header = [l for l in lines if l.startswith("#") and not l.startswith("#!")]
     code = "\n".join(l for l in lines if not l.lstrip().startswith("#"))
     assert any(mode in l for l in header), f"{mode} is not in the header comment"
+    if mode == "--update":
+        assert any(mode in l and "desk key runs" in l for l in header), header
     if mode == "--no-selftest":
         assert f'"{mode}"' in code
         return
@@ -592,12 +599,16 @@ def test_the_logind_drop_in_ignores_the_power_key_and_nothing_else(script):
     ("PATH_UNIT", "smylte-panel-poweroff.path", "/etc/systemd/system/smylte-panel-poweroff.path"),
     ("OFF_UNIT", "smylte-panel-poweroff.service", "/etc/systemd/system/smylte-panel-poweroff.service"),
     ("LOGIND", "logind-smylte-panel.conf", "/etc/systemd/logind.conf.d/50-smylte-panel.conf"),
+    ("UPD_PATH_UNIT", "smylte-panel-update.path", "/etc/systemd/system/smylte-panel-update.path"),
+    ("UPD_UNIT", "smylte-panel-update.service", "/etc/systemd/system/smylte-panel-update.service"),
+    ("UPDATER", "smylte-panel-update.sh", "$LIB/update.sh"),
 ])
 def test_the_script_installs_each_new_file_from_the_checkout_to_its_place(script, var, src, dst):
     assert (DEPLOY / src).exists()
     assert re.search(rf"^{var}={re.escape(dst)}$", script, re.M)
     src_var = {"PATH_UNIT": "PATH_SRC", "OFF_UNIT": "OFF_SRC",
-               "RULES": "RULES_SRC", "LOGIND": "LOGIND_SRC"}[var]
+               "RULES": "RULES_SRC", "LOGIND": "LOGIND_SRC", "UPD_PATH_UNIT": "UPD_PATH_SRC",
+               "UPD_UNIT": "UPD_SRC", "UPDATER": "UPDATER_SRC"}[var]
     assert re.search(rf"^{src_var}=\$REPO/deploy/{re.escape(src)}$", script, re.M)
     assert re.search(r"^KEY_GROUP=" + KEY_GROUP + "$", script, re.M)
     # The path unit's variable is not PATH: that is the shell's own.
@@ -680,7 +691,8 @@ def _arm_program(tmp_path, script, label, functions):
     (lib / "panel.py").write_text("")
     head = (f"UNIT_NAME=smylte-panel.service\nLIB={lib}\nPY={tmp_path / 'bin' / 'python3'}\n"
             f"PANEL_ENV={tmp_path / 'panel.env'}\nKEY_GROUP={KEY_GROUP}\nWAS_ACTIVE=no\nONEOFF=\n"
-            'die() { echo "DIE:$*"; exit 3; }\nsay() { echo "== $* =="; }\n')
+            'die() { echo "DIE:$*"; exit 3; }\nsay() { echo "== $* =="; }\n'
+            "take_lock() { :; }\n")
     return head + "".join(_function(script, f) for f in functions) + _case_arm(script, label) + "\n"
 
 
@@ -823,10 +835,13 @@ def test_install_orders_settings_files_key_check_logind_path_unit_token_selftest
     """The path unit is up before the trap or a failed self-test can start the
     new service, which would otherwise run with nothing to act on a power-off."""
     arm = _case_arm(script, "install")
-    steps = ["preflight ||", "write_settings", "install_files", "check_key_node",
+    steps = ["take_lock", "preflight ||", "write_settings", "install_files", "check_key_node",
              "apply_logind",
              "systemctl enable smylte-panel-poweroff.path",
              "systemctl start smylte-panel-poweroff.path",
+             "systemctl enable smylte-panel-update.path",
+             "systemctl start smylte-panel-update.path",
+             "sc=$(server_checkout)",
              'TOKEN=$(tr -d', "probe_token", "arm_restart_trap", "run_oneoff --selftest",
              'systemctl enable "$UNIT_NAME"', "start_service restart"]
     at = [arm.index(step) for step in steps]
@@ -844,36 +859,52 @@ def test_install_probes_the_token_on_every_run_and_reads_a_stored_one_as_root(sc
     assert "echo" not in stored.split("probe_token")[0].split("TOKEN=$(tr")[1]
 
 
-def test_the_path_unit_is_enabled_and_started_with_two_commands_not_enable_now(script):
-    arm = _case_arm(script, "install")
+@pytest.mark.parametrize("label", ["install", "--update"])
+def test_the_path_units_are_enabled_and_started_with_two_commands_not_enable_now(script, label):
+    arm = _case_arm(script, label)
     code = "\n".join(l for l in arm.splitlines() if not l.lstrip().startswith("#"))
     assert "enable --now" not in code
-    assert arm.count("systemctl enable smylte-panel-poweroff.path") == 1
-    assert arm.count("systemctl start smylte-panel-poweroff.path") == 1
+    for path in ("smylte-panel-poweroff.path", "smylte-panel-update.path"):
+        assert arm.count(f"systemctl enable {path}") == 1
+        assert arm.count(f"systemctl start {path}") == 1
+        assert arm.index(f"systemctl enable {path}") < arm.index(f"systemctl start {path}")
 
 
 def test_install_files_does_the_group_the_rule_the_units_logind_then_the_unit(script):
     body = _function(script, "install_files")
-    steps = ['getent group "$KEY_GROUP" >/dev/null || groupadd --system "$KEY_GROUP"',
-             'install -m 0644 -o root -g root "$RULES_SRC" "$RULES"',
+    steps = ['bash -n "$UPDATER_SRC" || die',
+             'getent group "$KEY_GROUP" >/dev/null || groupadd --system "$KEY_GROUP"',
+             'put 0644 "$RULES_SRC" "$RULES"',
              "udevadm control --reload",
              "udevadm trigger --action=change --subsystem-match=input",
              "udevadm settle",
-             'install -m 0644 -o root -g root "$PATH_SRC" "$PATH_UNIT"',
-             'install -m 0644 -o root -g root "$OFF_SRC" "$OFF_UNIT"',
-             'install -D -m 0644 -o root -g root "$LOGIND_SRC" "$LOGIND"',
-             'install -m 0644 -o root -g root "$UNIT_SRC" "$UNIT"',
-             'systemd-analyze verify "$UNIT" "$PATH_UNIT" "$OFF_UNIT"',
+             'put 0644 "$PATH_SRC" "$PATH_UNIT"',
+             'put 0644 "$OFF_SRC" "$OFF_UNIT"',
+             'put 0644 "$UPD_PATH_SRC" "$UPD_PATH_UNIT"',
+             'put 0644 "$UPD_SRC" "$UPD_UNIT"',
+             'install -d -m 0755 -o root -g root "${LOGIND%/*}"',
+             'put 0644 "$LOGIND_SRC" "$LOGIND"',
+             'install -d -m 0755 -o root -g root "$LIB"',
+             'for f in $FILES; do put 0644 "$SRC/$f" "$LIB/$f"; done',
+             'put 0644 "$UPDATER_SRC" "$UPDATER"',
+             'put 0644 "$UNIT_SRC" "$UNIT"',
+             'systemd-analyze verify "$UNIT" "$PATH_UNIT" "$OFF_UNIT" "$UPD_PATH_UNIT" "$UPD_UNIT"',
              "systemctl daemon-reload"]
     at = [body.index(step) for step in steps]
     assert at == sorted(at), dict(zip(steps, at))
+    # Every file goes through put: the only install calls left make directories.
+    code = body.replace(_function(script, "put"), "")
+    for line in code.splitlines():
+        if re.match(r"\s*install ", line):
+            assert line.strip().startswith("install -d "), line
 
 
 def test_key_off_removes_the_logind_drop_in_instead_of_installing_it(script):
     body = _function(script, "install_files")
     assert re.search(
         r'if \[ "\$\(setting SMYLTE_PANEL_KEY auto\)" != off \]; then\n'
-        r'\s*install -D -m 0644 -o root -g root "\$LOGIND_SRC" "\$LOGIND"\n'
+        r'\s*install -d -m 0755 -o root -g root "\$\{LOGIND%/\*\}"\n'
+        r'\s*put 0644 "\$LOGIND_SRC" "\$LOGIND"\n'
         r'\s*else\n\s*rm -f "\$LOGIND"\n\s*fi', body), body
 
 
@@ -951,7 +982,10 @@ def _drift(tmp_path, script, *, key="auto", tamper=(), remove=()):
     installed = {"UNIT": "smylte-panel.service", "RULES": "70-smylte-panel-key.rules",
                  "PATH_UNIT": "smylte-panel-poweroff.path",
                  "OFF_UNIT": "smylte-panel-poweroff.service",
-                 "LOGIND": "50-smylte-panel.conf"}
+                 "LOGIND": "50-smylte-panel.conf",
+                 "UPD_PATH_UNIT": "smylte-panel-update.path",
+                 "UPD_UNIT": "smylte-panel-update.service",
+                 "UPDATER": "update.sh"}
     for var, name in installed.items():
         (t / f"{var}.src").write_text(name)
         (t / name).write_text("changed" if var in tamper else name)
@@ -960,7 +994,8 @@ def _drift(tmp_path, script, *, key="auto", tamper=(), remove=()):
     env = t / "panel.env"
     env.write_text(f"SMYLTE_PANEL_KEY={key}\n")
     src_vars = {"UNIT": "UNIT_SRC", "RULES": "RULES_SRC", "PATH_UNIT": "PATH_SRC",
-                "OFF_UNIT": "OFF_SRC", "LOGIND": "LOGIND_SRC"}
+                "OFF_UNIT": "OFF_SRC", "LOGIND": "LOGIND_SRC", "UPD_PATH_UNIT": "UPD_PATH_SRC",
+                "UPD_UNIT": "UPD_SRC", "UPDATER": "UPDATER_SRC"}
     sources = "".join(f"{src_vars[v]}={t}/{v}.src\n" for v in installed)
     places = "".join(f"{v}={t}/{n}\n" for v, n in installed.items())
     program = (f'FILES="panel.py epd7in5_v2.py"\nSRC={t}/src\nLIB={t}/lib\n'
@@ -982,9 +1017,14 @@ def _drift(tmp_path, script, *, key="auto", tamper=(), remove=()):
     ({"remove": ["RULES"]}, "70-smylte-panel-key.rules"),
     ({"key": "off", "remove": ["LOGIND"]}, ""),
     ({"key": "off", "tamper": ["LOGIND"]}, "50-smylte-panel.conf(present, but KEY is off)"),
+    ({"tamper": ["UPD_PATH_UNIT"]}, "smylte-panel-update.path"),
+    ({"tamper": ["UPD_UNIT"]}, "smylte-panel-update.service"),
+    ({"tamper": ["UPDATER"]}, "update.sh"),
+    ({"remove": ["UPDATER"]}, "update.sh"),
 ], ids=["clean", "rules", "path", "off-unit", "unit", "logind", "logind-missing", "rules-missing",
-        "key-off-absent", "key-off-present"])
-def test_drift_covers_the_rule_both_power_off_units_and_the_logind_drop_in(
+        "key-off-absent", "key-off-present", "update-path", "update-unit", "updater",
+        "updater-missing"])
+def test_drift_covers_the_rule_the_power_off_and_update_units_the_updater_and_logind(
         tmp_path, script, kwargs, expected):
     out = _drift(tmp_path, script, **kwargs)
     if expected:
@@ -1244,6 +1284,9 @@ def test_uninstall_takes_the_key_apart_in_order_and_drops_the_group_last(script)
              "run_oneoff --clear",
              "systemctl disable --now smylte-panel-poweroff.path",
              'rm -f "$PATH_UNIT" "$OFF_UNIT"',
+             "systemctl disable --now smylte-panel-update.path",
+             'rm -f "$UPD_PATH_UNIT" "$UPD_UNIT"',
+             'rm -rf "$UPDATE_RUN"',
              'rm -f "$LOGIND"',
              "apply_logind",
              'rm -f "$RULES"',
@@ -1332,3 +1375,1072 @@ def test_settings_accept_none_in_any_case(tmp_path, script):
                + _function(script, "check_settings") + "check_settings\n")
     result, _ = _run_fake(tmp_path, program)
     assert "PWR pin: none" in result.stdout, result.stdout
+
+
+# ── the key's update: units ──────────────────────────────────────────────────
+
+UPDATER_SH = DEPLOY / "smylte-panel-update.sh"
+
+
+@pytest.fixture(scope="module")
+def updater() -> str:
+    return UPDATER_SH.read_text(encoding="utf-8")
+
+
+def _globals(text: str) -> dict[str, str]:
+    """The script's top-level NAME=value lines, the first of each, with $NAME
+    references to earlier ones expanded."""
+    out: dict[str, str] = {}
+    for m in re.finditer(r"^([A-Z_0-9]+)=(\S*)$", text, re.M):
+        value = re.sub(r"\$(\w+)", lambda g: out.get(g.group(1), g.group(0)), m.group(2))
+        out.setdefault(m.group(1), value)
+    return out
+
+
+def _update_units():
+    return (Unit(_deploy_text("smylte-panel-update.path")),
+            Unit(_deploy_text("smylte-panel-update.service")))
+
+
+def test_the_update_path_watches_the_clients_request_file(unit):
+    path, _ = _update_units()
+    watched = "/run/" + unit.one("Service", "RuntimeDirectory") + "/" + P.UPDATE_NAME
+    assert path.one("Path", "PathExists") == watched
+    assert path.one("Path", "Unit") == "smylte-panel-update.service"
+    assert path.one("Unit", "Description") == "Update Smylte when the desk panel asks"
+    assert path.one("Install", "WantedBy") == "multi-user.target"
+    assert list(path.sections) == ["Unit", "Path", "Install"]
+
+
+def test_the_update_service_is_a_root_oneshot_started_only_by_the_path():
+    _, svc = _update_units()
+    assert svc.one("Unit", "Description") == "Update Smylte at the desk panel's request"
+    assert svc.sections["Service"] == [
+        ("Type", "oneshot"),
+        ("UMask", "0022"),
+        ("RuntimeDirectory", "smylte-panel-update"),
+        ("RuntimeDirectoryMode", "0755"),
+        ("RuntimeDirectoryPreserve", "yes"),
+        ("TimeoutStartSec", "30min"),
+        ("TimeoutStopSec", "180"),
+        ("ExecStartPre", "-/usr/bin/mv -fT /run/smylte-panel/update /run/smylte-panel-update/request"),
+        ("ExecStart", "/usr/bin/bash /usr/local/lib/smylte-panel/update.sh"),
+    ]
+    assert list(svc.sections) == ["Unit", "Service"]        # not enabled itself
+
+
+def test_the_request_is_moved_into_the_updaters_directory_before_the_script_runs(updater):
+    path, svc = _update_units()
+    pre = svc.one("Service", "ExecStartPre").split()
+    # rename(2): the entry is moved, never opened or followed, and a missing
+    # one (the leading -) does not stop the script.
+    assert pre[:2] == ["-/usr/bin/mv", "-fT"] and len(pre) == 4
+    g = _globals(updater)
+    out = "/run/" + svc.one("Service", "RuntimeDirectory")
+    assert pre[2] == path.one("Path", "PathExists") == g["PANEL_REQ"]
+    assert pre[3] == g["REQ"] == out + "/request"
+    assert g["OUT"] == out
+    assert svc.one("Service", "ExecStart") == "/usr/bin/bash " + g["LIB"] + "/update.sh"
+
+
+def test_the_updater_the_units_the_setup_script_and_the_client_agree(updater, script, unit):
+    g, s = _globals(updater), _globals(script)
+    _, svc = _update_units()
+    assert g["RESULT"] == P.UPDATE_RESULT == s["RESULT"]
+    assert s["UPDATE_RUN"] == g["OUT"]
+    assert P.UPDATE_UNIT == s["UPD_PATH_UNIT"]
+    assert g["SETUP_LOCK"] == s["SETUP_LOCK"] == "/run/smylte-panel-setup.lock"
+    assert g["LIB"] == s["LIB"] and s["UPDATER"] == s["LIB"] + "/update.sh"
+    assert g["PANEL"] == s["UNIT_NAME"] and g["PANEL_UNIT"] == s["UNIT"]
+    # The client gives up on a running update only after systemd would have
+    # stopped it, the stop's own timeout included.
+    assert svc.one("Service", "TimeoutStartSec") == "30min"
+    assert P.UPDATE_MAX_S >= 30 * 60 + int(svc.one("Service", "TimeoutStopSec"))
+    # The watch outlasts the new client's first paint and its watchdog.
+    assert int(g["WATCH_S"]) == P.PAINT_MAX_S + int(unit.one("Service", "WatchdogSec"))
+    assert int(g["BUDGET_S"]) + int(g["WATCH_S"]) < 30 * 60
+    assert g["HEALTH_URL"] == "http://127.0.0.1:8080/healthz" and g["HEALTH_S"] == "300"
+
+
+# ── the key's update: update.sh as text ──────────────────────────────────────
+
+def test_the_updater_passes_bash_syntax_check():
+    result = subprocess.run(["bash", "-n", str(UPDATER_SH)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_the_updater_calls_main_on_its_last_line_only(updater):
+    """panel-setup.sh --update replaces the file while it runs, so bash must
+    have read all of it before anything runs."""
+    lines = updater.rstrip("\n").split("\n")
+    assert lines[-1] == 'main "$@"; exit $?'
+    assert updater.endswith('main "$@"; exit $?\n')
+    code = [l for l in lines[:-1] if l.strip() and not l.lstrip().startswith("#")]
+    assert not [l for l in code if re.match(r"main\b(?!\(\))", l)], "main is called before the end"
+    assert "set -u" in code and not [l for l in code if l.startswith("set -e")]
+    assert not re.search(r"^\s*(export )?PATH=", updater, re.M)   # systemd's, or the tests' fakes
+
+
+def test_the_updater_never_touches_the_display_token(updater):
+    code = "\n".join(l for l in updater.splitlines() if not l.lstrip().startswith("#"))
+    for word in ("credstore", "smylte-panel-token", "TOKEN", "CREDENTIALS_DIRECTORY"):
+        assert word not in code, word
+
+
+# ── the key's update: update.sh, run ─────────────────────────────────────────
+
+_UPD_FAKES = {
+    # `show -P PROP UNIT` answers from $SYSD/UNIT.PROP, or from UNIT.PROP.seq
+    # one line per call (the last repeats). Each look at the panel's
+    # ActiveState also logs what the result file says at that moment.
+    "systemctl": """#!/bin/bash
+echo "systemctl $*" >> "$LOG"
+case "$1" in
+  show)
+    f="$SYSD/$4.$3"
+    if [ "$4.$3" = smylte-panel.service.ActiveState ]; then
+      echo "result-now: $(cat "$RESULT_FILE" 2>/dev/null)" >> "$LOG"
+    fi
+    if [ -s "$f.seq" ]; then
+      head -n 1 "$f.seq"
+      [ "$(wc -l < "$f.seq")" -le 1 ] || sed -i 1d "$f.seq"
+    elif [ -f "$f" ]; then
+      cat "$f"
+    fi ;;
+  is-system-running) cat "$SYSD/system" ;;
+esac
+exit 0
+""",
+    "runuser": """#!/bin/bash
+echo "runuser ${*:1:7}" >> "$LOG"
+[ "$1" = -u ] && [ "$3" = -- ] || exit 99
+shift 3
+exec "$@"
+""",
+    "id": """#!/bin/bash
+[ -z "${FAKE_ID_FAIL:-}" ] || exit 1
+case "$1" in -u) echo "$FAKE_UID" ;; -g) echo "$FAKE_GID" ;; *) exit 1 ;; esac
+""",
+    "getent": """#!/bin/bash
+case "$1" in
+  passwd)
+    if [ $# -ge 2 ]; then echo "$2:x:$FAKE_UID:$FAKE_GID::$FAKE_HOME:/bin/bash"
+    else echo "owner:x:$FAKE_UID:$FAKE_GID::$FAKE_HOME:/bin/bash"; printf '%b' "${FAKE_PASSWD_MORE:-}"; fi ;;
+  group) [ -n "$FAKE_GROUP" ] || exit 2; echo "$FAKE_GROUP" ;;
+esac
+""",
+    # The ownership read answers from $STAT_TABLE (path<TAB>uid gid mode), or
+    # as the owner's 755; any other stat is the real one.
+    "stat": """#!/bin/bash
+if [ "$1" = -c ] && [ "$2" = '%u %g %a' ]; then
+  v=$(awk -F'\\t' -v p="${!#}" '$1 == p { print $2; exit }' "$STAT_TABLE")
+  echo "${v:-$FAKE_UID $FAKE_GID 755}"
+  exit 0
+fi
+exec @REALSTAT@ "$@"
+""",
+    "flock": """#!/bin/bash
+echo "flock $*" >> "$LOG"
+exit "${FAKE_FLOCK_RC:-0}"
+""",
+    "git": """#!/bin/bash
+echo "git $*" >> "$LOG"
+f="$SYSD/git.seq"
+head -n 1 "$f"
+[ "$(wc -l < "$f")" -le 1 ] || sed -i 1d "$f"
+""",
+}
+
+# The checkout's own scripts. autopull is run as text, so $0 is what the
+# updater names it.
+_FAKE_AUTOPULL = """echo "autopull: repo=$SMYLTE_AUTOPULL_REPO report=$SMYLTE_AUTOPULL_REPORT no_restart=$SMYLTE_AUTOPULL_NO_RESTART name=$0" >> "$LOG"
+echo "this run's log line" >> "$FAKE_HOME/smylte-autopull.log"
+echo "autopull noise"
+[ -z "$FAKE_OUTCOME" ] || echo "autopull: $FAKE_OUTCOME"
+exit "${FAKE_AUTOPULL_RC:-0}"
+"""
+
+_FAKE_SETUP = """echo "panel-setup $* locked=${SMYLTE_PANEL_SETUP_LOCKED:-}" >> "$LOG"
+echo "== preflight =="
+if [ -n "${FAKE_SETUP_CHANGE:-}" ]; then
+  echo "new panel" > "$FAKE_LIB/panel.py"
+  echo "new driver" > "$FAKE_LIB/epd7in5_v2.py"
+  printf '%s\\n' $FAKE_SETUP_INV > "$SYSD/smylte-panel.service.InvocationID.seq"
+fi
+echo "$FAKE_SETUP_LAST"
+exit "${FAKE_SETUP_RC:-0}"
+"""
+
+_RID = "123.456"
+
+
+def _updater_text(updater: str) -> str:
+    """update.sh without its last line: the globals and the functions."""
+    lines = updater.rstrip("\n").split("\n")
+    assert lines[-1] == 'main "$@"; exit $?'
+    return "\n".join(lines[:-1]) + "\n"
+
+
+class _Updater:
+    """A box for update.sh: its directories, the checkout, fake commands, and
+    the globals pointed at them. `run` composes update.sh's functions with the
+    overrides and whatever the test adds, then calls `call`."""
+
+    def __init__(self, root, updater: str, *, real=()):
+        if shutil.which("bash") is None:
+            pytest.skip("no bash")
+        self.updater = updater
+        r = root.resolve()
+        self.root = r
+        self.out, self.panel_run, self.lib = r / "out", r / "panel-run", r / "lib"
+        self.unit_file = r / "etc" / "smylte-panel.service"
+        self.home = r / "home"
+        self.repo = self.home / "smylte"
+        self.bin, self.sysd = r / "bin", r / "sysd"
+        self.log = r / "log"
+        for d in (self.out, self.panel_run, self.lib, self.unit_file.parent, self.bin, self.sysd,
+                  self.repo / ".git", self.repo / "deploy", self.repo / "backend"):
+            d.mkdir(parents=True, exist_ok=True)
+        (self.lib / "panel.py").write_text("old panel\n")
+        (self.lib / "epd7in5_v2.py").write_text("old driver\n")
+        self.unit_file.write_text("old unit\n")
+        (self.repo / "deploy" / "smylte-autopull.sh").write_text(_FAKE_AUTOPULL)
+        (self.repo / "deploy" / "panel-setup.sh").write_text(_FAKE_SETUP)
+        (self.home / "smylte-autopull.log").write_text("an older run's line\n")
+        (self.out / "request").write_text(_RID + "\n")
+        self.stat_table = r / "stat-table"
+        self.stat_table.write_text("")
+        self.clock = r / "clock"
+        self.clock.write_text("100")
+        self.health = r / "health"
+        self.health.write_text("ok\n")
+        self.log.write_text("")
+        real_stat = shutil.which("stat")
+        for name, body in _UPD_FAKES.items():
+            if name in real:
+                continue
+            fake = self.bin / name
+            fake.write_text(body.replace("@REALSTAT@", real_stat or "/usr/bin/stat"))
+            fake.chmod(0o755)
+        self.set("smylte.service", LoadState="loaded", User="owner",
+                 WorkingDirectory=f"{self.repo}/backend", ActiveState="active")
+        self.set("smylte-panel.service", InvocationID="inv-1", ActiveState="active")
+        (self.sysd / "system").write_text("running\n")
+        self.seq("git", ["a" * 40])
+        self.overrides = ""
+        self.env = {
+            "PATH": f"{self.bin}:{os.environ['PATH']}", "LOG": str(self.log),
+            "SYSD": str(self.sysd), "RESULT_FILE": str(self.out / "result"),
+            "FAKE_UID": "1000", "FAKE_GID": "1000", "FAKE_HOME": str(self.home),
+            "FAKE_GROUP": "owner:x:1000:", "STAT_TABLE": str(self.stat_table),
+            "CLOCK": str(self.clock), "HEALTH": str(self.health), "FAKE_LIB": str(self.lib),
+            "FAKE_OUTCOME": "current", "FAKE_SETUP_LAST": "panel: up to date",
+            "FAKE_SETUP_INV": "inv-2",
+        }
+
+    def set(self, unit, **props):
+        for prop, value in props.items():
+            (self.sysd / f"{unit}.{prop}").write_text(value + "\n")
+
+    def seq(self, name, values):
+        (self.sysd / f"{name}.seq").write_text("".join(v + "\n" for v in values))
+
+    def stat(self, path, answer):
+        with self.stat_table.open("a") as f:
+            f.write(f"{path}\t{answer}\n")
+
+    def program(self, call="main", extra=""):
+        return (_updater_text(self.updater)
+                + f"OUT={self.out}\nREQ=$OUT/request\nRESULT=$OUT/result\n"
+                + f"PANEL_REQ={self.panel_run}/update\nLIB={self.lib}\n"
+                + f"PANEL_UNIT={self.unit_file}\nSETUP_LOCK={self.root}/setup.lock\n"
+                + "HEALTH_S=0\nWATCH_S=0\n"
+                + 'pause() { echo "pause $1" >> "$LOG"; }\n'
+                + 'now_bt() { local n; n=$(cat "$CLOCK"); echo $((n + 1)) >"$CLOCK"; printf "%d.000\\n" "$n"; }\n'
+                + 'health_ok() { local v; echo health >> "$LOG"; v=$(head -n 1 "$HEALTH")\n'
+                + '  [ "$(wc -l < "$HEALTH")" -le 1 ] || sed -i 1d "$HEALTH"; [ "$v" = ok ]; }\n'
+                + self.overrides + extra + "\n" + call + "\n")
+
+    def run(self, call="main", extra="", timeout=60, **env):
+        return subprocess.run(["bash", "-c", self.program(call, extra)],
+                              env={**self.env, **env}, capture_output=True, text=True,
+                              timeout=timeout)
+
+    def popen(self, call="main", extra="", **env):
+        return subprocess.Popen(["bash", "-c", self.program(call, extra)],
+                                env={**self.env, **env}, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True)
+
+    def calls(self):
+        return self.log.read_text().splitlines()
+
+    def result(self):
+        """The result file as the client reads it."""
+        return P.read_update_result(str(self.out / "result"))
+
+
+@pytest.fixture
+def upd(tmp_path, updater):
+    return _Updater(tmp_path, updater)
+
+
+def _says(result, line):
+    assert f"update: {line}\n" in result.stdout, result.stdout + result.stderr
+
+
+def _after(calls, prefix, start=0):
+    return _index(calls, prefix, start)
+
+
+def test_a_full_update_runs_every_step_in_order(upd):
+    r = upd.run(FAKE_OUTCOME="updated", FAKE_SETUP_CHANGE="1", FAKE_SETUP_LAST="panel: updated")
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls, repo = upd.calls(), upd.repo
+    steps = [f"runuser -u owner -- cat -- {repo}/deploy/smylte-autopull.sh",
+             f"runuser -u owner -- env SMYLTE_AUTOPULL_REPO={repo} SMYLTE_AUTOPULL_REPORT=1 "
+             "SMYLTE_AUTOPULL_NO_RESTART=1",
+             f"autopull: repo={repo} report=1 no_restart=1 name=smylte-autopull",
+             f"git -C {repo} rev-parse HEAD",
+             "systemctl restart smylte.service",
+             "systemctl show -P ActiveState smylte.service",
+             "health",
+             "flock -w 600 8",
+             f"git -C {repo} rev-parse HEAD",
+             "systemctl show -P InvocationID smylte-panel.service",
+             "panel-setup --update locked=1",
+             "systemctl show -P ActiveState smylte-panel.service"]
+    at, i = [], 0
+    for step in steps:
+        i = _after(calls, step, i)
+        at.append(i)
+        i += 1
+    assert at == sorted(at)
+    assert not [c for c in calls if c.startswith("systemctl stop")], calls
+    assert upd.result() == P.UpdateResult(_RID, upd.result().at, "updated")
+    assert (upd.lib / "panel.py").read_text() == "new panel\n"     # kept
+    assert not list(upd.out.glob("work.*"))                        # WORK removed
+    _says(r, "autopull log: this run's log line")
+    assert "an older run's line" not in r.stdout                   # only what this run added
+    assert "autopull noise" in r.stdout                            # streamed to the journal
+    for line in r.stdout.splitlines():
+        assert line.startswith(("update: ", "autopull", "== preflight ==", "panel: ")), line
+
+
+def test_the_final_result_is_written_before_the_watch_looks_at_the_panel(upd):
+    """The new code's first paint is the notice, so a client that cannot paint
+    fails inside the watch."""
+    upd.overrides = "WATCH_S=1\npause() { sleep 0.3; }\n"
+    r = upd.run(FAKE_OUTCOME="updated", FAKE_SETUP_CHANGE="1", FAKE_SETUP_LAST="panel: updated")
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = upd.calls()
+    looks = [c for c in calls[_after(calls, "panel-setup"):] if c.startswith("result-now: ")]
+    assert len(looks) >= 2, calls
+    for look in looks:
+        assert look.startswith(f"result-now: {_RID} ") and look.endswith(" updated"), looks
+    assert (upd.lib / "panel.py").read_text() == "new panel\n"
+
+
+@pytest.mark.parametrize("outcome, setup_last, final", [
+    ("current", "panel: up to date", "up-to-date"),
+    ("updated", "panel: up to date", "updated"),
+])
+def test_nothing_new_for_the_panel_ends_without_a_watch(upd, outcome, setup_last, final):
+    r = upd.run(FAKE_OUTCOME=outcome, FAKE_SETUP_LAST=setup_last)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert upd.result().state == final and upd.result().rid == _RID
+    calls = upd.calls()
+    assert "systemctl show -P ActiveState smylte-panel.service" not in calls
+    assert "systemctl restart smylte.service" in calls          # for current too
+    assert not [c for c in calls if c.startswith(("systemctl stop", "systemctl start"))]
+
+
+@pytest.mark.parametrize("seqs", [
+    {"InvocationID": ["inv-2", "inv-2", "inv-3"]},
+    {"ActiveState": ["active", "activating"]},
+], ids=["restarted", "not-active"])
+def test_a_panel_that_does_not_stay_up_is_rolled_back_and_the_result_rewritten(upd, seqs):
+    if "InvocationID" in seqs:
+        env = {"FAKE_SETUP_INV": " ".join(seqs["InvocationID"])}
+    else:
+        upd.seq("smylte-panel.service.ActiveState", seqs["ActiveState"])
+        env = {}
+    upd.overrides = "WATCH_S=60\n"
+    r = upd.run(FAKE_OUTCOME="current", FAKE_SETUP_CHANGE="1", FAKE_SETUP_LAST="panel: updated", **env)
+    assert r.returncode == 1, r.stdout + r.stderr
+    _says(r, "the new panel code stopped within 60 s")
+    calls = upd.calls()
+    stop = _after(calls, "systemctl stop smylte-panel.service")
+    assert _after(calls, "systemctl daemon-reload", stop) < \
+        _after(calls, "systemctl reset-failed smylte-panel.service", stop) < \
+        _after(calls, "systemctl start smylte-panel.service", stop)
+    assert (upd.lib / "panel.py").read_text() == "old panel\n"
+    assert (upd.lib / "epd7in5_v2.py").read_text() == "old driver\n"
+    final = upd.result()
+    assert final.state == "update-failed" and final.rid == _RID
+    shown = [c for c in calls if c.startswith("result-now: ")][0].split()
+    assert shown[3] == "updated"
+    assert final.at > float(shown[2])        # after the new code's paints
+
+
+@pytest.mark.parametrize("system, restarts", [("running", True), ("stopping", False)])
+def test_a_sigterm_during_the_watch_puts_the_panel_back(upd, system, restarts):
+    (upd.sysd / "system").write_text(system + "\n")
+    upd.overrides = "WATCH_S=60\npause() { sleep 0.1; }\n"
+    proc = upd.popen(FAKE_OUTCOME="current", FAKE_SETUP_CHANGE="1", FAKE_SETUP_LAST="panel: updated")
+    try:
+        deadline = time.monotonic() + 30
+        while not [c for c in upd.calls() if c.startswith("result-now: ") and c.endswith("updated")]:
+            assert proc.poll() is None, proc.communicate()
+            assert time.monotonic() < deadline, upd.calls()
+            time.sleep(0.05)
+        proc.send_signal(signal.SIGTERM)
+        out, err = proc.communicate(timeout=30)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode in (-signal.SIGTERM, 128 + signal.SIGTERM), out + err
+    calls = upd.calls()
+    stop = _after(calls, "systemctl stop smylte-panel.service")
+    assert (upd.lib / "panel.py").read_text() == "old panel\n"
+    assert upd.result().state == "update-failed"
+    assert ("systemctl start smylte-panel.service" in calls[stop:]) is restarts
+    assert not list(upd.out.glob("work.*"))
+
+
+def test_a_refusal_fails_without_touching_the_panel(upd):
+    r = upd.run(FAKE_SETUP_RC="3", FAKE_SETUP_LAST="panel: refused: no token stored — run panel-setup.sh")
+    assert r.returncode == 1, r.stdout + r.stderr
+    _says(r, "panel-setup.sh refused: panel: refused: no token stored — run panel-setup.sh")
+    calls = upd.calls()
+    assert not [c for c in calls if c.startswith(("systemctl stop", "systemctl start",
+                                                   "systemctl reset-failed", "systemctl daemon-reload"))]
+    assert upd.result().state == "update-failed" and upd.result().rid == _RID
+    assert (upd.lib / "panel.py").read_text() == "old panel\n"
+
+
+@pytest.mark.parametrize("rc, last, says", [
+    ("1", "panel-setup: something broke", "panel-setup.sh --update failed (exit 1)"),
+    ("0", "something else", "panel-setup.sh gave no outcome"),
+], ids=["rc-1", "no-outcome"])
+def test_a_failed_install_is_rolled_back(upd, rc, last, says):
+    (upd.lib / "epd7in5_v2.py").unlink()          # absent before: removed again
+    r = upd.run(FAKE_SETUP_RC=rc, FAKE_SETUP_CHANGE="1", FAKE_SETUP_LAST=last)
+    assert r.returncode == 1, r.stdout + r.stderr
+    _says(r, says)
+    calls = upd.calls()
+    stop = _after(calls, "systemctl stop smylte-panel.service")
+    assert _after(calls, "systemctl daemon-reload", stop) < _after(calls, "systemctl start smylte-panel.service", stop)
+    assert (upd.lib / "panel.py").read_text() == "old panel\n"
+    assert not (upd.lib / "epd7in5_v2.py").exists()
+    assert upd.unit_file.read_text() == "old unit\n"
+    assert upd.result().state == "update-failed"
+    assert "systemctl show -P ActiveState smylte-panel.service" not in calls    # no watch
+
+
+def test_a_failed_install_that_changed_nothing_still_ends_the_wait(upd):
+    # Nothing to put back, so restore_panel leaves the panel alone. The EXIT
+    # trap must still turn `running` into update-failed, or the glass would
+    # say Updating… until the panel gives up on its own (UPDATE_MAX_S).
+    r = upd.run(FAKE_SETUP_RC="1", FAKE_SETUP_LAST="panel-setup: died early")
+    assert r.returncode == 1, r.stdout + r.stderr
+    _says(r, "panel-setup.sh --update failed (exit 1)")
+    calls = upd.calls()
+    assert not [c for c in calls if c.startswith(("systemctl stop", "systemctl start",
+                                                   "systemctl reset-failed", "systemctl daemon-reload"))]
+    assert upd.result().state == "update-failed" and upd.result().rid == _RID
+    assert (upd.lib / "panel.py").read_text() == "old panel\n"
+
+
+@pytest.mark.parametrize("outcome, rc, says", [
+    ("blocked", "0", "a migration needs root: sudo {repo}/deploy/migrate.sh"),
+    ("failed fetch", "1", "autopull failed: fetch (see above)"),
+    ("failed npm", "1", "autopull failed: npm (see above)"),
+    ("", "5", "autopull gave no outcome (exit 5)"),
+    ("whatever", "0", "autopull gave no outcome (exit 0)"),
+], ids=["blocked", "fetch", "npm", "none", "unknown"])
+def test_an_autopull_that_does_not_go_on_fails_before_the_restart(upd, outcome, rc, says):
+    r = upd.run(FAKE_OUTCOME=outcome, FAKE_AUTOPULL_RC=rc)
+    assert r.returncode == 1, r.stdout + r.stderr
+    _says(r, says.format(repo=upd.repo))
+    _says(r, "autopull log: this run's log line")
+    assert "systemctl restart smylte.service" not in upd.calls()
+    assert upd.result().state == "update-failed"
+
+
+def test_the_server_is_restarted_and_waited_for(upd):
+    upd.overrides = "HEALTH_S=60\n"
+    upd.seq("smylte.service.ActiveState", ["activating", "active"])
+    upd.health.write_text("fail\nok\n")
+    r = upd.run()
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = upd.calls()
+    restart = _after(calls, "systemctl restart smylte.service")
+    assert calls[restart:].count("health") == 2
+    assert calls[restart:].count("pause 2") == 1
+    _says(r, "smylted answers /healthz")
+
+
+@pytest.mark.parametrize("state, health, says", [
+    ("failed", "ok", "smylte.service is failed after the restart (journalctl -u smylte)"),
+    ("inactive", "ok", "smylte.service is inactive after the restart (journalctl -u smylte)"),
+    ("active", "fail", "smylted did not answer /healthz within 0 s"),
+], ids=["unit-failed", "unit-inactive", "timeout"])
+def test_a_server_that_does_not_come_back_fails_before_the_panel_step(upd, state, health, says):
+    upd.set("smylte.service", ActiveState=state)
+    upd.health.write_text(health + "\n")
+    r = upd.run()
+    assert r.returncode == 1, r.stdout + r.stderr
+    _says(r, says)
+    assert not [c for c in upd.calls() if c.startswith(("flock", "panel-setup"))]
+    assert upd.result().state == "update-failed"
+
+
+def test_the_health_timeout_is_health_s(updater):
+    assert re.search(r'fail "smylted did not answer /healthz within \$HEALTH_S s"', updater)
+
+
+def test_a_run_out_of_time_stops_before_the_panel_step(upd):
+    upd.overrides = "BUDGET_S=-1\n"
+    r = upd.run()
+    assert r.returncode == 1
+    _says(r, "ran out of time before the panel step")
+    assert not [c for c in upd.calls() if c.startswith(("flock", "panel-setup"))]
+
+
+def test_a_setup_run_by_hand_holding_the_lock_fails_the_update(upd):
+    r = upd.run(FAKE_FLOCK_RC="1")
+    assert r.returncode == 1
+    _says(r, "panel-setup.sh is running by hand; press again when it is done")
+    calls = upd.calls()
+    assert "flock -w 600 8" in calls
+    assert not [c for c in calls if c.startswith("panel-setup")]
+    assert (upd.root / "setup.lock").exists()
+    assert upd.result().state == "update-failed"
+
+
+def test_a_checkout_that_moved_after_the_pull_fails_the_update(upd):
+    upd.seq("git", ["a" * 40, "b" * 40])
+    r = upd.run()
+    assert r.returncode == 1
+    _says(r, "the checkout moved during the update; press again")
+    assert not [c for c in upd.calls() if c.startswith("panel-setup")]
+
+
+@pytest.mark.parametrize("extra", [
+    "",
+    'restart_server() { echo "$NO_SUCH_VARIABLE"; }\n',      # a set -u trip
+], ids=["fail", "unbound-variable"])
+def test_the_exit_trap_writes_the_failure_and_removes_the_work_directory(upd, extra):
+    if not extra:
+        upd.set("smylte.service", LoadState="not-found")
+    r = upd.run(extra=extra)
+    assert r.returncode != 0
+    assert upd.result() == P.UpdateResult(_RID, upd.result().at, "update-failed")
+    assert upd.result().at > 100          # rewritten after `running` (the clock's first value)
+    assert not list(upd.out.glob("work.*"))
+    assert not (upd.out / "request").exists()
+
+
+def test_the_result_is_running_while_the_update_runs(upd):
+    """And the client reads it."""
+    r = upd.run(extra='restart_server() { cat "$RESULT"; exit 0; }\n')
+    assert f"{_RID} 100.000 running\n" in r.stdout
+    assert P.UPDATE_RESULT_RE.fullmatch(f"{_RID} 100.000 running\n")
+
+
+# ── the request ──────────────────────────────────────────────────────────────
+
+def _request(upd, kind):
+    req = upd.out / "request"
+    req.unlink()
+    if kind == "valid":
+        req.write_text(_RID + "\n")
+    elif kind == "no-newline":
+        req.write_text(_RID)
+    elif kind == "symlink":
+        target = upd.root / "target"
+        target.write_text("999.000\n")
+        req.symlink_to(target)
+    elif kind == "fifo":
+        os.mkfifo(req)
+    elif kind == "directory":
+        req.mkdir()
+        (req / "x").write_text("999.000\n")
+    elif kind == "oversized":
+        req.write_text("1" * 10 + ".000" + "0" * 4000 + "\n")
+    elif kind == "empty":
+        req.write_text("")
+    elif kind == "text":
+        req.write_text("hello\n")
+    elif kind == "too-many-digits":
+        req.write_text("12345678901.000\n")
+
+
+@pytest.mark.parametrize("kind, rid, says", [
+    ("valid", _RID, None),
+    ("no-newline", _RID, None),
+    ("absent", "0.000", "started without a request"),
+    ("symlink", "0.000", "started without a request"),
+    ("fifo", "0.000", "started without a request"),
+    ("directory", "0.000", "started without a request"),
+    ("oversized", "0.000", "the request was malformed"),
+    ("empty", "0.000", "the request was malformed"),
+    ("text", "0.000", "the request was malformed"),
+    ("too-many-digits", "0.000", "the request was malformed"),
+])
+def test_the_request_is_read_only_from_a_regular_file_and_then_removed(upd, kind, rid, says):
+    _request(upd, kind)
+    (upd.panel_run / "update").mkdir()            # whatever the ExecStartPre left
+    (upd.panel_run / "update" / "f").write_text("x")
+    r = upd.run(call='take_request\necho "id=$id"', timeout=10)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout.splitlines()[-1] == f"id={rid}"
+    if says:
+        _says(r, says)
+    else:
+        assert r.stdout.splitlines() == [f"id={rid}"]
+    assert not os.path.lexists(upd.out / "request")
+    assert not os.path.lexists(upd.panel_run / "update")
+    if kind == "symlink":
+        assert (upd.root / "target").read_text() == "999.000\n"   # the link went, not its target
+
+
+# ── the checkout checks ──────────────────────────────────────────────────────
+
+def _symlinked_checkout(upd):
+    link = upd.home / "link"
+    link.symlink_to(upd.repo)
+    upd.set("smylte.service", WorkingDirectory=f"{link}/backend")
+    return f"{link} is a symlink"
+
+
+def _no_real_path(upd):
+    wd = f"{upd.home}/../home/smylte"
+    upd.set("smylte.service", WorkingDirectory=wd + "/backend")
+    return f"{wd} is not its own real path"
+
+
+_CHECKOUT_FAILS = {
+    "not-installed": (lambda u: u.set("smylte.service", LoadState="not-found"),
+                      "the key updates the checkout smylte.service runs, and it is not installed"),
+    "no-user": (lambda u: u.set("smylte.service", User=""), "smylte.service has no User="),
+    "root-user": (lambda u: u.set("smylte.service", User="root"),
+                  "smylte.service runs as root; the key updates only a user's checkout"),
+    "no-wd": (lambda u: u.set("smylte.service", WorkingDirectory=""),
+              "smylte.service has no WorkingDirectory="),
+    "wd-not-backend": (lambda u: u.set("smylte.service", WorkingDirectory=str(u.repo)),
+                       "smylte.service's WorkingDirectory {repo} does not end in /backend"),
+    "no-such-user": (lambda u: u.env.update(FAKE_ID_FAIL="1"),
+                     "owner, smylte.service's User=, does not exist"),
+    "uid-0": (lambda u: u.env.update(FAKE_UID="0"),
+              "owner has uid '0'; the key updates only a user's checkout"),
+    "relative": (lambda u: u.set("smylte.service", WorkingDirectory="home/smylte/backend"),
+                 "home/smylte is not an absolute path"),
+    "symlink": (_symlinked_checkout, None),
+    "not-real-path": (_no_real_path, None),
+    "no-git": (lambda u: shutil.rmtree(u.repo / ".git"), "{repo}/.git is not a directory"),
+    "setup-symlink": (lambda u: ((u.repo / "deploy" / "panel-setup.sh").unlink(),
+                                 (u.repo / "deploy" / "panel-setup.sh").symlink_to(u.root / "log")),
+                      "{repo}/deploy/panel-setup.sh is a symlink"),
+    "autopull-dir": (lambda u: ((u.repo / "deploy" / "smylte-autopull.sh").unlink(),
+                                (u.repo / "deploy" / "smylte-autopull.sh").mkdir()),
+                     "{repo}/deploy/smylte-autopull.sh is not a file"),
+    "deploy-other-owner": (lambda u: u.stat(f"{u.repo}/deploy", "2000 1000 755"),
+                           "{repo}/deploy is owned by uid 2000, not owner (1000)"),
+    "repo-world-writable": (lambda u: u.stat(str(u.repo), "1000 1000 777"),
+                            "{repo} is writable by everyone"),
+    "file-group-other": (lambda u: u.stat(f"{u.repo}/deploy/panel-setup.sh", "1000 2000 664"),
+                         "{repo}/deploy/panel-setup.sh is group-writable, and its group is not owner's own"),
+    "group-has-others": (lambda u: (u.stat(f"{u.repo}/.git", "1000 1000 775"),
+                                    u.env.update(FAKE_GROUP="owner:x:1000:owner,mallory")),
+                         "{repo}/.git is group-writable, and its group has mallory in it too"),
+    "group-is-primary-for-others": (lambda u: (u.stat(f"{u.repo}/.git", "1000 1000 775"),
+                                               u.env.update(FAKE_PASSWD_MORE="eve:x:1001:1000::/home/eve:/bin/bash\\n")),
+                                    "{repo}/.git is group-writable, and eve has it as their own group too"),
+    "group-unreadable": (lambda u: (u.stat(f"{u.repo}/.git", "1000 1000 775"),
+                                    u.env.update(FAKE_GROUP="")),
+                         "{repo}/.git is group-writable, and its group cannot be read"),
+    "ancestor-other-owner": (lambda u: u.stat(str(u.home), "2000 2000 755"),
+                             "{home} is owned by uid 2000, not root or owner"),
+    "ancestor-world-writable": (lambda u: u.stat(str(u.home), "0 0 1777"),
+                                "{home} is writable by everyone"),
+    "root-world-writable": (lambda u: u.stat("/", "0 0 777"), "/ is writable by everyone"),
+    "ancestor-group-other": (lambda u: u.stat(str(u.home), "0 50 775"),
+                             "{home} is group-writable, and its group is not owner's own"),
+}
+
+
+@pytest.mark.parametrize("name", list(_CHECKOUT_FAILS))
+def test_every_checkout_check_fails_before_anything_runs_as_the_owner(upd, name):
+    arrange, says = _CHECKOUT_FAILS[name]
+    said = arrange(upd)
+    r = upd.run()
+    assert r.returncode == 1, r.stdout + r.stderr
+    _says(r, (says or said).format(repo=upd.repo, home=upd.home))
+    assert not [c for c in upd.calls() if c.startswith("runuser")], upd.calls()
+    assert upd.result().state == "update-failed"
+
+
+@pytest.mark.parametrize("members", ["", "owner"])
+def test_group_write_is_allowed_for_the_owners_own_group_alone(upd, members):
+    upd.stat(f"{upd.repo}/.git", "1000 1000 2775")
+    upd.stat(str(upd.home), "1000 1000 775")
+    upd.env["FAKE_GROUP"] = f"owner:x:1000:{members}"
+    r = upd.run(extra='pull() { say "reached the pull"; exit 0; }\n')
+    _says(r, f"checkout {upd.repo}, owner owner")
+    _says(r, "reached the pull")
+
+
+def _safe_for_the_walk(path, uid):
+    """Why `path` would fail the real walk, or None."""
+    st = os.stat(path)
+    if st.st_uid not in (0, uid):
+        return f"{path} is owned by uid {st.st_uid}"
+    if st.st_mode & 0o022:
+        return f"{path} is group- or world-writable"
+    return None
+
+
+@pytest.fixture
+def walk(updater):
+    """A checkout on the real filesystem, owned by a real non-root account, in a
+    directory under backend/ whose ancestors are root's or ours and not writable
+    by others (tmp is world-writable, so the walk would rightly refuse it). As
+    root it is chowned to nobody; as a user it is simply ours."""
+    import pwd
+    import tempfile
+    if os.geteuid() == 0:
+        try:
+            pw = pwd.getpwuid(65534)
+        except KeyError:
+            pytest.skip("running as root, and there is no uid 65534 to own the checkout")
+    else:
+        try:
+            pw = pwd.getpwuid(os.getuid())
+        except KeyError:
+            pytest.skip("this uid has no passwd entry, so the real `id` cannot name it")
+    try:
+        base = pathlib.Path(tempfile.mkdtemp(prefix=".update-walk-", dir=F.REPO / "backend"))
+    except PermissionError:
+        pytest.skip("backend/ is not writable here, so there is nowhere safe to build the checkout")
+    try:
+        for p in [*reversed(base.parents), base]:
+            why = _safe_for_the_walk(p, pw.pw_uid)
+            if why:
+                pytest.skip(f"the real ownership walk cannot pass here: {why}")
+        box = _Updater(base / "box", updater, real=("id", "getent", "stat"))
+        for p in [box.root, box.home]:
+            p.chmod(0o755)
+        for d in (box.repo, box.repo / ".git", box.repo / "deploy", box.repo / "backend"):
+            d.chmod(0o755)
+        for f in ("panel-setup.sh", "smylte-autopull.sh"):
+            (box.repo / "deploy" / f).chmod(0o644)
+        if os.geteuid() == 0:
+            for p in [box.repo, *box.repo.rglob("*")]:
+                os.chown(p, pw.pw_uid, pw.pw_gid, follow_symlinks=False)
+        box.set("smylte.service", User=pw.pw_name)
+        box.owner = pw.pw_name
+        yield box
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_the_real_ownership_walk_passes_a_checkout_its_owner_holds(walk):
+    r = walk.run(extra='pull() { say "reached the pull"; exit 0; }\n')
+    _says(r, f"checkout {walk.repo}, owner {walk.owner}")
+    _says(r, "reached the pull")
+
+
+def test_the_real_ownership_walk_refuses_a_world_writable_ancestor(walk):
+    walk.home.chmod(0o777)
+    r = walk.run(extra='pull() { say "reached the pull"; exit 0; }\n')
+    assert r.returncode == 1
+    _says(r, f"{walk.home} is writable by everyone")
+    assert "reached the pull" not in r.stdout
+
+
+# ── the stubbed pieces, for real ─────────────────────────────────────────────
+
+def test_now_bt_prints_the_boot_clock_with_three_decimals(updater, tmp_path):
+    if shutil.which("python3") is None:
+        pytest.skip("no python3")
+    r = subprocess.run(["bash", "-c", _updater_text(updater) + "now_bt\n"],
+                       capture_output=True, text=True)
+    assert re.fullmatch(r"\d{1,10}\.\d{3}\n", r.stdout), r.stdout + r.stderr
+    assert abs(float(r.stdout) - time.clock_gettime(time.CLOCK_BOOTTIME)) < 10
+
+
+def test_the_health_probe_wants_a_2xx_from_the_url(updater):
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200 if self.path == "/healthz" else 404)
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+
+        def log_message(self, *a):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+    try:
+        def probe(url):
+            return subprocess.run(["bash", "-c", _updater_text(updater) + f"HEALTH_URL={url}\nhealth_ok\n"],
+                                  capture_output=True, text=True, timeout=20).returncode
+        assert probe(f"http://127.0.0.1:{port}/healthz") == 0
+        assert probe(f"http://127.0.0.1:{port}/nope") != 0
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert probe(f"http://127.0.0.1:{port}/healthz") != 0       # nothing listening
+
+
+# ── panel-setup.sh: what the key's update needs ──────────────────────────────
+
+_FAKE_INSTALL = """#!/bin/bash
+echo "install $*" >> "$LOG"
+[ -z "${FAIL_INSTALL:-}" ] || exit 1
+cp -- "${@: -2:1}" "${@: -1}"
+"""
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_put_writes_beside_the_old_copy_and_renames_it_over(tmp_path, script, fails):
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    src.write_text("new\n")
+    dst.write_text("old\n")
+    program = _function(script, "put") + f'put 0644 {src} {dst} || echo "put failed"\n'
+    result, calls = _run_fake(tmp_path, program, fakes={"install": _FAKE_INSTALL},
+                              env={"FAIL_INSTALL": "1"} if fails else {})
+    assert result.returncode == 0, result.stderr
+    assert calls == [f"install -m 0644 -o root -g root -- {src} {dst}.new"]
+    assert dst.read_text() == ("old\n" if fails else "new\n")
+    assert ("put failed" in result.stdout) is fails
+    if not fails:
+        assert not (tmp_path / "dst.new").exists()
+
+
+def test_an_updater_that_does_not_parse_is_never_installed(tmp_path, script):
+    broken = tmp_path / "update.sh"
+    broken.write_text("main() {\n")
+    program = (f"UPDATER_SRC={broken}\n" 'die() { echo "DIE:$*"; exit 3; }\n'
+               + _function(script, "install_files") + "install_files\n")
+    result, calls = _run_fake(tmp_path, program)
+    assert result.returncode == 3
+    assert f"DIE:{broken} does not parse (above); nothing installed" in result.stdout
+    assert calls == []
+
+
+def _update_arm(tmp_path, script):
+    stubs = "".join(
+        f'{name}() {{ echo {name} >> "$LOG"; {body} }}\n' for name, body in [
+            ("take_lock", ""),
+            ("preflight", 'return "${PREFLIGHT_RC:-0}";'),
+            ("server_checkout", 'printf "%s\\n" "${CHECKOUT-/srv/smylte}";'),
+            ("drift", 'printf "%s\\n" "${DRIFT-}";'),
+            ("write_settings", ""),
+            ("install_files", 'return "${INSTALL_RC:-0}";'),
+            ("check_key_node", ""),
+            ("apply_logind", ""),
+        ])
+    return ("UNIT_NAME=smylte-panel.service\nREPO=/srv/smylte\n"
+            f"CRED={tmp_path / 'cred'}\n"
+            'die() { echo "DIE:$*"; exit 1; }\nsay() { echo "== $* =="; }\n'
+            + stubs + _function(script, "start_service") + _case_arm(script, "--update") + "\n")
+
+
+@pytest.mark.parametrize("setup, env, last, calls", [
+    ("token", {"PREFLIGHT_RC": "1"}, "panel: refused: preflight failed (above)",
+     ["take_lock", "preflight"]),
+    ("none", {}, "panel: refused: no token stored — run panel-setup.sh", ["take_lock", "preflight"]),
+    ("empty", {}, "panel: refused: no token stored — run panel-setup.sh", ["take_lock", "preflight"]),
+    ("token", {"CHECKOUT": "/home/x/other"}, "panel: refused: smylte.service runs /home/x/other, not /srv/smylte",
+     ["take_lock", "preflight", "server_checkout"]),
+    ("token", {"CHECKOUT": ""}, "panel: refused: smylte.service runs , not /srv/smylte",
+     ["take_lock", "preflight", "server_checkout"]),
+], ids=["preflight", "no-token", "empty-token", "other-checkout", "no-server"])
+def test_update_refuses_with_exit_3_before_changing_anything(tmp_path, script, setup, env, last, calls):
+    if setup != "none":
+        (tmp_path / "cred").write_text("" if setup == "empty" else "x" * 43 + "\n")
+    result, log = _run_fake(tmp_path, _update_arm(tmp_path, script), env=env)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert result.stdout.splitlines()[-1] == last
+    assert log == calls
+
+
+def test_update_with_no_drift_is_up_to_date_and_changes_nothing(tmp_path, script):
+    (tmp_path / "cred").write_text("x" * 43 + "\n")
+    result, log = _run_fake(tmp_path, _update_arm(tmp_path, script))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines()[-1] == "panel: up to date"
+    assert log == ["take_lock", "preflight", "server_checkout", "drift"]
+
+
+def test_update_with_drift_installs_enables_and_restarts_in_order(tmp_path, script):
+    (tmp_path / "cred").write_text("x" * 43 + "\n")
+    result, log = _run_fake(tmp_path, _update_arm(tmp_path, script), env={"DRIFT": "panel.py"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines()[-1] == "panel: updated"
+    assert log == ["take_lock", "preflight", "server_checkout", "drift", "write_settings",
+                   "install_files", "check_key_node", "apply_logind",
+                   "systemctl enable smylte-panel-poweroff.path",
+                   "systemctl start smylte-panel-poweroff.path",
+                   "systemctl enable smylte-panel-update.path",
+                   "systemctl start smylte-panel-update.path",
+                   "systemctl enable smylte-panel.service",
+                   "systemctl reset-failed smylte-panel.service",
+                   "systemctl restart smylte-panel.service"]
+
+
+def test_a_failure_after_the_refusals_is_not_exit_3(tmp_path, script):
+    (tmp_path / "cred").write_text("x" * 43 + "\n")
+    result, log = _run_fake(tmp_path, _update_arm(tmp_path, script),
+                            env={"DRIFT": "panel.py", "INSTALL_RC": "1"})
+    assert result.returncode == 1
+    assert "panel: updated" not in result.stdout
+
+
+def test_update_reads_no_token_probes_nothing_and_sets_no_trap(script):
+    arm = _case_arm(script, "--update")
+    code = "\n".join(l for l in arm.splitlines() if not l.lstrip().startswith("#"))
+    for word in ("read_token", "probe_token", "store_token", "TOKEN", "run_oneoff",
+                 "trap", "stop_service", "read "):
+        assert word not in code, word
+
+
+@pytest.mark.parametrize("label", ["install", "--update", "--rotate-token", "--selftest|--clear",
+                                   "--keytest", "--reset-refresh", "--uninstall"])
+def test_every_arm_but_status_takes_the_lock_first(script, label):
+    arm = _case_arm(script, label)
+    first = [l.strip() for l in arm.splitlines() if l.strip() and not l.lstrip().startswith("#")][0]
+    assert first == "take_lock", (label, first)
+
+
+def test_status_takes_no_lock_and_every_arm_is_covered(script):
+    assert "take_lock" not in _case_arm(script, "--status")
+    labels = re.findall(r"^  ([\w|-]+)\)$", script[script.index('case "$MODE" in'):], re.M)
+    assert set(labels) == {"install", "--update", "--rotate-token", "--selftest|--clear",
+                           "--keytest", "--reset-refresh", "--status", "--uninstall"}
+
+
+def _take_lock(tmp_path, script, **env):
+    lock = tmp_path / "setup.lock"
+    program = (f"SETUP_LOCK={lock}\n" 'die() { echo "DIE:$*"; exit 3; }\n' + _function(script, "take_lock")
+               + 'take_lock\nif flock -n "$SETUP_LOCK" true; then echo free; else echo held; fi\n')
+    return lock, program
+
+
+def test_take_lock_holds_the_setup_lock_until_exit(tmp_path, script):
+    lock, program = _take_lock(tmp_path, script)
+    result, _ = _run_fake(tmp_path, program)
+    assert (result.returncode, result.stdout) == (0, "held\n")
+
+
+def test_take_lock_refuses_while_the_key_update_holds_it(tmp_path, script):
+    import fcntl
+    lock, program = _take_lock(tmp_path, script)
+    with open(lock, "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        result, _ = _run_fake(tmp_path, program)
+        assert result.returncode == 3
+        assert result.stdout == ("DIE:an update from the key is running (journalctl -u smylte-panel-update -f); "
+                                 "run this again when it is done\n")
+        # The updater's own --update says it holds the lock already.
+        result, _ = _run_fake(tmp_path, program, env={"SMYLTE_PANEL_SETUP_LOCKED": "1"})
+        assert (result.returncode, result.stdout) == (0, "held\n")
+
+
+_FAKE_SERVER_UNIT = """#!/bin/bash
+echo "systemctl $*" >> "$LOG"
+case "$*" in
+  "show -P LoadState smylte.service") echo "$LOADSTATE" ;;
+  "show -P WorkingDirectory smylte.service") echo "$WD" ;;
+  "show -P User smylte.service") echo "${OWNER_NAME-}" ;;
+  "is-enabled "*) echo enabled ;;
+  "is-active "*) echo active ;;
+esac
+"""
+
+
+@pytest.mark.parametrize("load, wd, expected", [
+    ("loaded", "/home/pi/smylte/backend", "/home/pi/smylte\n"),
+    ("not-found", "", ""),
+    ("loaded", "/srv/elsewhere", "/srv/elsewhere\n"),
+])
+def test_server_checkout_is_smylte_services_checkout(tmp_path, script, load, wd, expected):
+    result, _ = _run_fake(tmp_path, _function(script, "server_checkout") + "server_checkout\n",
+                          fakes={"systemctl": _FAKE_SERVER_UNIT}, env={"LOADSTATE": load, "WD": wd})
+    assert (result.returncode, result.stdout) == (0, expected)
+
+
+@pytest.mark.parametrize("checkout, warning", [
+    ("/srv/smylte", None),
+    ("/home/pi/other", "  ! smylte.service runs /home/pi/other: the key updates that checkout, not this one"),
+    ("", "  ! smylte.service is not installed: the key cannot update this box"),
+])
+def test_install_warns_when_the_key_would_update_another_checkout_or_none(tmp_path, script, checkout, warning):
+    arm = _case_arm(script, "install")
+    block = arm[arm.index("sc=$(server_checkout)"):]
+    block = block[:block.index("\n    fi\n") + len("\n    fi\n")]
+    program = ("REPO=/srv/smylte\n" f"server_checkout() {{ printf '%s\\n' '{checkout}'; }}\n" + block)
+    result, _ = _run_fake(tmp_path, program)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (warning + "\n" if warning else "")
+
+
+_FAKE_STATUS = {
+    "systemctl": _FAKE_SERVER_UNIT,
+    "journalctl": '#!/bin/bash\necho "journalctl $*" >> "$LOG"\n',
+    "getent": '#!/bin/bash\necho "$2:x:1000:1000::$FAKE_HOME:/bin/bash"\n',
+    "runuser": '#!/bin/bash\necho "runuser $*" >> "$LOG"\nshift 3\nexec "$@"\n',
+}
+
+
+@pytest.mark.parametrize("result_kind", ["regular", "symlink", "absent"])
+def test_status_shows_the_update_path_the_result_the_journal_and_the_owners_log(
+        tmp_path, script, result_kind):
+    arm = _case_arm(script, "--status")
+    block = arm[arm.index('say "update from the key"'):arm.index('say "service"')]
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "smylte-autopull.log").write_text("".join(f"line {n}\n" for n in range(25)))
+    res = tmp_path / "result"
+    if result_kind == "regular":
+        res.write_text(f"{_RID} 200.000 updated\n")
+    elif result_kind == "symlink":
+        (tmp_path / "elsewhere").write_text("secret\n")
+        res.symlink_to(tmp_path / "elsewhere")
+    program = f"RESULT={res}\n" 'say() { echo "== $* =="; }\n' + block
+    result, calls = _run_fake(tmp_path, program, fakes=_FAKE_STATUS,
+                              env={"OWNER_NAME": "owner", "FAKE_HOME": str(home)})
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert "  smylte-panel-update.path: enabled=enabled active=active" in out
+    assert (f"  last result: {_RID} 200.000 updated" in out) is (result_kind == "regular")
+    assert "secret" not in out
+    assert "journalctl --no-pager -u smylte-panel-update -n 15" in calls
+    assert f"runuser -u owner -- tail -n 20 -- {home}/smylte-autopull.log" in calls
+    assert "line 5\n" in out and "line 24\n" in out and "line 4\n" not in out
+
+
+def test_status_reads_no_owners_log_without_a_server_unit(tmp_path, script):
+    arm = _case_arm(script, "--status")
+    block = arm[arm.index('say "update from the key"'):arm.index('say "service"')]
+    program = f"RESULT={tmp_path / 'none'}\n" 'say() { echo "== $* =="; }\n' + block
+    result, calls = _run_fake(tmp_path, program, fakes=_FAKE_STATUS,
+                              env={"OWNER_NAME": "", "FAKE_HOME": str(tmp_path)})
+    assert result.returncode == 0, result.stderr
+    assert not [c for c in calls if c.startswith("runuser")]
+
+
+def test_uninstall_removes_the_update_units_and_their_run_directory(script):
+    arm = _case_arm(script, "--uninstall")
+    assert arm.index("systemctl disable --now smylte-panel-update.path") \
+        < arm.index('rm -f "$UPD_PATH_UNIT" "$UPD_UNIT"') < arm.index('rm -rf "$UPDATE_RUN"') \
+        < arm.index("systemctl daemon-reload")
+    assert re.search(r"^UPDATE_RUN=/run/smylte-panel-update$", script, re.M)
+    # update.sh lives in $LIB, which goes too.
+    assert re.search(r'^\s*rm -rf .*"\$LIB"', arm, re.M)

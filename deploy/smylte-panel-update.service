@@ -1,0 +1,36 @@
+# Updates Smylte at the desk panel's request: autopull's steps as the checkout's
+# owner, a restart of smylted, then the pulled deploy/panel-setup.sh --update
+# (deploy/smylte-panel-update.sh, installed as /usr/local/lib/smylte-panel/update.sh).
+# Started by smylte-panel-update.path, and not enabled itself.
+#
+# It runs as root and unsandboxed, because it runs panel-setup.sh, which writes
+# /etc and /usr/local and restarts units. The pull runs as the owner (runuser).
+#
+# ExecStartPre moves the request out of the panel's run directory instead of
+# letting the script read it in place:
+#  - rename(2) never opens or follows what it moves, so a symlink, a FIFO or a
+#    directory there is moved, not read, and the script reads only a regular
+#    file in its own root-owned directory;
+#  - the request is gone before the script runs. PathExists= is level-triggered,
+#    so a request left by a script that cannot run (a syntax error, a missing
+#    file) would start this unit again and again until the path unit hit its
+#    start limit and stopped acting on requests;
+#  - both paths are on /run, so the move is a rename on one tmpfs.
+# The leading - lets the script run when there is nothing to move; it says so.
+#
+# The result stays in /run/smylte-panel-update between runs (Preserve), where
+# the panel reads it. TimeoutStopSec leaves room to put the panel back and
+# restart it when a stop or the start timeout cuts a run short.
+[Unit]
+Description=Update Smylte at the desk panel's request
+
+[Service]
+Type=oneshot
+UMask=0022
+RuntimeDirectory=smylte-panel-update
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+TimeoutStartSec=30min
+TimeoutStopSec=180
+ExecStartPre=-/usr/bin/mv -fT /run/smylte-panel/update /run/smylte-panel-update/request
+ExecStart=/usr/bin/bash /usr/local/lib/smylte-panel/update.sh

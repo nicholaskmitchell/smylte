@@ -3116,8 +3116,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         header gives the strip's half-open rows in the buffer, `440-480` at
         800×480 and rotation 0.
 
-        `screen` (`confirm` or `off`) is a static screen instead of a view: the
-        shutdown prompt, or the notice that the unit is off. It works on every
+        `screen` (one of `frame.SCREEN_KINDS`) is a static screen instead of a
+        view: the shutdown prompt, the notice that the unit is off, or one of the
+        update's. It works on every
         display, switchable or not, reads nothing of the owner's, and cannot be
         combined with `mode` or `tabs` (422). `X-Display-Screen` names it, and
         there is no `X-Display-Mode`.
@@ -3168,8 +3169,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # anything about whether the token is real.
         if mode is not None and mode not in SmylteService._DISPLAY_MODES:
             raise HTTPException(422, "mode must be calendar, habits or now")
-        if screen is not None and screen not in ("confirm", "off"):
-            raise HTTPException(422, "screen must be confirm or off")
+        if screen is not None and screen not in frame_mod.SCREEN_KINDS:
+            raise HTTPException(
+                422, "screen must be one of " + ", ".join(frame_mod.SCREEN_KINDS))
         if screen is not None and (mode is not None or tabs):
             raise HTTPException(422, "screen cannot be combined with mode or tabs")
         _display_throttle(request)

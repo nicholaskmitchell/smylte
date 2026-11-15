@@ -2554,7 +2554,7 @@ def test_the_strip_is_pure_ink_and_paper_on_a_colour_display_too():
     assert png[:4] == b"\x89PNG"
 
 
-@pytest.mark.parametrize("kind", ["confirm", "off"])
+@pytest.mark.parametrize("kind", F.SCREEN_KINDS)
 def test_a_screen_is_a_raw_framebuffer_with_no_view_headers(api, kind):
     # A display that did NOT opt in: screens work on every display.
     token = api.post("/api/displays", json={
@@ -2574,9 +2574,10 @@ def test_a_screen_is_a_raw_framebuffer_with_no_view_headers(api, kind):
     inverted = _bin(api, token, f"&screen={kind}&invert=1")
     assert inverted.content == bytes(b ^ 0xFF for b in de.content)
     assert inverted.headers["x-display-format"] == "mono-hlsb-inverted"
-    # The two screens are different pictures.
-    other = "off" if kind == "confirm" else "confirm"
-    assert _bin(api, token, f"&screen={other}").content != de.content
+    # No two screens are the same picture.
+    for other in F.SCREEN_KINDS:
+        if other != kind:
+            assert _bin(api, token, f"&screen={other}").content != de.content, other
 
 
 def test_a_screen_advises_at_least_the_eink_floor_on_a_colour_display(api):
@@ -2623,6 +2624,16 @@ def test_a_screen_for_a_missing_or_disabled_display_is_a_404(api):
     assert _bin(api, token, "&screen=off").status_code == 404
 
 
+def test_an_unknown_screen_is_a_422_that_lists_the_kinds(api):
+    token = _switchable(api)
+    r = _bin(api, token, "&screen=sleep")
+    assert r.status_code == 422
+    assert r.json()["detail"] == "screen must be one of " + ", ".join(F.SCREEN_KINDS)
+    # Close to a real kind is still unknown: the match is exact.
+    for near in ("Update", "updating ", "confirm_update", ""):
+        assert _bin(api, token, f"&screen={near}").status_code == 422, near
+
+
 def test_a_screen_cannot_be_combined_with_a_view(api):
     token = _switchable(api)
     for query in ("&screen=off&mode=now", "&screen=off&tabs=1",
@@ -2630,15 +2641,19 @@ def test_a_screen_cannot_be_combined_with_a_view(api):
         assert _bin(api, token, query).status_code == 422, query
 
 
-def test_a_screen_answers_304_and_a_screen_needs_a_panel_size(api):
+@pytest.mark.parametrize("kind", F.SCREEN_KINDS)
+def test_a_screen_answers_304(api, kind):
     token = api.post("/api/displays", json={
         "name": "Hallway", "panel_width": 800, "panel_height": 480}).json()["token"]
-    first = _bin(api, token, "&screen=confirm")
-    again = api.get(f"/api/public/display/{token}.bin?w=800&h=480&screen=confirm",
+    first = _bin(api, token, f"&screen={kind}")
+    again = api.get(f"/api/public/display/{token}.bin?w=800&h=480&screen={kind}",
                     headers={"If-None-Match": first.headers["etag"]})
     assert again.status_code == 304 and not again.content
     # The headers that say what was skipped are on the 304 too.
-    assert again.headers["x-display-screen"] == "confirm"
+    assert again.headers["x-display-screen"] == kind
+
+
+def test_a_screen_needs_a_panel_size(api):
     blank = api.post("/api/displays", json={"name": "No size"}).json()["token"]
     missing = api.get(f"/api/public/display/{blank}.bin?screen=off")
     assert missing.status_code == 422 and "panel size" in missing.text
@@ -2674,6 +2689,30 @@ def test_screen_text_is_localized_and_a_bad_kind_is_refused():
         F.screen_lines("sleep", "en")
 
 
+def test_every_screen_kind_has_lines_in_both_languages():
+    # The two tables name the same words, so a key added to one cannot be missing
+    # from the other and fall back to English on a German panel.
+    assert set(F._TEXT["de"]) == set(F._TEXT["en"])
+    assert F.SCREEN_KINDS == ("confirm", "off", "confirm-update", "update",
+                              "updating", "updated", "up-to-date", "update-failed")
+    for kind in F.SCREEN_KINDS:
+        en, de = F.screen_lines(kind, "en"), F.screen_lines(kind, "de")
+        assert len(en) == len(de) and all(en) and all(de), kind
+        assert len(en) <= 3, kind
+        if kind not in ("confirm", "off"):
+            assert en != de, kind
+            assert len(en) == 3, kind
+    # The old-client contract: `confirm` is still the two lines it was.
+    assert len(F.screen_lines("confirm", "en")) == 2
+    assert len(F.screen_lines("confirm", "de")) == 2
+
+
+def test_no_two_screens_say_the_same_thing():
+    for language in ("en", "de"):
+        said = [F.screen_lines(kind, language) for kind in F.SCREEN_KINDS]
+        assert len(set(said)) == len(said), language
+
+
 def test_render_screen_is_one_bit_at_the_panel_size_and_refuses_what_it_cannot():
     lines = F.screen_lines("off", "en")
     body, media = R.render_screen(lines, width=800, height=480)
@@ -2690,7 +2729,7 @@ def test_render_screen_is_one_bit_at_the_panel_size_and_refuses_what_it_cannot()
 
 @pytest.mark.parametrize("rotation", [0, 90, 180, 270])
 @pytest.mark.parametrize("language", ["en", "de"])
-@pytest.mark.parametrize("kind", ["confirm", "off"])
+@pytest.mark.parametrize("kind", F.SCREEN_KINDS)
 def test_no_screen_line_is_shortened_at_the_stock_panel_size(
         monkeypatch, kind, language, rotation):
     # The prompt's instructions (how to cancel, to wait before unplugging) must
@@ -2742,7 +2781,7 @@ def test_panel_too_small_for_a_switchable_display_is_judged_without_the_strip(ap
     assert now["panel_too_small"] is None
 
 
-@pytest.mark.parametrize("kind", ["confirm", "off"])
+@pytest.mark.parametrize("kind", F.SCREEN_KINDS)
 @pytest.mark.parametrize("language", ["en", "de"])
 @pytest.mark.parametrize("width,height", [(296, 128), (250, 122), (400, 300), (800, 480)])
 @pytest.mark.parametrize("rotation", [0, 90])

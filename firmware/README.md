@@ -145,14 +145,15 @@ Pi's power-button pads, chooses the view and shuts the box down.
 | `deploy/smylte-panel.service` | The systemd unit |
 | `deploy/70-smylte-panel-key.rules` | udev: only the power key is readable by the unit |
 | `deploy/smylte-panel-poweroff.path` and `.service` | Power the box off when the panel asks |
+| `deploy/smylte-panel-update.path`, `.service` and `.sh` | Update Smylte when the panel asks (see "Updating from the key") |
 | `deploy/logind-smylte-panel.conf` | Tells logind to ignore the power key |
 | `deploy/panel-setup.sh` | Install, update, remove |
 
 It fetches the frame over loopback,
 `http://127.0.0.1:8080/api/public/display/<token>.bin?invert=1&w=800&h=480`,
 with `&mode=…&tabs=1` for a view of the desk key and `&screen=…` for the
-shutdown screens. It needs no wifi and no TLS: the request never leaves the
-box.
+shutdown and update screens. It needs no wifi and no TLS: the request never
+leaves the box.
 
 **Status:** tested in CI against the server and Waveshare's driver, **not yet
 run on hardware**.
@@ -219,9 +220,9 @@ seated Pico would boot and fight the Pi on the same wires.
    Calendar its calendars. Copy its token, or the whole URL.
 6. `sudo ~/smylte/deploy/panel-setup.sh`. It checks the box, writes
    `/etc/default/smylte-panel` (once: see "Settings"), installs the client, the
-   udev rule, the power-off units and the logind drop-in, asks for the token,
-   runs a self-test (power up and down, no refresh), then enables and starts
-   `smylte-panel.service`.
+   udev rule, the power-off and update units and the logind drop-in, asks for
+   the token, runs a self-test (power up and down, no refresh), then enables
+   and starts `smylte-panel.service`.
 7. Check the key: `sudo ~/smylte/deploy/panel-setup.sh --keytest`. See "Day to
    day".
 8. `journalctl -u smylte-panel -f`. Expect `ready: …`, maybe `waiting for the
@@ -235,9 +236,12 @@ seated Pico would boot and fight the Pi on the same wires.
 | You do | The panel does |
 | --- | --- |
 | Tap (press and let go within 0.6 s) | Shows the next view: Today, then Now, then Calendar, then Today again |
-| Hold about 1 s, then let go | Draws "Shut down?" |
+| Hold about 1 s, then let go | Draws "Shut down?". Where the update is on offer, it has a third line: "To update instead, hold the key again for a second." |
 | Tap once "Shut down?" is fully drawn | Draws "Off", then the box shuts down |
-| Wait 10 s | "Shut down?" goes away and the view comes back. If the service has drawn nothing since it started (a restart onto an unchanged view), the glass goes white instead, and the view follows once the 3-minute floor allows |
+| Hold again for about a second on "Shut down?", then let go | Draws "Update?" |
+| Tap once "Update?" is fully drawn | Draws "Updating…", runs the update, then draws "Updated", "Up to date" or "Update failed" |
+| Tap once the result is drawn, or wait 60 s | The view comes back (see "Updating from the key") |
+| Wait 10 s | "Shut down?" or "Update?" goes away and the view comes back. If the service has drawn nothing since it started (a restart onto an unchanged view), the glass goes white instead, and the view follows once the 3-minute floor allows |
 | Press while the Pi is off | The Pi boots, and the service draws Today |
 
 **Let go after about a second. Never hold the key to wait for the screen: at
@@ -247,13 +251,23 @@ about 5 s the Pi cuts its own power, and that is not a clean shutdown.**
   shorter than 0.03 s.
 - The prompt comes 2–3 s after you let go, or later if a refresh or a fetch is
   running. A tap counts for "Shut down?" only if it started after the prompt was
-  drawn and within 10 s of that.
+  drawn and within 10 s of that. The same goes for "Update?".
+- The update hint appears only when the update is on offer: the update units are
+  installed, the server has served every screen the update draws (they are
+  fetched in the background, like "Shut down?"), and the key has at least three
+  refreshes left in its budget. Otherwise "Shut down?" has its two lines only,
+  and a second hold does nothing.
+- A short press on "Shut down?" shuts down. To update, hold about 1 s.
+- Let go after about a second for the second hold too. It counts if it began
+  within 10 s of "Shut down?" being drawn, even while the draw is still running.
 - Taps are coalesced. The tab strip along the bottom changes first (a partial
   refresh), and the page follows 0.5 s after the last tap (a fast refresh).
 - The key has a budget: 12 view-change refreshes, refilled one per 50 s. A tap
   needs two left, one for its strip and one for its page. When they run out,
   taps are ignored and the Status line says `key resting; try again in N s`.
   The confirming tap, the "Off" screen and the way back from the prompt cost
+  nothing. An update costs three in all: "Shut down?", "Update?" and
+  "Updating…". The tap on "Update?", the result and the way back from it cost
   nothing.
 - After the "Off" screen the Pi powers off by itself, and the glass keeps the
   screen with no power. A press boots it again. It takes a few minutes: the
@@ -261,6 +275,80 @@ about 5 s the Pi cuts its own power, and that is not a clean shutdown.**
 - logind is told to ignore the key, so **while the service is not running the
   key does nothing**. Shut down over SSH, or hold the key for about 5 s for the
   hardware cut, which is not clean.
+
+### Updating from the key
+
+After pulling the version that has this, run `sudo ~/smylte/deploy/panel-setup.sh`
+once. It installs the update units and the updater (`update.sh` in
+`/usr/local/lib/smylte-panel`). Until then the Status line ends `the key cannot
+update: the update units are not installed — re-run panel-setup.sh`, and the key
+only shuts down. From then on a hold, a second hold and a tap update the box.
+
+What runs, as root, once you tap "Update?":
+
+1. The panel draws "Updating…" and writes a request file. `smylte-panel-update.path`
+   sees it and starts `smylte-panel-update.service`.
+2. The updater takes the checkout from `smylte.service` (its `User=` and its
+   `WorkingDirectory=` minus `/backend`), never from the panel. It refuses a
+   checkout, or a directory above it, that anyone else could write, and a
+   symlink in the way.
+3. As that user it runs the checkout's `deploy/smylte-autopull.sh`: a
+   fast-forward pull of the branch the checkout is on, `pip install` if
+   `requirements.txt` changed, a frontend rebuild if `frontend/` changed, and
+   the unprivileged migrations. It does not restart anything and needs no
+   sudoers rule.
+4. It restarts `smylte.service` and waits up to 300 s for `/healthz`.
+5. It runs the pulled `deploy/panel-setup.sh --update`. That installs only what
+   differs from the checkout, and restarts the panel only if something did.
+   Where it changed the panel, the updater watches the new one for 150 s.
+6. The panel draws the result.
+
+| Screen | Means |
+| --- | --- |
+| Updated | Something new was pulled, or the panel's code changed |
+| Up to date | Nothing new. A push reaches the box about a minute after it lands on GitLab, because the GitHub mirror lags |
+| Update failed | Something went wrong. The glass says `sudo ~/smylte/deploy/panel-setup.sh --status`, which shows why |
+
+- **Rollback.** If `panel-setup.sh --update` fails after it began, or the new
+  panel stops or restarts within 150 s, the updater puts back the panel's
+  `panel.py`, `epd7in5_v2.py` and `smylte-panel.service`, restarts it, and the
+  glass says "Update failed". Only those three are rolled back. The udev rule,
+  the logind drop-in, and the power-off and update units are not, and neither
+  is anything earlier in the run: the pull, the rebuild and the server's restart
+  have already happened when the panel step starts. A refusal (exit 3 from
+  `--update`: preflight failed, no token stored, or `smylte.service` runs
+  another checkout) changes nothing and rolls nothing back.
+- **Root migrations need SSH.** If autopull finds one pending, the update stops
+  with `a migration needs root: sudo …/deploy/migrate.sh` in the journal. Run it
+  by hand.
+- **Git.** The checkout's owner must be able to `git fetch` with no prompt, as
+  for cron autopull. The updater runs with systemd's `PATH`, not the crontab's,
+  so a tool that only the crontab's `PATH` finds (`npm`, say) is not found.
+- **A failed `pip` or `npm` is retried.** The updater remembers where the pull
+  started (`~/.smylte-autopull-pending`), so the next press rebuilds and reports
+  "Updated", even if nothing new has arrived since.
+- **While "Updating…" is up the key does nothing**, for at most 35 min
+  (`UPDATE_MAX_S`). A tap or a hold is ignored. **Don't unplug the box, and
+  don't hold the key: at about 5 s the Pi cuts its own power.** If the updater
+  never answers, the panel gives up after 60 s (`UPDATE_START_S`); if its result
+  stays `running`, after 35 min. Routine refreshes wait meanwhile.
+- **One at a time.** The updater waits up to 15 min for a cron autopull and up
+  to 10 min for a `panel-setup.sh` you started by hand. From the updater's
+  snapshot of the panel to the end of its watch, every `panel-setup.sh` option
+  except `--status` refuses with `an update from the key is running
+  (journalctl -u smylte-panel-update -f); run this again when it is done`.
+- **The result screen** goes away on a tap that begins after it is drawn, or
+  after 60 s (`NOTICE_S`), and the view comes back. A hold does nothing. A panel
+  the update restarted has no view to go back to: it draws Today as soon as the
+  server answers, without waiting for the 180 s floor.
+- **Logs.** `journalctl -u smylte-panel-update` (every line starts `update: `,
+  and the autopull log lines it added start `update: autopull log: `) and
+  `~/smylte-autopull.log`. `panel-setup.sh --status` shows the update path's
+  state, the last result line, the last 15 journal lines and the last 20 lines
+  of the log.
+- **Trust.** The key runs the pulled `panel-setup.sh` as root, as you would by
+  hand: whoever can push to the checkout's branch decides what runs. That is why
+  the updater checks who owns and who can write the checkout first.
 
 ### Settings
 
@@ -337,11 +425,13 @@ it installs or removes the logind drop-in. After changing any other setting,
   time.
 - After **New URL** in Settings: `sudo ~/smylte/deploy/panel-setup.sh --rotate-token`.
 - **After pulling a change to `firmware/pi_epaper_7in5/`, `deploy/smylte-panel.service`
-  or the panel's udev, power-off and logind files in `deploy/`, re-run
+  or the panel's udev, power-off, update and logind files in `deploy/`, re-run
   `sudo ~/smylte/deploy/panel-setup.sh`.**
-  Autopull does not update or restart the panel, because the service runs a
+  Cron autopull does not update or restart the panel, because the service runs a
   root-owned copy in `/usr/local/lib/smylte-panel`. `--status` shows whether the
-  copy differs.
+  copy differs. The key's update does this for you: it runs
+  `panel-setup.sh --update`, which installs only what differs (see "Updating from
+  the key").
 - `panel-setup.sh --keytest` listens to the key for 30 s and prints each press
   and release with how long it lasted and what the panel would make of it (tap,
   hold, noise or ignored). It prints "let go now" once the key has been down for 1 s.
@@ -352,11 +442,17 @@ it installs or removes the logind drop-in. After changing any other setting,
   the batch guard turned them off. It stops the service around itself and
   starts it again.
 - `panel-setup.sh --status` also shows logind's `HandlePowerKey` settings, the
-  power-off path unit and the key's device node.
+  power-off path unit, the key's device node, the update path unit's enabled and
+  active state, the last result line of the key's update, the last 15 lines of
+  `journalctl -u smylte-panel-update` and the last 20 lines of
+  `~/smylte-autopull.log`.
+- `panel-setup.sh --update` is what the key's update runs. It never prompts, and
+  it prints `panel: up to date`, `panel: updated` or `panel: refused: …` (exit 3,
+  nothing changed) as its last line.
 - Before storing the panel: `--clear` paints it white and stops the service.
 - `--uninstall` removes everything, including any `systemctl edit` override,
   `/etc/default/smylte-panel`, the udev rule, the `smylte-panel-key` group, the
-  power-off units and the logind drop-in. Then delete the display in Settings.
+  power-off and update units and the logind drop-in. Then delete the display in Settings.
   **After uninstall, the key powers the box off again (the OS default).**
 - After five failed starts in an hour the unit stays failed:
   `sudo systemctl reset-failed smylte-panel && sudo systemctl start smylte-panel`.
@@ -378,6 +474,15 @@ last frame`.
 | `no confirm screen yet` | A hold was ignored: the "Shut down?" screen has not been fetched yet. It is fetched in the background after the first successful fetch, and kept in `/var/lib/smylte-panel` | Wait a minute and hold again. If it stays, smylted is probably too old |
 | `logind still powers off on a press — re-run panel-setup.sh`, or `the key does nothing — re-run panel-setup.sh` | The logind drop-in does not match `SMYLTE_PANEL_KEY`: with `auto` it is missing, with `off` it is present | `sudo ~/smylte/deploy/panel-setup.sh` |
 | `could not power off: failed: …` or `could not power off: nothing acted on the request within 120 s` | The panel could not write its request file, or the power-off path unit did not act on it. The glass goes back to the view | `systemctl status smylte-panel-poweroff.path`, re-run `panel-setup.sh`, and shut down over SSH meanwhile |
+| (nothing, or `the update is not offered yet: its screens are not cached`, once per start). "Shut down?" has no "To update instead…" line, and a second hold does nothing | The update is not on offer. Either smylted has not served the update's screens (it is too old, or has not been restarted since the pull), or the key has fewer than three refreshes left, or the units are missing (next row) | Pull and `sudo systemctl restart smylte`, wait a minute for the background fetch, and hold again once the budget has refilled (one per 50 s) |
+| `the key cannot update: the update units are not installed — re-run panel-setup.sh` (the Status line ends `· the key cannot update: …`) | `/etc/systemd/system/smylte-panel-update.path` is missing, so the update is never offered | `sudo ~/smylte/deploy/panel-setup.sh` |
+| `update failed (see sudo ~/smylte/deploy/panel-setup.sh --status)`. The glass says "Update failed", and later Status lines end `· the last update failed: sudo ~/smylte/deploy/panel-setup.sh --status` | The updater ran and failed. The updater's own lines say where. Typical ones: `a migration needs root: sudo …/deploy/migrate.sh`, `autopull failed: … (see above)`, `smylted did not answer /healthz within 300 s`, `panel-setup.sh refused: …`, `the new panel code stopped within 150 s` (the panel's code and unit were put back) | `sudo ~/smylte/deploy/panel-setup.sh --status` shows the result line, the updater's journal and the end of `~/smylte-autopull.log`. Fix it, then update again. The note goes away after an update that succeeds |
+| `could not update: failed: …` (for example `failed: no run directory`), or `could not update: the Updating screen could not be recorded` | The panel could not write its request file, or could not record the "Updating…" paint, so nothing was asked of the updater. The glass says "Update failed" | Check that `/run/smylte-panel` (the unit's `RuntimeDirectory`) is writable by the panel's user, or the state file as for `could not record the refresh`, and try again |
+| `could not update: nothing acted on the request within 60 s` | The updater did not write a result for the request within 60 s: the update path unit is not enabled or not running, or the updater could not start. The glass says "Update failed" | `systemctl status smylte-panel-update.path smylte-panel-update.service`, `journalctl -u smylte-panel-update`, and re-run `panel-setup.sh` |
+| `could not update: still running after 35 min` | The updater wrote `running` and then no final result for 35 min (`UPDATE_MAX_S`). The glass says "Update failed" | `journalctl -u smylte-panel-update` shows where it stopped. Check the box before updating again: the pull or the restart may be half done |
+| `could not update: lost track of the request` | "Updating…" was on the glass, with no request out and none waiting. This should not happen | Report it, with `journalctl -u smylte-panel` |
+| "Updating…" stays on the glass and the key does nothing | An update is running, which can take several minutes (a frontend rebuild, a slow `npm`). The panel gives up on its own: after 60 s if the updater never answers, after 35 min at the latest, whatever the updater did | Don't hold the key. Over SSH: `journalctl -u smylte-panel-update -f` |
+| "Up to date" although you pushed | The push has not reached the box yet: the GitHub mirror lags GitLab by about a minute. Or the checkout is on another branch than the one you pushed to | Wait a minute and update again. `git -C ~/smylte status` shows the branch |
 | `waking: the server is not answering` | The Pi was started with the key, and 10 min later the server still does not answer. The glass keeps the "Off" screen | `systemctl status smylte` |
 | `fast refresh is off: this panel looks like a pre-2023 batch; see firmware/README.md` (later `· fast refresh is off (see firmware/README.md)`) | The batch guard turned quick refresh off | See "What it does". `panel-setup.sh --reset-refresh` clears it |
 | `/dev/spidev0.0: missing` | SPI is off | Enable it (setup step 3) and reboot |
@@ -423,6 +528,16 @@ Do these once, at bring-up.
   change cleanly with no ghost, and then a full refresh comes.
 - A clean shutdown with the key: hold, let go, tap. Then press the key once: the
   Pi boots and Today is drawn.
+- The update, three ways. Each is hold, let go, hold again, let go, tap on
+  "Update?", with `journalctl -u smylte-panel-update -f` open:
+  - With nothing new: "Updating…", then "Up to date". The journal ends
+    `update: done: up-to-date`, and the panel was not restarted.
+  - With a server change pushed: "Updated". smylted has restarted
+    (`systemctl status smylte`), and the panel has not.
+  - With a change to `panel.py` pushed (a comment will do): "Updating…", then
+    the panel restarts, and the restarted panel draws "Updated" as its first
+    paint, within 150 s. A tap, or 60 s, and it draws Today. `panel-setup.sh
+    --status` shows no drift.
 - With `POWER_OFF_ON_HALT=1` in the bootloader config (`sudo rpi-eeprom-config`),
   check that a press still boots the halted Pi.
 - `systemd-analyze security smylte-panel.service`.
@@ -455,11 +570,15 @@ The panel's life is only guaranteed between 0 and 40 °C. A Pi 5 gives off about
 - the contract against the live server routes;
 - the driver against Waveshare's own driver, read as source (never executed);
 - the loop, floor and signals on fakes;
-- the unit and script against the client's constants;
+- the unit and script against the client's constants, and the updater
+  (`deploy/smylte-panel-update.sh`) run against fake `systemctl`, `runuser`,
+  `git` and `panel-setup.sh`;
 - `test_firmware_pi_key.py`: the gestures, the `Ui`, the key's budget and the
   key input.
 
-The server's own tests cover the tab strip and the screens.
+`backend/tests/test_autopull.py` runs `deploy/smylte-autopull.sh` against a
+temporary bare origin. The server's own tests cover the tab strip and the
+screens.
 
 ## Licence
 

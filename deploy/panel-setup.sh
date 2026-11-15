@@ -7,6 +7,7 @@
 #   sudo ~/smylte/deploy/panel-setup.sh --clear         paint it white (for storage) and stop
 #   sudo ~/smylte/deploy/panel-setup.sh --keytest       print what the view key's presses would do
 #   sudo ~/smylte/deploy/panel-setup.sh --reset-refresh turn fast and partial refresh back on
+#   sudo ~/smylte/deploy/panel-setup.sh --update        update after a pull, unattended (what the desk key runs)
 #   sudo ~/smylte/deploy/panel-setup.sh --status        checks, drift, service state
 #   sudo ~/smylte/deploy/panel-setup.sh --uninstall     stop, clear, and remove everything
 #   sudo ~/smylte/deploy/panel-setup.sh --no-selftest   install without the self-test
@@ -20,6 +21,11 @@
 # from this checkout, so autopull cannot change the code driving the glass. The
 # cost is this script: after pulling a change to firmware/pi_epaper_7in5/ or
 # deploy/smylte-panel.service, run it again. `--status` shows whether you need to.
+#
+# The desk key can do that too: smylte-panel-update.service runs autopull, then
+# this script's --update, which installs only what drifted and never prompts.
+# It exits 3 when it refuses before changing anything. While the key's update
+# runs, every option but --status refuses to start.
 #
 # --keytest refuses until logind has been told to ignore the power key (an
 # install does that), because otherwise the first press would power the box
@@ -48,6 +54,15 @@ OFF_SRC=$REPO/deploy/smylte-panel-poweroff.service
 OFF_UNIT=/etc/systemd/system/smylte-panel-poweroff.service
 LOGIND_SRC=$REPO/deploy/logind-smylte-panel.conf
 LOGIND=/etc/systemd/logind.conf.d/50-smylte-panel.conf
+UPD_PATH_SRC=$REPO/deploy/smylte-panel-update.path
+UPD_PATH_UNIT=/etc/systemd/system/smylte-panel-update.path
+UPD_SRC=$REPO/deploy/smylte-panel-update.service
+UPD_UNIT=/etc/systemd/system/smylte-panel-update.service
+UPDATER_SRC=$REPO/deploy/smylte-panel-update.sh
+UPDATER=$LIB/update.sh
+UPDATE_RUN=/run/smylte-panel-update
+RESULT=$UPDATE_RUN/result
+SETUP_LOCK=/run/smylte-panel-setup.lock
 PY=/usr/bin/python3
 FILES="panel.py epd7in5_v2.py"
 
@@ -72,6 +87,25 @@ pwr_setting() {
 }
 
 [ "$(id -u)" -eq 0 ] || die "run with sudo"
+
+# One run at a time, the key's update included. The updater holds this lock
+# from its snapshot of the panel to the end of its watch, and runs --update
+# under it with SMYLTE_PANEL_SETUP_LOCKED=1. A run by hand inside that window
+# could be undone by the update's rollback, so it refuses instead.
+take_lock() {
+  if [ "${SMYLTE_PANEL_SETUP_LOCKED:-}" = 1 ]; then return 0; fi
+  exec 8>>"$SETUP_LOCK"
+  flock -n 8 || die "an update from the key is running (journalctl -u smylte-panel-update -f); run this again when it is done"
+}
+
+# The checkout the key updates: the one smylte.service runs, as the updater
+# reads it from the unit. Nothing when smylte.service is not installed.
+server_checkout() {
+  local wd
+  [ "$(systemctl show -P LoadState smylte.service 2>/dev/null || true)" = loaded ] || return 0
+  wd=$(systemctl show -P WorkingDirectory smylte.service 2>/dev/null || true)
+  printf '%s\n' "${wd%/backend}"
+}
 
 # ── preflight ────────────────────────────────────────────────────────────────
 # Each check prints its fix. Nothing is written until all of them pass.
@@ -290,6 +324,9 @@ drift() {   # prints the files whose installed copy differs from the checkout
   cmp -s "$RULES_SRC" "$RULES" || out="$out ${RULES##*/}"
   cmp -s "$PATH_SRC" "$PATH_UNIT" || out="$out ${PATH_UNIT##*/}"
   cmp -s "$OFF_SRC" "$OFF_UNIT" || out="$out ${OFF_UNIT##*/}"
+  cmp -s "$UPD_PATH_SRC" "$UPD_PATH_UNIT" || out="$out ${UPD_PATH_UNIT##*/}"
+  cmp -s "$UPD_SRC" "$UPD_UNIT" || out="$out ${UPD_UNIT##*/}"
+  cmp -s "$UPDATER_SRC" "$UPDATER" || out="$out ${UPDATER##*/}"
   if [ "$(setting SMYLTE_PANEL_KEY auto)" != off ]; then
     cmp -s "$LOGIND_SRC" "$LOGIND" || out="$out ${LOGIND##*/}"
   elif [ -e "$LOGIND" ]; then
@@ -378,25 +415,40 @@ show_service() {
   journalctl --no-pager -u "$UNIT_NAME" -n 20 || true
 }
 
+# Written beside the old copy and renamed over it, so a crash or a power cut
+# leaves the old file or the new one, never half of one. The key's update runs
+# the client from these files.
+put() {   # $1: mode, $2: source, $3: destination
+  install -m "$1" -o root -g root -- "$2" "$3.new" && mv -f -- "$3.new" "$3"
+}
+
 install_files() {
-  say "group $KEY_GROUP, udev rule, power-off units, logind drop-in"
+  # The updater installed here is the one the next key press runs: one that
+  # does not parse would leave the key unable to update anything again.
+  bash -n "$UPDATER_SRC" || die "$UPDATER_SRC does not parse (above); nothing installed"
+  say "group $KEY_GROUP, udev rule, power-off and update units, logind drop-in"
   getent group "$KEY_GROUP" >/dev/null || groupadd --system "$KEY_GROUP"
-  install -m 0644 -o root -g root "$RULES_SRC" "$RULES"
+  put 0644 "$RULES_SRC" "$RULES"
   udevadm control --reload
   udevadm trigger --action=change --subsystem-match=input
   udevadm settle
-  install -m 0644 -o root -g root "$PATH_SRC" "$PATH_UNIT"
-  install -m 0644 -o root -g root "$OFF_SRC" "$OFF_UNIT"
+  put 0644 "$PATH_SRC" "$PATH_UNIT"
+  put 0644 "$OFF_SRC" "$OFF_UNIT"
+  put 0644 "$UPD_PATH_SRC" "$UPD_PATH_UNIT"
+  put 0644 "$UPD_SRC" "$UPD_UNIT"
   if [ "$(setting SMYLTE_PANEL_KEY auto)" != off ]; then
-    install -D -m 0644 -o root -g root "$LOGIND_SRC" "$LOGIND"
+    install -d -m 0755 -o root -g root "${LOGIND%/*}"
+    put 0644 "$LOGIND_SRC" "$LOGIND"
   else
     rm -f "$LOGIND"
   fi
   say "code -> $LIB, unit -> $UNIT"
   install -d -m 0755 -o root -g root "$LIB"
-  for f in $FILES; do install -m 0644 -o root -g root "$SRC/$f" "$LIB/$f"; done
-  install -m 0644 -o root -g root "$UNIT_SRC" "$UNIT"
-  systemd-analyze verify "$UNIT" "$PATH_UNIT" "$OFF_UNIT" || echo "  ! systemd-analyze verify complained (above); continuing"
+  for f in $FILES; do put 0644 "$SRC/$f" "$LIB/$f"; done
+  # Run by bash, so it needs no execute bit.
+  put 0644 "$UPDATER_SRC" "$UPDATER"
+  put 0644 "$UNIT_SRC" "$UNIT"
+  systemd-analyze verify "$UNIT" "$PATH_UNIT" "$OFF_UNIT" "$UPD_PATH_UNIT" "$UPD_UNIT" || echo "  ! systemd-analyze verify complained (above); continuing"
   systemctl daemon-reload
 }
 
@@ -407,6 +459,7 @@ if [ "$MODE" = "--no-selftest" ]; then MODE=install; NO_SELFTEST=yes; fi
 
 case "$MODE" in
   install)
+    take_lock
     say "preflight"
     preflight || die "fix the ✗ lines above, then run this again"
     say "settings"
@@ -418,6 +471,15 @@ case "$MODE" in
     say "power-off request unit"
     systemctl enable smylte-panel-poweroff.path
     systemctl start smylte-panel-poweroff.path
+    say "update request unit"
+    systemctl enable smylte-panel-update.path
+    systemctl start smylte-panel-update.path
+    sc=$(server_checkout)
+    if [ -z "$sc" ]; then
+      echo "  ! smylte.service is not installed: the key cannot update this box"
+    elif [ "$sc" != "$REPO" ]; then
+      echo "  ! smylte.service runs $sc: the key updates that checkout, not this one"
+    fi
     say "display token"
     if [ -s "$CRED" ]; then
       echo "  ✓ $CRED exists (--rotate-token to replace it)"
@@ -449,7 +511,48 @@ case "$MODE" in
     echo "The first refresh comes once the clock has synced and the 180 s floor has"
     echo "passed: up to about five minutes. Watch: journalctl -u $UNIT_NAME -f"
     ;;
+  --update)
+    # Run by the key's updater, with nothing on stdin. The last line is the
+    # outcome it reads. Exit 3: refused, and nothing was changed. It reads no
+    # token, probes nothing and runs no self-test.
+    take_lock
+    say "preflight"
+    if ! preflight; then
+      echo "panel: refused: preflight failed (above)"
+      exit 3
+    fi
+    if [ ! -s "$CRED" ]; then
+      echo "panel: refused: no token stored — run panel-setup.sh"
+      exit 3
+    fi
+    sc=$(server_checkout)
+    if [ "$sc" != "$REPO" ]; then
+      echo "panel: refused: smylte.service runs $sc, not $REPO"
+      exit 3
+    fi
+    d=$(drift)
+    if [ -z "$d" ]; then
+      echo "panel: up to date"
+      exit 0
+    fi
+    say "settings"
+    write_settings
+    install_files
+    say "power key"
+    check_key_node
+    apply_logind
+    say "request units"
+    systemctl enable smylte-panel-poweroff.path
+    systemctl start smylte-panel-poweroff.path
+    systemctl enable smylte-panel-update.path
+    systemctl start smylte-panel-update.path
+    say "service"
+    systemctl enable "$UNIT_NAME"
+    start_service restart
+    echo "panel: updated"
+    ;;
   --rotate-token)
+    take_lock
     say "display token"
     read_token; probe_token; store_token
     # The client reads the token once, at start. Restart it if it is running,
@@ -464,6 +567,7 @@ case "$MODE" in
     esac
     ;;
   --selftest|--clear)
+    take_lock
     [ -f "$LIB/panel.py" ] || die "not installed — run this script without options first"
     say "${MODE#--}"
     arm_restart_trap
@@ -489,6 +593,7 @@ case "$MODE" in
     exit "$rc"
     ;;
   --keytest)
+    take_lock
     [ -f "$LIB/panel.py" ] || die "not installed — run this script without options first"
     say "keytest"
     # The first press would power the box off if the running logind still handled
@@ -517,6 +622,7 @@ case "$MODE" in
     exit "$rc"
     ;;
   --reset-refresh)
+    take_lock
     [ -f "$LIB/panel.py" ] || die "not installed — run this script without options first"
     say "reset-refresh"
     arm_restart_trap
@@ -548,10 +654,26 @@ case "$MODE" in
     echo "  smylte-panel-poweroff.path: enabled=$(systemctl is-enabled smylte-panel-poweroff.path 2>/dev/null || true)" \
          "active=$(systemctl is-active smylte-panel-poweroff.path 2>/dev/null || true)"
     check_key_node
+    say "update from the key"
+    echo "  smylte-panel-update.path: enabled=$(systemctl is-enabled smylte-panel-update.path 2>/dev/null || true)" \
+         "active=$(systemctl is-active smylte-panel-update.path 2>/dev/null || true)"
+    if [ -f "$RESULT" ] && [ ! -L "$RESULT" ]; then
+      echo "  last result: $(head -n 1 -- "$RESULT")"
+    fi
+    journalctl --no-pager -u smylte-panel-update -n 15 || true
+    # The pull's reasons are in the owner's log, not the journal. Read as the
+    # owner, so a symlink there cannot show root's files.
+    owner=$(systemctl show -P User smylte.service 2>/dev/null || true)
+    if [ -n "$owner" ]; then
+      home=$(getent passwd "$owner" | cut -d: -f6 || true)
+      echo "  the end of $home/smylte-autopull.log:"
+      runuser -u "$owner" -- tail -n 20 -- "$home/smylte-autopull.log" 2>/dev/null || echo "  (unreadable)"
+    fi
     say "service"
     show_service
     ;;
   --uninstall)
+    take_lock
     say "stopping"
     systemctl disable --now "$UNIT_NAME" 2>/dev/null || true
     if [ -f "$LIB/panel.py" ]; then
@@ -561,6 +683,9 @@ case "$MODE" in
     say "removing the power key's files"
     systemctl disable --now smylte-panel-poweroff.path 2>/dev/null || true
     rm -f "$PATH_UNIT" "$OFF_UNIT"
+    systemctl disable --now smylte-panel-update.path 2>/dev/null || true
+    rm -f "$UPD_PATH_UNIT" "$UPD_UNIT"
+    rm -rf "$UPDATE_RUN"
     # With the drop-in gone, logind's default is back: a press powers the box off.
     rm -f "$LOGIND"
     apply_logind

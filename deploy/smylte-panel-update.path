@@ -1,0 +1,13 @@
+# Starts smylte-panel-update.service when the desk panel asks for an update:
+# smylte-panel.service writes /run/smylte-panel/update, a directory only that
+# unit can write to and that goes away when it stops. Installed and enabled by
+# panel-setup.sh.
+[Unit]
+Description=Update Smylte when the desk panel asks
+
+[Path]
+PathExists=/run/smylte-panel/update
+Unit=smylte-panel-update.service
+
+[Install]
+WantedBy=multi-user.target

@@ -183,6 +183,26 @@ crontab -e     # * * * * * $HOME/smylte-autopull.sh
 
 The log is `~/smylte-autopull.log`.
 
+The desk key's update (see **Desk panel on this box**) runs the checkout's
+copy of this script, not the installed one, so the cron copy needs no
+re-copying for it. Three environment variables, all unset under cron, change
+what it does; with none of them set it logs as it always has and prints
+nothing:
+
+| Variable | Effect |
+| --- | --- |
+| `SMYLTE_AUTOPULL_REPO` | The checkout to pull, instead of `~/smylte` or `~/tasks` |
+| `SMYLTE_AUTOPULL_NO_RESTART=1` | Skips the `sudo -n systemctl restart`, so the caller restarts. No sudoers rule is needed |
+| `SMYLTE_AUTOPULL_REPORT=1` | Waits up to 900 s for the lock instead of exiting, and prints `autopull: <outcome>` as its last line: `current`, `updated`, `blocked` (a root migration is pending), or `failed cd`, `failed fetch`, `failed pull`, `failed pip`, `failed npm`, `failed migrate` or `failed busy` |
+
+With `REPORT`, a failed `pip` or `npm` after a pull writes the commit the pull
+started from to `~/.smylte-autopull-pending` and stops before the migrations,
+because the next run would otherwise find nothing new and skip the rebuild for
+good. While the file holds a commit that is an ancestor of `HEAD`, the next
+`REPORT` run diffs from it, rebuilds even if nothing new was fetched, and
+reports `updated`. The file is deleted when a run reaches `updated`. The oldest
+base wins if a rebuild fails twice. Cron never writes it.
+
 ## 8. Upgrades and migrations
 
 Changes outside the source tree (the unit, `/etc/smylte`, Radicale's hook line)
@@ -388,7 +408,7 @@ Pair a display in **Settings → Displays**. Each one has a token and these URLs
 | URL | For |
 | --- | --- |
 | `/display/<token>` | A browser: a Raspberry Pi kiosk, an old tablet, a Boox |
-| `/api/public/display/<token>.bin` | A microcontroller, or a panel on this box's own SPI header: the packed 1-bit framebuffer (see `firmware/README.md`). `?mode=`, `?tabs=1` and `?screen=` are for the desk key: `mode` and `tabs` choose the view and draw its tab strip, and only on a display with Desk key on (any other gets a 422); `screen` is the shutdown prompt and the off screen, on any display |
+| `/api/public/display/<token>.bin` | A microcontroller, or a panel on this box's own SPI header: the packed 1-bit framebuffer (see `firmware/README.md`). `?mode=`, `?tabs=1` and `?screen=` are for the desk key: `mode` and `tabs` choose the view and draw its tab strip, and only on a display with Desk key on (any other gets a 422); `screen` is a static screen on any display: `confirm`, `off`, `confirm-update`, `update`, `updating`, `updated`, `up-to-date` or `update-failed` (the shutdown and update screens), and anything else gets a 422 |
 | `/api/public/display/<token>.png`, `.bmp` | A board with an image decoder. `?w=&h=`, `?rotate=` and `?palette=` override per request |
 | `/api/public/display/<token>` | The frame as JSON (about 30 KB for a typical month, up to about 130 KB) |
 
@@ -427,7 +447,7 @@ Optional, and separate from `setup.sh`. A Raspberry Pi 5 server can drive a
 Waveshare 7.5" e-Paper panel on its own SPI header, with no Pico. The default
 board is the Waveshare e-Paper Driver HAT (Rev2.3 or later), seated on the
 header. A key wired across the Pi's J2 pads (the power-button breakout) changes
-the view and shuts the box down.
+the view, shuts the box down and can update Smylte.
 
 1. Turn SPI on: `sudo raspi-config nonint do_spi 0`, then reboot.
 2. Seat the HAT on the header (Display Config B, Interface 0) and wire the key,
@@ -448,12 +468,30 @@ the view and shuts the box down.
   (`/etc/systemd/logind.conf.d/50-smylte-panel.conf`) that makes logind ignore
   the power key, a udev rule that lets the panel's unit read only that key, and
   a power-off path unit. The panel service asks that unit to power the box off
-  after the key's confirmation. `--uninstall` removes all of them, and then a
-  press of the key powers the box off again.
-- **Autopull never updates or restarts it.** The service runs a root-owned copy
-  in `/usr/local/lib/smylte-panel`. After pulling a change to
+  after the key's confirmation. It also installs an update path unit and
+  service, and the updater they run (`/usr/local/lib/smylte-panel/update.sh`).
+  `--uninstall` removes all of them, and then a press of the key powers the box
+  off again.
+- **Cron autopull never updates or restarts it.** The service runs a root-owned
+  copy in `/usr/local/lib/smylte-panel`. After pulling a change to
   `firmware/pi_epaper_7in5/` or `deploy/smylte-panel.service`, re-run
-  `sudo ~/smylte/deploy/panel-setup.sh`.
+  `sudo ~/smylte/deploy/panel-setup.sh`, or update from the key (next bullet).
+- **Updating from the key.** Hold the key about a second ("Shut down?"), hold
+  again ("Update?"), and tap. The update units must be installed, so re-run
+  `sudo ~/smylte/deploy/panel-setup.sh` once after pulling the version that has
+  them. It then does what autopull does (as the owner of the checkout that
+  `smylte.service` runs, on its branch), restarts `smylte.service` and waits
+  for `/healthz`, and runs the pulled `deploy/panel-setup.sh --update` as root,
+  which installs only what differs and restarts the panel only if it must. A
+  panel that does not stay up for 150 s afterwards gets its previous code and
+  unit back. The glass shows the result: "Updated", "Up to date" or "Update
+  failed". Root migrations still need SSH (`sudo ~/smylte/deploy/migrate.sh`),
+  and the owner's git credentials must work with no prompt, as for cron. The
+  updater logs to `journalctl -u smylte-panel-update` and
+  `~/smylte-autopull.log`, and `panel-setup.sh --status` shows both. While it
+  runs, `panel-setup.sh` refuses every option but `--status`. Since it runs the
+  pulled script as root, anyone who can push to the checkout's branch decides
+  what root runs, as with a run by hand. `firmware/README.md` has the details.
 - **Moving machines:** the restored `displays` table keeps the token valid. Store
   it again on the new box with `panel-setup.sh`.
 - **Migrations:** any future migration that touches the panel must be a no-op on

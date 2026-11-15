@@ -59,9 +59,12 @@
 #     off through a request file; otherwise the view comes back. If this
 #     process has drawn nothing yet (a restart onto an unchanged view), the
 #     glass goes white instead, and the view follows once the floor allows.
-#     These refreshes skip the floor and are paid for from a bucket of KEY_BURST,
-#     refilled one per KEY_REFILL_S; the confirming tap and every way back are
-#     free. A panel that takes a partial or fast refresh too slowly (an old
+#     Where the update units are installed, a second hold on "Shut down?"
+#     asks "Update?"; a tap there draws Updating…, asks the root updater
+#     through a second request file, and shows how it went until a tap or
+#     NOTICE_S. These refreshes skip the floor and are paid for from a bucket
+#     of KEY_BURST, refilled one per KEY_REFILL_S; the confirming tap and every
+#     way back are free. A panel that takes a partial or fast refresh too slowly (an old
 #     batch) gets quick refresh turned off in the state file.
 #
 # Run by deploy/smylte-panel.service. Install and update with
@@ -90,6 +93,7 @@ import re
 import select
 import signal
 import socket
+import stat
 import struct
 import sys
 import threading
@@ -125,7 +129,10 @@ USER_AGENT = "smylte-panel/1"
 # These are the server's `mode` values (`?mode=`, X-Display-Mode).
 VIEWS = ("habits", "now", "calendar")
 TODAY = "habits"            # the view a wake or the idle return shows
-SCREENS = ("confirm", "off")    # the server's `?screen=` values
+SCREENS = ("confirm", "off", "confirm-update", "update", "updating", "updated",
+           "up-to-date", "update-failed")          # == the server's SCREEN_KINDS
+UPDATE_SCREENS = SCREENS[2:]       # all must be cached for the update to be offered
+NOTICES = ("updated", "up-to-date", "update-failed")
 
 # ── the glass ────────────────────────────────────────────────────────────────
 MIN_REFRESH_S = 180         # Waveshare: never sooner. Not configurable.
@@ -202,6 +209,15 @@ KEY_REFILL_S = 50
 HOLD_EMPTY_GAP_S = 60   # an empty bucket still allows a hold this long after a prompt
 POWEROFF_NAME = "poweroff"      # the request file in $RUNTIME_DIRECTORY
 POWEROFF_GRACE_S = 120          # how long a request waits for the stop
+UPDATE_TOKENS = 3                  # the offer: this prompt, the update prompt, Updating
+UPDATE_NAME = "update"             # the request file in $RUNTIME_DIRECTORY
+UPDATE_RESULT = "/run/smylte-panel-update/result"
+UPDATE_UNIT = "/etc/systemd/system/smylte-panel-update.path"
+UPDATE_POLL_S = 2
+UPDATE_START_S = 60                # no answer for the request by then → failed
+UPDATE_MAX_S = 2100                # a running update past this → failed (> the unit's 30 min start + 180 s stop)
+NOTICE_S = 60
+FAILED_NOTE = "the last update failed: sudo ~/smylte/deploy/panel-setup.sh --status"
 KEYTEST_S = 30                  # how long --keytest listens
 
 EX_OK = 0
@@ -217,6 +233,9 @@ ETAG_RE = re.compile(r'"[\x21\x23-\x7e]{1,128}"')
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 REFRESH_RE = re.compile(r"[0-9]{1,9}")
 RETRY_RE = re.compile(r"[0-9]{1,6}")
+UPDATE_RESULT_RE = re.compile(r"([0-9]{1,10}\.[0-9]{3}) ([0-9]{1,10}\.[0-9]{3}) "
+                              r"(running|updated|up-to-date|update-failed)\n")
+UPDATE_RESULT_MAX_BYTES = 96
 
 STOP_SIGNALS = frozenset({signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
 REPAINT_SIGNAL = signal.SIGUSR1     # forget the glass; repaint when allowed
@@ -772,7 +791,7 @@ class Page:
 
 @dataclasses.dataclass(frozen=True)
 class Prompt:
-    pass
+    kind: str = "confirm"   # "confirm", "confirm-update" or "update"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -781,8 +800,18 @@ class Off:
 
 
 @dataclasses.dataclass(frozen=True)
+class Update:
+    pass
+
+
+@dataclasses.dataclass(frozen=True)
+class Notice:
+    kind: str       # one of NOTICES
+
+
+@dataclasses.dataclass(frozen=True)
 class Leave:
-    why: str        # "timeout", "resume" or "failed"
+    why: str        # "timeout", "resume", "failed" or "notice"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -795,9 +824,12 @@ class Ui:
     nothing of tokens or the network, and every time is a parameter.
 
     `mode` is browse, prompt_pending (the prompt is being drawn), prompt (it is
-    drawn and armed) or off. Every method returns one-shot actions, never
+    drawn and armed), off, updating (Updating… is on the glass) or notice (the
+    update's outcome is). Every method returns one-shot actions, never
     re-emitted. `page_needed` says a tap moved the tab since the last
     whole-view paint; `page_due` is when that page is to be fetched.
+    `prompt_kind` is the prompt being drawn or armed, and `confirm_press_t`
+    the press of the hold that asked for "Shut down?".
     """
 
     def __init__(self, view: str, start: float, idle_s: float):
@@ -807,6 +839,10 @@ class Ui:
         self.page_needed = False
         self.prompt_shown_bt: float | None = None
         self.prompt_deadline: float | None = None
+        self.prompt_kind: str | None = None
+        self.confirm_press_t: float | None = None
+        self.notice_shown_bt: float | None = None
+        self.notice_deadline: float | None = None
         self.last_key = start
         self.idle_s = idle_s
         # The earliest the idle return can happen: the floor, and the clock
@@ -815,6 +851,10 @@ class Ui:
 
     def _leave_prompt(self) -> None:
         self.prompt_shown_bt = self.prompt_deadline = None
+        self.prompt_kind = self.confirm_press_t = None
+
+    def _leave_notice(self) -> None:
+        self.notice_shown_bt = self.notice_deadline = None
 
     def tap(self, press_t: float, now: float) -> list:
         if self.mode == "browse":
@@ -826,17 +866,39 @@ class Ui:
         if self.mode == "prompt":
             # The press decides, however late the release came.
             if self.prompt_shown_bt <= press_t <= self.prompt_deadline:
+                if self.prompt_kind == "update":
+                    self.mode = "updating"
+                    self._leave_prompt()
+                    return [Update()]
                 self.mode = "off"
                 self._leave_prompt()
                 return [Off()]
+        if self.mode == "notice":
+            # Only a press made once the notice was on the glass goes back.
+            if self.notice_shown_bt is not None and press_t >= self.notice_shown_bt:
+                self.mode = "browse"
+                self._leave_notice()
+                self.last_key = now
+                return [Leave("notice")]
         return []
 
-    def hold(self, press_t: float, now: float) -> list:
+    def hold(self, press_t: float, now: float, *, offer_update: bool = False) -> list:
         if self.mode == "browse":
             self.mode = "prompt_pending"
+            self.prompt_kind = "confirm-update" if offer_update else "confirm"
+            self.confirm_press_t = press_t
             self.page_due = None
             self.last_key = now
-            return [Prompt()]
+            return [Prompt(self.prompt_kind)]
+        # A second hold on "Shut down?": its press came after the first
+        # hold's, which lets in one made while the prompt was still drawn,
+        # since the loop takes that hold only once the draw is over.
+        if (self.mode == "prompt" and self.prompt_kind == "confirm-update"
+                and self.confirm_press_t < press_t <= self.prompt_deadline):
+            self.mode = "prompt_pending"
+            self.prompt_kind = "update"
+            self.last_key = now
+            return [Prompt("update")]
         return []
 
     def shown_prompt(self, end_bt: float) -> list:
@@ -849,9 +911,44 @@ class Ui:
 
     def prompt_failed(self, now: float) -> list:
         if self.mode == "prompt_pending":
+            if self.prompt_kind == "update":
+                # "Update?" never reached the glass, which still shows
+                # "Shut down?", armed as it was.
+                self.mode = "prompt"
+                self.prompt_kind = "confirm-update"
+                return []
             self.mode = "browse"
+            self.prompt_kind = self.confirm_press_t = None
             if self.page_needed:
                 self.page_due = now
+        return []
+
+    def awaiting_update(self) -> list:
+        """Updating… is on the glass, drawn by an earlier process (§3.5)."""
+        self.mode = "updating"
+        self.page_due = None
+        return []
+
+    def update_done(self, kind: str, now: float) -> list:
+        if self.mode == "updating":
+            self.mode = "notice"
+            self._leave_notice()
+            return [Notice(kind)]
+        return []
+
+    def shown_notice(self, end_bt: float) -> list:
+        if self.mode == "notice":
+            self.notice_shown_bt = end_bt
+            self.notice_deadline = end_bt + NOTICE_S
+            self.last_key = end_bt
+        return []
+
+    def notice_skipped(self, now: float) -> list:
+        if self.mode == "notice":
+            self.mode = "browse"
+            self._leave_notice()
+            self.last_key = now
+            return [Leave("notice")]
         return []
 
     def tick(self, now: float, *, gate_open: bool, floor_at: float) -> list:
@@ -862,6 +959,12 @@ class Ui:
             self._leave_prompt()
             self.last_key = now
             return [Leave("timeout")]
+        if self.mode == "notice" and self.notice_deadline is not None \
+                and now >= self.notice_deadline:
+            self.mode = "browse"
+            self._leave_notice()
+            self.last_key = now
+            return [Leave("notice")]
         if self.mode != "browse":
             return []
         if self.page_due is not None and now >= self.page_due:
@@ -908,6 +1011,7 @@ class Ui:
             return None
         times = [t for t in (self.page_due,
                              self.prompt_deadline if self.mode == "prompt" else None,
+                             self.notice_deadline if self.mode == "notice" else None,
                              self._idle_deadline()) if t is not None]
         return min(times) if times else None
 
@@ -1307,6 +1411,97 @@ def clear_poweroff(run_dir: str | None) -> None:
         log.error("cannot remove %s: %s", path, e)
 
 
+def request_update(run_dir: str | None, rid: str) -> str:
+    """Ask the update units to update Smylte: "ok", or why not.
+
+    The path unit starts the updater as soon as the name exists, and the
+    updater reads the id from it, so the request is written whole under a
+    temporary name first and only then linked into place.
+    """
+    if run_dir is None or not (os.path.isdir(run_dir) and os.access(run_dir, os.W_OK)):
+        return "failed: no run directory"
+    path = os.path.join(run_dir, UPDATE_NAME)
+    tmp = path + ".tmp"
+    result = "ok"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+                     | os.O_CLOEXEC, 0o600)
+        try:
+            view = memoryview((rid + "\n").encode("ascii"))
+            while view:
+                view = view[os.write(fd, view):]
+        finally:
+            os.close(fd)
+        os.link(tmp, path)
+    except FileExistsError:
+        pass        # a request is already out
+    except OSError as e:
+        result = "failed: " + errno.errorcode.get(e.errno, str(e.errno))
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            log.error("cannot remove %s: %s", tmp, e)
+    return result
+
+
+def clear_update(run_dir: str | None) -> None:
+    if run_dir is None:
+        return
+    for name in (UPDATE_NAME, UPDATE_NAME + ".tmp"):
+        path = os.path.join(run_dir, name)
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            log.error("cannot remove %s: %s", path, e)
+
+
+@dataclasses.dataclass(frozen=True)
+class UpdateResult:
+    rid: str        # the request's id: the boot time the Updating paint ended
+    at: float       # the boot time the updater wrote the line
+    state: str      # running, or one of NOTICES
+
+
+def read_update_result(path: str = UPDATE_RESULT) -> UpdateResult | None:
+    """The updater's result line, or None if there is none to believe.
+
+    The file is root's, in a directory this process cannot write, but it is
+    read as if it were not: never through a symlink, never waiting on a FIFO,
+    only a regular file, and only a line in exactly the updater's format.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        log.debug("cannot read %s: %s", path, e)
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            log.debug("%s is not a regular file", path)
+            return None
+        raw = os.read(fd, UPDATE_RESULT_MAX_BYTES)
+    except OSError as e:
+        log.debug("cannot read %s: %s", path, e)
+        return None
+    finally:
+        os.close(fd)
+    m = UPDATE_RESULT_RE.fullmatch(raw.decode("ascii", errors="replace"))
+    if m is None:
+        return None
+    return UpdateResult(m.group(1), float(m.group(2)), m.group(3))
+
+
+def update_present(path: str = UPDATE_UNIT) -> bool:
+    """Whether the units that act on an update request are installed."""
+    return os.path.exists(path)
+
+
 def load_screen(state_dir: pathlib.Path, kind: str) -> bytes | None:
     """A cached screen: its frame, if the file is the frame, a newline, the
     frame's sha256 in hex and a newline. Anything else is no screen."""
@@ -1377,6 +1572,10 @@ class Deps:
     notify: object = sd_notify
     request_poweroff: object = lambda: "failed: no run directory"   # () -> "ok" | why not
     clear_poweroff: object = lambda: None
+    request_update: object = lambda rid: "failed: no run directory"   # (rid) -> "ok" | why not
+    clear_update: object = lambda: None
+    update_result: object = lambda: None     # () -> UpdateResult | None
+    update_present: bool | None = None       # the update units; None is unknown
     refresh: str = "fast"       # SMYLTE_PANEL_REFRESH
     idle_s: int = 0             # SMYLTE_PANEL_IDLE_RETURN_S
     key: str = "auto"           # SMYLTE_PANEL_KEY
@@ -1556,6 +1755,7 @@ class _Runner:
                 self.screens[kind] = frame
         self.screen_fetched_at = {kind: start for kind in self.screens}
         d.clear_poweroff()      # a request left by an earlier process
+        d.clear_update()
         # The first VIEW paint of this process skips the floor once after a
         # wake, or when the glass shows a screen (the prompt or the off screen)
         # that a stop or a crash left there. Prompts and leaves do not use it.
@@ -1607,7 +1807,16 @@ class _Runner:
         self.last_prompt_end: float | None = None
         self.grace_end: float | None = None
         self.off_paint_failed = False
-        self.stop_pending = False       # a stop came while an Off was queued
+        self.stop_pending = False       # a stop came while an Off or an Update was queued
+        # The wait for the updater's result: a request is out (or, at start,
+        # Updating… is on the glass), and these say what answers it and by when.
+        self.update_wait = False
+        self.update_rid: str | None = None
+        self.update_since: float | None = None
+        self.update_deadline: float | None = None
+        self.update_running = False
+        self.next_update_poll: float | None = None
+        self.update_screens_logged = False
         if self.floor_at > start and not self.exempt_first_view:
             log.info("first refresh allowed in %d s (the 180 s floor is kept across "
                      "restarts)", math.ceil(self.floor_at - start))
@@ -1621,10 +1830,30 @@ class _Runner:
             self.notes.append("logind still powers off on a press — re-run panel-setup.sh")
         elif d.key == "off" and d.logind_present:
             self.notes.append("the key does nothing — re-run panel-setup.sh")
+        if d.key == "auto" and d.update_present is False:
+            self.notes.append("the key cannot update: the update units are not installed "
+                              "— re-run panel-setup.sh")
         for note in self.notes:
             log.warning("%s", note)
         if self.notes:
             d.notify("STATUS=" + " · ".join(self.notes))
+        # Updating… or a notice on the glass, and a result written after it was
+        # drawn: this process was restarted by the update, or by its rollback,
+        # or a crash cut the wait short. A result from before the last paint is
+        # stale.
+        if d.key == "auto" and state.complete and state.painted_end_bt is not None:
+            since = state.painted_end_bt
+            res = d.update_result()
+            if res is not None and res.at + 0.001 >= since:
+                self.ui.awaiting_update()
+                if res.state == "running":
+                    self._begin_wait(res.rid, since, True, start + UPDATE_MAX_S)
+                else:
+                    self._finish(res.state, start)
+            elif "updating" in self.screens and state.glass_sha256 == \
+                    hashlib.sha256(self.screens["updating"]).hexdigest():
+                self.ui.awaiting_update()
+                self._begin_wait(None, since, False, start + UPDATE_START_S)
 
     # ── helpers ─────────────────────────────────────────────────────────────
 
@@ -1647,6 +1876,31 @@ class _Runner:
     def _take(self, now: float) -> None:
         self.bucket.refill(now)
         self.bucket.take()
+
+    def _offer_update(self, now: float) -> bool:
+        """Whether a hold now asks "Shut down?" with the update on offer: holds
+        work, the units are there, every screen the update draws is cached,
+        and the budget covers this prompt, "Update?" and Updating…."""
+        rest = (self.d.holds_ok and self.d.update_present is True
+                and self._tokens(now) >= UPDATE_TOKENS)
+        cached = all(kind in self.screens for kind in UPDATE_SCREENS)
+        if rest and not cached and not self.update_screens_logged:
+            log.info("the update is not offered yet: its screens are not cached")
+            self.update_screens_logged = True
+        return rest and cached
+
+    def _begin_wait(self, rid: str | None, since: float, running: bool,
+                    deadline: float) -> None:
+        self.update_wait = True
+        self.update_rid, self.update_since = rid, since
+        self.update_running, self.update_deadline = running, deadline
+        self.next_update_poll = self.d.boottime()
+
+    def _end_wait(self) -> None:
+        self.update_wait = False
+        self.update_rid = self.update_since = self.update_deadline = None
+        self.update_running = False
+        self.next_update_poll = None
 
     def _healthy_line(self) -> str:
         line = _showing(self.state)
@@ -1801,11 +2055,13 @@ class _Runner:
         """Take in waited-for items. True if a stop means run() must return."""
         for item in items:
             if isinstance(item, Stop):
-                if isinstance(current, Off) or any(isinstance(a, Off) for a in self.actions):
-                    # The confirmed power-off is still drawn and requested.
+                confirmed = [a for a in [current, *self.actions]
+                             if isinstance(a, (Off, Update))]
+                if confirmed:
+                    # The confirmed power-off or update is still drawn and requested.
                     if not self.stop_pending:
-                        log.info("stopping on signal %d once the power-off is "
-                                 "requested", item.sig)
+                        log.info("stopping on signal %d once the %s is requested", item.sig,
+                                 "power-off" if isinstance(confirmed[0], Off) else "update")
                     self.stop_pending = True
                     continue
                 log.info("stopping on signal %d", item.sig)
@@ -1843,15 +2099,30 @@ class _Runner:
         elif kind == "hold" and self.ui.mode == "browse":
             if not self.d.holds_ok:
                 return
-            if "confirm" not in self.screens:
+            offer = self._offer_update(now)
+            if not offer and "confirm" not in self.screens:
                 self.problems.set("no-confirm", "no confirm screen yet")
                 return
+            # With the update on offer there are at least UPDATE_TOKENS, so
+            # this takes one and leaves the update's two.
             if self._tokens(now) >= 1:
                 self.bucket.take()
             elif self.last_prompt_end is not None \
                     and now - self.last_prompt_end < HOLD_EMPTY_GAP_S:
                 log.info("key: hold ignored; the key is resting")
                 return
+            self.actions.extend(self.ui.hold(press_t, now, offer_update=offer))
+            return
+        elif kind == "hold" and self.ui.mode == "prompt" \
+                and self.ui.prompt_kind == "confirm-update":
+            acts = self.ui.hold(press_t, now)
+            if acts:
+                # "Update?" and its Updating…, both paid for here.
+                for _ in range(2):
+                    if self._tokens(now) >= 1:
+                        self.bucket.take()
+                self.actions.extend(acts)
+            return
         self.actions.extend(getattr(self.ui, kind)(press_t, now))
 
     def _drain(self, current):
@@ -1860,7 +2131,7 @@ class _Runner:
         head of the queue), else None."""
         items = self.d.events.wait(0)
         if self._ingest(items, self.d.boottime(), current=current) \
-                or (self.stop_pending and not isinstance(current, Off)):
+                or (self.stop_pending and not isinstance(current, (Off, Update))):
             log.info("stopping before the refresh it would have started")
             return _STOP
         if self.gestures.pressed:
@@ -1959,12 +2230,15 @@ class _Runner:
         return None
 
     def _do_prompt(self, action: Prompt):
-        self.pre_prompt = ((self.glass, self.state.view, self.state.etag, self.glass_strip)
-                           if self.glass is not None else None)
+        if action.kind != "update":
+            # "Update?" follows "Shut down?": the way back is to the glass
+            # from before the first prompt.
+            self.pre_prompt = ((self.glass, self.state.view, self.state.etag, self.glass_strip)
+                               if self.glass is not None else None)
         r = self._drain(action)
         if r:
             return r
-        end = self._draw(self.screens["confirm"], purpose="prompt",
+        end = self._draw(self.screens[action.kind], purpose="prompt",
                          kind=self._kind("prompt"), etag=None, view=None)
         if end is None:
             self.actions.extend(self.ui.prompt_failed(self.d.boottime()))
@@ -2003,11 +2277,117 @@ class _Runner:
             return _STOP
         return None
 
+    def _do_update(self, action: Update):
+        r = self._drain(action)
+        if r:
+            return r
+        end = self._draw(self.screens["updating"], purpose="update",
+                         kind=self._kind("update"), etag=None, view=None)
+        now = self.d.boottime()
+        if end is None:
+            self._finish("update-failed", now, problem="could not update: the Updating "
+                                                       "screen could not be recorded")
+        else:
+            rid = f"{end:.3f}"
+            result = self.d.request_update(rid)
+            if result != "ok":
+                log.error("could not request the update: %s", result)
+                self._finish("update-failed", now, problem=f"could not update: {result}")
+            else:
+                log.info("update requested (%s)", rid)
+                self._begin_wait(rid, end, False, end + UPDATE_START_S)
+                self.problems.set("updating", "updating (asked for with the key)")
+        if self.stop_pending:
+            log.info("stopping: the update is requested")
+            return _STOP
+        return None
+
+    def _poll_update(self, now: float) -> None:
+        """While Updating… is on the glass: read the updater's result, and
+        give up on it past its deadline."""
+        if self.ui.mode != "updating":
+            return
+        if not self.update_wait:
+            # Belt and braces: Updating… with no request out and none queued
+            # would never end.
+            if not any(isinstance(a, Update) for a in self.actions):
+                log.error("updating, but no update request is out")
+                self._finish("update-failed", now,
+                             problem="could not update: lost track of the request")
+            return
+        if now < self.next_update_poll:
+            return
+        res = self.d.update_result()
+        self.next_update_poll = now + UPDATE_POLL_S
+        answers = res is not None and (
+            res.rid == self.update_rid if self.update_rid is not None
+            else res.at + 0.001 >= self.update_since)
+        if answers and self.update_rid is None:
+            self.update_rid = res.rid
+        if answers and res.state in NOTICES:
+            self._finish(res.state, now)
+            return
+        if answers and res.state == "running" and not self.update_running:
+            self.update_running = True
+            self.update_deadline = now + UPDATE_MAX_S
+        # Every result that is not final, a repeated "running" too, is held
+        # to the deadline: an updater killed outright leaves "running" behind.
+        if now >= self.update_deadline:
+            self.d.clear_update()
+            if self.update_running:
+                problem = f"could not update: still running after {UPDATE_MAX_S // 60} min"
+            else:
+                problem = ("could not update: nothing acted on the request within "
+                           f"{UPDATE_START_S} s")
+            self._finish("update-failed", now, problem=problem)
+
+    def _finish(self, kind: str, now: float, problem: str | None = None) -> None:
+        """The update is over, one way or another: its notice follows."""
+        self._end_wait()
+        self.actions.extend(self.ui.update_done(kind, now))
+        log.info("the update ended: %s", kind)
+        if kind == "update-failed":
+            if FAILED_NOTE not in self.notes:
+                self.notes.append(FAILED_NOTE)
+            self.problems.set("update", problem or "update failed (see sudo "
+                                                   "~/smylte/deploy/panel-setup.sh --status)")
+        else:
+            if FAILED_NOTE in self.notes:
+                self.notes.remove(FAILED_NOTE)
+            if self.problems.current in ("updating", "update"):
+                self.problems.ok(self._healthy_line())
+
+    def _do_notice(self, action: Notice):
+        r = self._drain(action)
+        if r:
+            return r
+        if action.kind not in self.screens:
+            log.warning("no %s screen cached; going back without the notice", action.kind)
+            self.actions.extend(self.ui.notice_skipped(self.d.boottime()))
+            return None
+        end = self._draw(self.screens[action.kind], purpose="notice",
+                         kind=self._kind("notice"), etag=None, view=None)
+        if end is None:
+            self.actions.extend(self.ui.notice_skipped(self.d.boottime()))
+        else:
+            self.ui.shown_notice(end)
+        return None
+
     def _do_leave(self, action: Leave):
         r = self._drain(action)
         if r:
             return r
         pre = self.pre_prompt
+        if action.why == "notice" and pre is None:
+            # Nothing to go back to (a process restarted by the update, or
+            # USR1): no white either. The routine fetch draws the view, and
+            # that paint skips the floor once, the allowance this leave's
+            # own paint would have had.
+            self.exempt_first_view = True
+            if self.healthy:
+                self.next_poll = self.d.boottime()
+            self.ui.leave_done(self.d.boottime())
+            return None
         if pre is not None:
             frame, view, etag, strip = pre
             self._draw(frame, purpose="leave", kind=self._kind("leave"), etag=etag,
@@ -2209,6 +2589,8 @@ class _Runner:
                    self.d.events.next_retry(), self.grace_end):
             if at is not None:
                 terms.append(at - now)
+        if self.ui.mode == "updating" and self.update_wait:
+            terms.append(self.next_update_poll - now)
         if self.painted_any and self._bg_items(now):
             terms.append(float(BG_GAP_S))
         if self.resting:
@@ -2246,6 +2628,7 @@ class _Runner:
                 code = self._grace_expired(now)
                 if code is not None:
                     return code
+            self._poll_update(now)
             if not self.gestures.pressed:
                 self.actions.extend(self.ui.tick(now, gate_open=self._gate_open(now),
                                                  floor_at=self.floor_at))
@@ -2623,6 +3006,10 @@ def main(argv=None) -> int:
                         events=events,
                         request_poweroff=lambda: request_poweroff(run_dir, start_bt),
                         clear_poweroff=lambda: clear_poweroff(run_dir),
+                        request_update=lambda rid: request_update(run_dir, rid),
+                        clear_update=lambda: clear_update(run_dir),
+                        update_result=read_update_result,
+                        update_present=update_present(),
                         refresh=refresh, idle_s=idle, key=key, holds_ok=holds_ok,
                         logind_present=logind_dropin_present()))
     except Exception:

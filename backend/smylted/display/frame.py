@@ -89,6 +89,19 @@ _TEXT = {
         "off_title": "Off",
         "off_hint": "Press the key to start.",
         "off_wake": "Waking takes a few minutes. Wait a few seconds before unplugging.",
+        "confirm_update": "To update instead, hold the key again for a second.",
+        "update_title": "Update?",
+        "update_what": "Fetches the latest version and restarts Smylte.",
+        "updating_title": "Updating…",
+        "updating_hint": "This can take several minutes.",
+        "updating_wait": "Don't unplug the box or hold the key until this screen changes.",
+        "updated_title": "Updated",
+        "updated_hint": "Smylte is running the latest version.",
+        "uptodate_title": "Up to date",
+        "uptodate_hint": "This box already has the newest version. A push can take a minute to arrive.",
+        "updatefailed_title": "Update failed",
+        "updatefailed_hint": "Details: sudo ~/smylte/deploy/panel-setup.sh --status",
+        "notice_back": "Tap the key, or wait, to go back.",
     },
     "de": {
         "today": "Heute", "nothing": "Heute nichts", "no_events": "Keine Termine",
@@ -104,6 +117,19 @@ _TEXT = {
         "off_title": "Aus",
         "off_hint": "Zum Starten die Taste drücken.",
         "off_wake": "Das Aufwachen dauert einige Minuten. Vor dem Ausstecken einige Sekunden warten.",
+        "confirm_update": "Zum Aktualisieren die Taste noch einmal eine Sekunde halten.",
+        "update_title": "Aktualisieren?",
+        "update_what": "Holt die neueste Version und startet Smylte neu.",
+        "updating_title": "Wird aktualisiert …",
+        "updating_hint": "Das kann einige Minuten dauern.",
+        "updating_wait": "Bis sich die Anzeige ändert, nicht ausstecken und die Taste nicht halten.",
+        "updated_title": "Aktualisiert",
+        "updated_hint": "Smylte läuft jetzt mit der neuesten Version.",
+        "uptodate_title": "Bereits aktuell",
+        "uptodate_hint": "Hier läuft schon die neueste Version. Ein Push braucht etwa eine Minute bis hierher.",
+        "updatefailed_title": "Update fehlgeschlagen",
+        "updatefailed_hint": "Details: sudo ~/smylte/deploy/panel-setup.sh --status",
+        "notice_back": "Zum Zurückkehren die Taste antippen oder warten.",
     },
 }
 
@@ -179,13 +205,38 @@ def tab_labels(language: str) -> tuple[str, str, str]:
             text(language, "tab_calendar"))
 
 
+# The static screens the desk key can ask for, in the order the firmware lists
+# them (`panel.SCREENS`, which a contract test holds equal to this).
+SCREEN_KINDS = ("confirm", "off", "confirm-update", "update", "updating",
+                "updated", "up-to-date", "update-failed")
+
+
 def screen_lines(kind: str, language: str) -> tuple[str, ...]:
-    """The text of a static screen: `confirm` (shut down?) or `off`."""
+    """The text of a static screen, one of `SCREEN_KINDS`.
+
+    `confirm` stays the two lines it always was: a client that predates the
+    update asks for it and must get the screen it was built against. The
+    prompt that offers the update is its own kind, `confirm-update`.
+    """
+    def lines(*keys: str) -> tuple[str, ...]:
+        return tuple(text(language, key) for key in keys)
+
     if kind == "confirm":
-        return (text(language, "confirm_title"), text(language, "confirm_hint"))
+        return lines("confirm_title", "confirm_hint")
     if kind == "off":
-        return (text(language, "off_title"), text(language, "off_hint"),
-                text(language, "off_wake"))
+        return lines("off_title", "off_hint", "off_wake")
+    if kind == "confirm-update":
+        return lines("confirm_title", "confirm_hint", "confirm_update")
+    if kind == "update":
+        return lines("update_title", "confirm_hint", "update_what")
+    if kind == "updating":
+        return lines("updating_title", "updating_hint", "updating_wait")
+    if kind == "updated":
+        return lines("updated_title", "updated_hint", "notice_back")
+    if kind == "up-to-date":
+        return lines("uptodate_title", "uptodate_hint", "notice_back")
+    if kind == "update-failed":
+        return lines("updatefailed_title", "updatefailed_hint", "notice_back")
     raise ValueError(f"unknown screen {kind!r}")
 
 

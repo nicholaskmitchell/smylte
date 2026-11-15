@@ -25,6 +25,7 @@ from fastapi.testclient import TestClient
 from test_displays import _api_settings, _frame
 
 from smylted.app import create_app
+from smylted.display import frame as frame_mod
 from smylted.display import render
 from smylted.service import SmylteService
 
@@ -101,6 +102,10 @@ def test_the_address_is_the_one_the_server_binds():
     kw = {k.arg: ast.literal_eval(k.value) for k in calls[0].keywords}
     assert kw["host"] == P.HOST
     assert kw["port"] == P.PORT
+
+
+def test_the_screens_are_the_servers_screen_kinds():
+    assert P.SCREENS == frame_mod.SCREEN_KINDS
 
 
 def test_the_request_target_is_a_registered_route(tmp_path):
@@ -487,6 +492,17 @@ def test_a_screen_fetch_is_a_frame_with_no_view_and_no_strip(live):
     token = new_switchable_display(c)
     result, r = _live_fetch(c, token, screen="confirm")
     assert isinstance(result, P.Frame), result
+    assert (result.mode, result.strip) == (None, None)
+    assert result.body == r.content
+
+
+@pytest.mark.parametrize("kind", ["confirm-update", "updating"])
+def test_an_update_screen_fetch_is_that_screen(live, kind):
+    c, _ = live
+    token = new_switchable_display(c)
+    result, r = _live_fetch(c, token, screen=kind)
+    assert isinstance(result, P.Frame), result
+    assert r.headers.get_list("x-display-screen") == [kind]
     assert (result.mode, result.strip) == (None, None)
     assert result.body == r.content
 
