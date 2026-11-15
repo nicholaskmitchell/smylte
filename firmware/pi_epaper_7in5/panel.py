@@ -56,8 +56,10 @@
 #     partial refresh, then the page, as a fast one, once no tap has come for
 #     COALESCE_S. A hold (down for HOLD_S) asks "Shut down?"; a tap
 #     within PROMPT_S confirms, draws the off screen and has the box powered
-#     off through a request file; otherwise the view comes back. These
-#     refreshes skip the floor and are paid for from a bucket of KEY_BURST,
+#     off through a request file; otherwise the view comes back. If this
+#     process has drawn nothing yet (a restart onto an unchanged view), the
+#     glass goes white instead, and the view follows once the floor allows.
+#     These refreshes skip the floor and are paid for from a bucket of KEY_BURST,
 #     refilled one per KEY_REFILL_S; the confirming tap and every way back are
 #     free. A panel that takes a partial or fast refresh too slowly (an old
 #     batch) gets quick refresh turned off in the state file.
@@ -1406,6 +1408,9 @@ class _Problems:
 
     def set(self, key: str, message: str) -> None:
         if key == self.current:
+            if message != self._message:
+                self._notify(f"STATUS={message}; the glass keeps its last frame")
+                self._message = message
             return
         log.warning("%s", message)
         self._notify(f"STATUS={message}; the glass keeps its last frame")
@@ -1598,6 +1603,7 @@ class _Runner:
         self.last_ping = start
         self.bg_retry: dict[tuple[str, str], float] = {}
         self.resting = False
+        self.rest_displaced: tuple[str, str] | None = None
         self.last_prompt_end: float | None = None
         self.grace_end: float | None = None
         self.off_paint_failed = False
@@ -1828,6 +1834,9 @@ class _Runner:
             if not (self.views and self.view_ready and self._tokens(now) >= 2):
                 if self.views and self.view_ready:
                     self.resting = True
+                    if self.problems.current != "resting":
+                        self.rest_displaced = ((self.problems.current, self.problems._message)
+                                               if self.problems.current is not None else None)
                     self.problems.set("resting", "key resting; try again in "
                                       f"{math.ceil(self.bucket.next_at(2) - now)} s")
                 return
@@ -1917,10 +1926,14 @@ class _Runner:
             # No retry here: the routine branch fetches ui.view on its own
             # schedule, unconditionally, since the record's view is not it.
             backoff = self._failure(result, now, flipped)
+            pull = self.healthy or flipped      # taken before the failure counts
+            self.healthy = False
             if isinstance(result, Throttled):
                 self.next_poll = now + result.retry_s
-            else:
+            elif pull:
                 self.next_poll = min(self.next_poll, now + backoff)
+            else:   # a routine failure backoff is running: never cut it short
+                self.next_poll = max(self.next_poll, now + backoff)
             return None
         if self.glass is not None and result.body == self.glass:
             if (self.state.view, self.state.etag) != (view, result.etag):
@@ -2003,7 +2016,8 @@ class _Runner:
             # Nothing to go back to: white, so the glass never shows a prompt
             # that is no longer armed, until the routine fetch can draw.
             self._draw(WHITE, purpose="leave", kind="full", etag=None, view=None)
-            self.next_poll = self.d.boottime()
+            if self.healthy:
+                self.next_poll = self.d.boottime()
         self.pre_prompt = None
         if pre is not None and pre[1] is not None:
             self.ui.painted_view(pre[1])
@@ -2011,7 +2025,8 @@ class _Runner:
         return None
 
     def _do_idle(self, action: Idle):
-        self.next_poll = self.d.boottime()
+        if self.healthy:
+            self.next_poll = self.d.boottime()
         return None
 
     def _grace_expired(self, now: float) -> int | None:
@@ -2170,7 +2185,7 @@ class _Runner:
         else:
             result = self._fetch(None, mode=name, tabs=True)
             self._view_result(result, name)
-            if isinstance(result, Frame):
+            if isinstance(result, Frame) and name in self.strip_cache:
                 return
         self.bg_retry[item] = d.boottime() + BG_RETRY_S
 
@@ -2247,7 +2262,14 @@ class _Runner:
             if self.resting and self._tokens(now) >= 2:
                 self.resting = False
                 if self.problems.current == "resting":
-                    self.problems.ok(self._healthy_line())
+                    displaced, self.rest_displaced = self.rest_displaced, None
+                    if displaced is not None:
+                        self.problems.set(*displaced)   # still the latest known state
+                    else:
+                        self.problems.ok(self._healthy_line())
+            elif self.resting and self.problems.current == "resting":
+                self.problems.set("resting", "key resting; try again in "
+                                  f"{math.ceil(self.bucket.next_at(2) - now)} s")
             timeout = self._timeout(now)
             items = d.events.wait(timeout)
             if timeout > 0:

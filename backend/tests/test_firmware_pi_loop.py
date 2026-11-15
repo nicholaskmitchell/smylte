@@ -1818,6 +1818,22 @@ class Server:
         return P.Frame(body, tag(body), self.refresh_s, strip=strip, mode=mode)
 
 
+class Scripted(Server):
+    """Server, except where `rule(t, mode, screen)` gives an answer: that
+    answer, after the time the Server would have taken."""
+
+    def __init__(self, rule, **kw):
+        super().__init__(**kw)
+        self.rule = rule
+
+    def __call__(self, n, sent, clock, mode, tabs, screen):
+        got = self.rule(clock.t, mode, screen)
+        if got is None:
+            return super().__call__(n, sent, clock, mode, tabs, screen)
+        clock.t += 0.05 if screen is not None else self.render_s
+        return got
+
+
 def tap(t: float, d: float = 0.12) -> list[tuple[float, int]]:
     return [(t, 1), (t + d, 0)]
 
@@ -1857,6 +1873,13 @@ def set_fast_count(h: Harness, n: int):
 def checks(*hs: Harness) -> None:
     """The critique's checks, over one process or several in turn."""
     painted = [p for h in hs for p in h.painted]
+    # The runner's exemption is believed for one paint per process: its first
+    # view paint. A later routine paint that claims it is held to the floor.
+    allowed = set()
+    for h in hs:
+        first = next((p for p in h.painted if p.purpose in ("routine", "page")), None)
+        if first is not None and first.exempt:
+            allowed.add(id(first))
     for h in hs:
         assert not h.stale, f"a screen on the glass while Ui browses: {h.stale}"
         prompts = [p for p in h.painted if p.purpose == "prompt"]
@@ -1876,7 +1899,7 @@ def checks(*hs: Harness) -> None:
         if h.runner is not None:
             assert h.runner.bucket.tokens >= 0
     for prev, p in zip(painted, painted[1:]):
-        if p.purpose == "routine" and not p.exempt:
+        if p.purpose == "routine" and id(p) not in allowed:
             assert p.t0 >= prev.t1 + P.MIN_REFRESH_S - 1e-6, \
                 f"a routine paint {p.t0 - prev.t1:.1f} s after the last refresh"
 
@@ -2043,6 +2066,9 @@ def test_off_with_no_off_screen_still_requests_the_power_off(tmp_path):
     assert h.run() == 0
     assert key_paints(h) == [("prompt", "fast")]
     assert [why for _, why in h.poweroffs] == ["ok"]
+    # The refused off screen is asked for again no sooner than BG_RETRY_S.
+    offs = [f.t for f in h.requests if f.screen == "off"]
+    assert len(offs) >= 2 and all(b - a >= P.BG_RETRY_S for a, b in zip(offs, offs[1:]))
     checks(h)
 
 
@@ -2195,6 +2221,41 @@ def test_the_budget_a_crash_loop_start_rests_the_key_then_refills(tmp_path):
     checks(h)
 
 
+def test_a_resting_key_puts_back_the_problem_it_covered(tmp_path):
+    """§4.12: "key resting" covers a 404 for a while. Once the bucket holds 2
+    again, STATUS names the 404 again, never "showing", until the next
+    routine fetch."""
+    server = Scripted(lambda t, mode, screen:
+                      P.Gone() if screen is None and t >= 380 else None, refresh_s=300)
+    h = desk(tmp_path, keys=tap(610), until=1300, server=server)
+    h.at(600, set_tokens(h, 1))
+    assert h.run() == 0
+    assert len([f for f in h.requests if f.screen is None and f.t >= 380]) == 1
+    statuses = h.statuses()
+    i = next(i for i, s in enumerate(statuses) if "key resting" in s)
+    assert "(404)" in statuses[i - 1]
+    after = statuses[i + 1:]
+    assert after and not any(s.startswith("STATUS=showing") for s in after)
+    assert "(404)" in after[-1]
+    checks(h)
+
+
+def test_the_resting_status_counts_down_and_is_logged_once(tmp_path, caplog):
+    """§4.12: the wait STATUS gives is sent again whenever it changes; the
+    warning is still logged once."""
+    h = desk(tmp_path, keys=tap(610) + tap(630), until=700)
+    h.at(600, set_tokens(h, 1))
+    with caplog.at_level(logging.WARNING, logger="smylte-panel"):
+        assert h.run() == 0
+    ns = [int(m.group(1)) for s in h.statuses()
+          if (m := re.search(r"key resting; try again in (\d+) s", s))]
+    assert ns[0] == 40 and min(ns) <= 20
+    assert ns == sorted(set(ns), reverse=True)
+    assert len([m for m in caplog.messages if "key resting" in m]) == 1
+    assert h.statuses()[-1].startswith("STATUS=showing")
+    checks(h)
+
+
 def test_a_reboot_start_has_a_full_bucket(tmp_path):
     s = P.State(etag=tag(view_frame("habits")), glass_sha256=sha(view_frame("habits")),
                 painted_end_bt=50_000.0, attempt_start_bt=49_995.0, complete=True,
@@ -2245,6 +2306,23 @@ def test_t6_a_legacy_display_is_drawn_at_once_and_rechecked(tmp_path, server, re
     assert len(rechecks) >= 5
     assert all(b - a >= P.VIEWS_RECHECK_S for a, b in zip(rechecks, rechecks[1:]))
     assert any(s.endswith(" · desk key off: " + reason) for s in h.statuses())
+    checks(h)
+
+
+def test_t6_turning_desk_key_on_brings_the_views_back(tmp_path):
+    """A recheck that succeeds turns the views back on: view fetches only,
+    view frames on the glass, taps work, STATUS drops 'desk key off'."""
+    server = Server(switchable=False, refresh_s=300)
+    h = desk(tmp_path, keys=tap(2000), until=2400, server=server)
+    h.at(1000, lambda: setattr(server, "switchable", True))
+    assert h.run() == 0
+    assert h.runner.views and h.runner.views_reason is None
+    on = next(f.t for f in h.requests if f.t > 1000 and f.mode is not None)
+    assert all(f.mode is not None for f in h.requests if f.t >= on and f.screen is None)
+    routine = [p for p in h.painted if p.purpose == "routine" and p.t0 > on]
+    assert routine and all(what(p.frame).startswith("view:") for p in routine)
+    assert key_paints(h, 1990)[:2] == [("strip", "partial"), ("page", "fast")]
+    assert "desk key off" not in h.statuses()[-1]
     checks(h)
 
 
@@ -2334,6 +2412,67 @@ def test_t7b_the_server_going_down_leaves_the_taps_to_the_routine_schedule(tmp_p
     checks(h)
 
 
+def test_the_idle_return_does_not_cut_a_routine_429_short(tmp_path):
+    """§4.12: the idle return pulls the routine fetch forward only after a
+    healthy answer; after a routine 429 it waits for the Retry-After."""
+    server = Scripted(lambda t, mode, screen:
+                      P.Throttled(3600) if screen is None and t >= 580 else None,
+                      refresh_s=180)
+    h = desk(tmp_path, keys=tap(400), until=1500, idle_s=600, server=server)
+    assert h.run() == 0
+    [throttled] = [f for f in fetched(h, 580) if f.screen is None]
+    assert throttled.t < 590
+    assert h.runner.ui.view == "habits"     # the idle return came, and fetched nothing
+    assert h.runner.next_poll >= throttled.t + 3600
+    checks(h)
+
+
+def test_the_idle_return_does_not_cut_a_key_page_429_short(tmp_path):
+    """§4.12: a failed key Page counts as a failure for the healthy guard."""
+    server = Scripted(lambda t, mode, screen:
+                      P.Throttled(3600) if screen is None and 400 <= t < 410 else None)
+    h = desk(tmp_path, keys=tap(400), until=1500, idle_s=600, server=server)
+    assert h.run() == 0
+    [page] = [f for f in fetched(h, 390) if f.screen is None]
+    assert page.mode == "now"
+    assert h.runner.ui.view == "habits"
+    assert h.runner.next_poll >= page.t + 3600
+    checks(h)
+
+
+def test_a_failed_key_page_does_not_cut_a_routine_429_short(tmp_path):
+    """§4.12: a Transient on a key Page during a routine 429's backoff keeps
+    the backoff (max), where after a healthy answer it would pull it in (min)."""
+    def rule(t, mode, screen):
+        if screen is None and 380 <= t < 390:
+            return P.Throttled(3600)
+        if screen is None and 400 <= t < 410:
+            return P.Transient("ECONNRESET")
+        return None
+    h = desk(tmp_path, keys=tap(400), until=1500, server=Scripted(rule, refresh_s=180))
+    assert h.run() == 0
+    throttled, page = [f for f in fetched(h, 380) if f.screen is None]
+    assert throttled.t < 390 and page.mode == "now" and 400 <= page.t < 410
+    assert h.runner.next_poll >= throttled.t + 3600
+    checks(h)
+
+
+def test_the_way_back_to_white_does_not_cut_a_404_backoff_short(tmp_path):
+    """§4.12: a 404, USR1 (which forgets the glass), a hold and its timeout:
+    the glass goes white, and the routine still waits out the 404's backoff."""
+    server = Scripted(lambda t, mode, screen:
+                      P.Gone() if screen is None and t >= 380 else None, refresh_s=300)
+    h = desk(tmp_path, keys=hold(620), signals=[(600.0, signal.SIGUSR1)], until=1450,
+             server=server)
+    assert h.run() == 0
+    assert [(p.purpose, what(p.frame)) for p in h.painted if p.t0 > 300] == [
+        ("prompt", "confirm"), ("leave", "white")]
+    gone = [f.t for f in h.requests if f.screen is None and f.t >= 380]
+    assert len(gone) == 2 and 600 <= gone[1] < 601     # the routine 404, then USR1's
+    assert h.runner.next_poll >= gone[1] + P.GONE_RETRY_S
+    checks(h)
+
+
 @pytest.mark.parametrize("stop_at, painted", [
     (400.5, [("strip", "partial")]),     # during the strip: it finishes, no page
     (402.3, [("strip", "partial")]),     # during the page's fetch: the page is skipped
@@ -2367,11 +2506,14 @@ def test_t9c_a_stop_while_an_off_is_queued_still_draws_it_and_requests_once(tmp_
     """v3: the confirming tap, a second press and a stop all at once: the
     press holds the queue, then the off screen is drawn and requested."""
     keys = hold(400) + [(405.0, 1), (405.12, 0), (405.12, 1), (405.6, 0)]
-    h = desk(tmp_path, keys=keys, signals=[(405.12, signal.SIGTERM)])
+    # systemd sends no second SIGTERM to a unit that is already stopping.
+    h = desk(tmp_path, keys=keys, signals=[(405.12, signal.SIGTERM)], path_unit=False)
     assert h.run() == 0
     assert key_paints(h) == [("prompt", "fast"), ("off", "full")]
     assert h.painted[-1].t0 >= 405.6
-    assert len(h.poweroffs) == 1
+    [(t_req, _)] = h.poweroffs
+    # Returned at the request, not at the grace or a second signal.
+    assert h.clock.t == pytest.approx(t_req, abs=0.01)
     checks(h)
 
 
@@ -2398,6 +2540,20 @@ def test_t10_usr1_during_the_prompt_goes_back_to_white_then_the_view(tmp_path):
     assert [(p.purpose, p.kind, what(p.frame)) for p in h.painted if p.t0 > 300] == [
         ("prompt", "fast", "confirm"), ("leave", "full", "white"),
         ("routine", "fast", "view:habits")]
+    checks(h)
+
+
+def test_a_restart_onto_an_unchanged_view_leaves_the_prompt_to_white_then_the_view_at_the_floor(
+        tmp_path):
+    s = P.State(etag=tag(view_frame("habits")), glass_sha256=sha(view_frame("habits")),
+                painted_end_bt=10.0, attempt_start_bt=5.0, complete=True,
+                view="habits", fast_count=1, full_end_bt=10.0)
+    h = desk(tmp_path, state=s, keys=hold(450), until=1000, server=Server(refresh_s=3600))
+    assert h.run() == 0
+    assert [(p.purpose, what(p.frame)) for p in h.painted] == [
+        ("prompt", "confirm"), ("leave", "white"), ("routine", "view:habits")]
+    white_end, view = h.painted[1].t1, h.painted[2]
+    assert white_end + P.MIN_REFRESH_S <= view.t0 <= white_end + P.MIN_REFRESH_S + 5
     checks(h)
 
 
@@ -2439,6 +2595,10 @@ def test_a_wake_with_the_server_down_for_long_says_so(tmp_path):
              server=server)
     assert h.run() == 0
     assert h.painted == []
+    # The 5 s startup retry ends 600 s into the process's life.
+    late = [b.t - a.t for a, b in zip(h.requests, h.requests[1:])
+            if a.t >= 15.0 + P.STARTUP_WINDOW_S]
+    assert late and min(late) >= P.ERROR_RETRY_S - 0.01
     assert any("waking: the server is not answering" in s for s in h.statuses())
     checks(h)
 
@@ -2467,6 +2627,18 @@ def test_t11b_a_prompt_before_the_wake_paint_does_not_spend_its_exemption(tmp_pa
     assert routine.t0 < h.painted[1].t1 + P.MIN_REFRESH_S
     assert routine.t0 == pytest.approx(next(f.t for f in h.requests if f.t >= 100)
                                        + server.render_s)
+    checks(h)
+
+
+def test_a_wake_spends_its_floor_exemption_on_the_first_view_paint_only(tmp_path):
+    server = Server(refresh_s=300)
+    server.version = lambda view, t: int(t // 300) + 1
+    h = desk(tmp_path, clock=LateSync(15.0, 25.0), state=OFF_STATE,
+             keys=tap(290), until=700, server=server)
+    assert h.run() == 0
+    assert [p.purpose for p in h.painted][:4] == ["routine", "strip", "page", "routine"]
+    page, routine = h.painted[2], h.painted[3]
+    assert routine.t0 >= page.t1 + P.MIN_REFRESH_S
     checks(h)
 
 
@@ -2600,6 +2772,100 @@ def test_a_press_blocks_a_routine_paint_until_it_is_let_go(tmp_path):
     checks(h)
 
 
+def test_a_press_during_a_key_page_fetch_puts_the_page_back(tmp_path):
+    """§4.11 M3: the drain before a paint sees the press; the action goes back
+    unpainted, and the hold's prompt is the next refresh."""
+    press = 402.0
+    h = desk(tmp_path, keys=tap(400) + hold(press), until=440)
+    assert h.run() == 0
+    [page_fetch] = [f for f in fetched(h, 401) if f.mode is not None and f.t <= press]
+    assert page_fetch.t <= press < page_fetch.t + 0.4      # the press lands mid-fetch
+    assert not [p for p in h.painted if press <= p.t0 < press + P.HOLD_S]
+    [prompt] = [p for p in h.painted if p.purpose == "prompt"]
+    assert prompt.t0 == pytest.approx(press + P.HOLD_S)
+    checks(h)
+
+
+def test_a_hold_during_a_slow_key_page_fetch_comes_before_the_page(tmp_path):
+    """§4.11 M3: no paint starts while the key is down until the hold is
+    seen; the page waits behind the prompt and its way back."""
+    h = desk(tmp_path, keys=tap(400) + hold(402.3, 1.3), until=440,
+             server=Server(render_s=1.0))
+    assert h.run() == 0
+    assert not [p for p in h.painted if 402.3 <= p.t0 < 402.3 + P.HOLD_S]
+    assert key_paints(h, 400) == [("strip", "partial"), ("prompt", "fast"),
+                                  ("leave", "fast"), ("page", "fast")]
+    [prompt] = [p for p in h.painted if p.purpose == "prompt"]
+    assert prompt.t0 == pytest.approx(402.3 + P.HOLD_S)
+    checks(h)
+
+
+def test_a_tap_and_a_hold_during_a_page_paint_leave_no_strip_before_the_prompt(tmp_path):
+    """_collapse: a strip queued before a prompt is dropped, so the prompt
+    follows the page at once."""
+    h = desk(tmp_path, keys=tap(400) + tap(402.3) + hold(402.7, 1.3), until=440)
+    assert h.run() == 0
+    paints = [p for p in h.painted if p.t0 >= 400]
+    assert [p.purpose for p in paints[:3]] == ["strip", "page", "prompt"]
+    page, prompt = paints[1], paints[2]
+    assert page.t0 < 402.3 and 402.7 + 1.3 < page.t1     # both presses inside the page paint
+    assert prompt.t0 == pytest.approx(page.t1)
+    checks(h)
+
+
+def test_no_background_fetch_while_a_page_is_due(tmp_path):
+    """§4.8 step 6: the coalesce wait is not a gap for the background."""
+    h = desk(tmp_path, keys=tap(205.5), until=260, server=Server(render_s=1.0))
+    assert h.run() == 0
+    [page] = [p for p in h.painted if p.purpose == "page"]
+    assert [f.mode for f in h.requests if 205.5 <= f.t < page.t0] == ["now"]
+    checks(h)
+
+
+def test_the_way_back_from_the_prompt_costs_no_token(tmp_path):
+    h = desk(tmp_path, keys=hold(400), until=430)
+    assert h.run() == 0
+    assert key_paints(h, 390) == [("prompt", "fast"), ("leave", "fast")]
+    assert h.runner.bucket.tokens == P.KEY_BURST - 1
+    checks(h)
+
+
+def test_only_the_hold_is_charged_when_tokens_remain(tmp_path):
+    h = desk(tmp_path, keys=hold(400), until=440)
+    h.at(390, set_tokens(h, 5))
+    assert h.run() == 0
+    assert key_paints(h, 390) == [("prompt", "fast"), ("leave", "fast")]
+    assert h.runner.bucket.tokens == 4
+    checks(h)
+
+
+def test_a_failed_key_page_keeps_the_earlier_routine_fetch(tmp_path):
+    """§4.11 m1: after a healthy answer a failed key Page may pull the routine
+    fetch in, never push it back: it stays at the floor after the strip."""
+    server = Scripted(lambda t, mode, screen: P.Refused("HTTP 500", 500)
+                      if screen is None and 370 <= t < 375 else None, refresh_s=180)
+    h = desk(tmp_path, keys=tap(370), until=1400, server=server)
+    assert h.run() == 0
+    [strip] = [p for p in h.painted if p.purpose == "strip"]
+    page, routine = [f for f in fetched(h, 370) if f.screen is None][:2]
+    assert 370 <= page.t < 375 and page.mode == "now"
+    assert routine.t == pytest.approx(strip.t1 + P.MIN_REFRESH_S, abs=0.5)
+    checks(h)
+
+
+def test_no_tick_while_the_key_is_down(tmp_path):
+    """The key down holds Ui's deadlines: the first tap's page is not fetched
+    under the second press, and the second strip starts at its release."""
+    h = desk(tmp_path, keys=tap(400) + tap(401.5, 0.4), until=440,
+             server=Server(render_s=1.0))
+    assert h.run() == 0
+    assert fetched(h, 401.5, mode="now") == []
+    strips = [p for p in h.painted if p.purpose == "strip"]
+    assert len(strips) == 2
+    assert strips[1].t0 == pytest.approx(401.9, abs=0.05)
+    checks(h)
+
+
 def test_a_stuck_key_is_forgotten_and_the_loop_goes_on(tmp_path, caplog):
     h = desk(tmp_path, keys=[(400.0, 1)], until=440, holds_ok=False)
     with caplog.at_level(logging.WARNING, logger="smylte-panel"):
@@ -2619,6 +2885,37 @@ def test_background_fetches_are_one_at_a_time_apart_and_never_paint(tmp_path):
     assert all(f.t - end >= P.BG_GAP_S for f, end in zip(bg, ends))
     assert [p.purpose for p in h.painted] == ["routine"]
     assert set(h.runner.strip_cache) == set(P.VIEWS)
+    checks(h)
+
+
+def test_a_view_with_no_strip_is_prefetched_no_more_than_once_a_minute(tmp_path):
+    """§4.12: the display is turned to 90 while a strip is still to fetch. The
+    view frame that comes back has no strip, and counts as a failed item."""
+    server = Server(refresh_s=300)
+    server.down = [(206.0, 208.0)]
+    h = desk(tmp_path, until=500, server=server)
+    h.at(230, lambda: setattr(server, "rotation", 90))
+    assert h.run() == 0
+    nows = [f.t for f in h.requests if f.mode == "now"]
+    assert nows[0] < 208 and len(nows) >= 3
+    assert all(b - a >= P.BG_RETRY_S - 0.01 for a, b in zip(nows, nows[1:]))
+    assert "now" not in h.runner.strip_cache
+    assert [p.purpose for p in h.painted] == ["routine"]
+    checks(h)
+
+
+def test_the_cached_screens_are_fetched_again_every_hour(tmp_path):
+    """§4.8 step 6: a screen cached on disk is revalidated after
+    SCREEN_REVALIDATE_S, and the new one replaces it in memory and on disk."""
+    new = bytes([0xC3]) * P.BUF_BYTES
+    server = Scripted(lambda t, mode, screen: P.Frame(new, tag(new), 3600)
+                      if screen == "confirm" and t > 1000 else None)
+    h = desk(tmp_path, until=P.SCREEN_REVALIDATE_S + 400, server=server)
+    assert h.run() == 0
+    [confirm] = [f.t for f in h.requests if f.screen == "confirm"]
+    assert confirm >= 20 + P.SCREEN_REVALIDATE_S
+    assert h.runner.screens["confirm"] == new
+    assert P.load_screen(tmp_path, "confirm") == new
     checks(h)
 
 

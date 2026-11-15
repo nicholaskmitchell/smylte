@@ -1095,6 +1095,14 @@ def test_the_bucket_is_capped_and_a_full_bucket_banks_no_time():
     assert P.Bucket(50, 0.0).tokens == P.KEY_BURST
 
 
+def test_a_bucket_that_stays_full_banks_no_time():
+    b = P.Bucket(P.KEY_BURST, 0.0)
+    b.refill(10_000.0)
+    assert b.take()
+    b.refill(10_001.0)
+    assert b.tokens == P.KEY_BURST - 1 and b.next_at(P.KEY_BURST) == 10_050.0
+
+
 def test_take_and_give():
     b = P.Bucket(2, 0.0)
     assert b.take(2) and b.tokens == 0
