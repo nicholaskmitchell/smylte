@@ -216,11 +216,13 @@ wires.
   is not running.
 - It paints only a frame whose headers say exactly 800×480 `mono-hlsb-inverted`,
   48,000 bytes.
-- It repaints at least every 23 h, even if nothing changed. After a reboot it
-  repaints within 23 h of the service starting at the latest. It keeps the
-  original time, by the wall clock, when the last refresh happened with a
-  synced clock and the clock syncs again after the boot; a repaint that fell
-  due before that sync comes at the sync.
+- It repaints at least every 23 h, even if nothing changed, and within 23 h of
+  the service's latest start even after a reboot. If the last refresh happened
+  with a synced clock and the clock syncs again after the boot, it keeps that
+  refresh's wall-clock time, give or take the 180 s floor and up to 15 s to
+  notice the sync.
+- A refresh it cannot first record in its state file is never started. It
+  retries every minute, and the Status line says so.
 - It waits for the clock to sync after boot (at most 300 s of uptime), because
   the server on the same box would otherwise draw the wrong day.
 - On a 404 it keeps the frame and retries every 15 min.
@@ -265,6 +267,7 @@ wires.
 | `server not answering` | smylted is down. The glass keeps its frame | `systemctl status smylte` |
 | `refused the server's response (…)` | The server and client disagree about the frame | Update both: pull, restart smylte, re-run `panel-setup.sh` |
 | `waiting for the clock to sync` | Normal after boot | Nothing |
+| `could not record the refresh` | The state file cannot be written: the disk is full or the SD card went read-only. Nothing is painted | Free some space, or check the card (`dmesg`). It retries every minute |
 | `refresh failed during …` | The panel or its wiring failed mid-refresh | It retries in a minute, up to five times an hour. Then see "Day to day" |
 
 ### Checks only hardware can settle
