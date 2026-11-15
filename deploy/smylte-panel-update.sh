@@ -99,22 +99,43 @@ stat_of() {   # prints "<uid> <gid> <octal mode>"
   stat -c '%u %g %a' -- "$1" 2>/dev/null
 }
 
-# Whether $1 carries a POSIX ACL. stat shows an ACL's mask as the group bits,
-# so the mode check cannot see who else it lets write. The kernel drops the
-# attribute when an ACL comes down to the mode bits, so its presence means more
-# entries. A filesystem without extended attributes (ENOTSUP) has no ACL.
-has_acl() {   # $1: path
+# Whether an ACL on $1 lets an account other than root or $2 write it: exit 0
+# if so, 1 if not (no ACL, or one that grants no such write), 2 if it cannot be
+# read. stat shows an ACL's mask as the group bits, so the mode check cannot
+# see a named user or group the ACL lets write; the mask still limits what
+# they get. An ACL that only lets others read is fine: one on /home is common.
+# A default ACL grants nothing on the directory itself, and every file it would
+# reach is checked on its own. A filesystem without ACLs (ENOTSUP) has none.
+acl_lets_write() {   # $1: path, $2: the owner's uid
   python3 -I -c '
-import os, stat, sys
-p = sys.argv[1]
+import errno, os, struct, sys
+path, owner = sys.argv[1], int(sys.argv[2])
 try:
-    names = os.listxattr(p, follow_symlinks=False)
-    is_dir = stat.S_ISDIR(os.lstat(p).st_mode)
-except OSError:
-    sys.exit(1)
-sys.exit(0 if "system.posix_acl_access" in names
-         or (is_dir and "system.posix_acl_default" in names) else 1)
-' "$1" 2>/dev/null
+    raw = os.getxattr(path, "system.posix_acl_access", follow_symlinks=False)
+except OSError as e:
+    sys.exit(1 if e.errno in (errno.ENODATA, errno.ENOTSUP, errno.EOPNOTSUPP) else 2)
+if len(raw) < 4 or (len(raw) - 4) % 8 or struct.unpack_from("<I", raw)[0] != 2:
+    sys.exit(2)
+entries = [struct.unpack_from("<HHI", raw, 4 + 8 * i) for i in range((len(raw) - 4) // 8)]
+mask = next((perm for tag, perm, _ in entries if tag == 0x10), 7)
+for tag, perm, who in entries:
+    if not perm & mask & 2:
+        continue
+    if tag == 0x02 and who not in (0, owner):    # a named user
+        sys.exit(0)
+    if tag == 0x08:                             # a named group
+        sys.exit(0)
+sys.exit(1)
+' "$1" "$2" 2>/dev/null
+}
+
+no_acl_write() {   # $1: path, $2: the owner's uid
+  acl_lets_write "$1" "$2"
+  case $? in
+    0) fail "$1 has an ACL that lets another account write it" ;;
+    1) ;;
+    *) fail "the ACL of $1 cannot be read" ;;
+  esac
 }
 
 uid_of() { id -u -- "$1" 2>/dev/null; }
@@ -206,7 +227,7 @@ check_owned() {   # $1: path, $2: uid, $3: dir or file
   read -r owner group mode <<<"$st"
   [ "$owner" = "$2" ] || fail "$1 is owned by uid $owner, not $OWNER ($2)"
   check_writable "$1" "$group" "$mode"
-  ! has_acl "$1" || fail "$1 has an ACL"
+  no_acl_write "$1" "$2"
 }
 
 # Everything in the checkout that root runs or installs: the five paths the
@@ -247,7 +268,7 @@ check_ancestors() {   # $1: uid
     read -r owner group mode <<<"$st"
     [ "$owner" = 0 ] || [ "$owner" = "$1" ] || fail "$p is owned by uid $owner, not root or $OWNER"
     check_writable "$p" "$group" "$mode"
-    ! has_acl "$p" || fail "$p has an ACL"
+    no_acl_write "$p" "$1"
   done
 }
 

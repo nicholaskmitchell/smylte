@@ -2145,10 +2145,12 @@ _CHECKOUT_FAILS = {
                                          u.stat(f"{u.repo}/firmware", "1000 1000 775"),
                                          u.env.update(FAKE_GROUP="owner:x:1000:owner,mallory")),
                               "{repo}/firmware is group-writable, and its group has mallory in it too"),
-    "ancestor-acl": (lambda u: setattr(u, "overrides", f'has_acl() {{ [ "$1" = "{u.home}" ]; }}\n'),
-                     "{home} has an ACL"),
-    "deploy-acl": (lambda u: setattr(u, "overrides", 'has_acl() { [ "$1" = "$REPO/deploy" ]; }\n'),
-                   "{repo}/deploy has an ACL"),
+    "ancestor-acl": (lambda u: setattr(u, "overrides", f'acl_lets_write() {{ [ "$1" != "{u.home}" ] && return 1; return 0; }}\n'),
+                     "{home} has an ACL that lets another account write it"),
+    "acl-unreadable": (lambda u: setattr(u, "overrides", 'acl_lets_write() { [ "$1" != "$REPO/.git" ] && return 1; return 2; }\n'),
+                       "the ACL of {repo}/.git cannot be read"),
+    "deploy-acl": (lambda u: setattr(u, "overrides", 'acl_lets_write() { [ "$1" != "$REPO/deploy" ] && return 1; return 0; }\n'),
+                   "{repo}/deploy has an ACL that lets another account write it"),
 }
 
 
@@ -2190,24 +2192,46 @@ def test_the_directories_above_are_walked_again_under_the_lock(upd):
         < _after(calls, "systemctl show -P InvocationID smylte-panel.service", lock)
 
 
-def test_a_real_acl_on_the_checkout_is_refused(upd):
-    """stat shows an ACL's mask as the group bits, so only the attribute itself
-    says that someone else may write."""
+_EVERY = 0xFFFFFFFF
+
+
+def _acl(*entries):
+    """A system.posix_acl_access value: (tag, perm, id) entries, version 2."""
+    return struct.pack("<I", 2) + b"".join(struct.pack("<HHI", *e) for e in entries)
+
+
+# user::rwx, group::r-x, a named entry, mask, other::r-x. The kernel takes the
+# entries only in tag order.
+def _named(tag, perm, who, mask=7):
+    return _acl(*sorted([(0x01, 7, _EVERY), (0x04, 5, _EVERY), (tag, perm, who),
+                         (0x10, mask, _EVERY), (0x20, 5, _EVERY)]))
+
+
+@pytest.mark.parametrize("acl, refused", [
+    (_named(0x02, 7, 65534), True),            # another user may write
+    (_named(0x08, 7, 4242), True),             # a named group may write
+    (_named(0x02, 5, 65534), False),           # another user may only read
+    (_named(0x02, 7, 65534, mask=5), False),   # the mask takes the write away
+    (_named(0x02, 7, 1000), False),            # the owner, named
+], ids=["user-writes", "group-writes", "user-reads", "masked", "owner"])
+def test_a_real_acl_is_refused_only_when_it_lets_another_account_write(upd, acl, refused):
+    """stat shows an ACL's mask as the group bits, so only the attribute says
+    who else may write. One that lets others only read, as on GitHub's runners'
+    /home, must not stop the update."""
     if shutil.which("python3") is None:
         pytest.skip("no python3")
     deploy = upd.repo / "deploy"
-    every = 0xFFFFFFFF
-    # user::rwx, user:65534:rwx, group::r-x, mask::rwx, other::r-x
-    entries = [(0x01, 7, every), (0x02, 7, 65534), (0x04, 5, every), (0x10, 7, every), (0x20, 5, every)]
-    blob = struct.pack("<I", 2) + b"".join(struct.pack("<HHI", *e) for e in entries)
     try:
-        os.setxattr(deploy, "system.posix_acl_access", blob)
+        os.setxattr(deploy, "system.posix_acl_access", acl)
     except OSError as e:
         pytest.skip(f"this filesystem takes no ACL: {e}")
-    r = upd.run()
-    assert r.returncode == 1, r.stdout + r.stderr
-    _says(r, f"{deploy} has an ACL")
-    assert not [c for c in upd.calls() if c.startswith("runuser")], upd.calls()
+    r = upd.run(extra='pull() { say "reached the pull"; exit 0; }\n')
+    if refused:
+        assert r.returncode == 1, r.stdout + r.stderr
+        _says(r, f"{deploy} has an ACL that lets another account write it")
+        assert not [c for c in upd.calls() if c.startswith("runuser")], upd.calls()
+    else:
+        _says(r, "reached the pull")
 
 
 @pytest.mark.parametrize("members", ["", "owner"])
@@ -2220,13 +2244,18 @@ def test_group_write_is_allowed_for_the_owners_own_group_alone(upd, members):
     _says(r, "reached the pull")
 
 
-def _safe_for_the_walk(path, uid):
-    """Why `path` would fail the real walk, or None."""
+def _safe_for_the_walk(path, uid, updater):
+    """Why `path` would fail the real walk, or None. The ACL is judged by the
+    updater's own function, so the test skips exactly where the walk refuses."""
     st = os.stat(path)
     if st.st_uid not in (0, uid):
         return f"{path} is owned by uid {st.st_uid}"
     if st.st_mode & 0o022:
         return f"{path} is group- or world-writable"
+    r = subprocess.run(["bash", "-c", _updater_text(updater) + 'acl_lets_write "$1" "$2"\n',
+                        "walk", str(path), str(uid)], capture_output=True, text=True)
+    if r.returncode != 1:
+        return f"{path} has an ACL that lets another account write it (or it cannot be read)"
     return None
 
 
@@ -2254,7 +2283,7 @@ def walk(updater):
         pytest.skip("backend/ is not writable here, so there is nowhere safe to build the checkout")
     try:
         for p in [*reversed(base.parents), base]:
-            why = _safe_for_the_walk(p, pw.pw_uid)
+            why = _safe_for_the_walk(p, pw.pw_uid, updater)
             if why:
                 pytest.skip(f"the real ownership walk cannot pass here: {why}")
         box = _Updater(base / "box", updater, real=("id", "getent", "stat"))
@@ -2278,6 +2307,31 @@ def test_the_real_ownership_walk_passes_a_checkout_its_owner_holds(walk):
     r = walk.run(extra='pull() { say "reached the pull"; exit 0; }\n')
     _says(r, f"checkout {walk.repo}, owner {walk.owner}")
     _says(r, "reached the pull")
+
+
+def test_the_real_ownership_walk_passes_an_ancestor_whose_acl_only_lets_others_read(walk):
+    # GitHub's runners give /home such an ACL; refusing it refused every box.
+    # Its mask is r-x, which stat reports as the group bits.
+    try:
+        os.setxattr(walk.home, "system.posix_acl_access", _named(0x02, 5, 4242, mask=5))
+    except OSError as e:
+        pytest.skip(f"this filesystem takes no ACL: {e}")
+    r = walk.run(extra='pull() { say "reached the pull"; exit 0; }\n')
+    _says(r, "reached the pull")
+
+
+def test_the_real_ownership_walk_refuses_an_ancestor_whose_acl_lets_another_write(walk):
+    try:
+        os.setxattr(walk.home, "system.posix_acl_access", _named(0x02, 7, 4242))
+    except OSError as e:
+        pytest.skip(f"this filesystem takes no ACL: {e}")
+    r = walk.run(extra='pull() { say "reached the pull"; exit 0; }\n')
+    assert r.returncode == 1
+    # The mask that lets the named user write shows as group write, so the mode
+    # check may refuse it first; either way it is refused before the pull.
+    assert (f"update: {walk.home} has an ACL that lets another account write it\n" in r.stdout
+            or f"update: {walk.home} is group-writable" in r.stdout), r.stdout
+    assert "reached the pull" not in r.stdout
 
 
 def test_the_real_ownership_walk_refuses_a_world_writable_ancestor(walk):

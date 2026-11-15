@@ -291,8 +291,9 @@ What runs, as root, once you tap "Update?":
 2. The updater takes the checkout from `smylte.service` (its `User=` and its
    `WorkingDirectory=` minus `/backend`), never from the panel. It refuses
    the checkout if anyone else could write it, a directory above it, or any
-   file `panel-setup.sh` installs from it (by mode bits or an ACL), or if a
-   symlink is in the way. It checks again under its lock, after the pull.
+   file `panel-setup.sh` installs from it (by its mode bits, or an ACL that
+   lets another account write; one that only lets others read is fine), or if
+   a symlink is in the way. It checks again under its lock, after the pull.
 3. As that user it runs the checkout's `deploy/smylte-autopull.sh`: a
    fast-forward pull of the branch the checkout is on, `pip install` if
    `requirements.txt` changed, a frontend rebuild if `frontend/` changed, and
