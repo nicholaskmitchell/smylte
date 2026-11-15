@@ -721,6 +721,10 @@ CREATE TABLE IF NOT EXISTS displays (
     panel_height INTEGER,
     rotation     INTEGER NOT NULL DEFAULT 0,   -- 0 | 90 | 180 | 270
     enabled     INTEGER NOT NULL DEFAULT 1,
+    -- Whether the desk key may ask this display for its other views; off by
+    -- default, because a URL that reaches one view should not quietly start
+    -- reaching three.
+    switchable  INTEGER NOT NULL DEFAULT 0,
     -- Stamped on every fetch that answered with a frame. The ONLY thing
     -- recorded about the device: no address, no user agent, no request log.
     -- It exists to answer one question the owner cannot otherwise answer —

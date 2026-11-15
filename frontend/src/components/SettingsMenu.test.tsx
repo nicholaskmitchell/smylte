@@ -202,7 +202,7 @@ describe('<SettingsMenu> on a desktop', () => {
         token: 'tok-hallway', name: 'Hallway', mode: 'calendar', palette: 'color',
         calendars: [], lists: [], hide_done_habits: true, hide_done_tasks: true,
         refresh_seconds: 300, panel_width: null, panel_height: null, rotation: 0,
-        panel_too_small: null, enabled: true, last_seen_at: null,
+        panel_too_small: null, enabled: true, switchable: false, last_seen_at: null,
         created_at: '2026-08-01T10:00:00Z', updated_at: '2026-08-01T10:00:00Z',
       } as never)
     }))

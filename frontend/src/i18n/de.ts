@@ -189,6 +189,8 @@ export const de: Catalogue = {
   'disp.imageHint': 'Für einen Mikrocontroller die .bin verwenden: ein gepackter 1-Bit-Framebuffer, der direkt aufs Panel geht (800×480 sind 48.000 Bytes). Nimm .png oder .bmp, wenn dein Board Bilder dekodieren kann.',
   'disp.enabled': 'Verbunden',
   'disp.enabledHint': 'Solange sie aus ist, funktioniert die URL nicht.',
+  'disp.switchable': 'Desk-Taste (Heute · Jetzt · Kalender)',
+  'disp.switchableHint': 'Lässt die Taste des Schreibtischgeräts zwischen den drei Ansichten wechseln. Die URL zeigt dann alle drei.',
   'disp.rotateToken': 'Neue URL',
   'disp.rotateHint': 'Eine neue URL behält die Einstellungen dieser Anzeige. Richte den Bildschirm danach neu darauf.',
   'disp.delete': 'Löschen',

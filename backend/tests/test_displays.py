@@ -2337,3 +2337,330 @@ def test_the_preview_route_gives_refs_only_when_asked(api, monkeypatch):
     # The picture never asks for them, whatever the query says.
     assert api.get("/api/displays/preview.png?refs=true").status_code == 200
     assert seen == [True, False, False]
+
+
+# ── the desk key: switchable displays, mode, tabs and screens ───────────────
+
+def _bin(api, token, query=""):
+    return api.get(f"/api/public/display/{token}.bin?w=800&h=480{query}")
+
+
+def _switchable(api, *, mode="calendar", **over):
+    return api.post("/api/displays", json={
+        "name": "Desk", "mode": mode, "palette": "eink", "switchable": True,
+        "panel_width": 800, "panel_height": 480, **over}).json()["token"]
+
+
+def test_a_new_display_is_not_switchable_and_the_field_round_trips(api):
+    made = api.post("/api/displays", json={"name": "Hallway"}).json()
+    assert made["switchable"] is False
+    token = made["token"]
+    on = api.patch(f"/api/displays/{token}", json={"switchable": True})
+    assert on.status_code == 200 and on.json()["switchable"] is True
+    off = api.patch(f"/api/displays/{token}", json={"switchable": False})
+    assert off.json()["switchable"] is False
+    assert api.post("/api/displays", json={"name": "Desk", "switchable": True}
+                    ).json()["switchable"] is True
+
+
+def test_switchable_is_a_bool_and_nothing_else(svc, api):
+    for bad in ("yes", 1, None, "true"):
+        with pytest.raises(ValueError):
+            svc.create_display({"name": "X", "switchable": bad})
+    made = svc.create_display({"name": "X", "switchable": True})
+    assert made["switchable"] is True
+    with pytest.raises(ValueError):
+        svc.update_display(made["token"], {"switchable": 0})
+    assert api.post("/api/displays",
+                    json={"name": "X", "switchable": "maybe"}).status_code == 422
+    assert api.post("/api/displays",
+                    json={"name": "X", "switchable": [1]}).status_code == 422
+
+
+def test_the_switchable_column_is_added_to_a_database_that_lacks_it(tmp_path):
+    path = tmp_path / "old.db"
+    with store.connect(str(path)) as conn:
+        store.init_db(conn)
+        store.create_display(conn, "tok-old", {"name": "Old"})
+        # A database from before the desk key: SQLite 3.35 can drop the column.
+        conn.execute("ALTER TABLE displays DROP COLUMN switchable")
+        assert "switchable" not in {
+            r["name"] for r in conn.execute("PRAGMA table_info(displays)")}
+    with store.connect(str(path)) as conn:
+        store.init_db(conn)
+        row = store.get_display(conn, "tok-old")
+    # Every display that existed stays as narrow as it was.
+    assert row["switchable"] == 0
+
+
+@pytest.mark.parametrize("m", ["calendar", "habits", "now"])
+def test_a_switchable_display_draws_any_mode_as_a_display_stored_in_it(api, m):
+    allow = {"calendars": ["no-such-cal"], "lists": ["no-such-list"]}
+    token = _switchable(api, mode="calendar", **allow)
+    ref = api.post("/api/displays", json={
+        "name": "Desk", "mode": m, "palette": "eink", "panel_width": 800,
+        "panel_height": 480, **allow}).json()["token"]
+    asked = _bin(api, token, f"&mode={m}")
+    assert asked.status_code == 200
+    assert asked.content == _bin(api, ref).content
+    assert asked.headers["x-display-mode"] == m
+    # Without `mode` the stored one is what is drawn, and it is still reported.
+    assert _bin(api, token).headers["x-display-mode"] == "calendar"
+
+
+def test_a_display_that_did_not_opt_in_refuses_mode_and_tabs(api):
+    made = api.post("/api/displays", json={
+        "name": "Hallway", "mode": "calendar", "panel_width": 800,
+        "panel_height": 480}).json()
+    token = made["token"]
+    before = _bin(api, token)
+    for query in ("&mode=now", "&mode=calendar", "&tabs=1", "&mode=now&tabs=1"):
+        r = _bin(api, token, query)
+        assert r.status_code == 422, query
+        assert r.headers["x-display-error"] == "views-off", query
+        assert "Desk key" in r.json()["detail"]
+    assert api.get("/api/displays").json()[0]["mode"] == "calendar"
+    assert _bin(api, token).content == before.content
+    # Other 422s carry no code.
+    assert "x-display-error" not in _bin(api, token, "&mode=bogus").headers
+
+
+def test_a_bad_query_is_refused_before_it_spends_throttle_credit(api):
+    token = _switchable(api)
+    api.cookies.clear()
+    # `display_limiter` allows 300 in its window and locks out past it, and
+    # these are refused before it is asked.
+    for query in ("&mode=bogus", "&screen=bogus", "&screen=off&mode=now",
+                  "&screen=confirm&tabs=1"):
+        for _ in range(100):
+            assert _bin(api, token, query).status_code == 422
+    assert _bin(api, token).status_code == 200
+
+
+def test_a_disabled_or_unknown_display_is_a_404_whatever_it_asks_for(api):
+    token = api.post("/api/displays", json={
+        "name": "Hallway", "rotation": 90, "panel_width": 800,
+        "panel_height": 480}).json()["token"]
+    api.patch(f"/api/displays/{token}", json={"enabled": False})
+    for query in ("&mode=now", "&tabs=1", "&mode=now&tabs=1"):
+        assert _bin(api, token, query).status_code == 404, query
+    assert _bin(api, "nope", "&mode=now").status_code == 404
+    switch = _switchable(api, rotation=90)
+    api.patch(f"/api/displays/{switch}", json={"enabled": False})
+    assert _bin(api, switch, "&mode=now&tabs=1").status_code == 404
+
+
+@pytest.mark.parametrize("rotation,rows", [(0, "440-480"), (180, "0-40")])
+def test_tabs_draw_a_strip_and_say_which_rows_it_is(api, rotation, rows):
+    token = _switchable(api, rotation=rotation)
+    r = _bin(api, token, "&mode=habits&tabs=1")
+    assert r.status_code == 200
+    assert len(r.content) == 48_000
+    assert r.headers["x-display-tab-strip"] == rows
+    y0, y1 = (int(n) for n in rows.split("-"))
+    assert (y1 - y0) == R.strip_height(480) == 40
+    assert r.headers["x-display-mode"] == "habits"
+    # Which tab is lit is the only thing that differs between the strips.
+    other = _bin(api, token, "&mode=calendar&tabs=1")
+    assert other.headers["x-display-tab-strip"] == rows
+    assert r.content[y0 * 100:y1 * 100] != other.content[y0 * 100:y1 * 100]
+    # And tabs=1 is another picture from tabs=0.
+    assert r.content != _bin(api, token, "&mode=habits").content
+
+
+@pytest.mark.parametrize("rotation", [0, 180])
+@pytest.mark.parametrize("m", ["calendar", "habits", "now"])
+def test_the_page_above_the_strip_is_the_view_at_the_reduced_height(api, m, rotation):
+    token = _switchable(api, rotation=rotation)
+    body = _bin(api, token, f"&mode={m}&tabs=1").content
+    frame = api.app.state.service.display_frame(token, mode=m)
+    page = R.render_frame(frame, width=800, height=440, rotation=rotation,
+                          fmt="raw")[0]
+    assert len(page) == 44_000
+    if rotation == 0:
+        assert body[:44_000] == page
+    else:
+        assert body[4_000:] == page
+
+
+def test_tabs_are_not_drawn_at_a_quarter_turn(api):
+    token = _switchable(api, rotation=90)
+    plain = _bin(api, token, "&mode=now")
+    tabbed = _bin(api, token, "&mode=now&tabs=1")
+    assert tabbed.status_code == 200
+    assert "x-display-tab-strip" not in tabbed.headers
+    assert tabbed.content == plain.content
+    assert tabbed.headers["x-display-mode"] == "now"
+    # The same holds when the quarter turn is asked for rather than stored.
+    upright = _switchable(api)
+    asked = _bin(api, upright, "&mode=now&tabs=1&rotate=270")
+    assert "x-display-tab-strip" not in asked.headers
+    assert asked.content == _bin(api, upright, "&mode=now&rotate=270").content
+
+
+def test_tabs_none_is_the_render_it_always_was():
+    for mode in ("calendar", "habits", "now"):
+        frame = _frame(mode)
+        for kw in ({"fmt": "raw"}, {"fmt": "png"}, {"fmt": "raw", "rotation": 90}):
+            assert R.render_frame(frame, width=800, height=480, tabs=None, **kw) \
+                == R.render_frame(frame, width=800, height=480, **kw)
+
+
+def test_the_strip_helpers_and_their_refusals():
+    assert R.tab_strip_rows(480, 0) == (440, 480)
+    assert R.tab_strip_rows(480, 180) == (0, 40)
+    for rotation in (90, 270):
+        with pytest.raises(ValueError):
+            R.tab_strip_rows(480, rotation)
+        with pytest.raises(ValueError):
+            R.render_frame(_frame(), width=800, height=480, rotation=rotation,
+                           tabs=("a", "b", "c"))
+    assert F.TAB_MODES == ("habits", "now", "calendar")
+    assert F.tab_labels("en") == ("Today", "Now", "Calendar")
+    assert F.tab_labels("de") == ("Heute", "Jetzt", "Kalender")
+    assert F.tab_labels("xx") == F.tab_labels("en")
+
+
+def test_the_strip_is_pure_ink_and_paper_on_a_colour_display_too():
+    # The raw format is one bit whatever the palette, and the strip is drawn
+    # from the same two values.
+    frame = _frame("habits", palette="color")
+    body, _ = R.render_frame(frame, width=800, height=480, fmt="raw",
+                             tabs=F.tab_labels("en"))
+    assert len(body) == 48_000
+    png, _ = R.render_frame(frame, width=800, height=480, fmt="png",
+                            tabs=F.tab_labels("en"))
+    assert png[:4] == b"\x89PNG"
+
+
+@pytest.mark.parametrize("kind", ["confirm", "off"])
+def test_a_screen_is_a_raw_framebuffer_with_no_view_headers(api, kind):
+    # A display that did NOT opt in: screens work on every display.
+    token = api.post("/api/displays", json={
+        "name": "Hallway", "panel_width": 800, "panel_height": 480}).json()["token"]
+    en = _bin(api, token, f"&screen={kind}")
+    assert en.status_code == 200 and len(en.content) == 48_000
+    assert en.headers["x-display-screen"] == kind
+    assert "x-display-mode" not in en.headers
+    assert "x-display-tab-strip" not in en.headers
+    assert en.headers["x-display-format"] == "mono-hlsb"
+    assert en.headers["x-display-stride"] == "100"
+    assert int(en.headers["x-display-refresh-seconds"]) >= 180
+    api.put("/api/settings", json={"language": "de"})
+    de = _bin(api, token, f"&screen={kind}")
+    assert de.status_code == 200 and de.content != en.content
+    assert _bin(api, token, f"&screen={kind}").content == de.content
+    inverted = _bin(api, token, f"&screen={kind}&invert=1")
+    assert inverted.content == bytes(b ^ 0xFF for b in de.content)
+    assert inverted.headers["x-display-format"] == "mono-hlsb-inverted"
+    # The two screens are different pictures.
+    other = "off" if kind == "confirm" else "confirm"
+    assert _bin(api, token, f"&screen={other}").content != de.content
+
+
+def test_a_screen_follows_the_stored_rotation_and_the_asked_one(api):
+    token = api.post("/api/displays", json={
+        "name": "Hallway", "panel_width": 800, "panel_height": 480}).json()["token"]
+    upright = _bin(api, token, "&screen=confirm").content
+    api.patch(f"/api/displays/{token}", json={"rotation": 180})
+    assert _bin(api, token, "&screen=confirm").content != upright
+    assert _bin(api, token, "&screen=confirm&rotate=0").content == upright
+    api.patch(f"/api/displays/{token}", json={"rotation": 90})
+    assert len(_bin(api, token, "&screen=off").content) == 48_000
+
+
+def test_a_screen_for_a_missing_or_disabled_display_is_a_404(api):
+    assert _bin(api, "nope", "&screen=confirm").status_code == 404
+    token = api.post("/api/displays", json={
+        "name": "Hallway", "panel_width": 800, "panel_height": 480}).json()["token"]
+    api.patch(f"/api/displays/{token}", json={"enabled": False})
+    assert _bin(api, token, "&screen=off").status_code == 404
+
+
+def test_a_screen_cannot_be_combined_with_a_view(api):
+    token = _switchable(api)
+    for query in ("&screen=off&mode=now", "&screen=off&tabs=1",
+                  "&screen=confirm&mode=calendar&tabs=1", "&screen=sleep"):
+        assert _bin(api, token, query).status_code == 422, query
+
+
+def test_a_screen_answers_304_and_a_screen_needs_a_panel_size(api):
+    token = api.post("/api/displays", json={
+        "name": "Hallway", "panel_width": 800, "panel_height": 480}).json()["token"]
+    first = _bin(api, token, "&screen=confirm")
+    again = api.get(f"/api/public/display/{token}.bin?w=800&h=480&screen=confirm",
+                    headers={"If-None-Match": first.headers["etag"]})
+    assert again.status_code == 304 and not again.content
+    # The headers that say what was skipped are on the 304 too.
+    assert again.headers["x-display-screen"] == "confirm"
+    blank = api.post("/api/displays", json={"name": "No size"}).json()["token"]
+    missing = api.get(f"/api/public/display/{blank}.bin?screen=off")
+    assert missing.status_code == 422 and "panel size" in missing.text
+
+
+def test_a_view_304_carries_the_desk_key_headers(api):
+    token = _switchable(api)
+    first = _bin(api, token, "&mode=now&tabs=1")
+    again = api.get(f"/api/public/display/{token}.bin?w=800&h=480&mode=now&tabs=1",
+                    headers={"If-None-Match": first.headers["etag"]})
+    assert again.status_code == 304
+    assert again.headers["x-display-mode"] == "now"
+    assert again.headers["x-display-tab-strip"] == "440-480"
+
+
+def test_the_other_routes_carry_none_of_the_desk_key_headers(api):
+    token = _switchable(api)
+    for suffix in ("", ".png", ".bmp"):
+        r = api.get(f"/api/public/display/{token}{suffix}?w=800&h=480")
+        assert r.status_code == 200
+        assert "x-display-mode" not in r.headers
+        assert "x-display-tab-strip" not in r.headers
+        assert "x-display-screen" not in r.headers
+
+
+def test_screen_text_is_localized_and_a_bad_kind_is_refused():
+    assert F.screen_lines("confirm", "en") == (
+        "Shut down?", "Tap the key to confirm. Wait to cancel.")
+    assert F.screen_lines("confirm", "de")[0] == "Herunterfahren?"
+    assert len(F.screen_lines("off", "en")) == 3
+    assert F.screen_lines("off", "de")[0] == "Aus"
+    with pytest.raises(ValueError):
+        F.screen_lines("sleep", "en")
+
+
+def test_render_screen_is_one_bit_at_the_panel_size_and_refuses_what_it_cannot():
+    lines = F.screen_lines("off", "en")
+    body, media = R.render_screen(lines, width=800, height=480)
+    assert media == "application/octet-stream" and len(body) == 48_000
+    assert R.render_screen(lines, width=800, height=480, invert=True)[0] \
+        == bytes(b ^ 0xFF for b in body)
+    assert len(R.render_screen(lines, width=296, height=128)[0]) == 37 * 128
+    assert len(R.render_screen(lines, width=800, height=480, rotation=90)[0]) == 48_000
+    with pytest.raises(ValueError):
+        R.render_screen(lines, width=800, height=480, rotation=45)
+    with pytest.raises(ValueError):
+        R.render_screen(lines, width=4000, height=4000)
+
+
+def test_panel_too_small_for_a_switchable_display_is_judged_without_the_strip(api):
+    # 400×240 holds a month; 400×210, which is what the strip leaves of it at
+    # rotation 0, does not.
+    assert R.month_grid_fits(400, 240) is True
+    assert R.month_grid_fits(400, 240 - R.strip_height(240)) is False
+    plain = api.post("/api/displays", json={
+        "name": "A", "panel_width": 400, "panel_height": 240}).json()
+    desk = api.post("/api/displays", json={
+        "name": "B", "panel_width": 400, "panel_height": 240,
+        "switchable": True}).json()
+    assert plain["panel_too_small"] is False
+    assert desk["panel_too_small"] is True
+    # The strip is not drawn at a quarter turn, so nothing is taken off.
+    turned = api.post("/api/displays", json={
+        "name": "C", "panel_width": 240, "panel_height": 400, "rotation": 90,
+        "switchable": True}).json()
+    assert turned["panel_too_small"] is False
+    # A mode with no grid has nothing to judge, switchable or not.
+    now = api.post("/api/displays", json={
+        "name": "D", "mode": "now", "panel_width": 400, "panel_height": 240,
+        "switchable": True}).json()
+    assert now["panel_too_small"] is None

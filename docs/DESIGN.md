@@ -262,7 +262,10 @@ It lists the first 20 and counts the rest.
 ## Displays
 
 **No input, by design.** A display has no session, no controls and nothing
-focusable. Its URL reaches one read-only call.
+focusable. Its URL reaches one read-only call. The one thing that looks like an
+input is the desk unit's single key, which chooses which read-only view to ask
+for. It does that only on a display with *Desk key* turned on, and the URL itself
+still takes no input.
 
 **Three modes.** *The month* is drawn like a paper wall calendar: six fixed
 weeks, Sunday first. *Habits + today* gets shorter as the day goes, and its
@@ -311,8 +314,24 @@ and `.bmp` are 1-bit only while the display is set to e-ink. Switch it to colour
 and the same URL serves 24-bit BGR (1,152,054 bytes instead of 48,000). `.bin`
 is 1-bit by construction and rejects a palette parameter.
 
+`.bin` also takes three parameters for the desk unit's key. `mode`
+(`calendar`, `habits` or `now`) draws that view instead of the stored one, and
+`tabs=1` adds a three-tab strip (Today, Now, Calendar) along the bottom edge,
+with the page above it drawn at the reduced height. Both need *Desk key* on for
+the display; any other display answers 422 with `X-Display-Error: views-off`,
+the stored mode included. `screen` (`confirm` or `off`) is a static screen, the
+shutdown prompt or the notice that the unit is off. It works on every display,
+reads nothing of the owner's, and cannot be combined with `mode` or `tabs`.
+Four headers describe the answer: `X-Display-Mode` (the view drawn, on every
+`.bin` view response), `X-Display-Screen` (on screens), `X-Display-Tab-Strip`
+(the strip's half-open rows in the buffer, such as `440-480`, present only when
+one was drawn; at rotation 90 and 270 there is no strip) and `X-Display-Error`
+(`views-off`, on the 422). The first three ride on the 304 as well.
+
 **Refresh and caching.** E-ink is limited to one refresh every three minutes,
-because panel makers say faster refreshes damage the screen permanently. Colour
+because panel makers say faster refreshes damage the screen permanently. That
+is the rule for routine refreshes, which keep the 180 s floor; the desk key's
+refreshes are budgeted by the client (`firmware/README.md`). Colour
 screens can refresh every minute. Every response answers 304 to a matching
 `If-None-Match`, so a panel polling every five minutes doesn't flash 288 times a
 day to redraw a month that changed twice. Content is built once
@@ -320,7 +339,8 @@ day to redraw a month that changed twice. Content is built once
 formatted in the account's language and clock.
 
 **The URL is the credential.** Unlike a booking link, it shows the calendar
-itself. It is 32 bytes, reaches one read-only call, and *New URL* re-keys a
+itself. A switchable display's URL reaches all three views. It is 32 bytes,
+reaches one read-only call, and *New URL* re-keys a
 display in place, keeping its configuration so there's no reason to leave a
 leaked token in use. Settings → Displays → "Preview every display mode" previews every mode at real panel
 sizes without creating tokens.

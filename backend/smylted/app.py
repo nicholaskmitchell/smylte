@@ -46,6 +46,7 @@ from .access import AccessVerifier
 from .auth import Authenticator, HashBudget, RateLimiter, hash_password, limiter_key
 from .config import Settings, normalize_dav_url
 from .db import store
+from .display import frame as frame_mod
 from .display import render
 from .notify.rules import TRIGGERS as NOTIFY_TRIGGERS
 from .dav.errors import AuthError as DavAuthError
@@ -62,7 +63,7 @@ from .scheduling import SlotTaken
 from . import logredact
 from . import share as share_mod
 from .service import (
-    SmylteService, day_key, priority_from_label,
+    DisplayViewsOff, SmylteService, day_key, priority_from_label,
     # The weekday vocabulary, imported rather than restated. `service._WEEKDAYS`
     # is documented as the ONE place those names and Python's numbering meet, and
     # a copy of the seven strings at this edge is exactly the second mapping that
@@ -590,6 +591,9 @@ class CreateDisplay(BaseModel):
     panel_height: int | None = Field(default=None, ge=100, le=4096)
     rotation: Literal[0, 90, 180, 270] = 0
     enabled: bool = True
+    # Whether the desk key may ask this display for its other views. Off, so a
+    # URL that reaches one view does not quietly start reaching three.
+    switchable: bool = False
 
 
 class EditDisplay(BaseModel):
@@ -609,6 +613,7 @@ class EditDisplay(BaseModel):
     panel_height: int | None = Field(default=None, ge=0, le=4096)
     rotation: Literal[0, 90, 180, 270] | None = None
     enabled: bool | None = None
+    switchable: bool | None = None
 
 
 class CreateShare(BaseModel):
@@ -3064,6 +3069,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         rotate: int | None = Query(default=None),
         invert: bool = Query(default=False),
         palette: str | None = Query(default=None),
+        mode: str | None = Query(default=None),
+        tabs: bool = Query(default=False),
+        screen: str | None = Query(default=None),
     ):
         """The packed one-bit framebuffer, and nothing else.
 
@@ -3091,25 +3099,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         parameter and answering 422 is what makes that visible: FastAPI ignores
         a query it was never told about, so leaving it out would let
         `?palette=color` look accepted and do nothing.
+
+        `mode` (`calendar`, `habits` or `now`) draws that view instead of the
+        display's stored one. It is for the desk unit's key, and a display
+        answers it only when Desk key is on for it in Settings → Displays: any
+        other display gets a 422 with `X-Display-Error: views-off`, the stored
+        mode included, so a URL that reaches one view does not quietly start
+        reaching three. The view it draws reads the allowlists it always read.
+        `X-Display-Mode` says which view the bytes are.
+
+        `tabs=1` draws the three-tab strip (Today, Now, Calendar) along the
+        panel's bottom edge, with the active view's tab filled, and the page
+        above it at the reduced height. Same permission as `mode`. At rotation
+        90 and 270 the strip would be a column of the buffer, so the page is
+        drawn without one and there is no `X-Display-Tab-Strip`; otherwise that
+        header gives the strip's half-open rows in the buffer, `440-480` at
+        800×480 and rotation 0.
+
+        `screen` (`confirm` or `off`) is a static screen instead of a view: the
+        shutdown prompt, or the notice that the unit is off. It works on every
+        display, switchable or not, reads nothing of the owner's, and cannot be
+        combined with `mode` or `tabs` (422). `X-Display-Screen` names it, and
+        there is no `X-Display-Mode`.
         """
         if palette is not None:
             raise HTTPException(422, "raw is 1-bit only — palette does not apply")
         return await _display_image(request, token, "raw", w, h, rotate, None,
-                                    invert=invert)
+                                    invert=invert, mode=mode, tabs=tabs,
+                                    screen=screen)
 
-    async def _display_image(
-        request: Request, token: str, fmt: str,
-        w: int | None, h: int | None, rotate: int | None, palette: str | None,
-        *, invert: bool = False,
-    ) -> Response:
-        if rotate is not None and rotate not in (0, 90, 180, 270):
-            raise HTTPException(422, "rotate must be 0, 90, 180 or 270")
-        if palette is not None and palette not in ("color", "eink"):
-            raise HTTPException(422, "palette must be color or eink")
-        _display_throttle(request)
-        frame = await _run(_svc(request).display_frame, token)
-        if frame is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown display")
+    async def _panel_size(
+        request: Request, token: str, w: int | None, h: int | None,
+    ) -> tuple[int, int]:
         stored = await _run(_svc(request).list_displays_one, token)
         width = w or (stored or {}).get("panel_width")
         height = h or (stored or {}).get("panel_height")
@@ -3130,25 +3151,82 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 422,
                 f"{width}×{height} is more than the {render.MAX_PIXELS:,} pixels "
                 "a display render may cover")
-        if palette:
-            frame = {**frame, "display": {**frame["display"], "palette": palette}}
-        turn = rotate if rotate is not None else frame["display"].get("rotation", 0)
-        # Rendering is CPU-bound Pillow work — off the event loop, like every
-        # other blocking call in this module.
-        body, media = await asyncio.to_thread(
-            render.render_frame, frame, width=width, height=height,
-            rotation=turn, fmt=fmt, invert=invert)
+        return width, height
+
+    async def _display_image(
+        request: Request, token: str, fmt: str,
+        w: int | None, h: int | None, rotate: int | None, palette: str | None,
+        *, invert: bool = False, mode: str | None = None, tabs: bool = False,
+        screen: str | None = None,
+    ) -> Response:
+        if rotate is not None and rotate not in (0, 90, 180, 270):
+            raise HTTPException(422, "rotate must be 0, 90, 180 or 270")
+        if palette is not None and palette not in ("color", "eink"):
+            raise HTTPException(422, "palette must be color or eink")
+        # The three below look at the query alone, so they come before the
+        # throttle: a malformed request costs no credit, and none of them says
+        # anything about whether the token is real.
+        if mode is not None and mode not in SmylteService._DISPLAY_MODES:
+            raise HTTPException(422, "mode must be calendar, habits or now")
+        if screen is not None and screen not in ("confirm", "off"):
+            raise HTTPException(422, "screen must be confirm or off")
+        if screen is not None and (mode is not None or tabs):
+            raise HTTPException(422, "screen cannot be combined with mode or tabs")
+        _display_throttle(request)
+        extra: dict[str, str] = {}
+        if screen is not None:
+            info = await _run(_svc(request).display_screen_info, token)
+            if info is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown display")
+            width, height = await _panel_size(request, token, w, h)
+            turn = rotate if rotate is not None else info["display"]["rotation"]
+            body, media = await asyncio.to_thread(
+                render.render_screen,
+                frame_mod.screen_lines(screen, info["language"]),
+                width=width, height=height, rotation=turn, invert=invert)
+            seconds = max(info["display"]["refresh_seconds"],
+                          SmylteService._REFRESH_MIN_EINK_S)
+            extra["X-Display-Screen"] = screen
+        else:
+            try:
+                frame = await _run(_svc(request).display_frame, token, mode, tabs)
+            except DisplayViewsOff:
+                raise HTTPException(
+                    422,
+                    "this display does not switch views — turn on Desk key in "
+                    "Settings → Displays",
+                    headers={"X-Display-Error": "views-off"}) from None
+            if frame is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown display")
+            width, height = await _panel_size(request, token, w, h)
+            if palette:
+                frame = {**frame, "display": {**frame["display"], "palette": palette}}
+            turn = rotate if rotate is not None else frame["display"].get("rotation", 0)
+            strip_labels = None
+            if tabs and turn in (0, 180):
+                # At 90 and 270 the strip would be a column of the buffer, so
+                # there is none, and no header to say there is.
+                strip_labels = frame_mod.tab_labels(frame["language"])
+                y0, y1 = render.tab_strip_rows(height, turn)
+                extra["X-Display-Tab-Strip"] = f"{y0}-{y1}"
+            if fmt == "raw":
+                extra["X-Display-Mode"] = frame["display"]["mode"]
+            # Rendering is CPU-bound Pillow work — off the event loop, like every
+            # other blocking call in this module.
+            body, media = await asyncio.to_thread(
+                render.render_frame, frame, width=width, height=height,
+                rotation=turn, fmt=fmt, invert=invert, tabs=strip_labels)
+            # `raw` is a one-bit framebuffer, which is to say an e-ink panel is
+            # asking — whatever the display happens to be CONFIGURED as. The stored
+            # interval is floored by the palette, so a display left on the default
+            # `color` was advising 60 seconds to glass Waveshare rate at 180 and
+            # document as damaged beyond repair below it. The firmware carries its
+            # own floor precisely because this header is advisory, but a server that
+            # advises a number it knows to be unsafe is not much of a defence.
+            seconds = frame["display"]["refresh_seconds"]
+            if fmt == "raw":
+                seconds = max(seconds, SmylteService._REFRESH_MIN_EINK_S)
         etag = '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
-        # `raw` is a one-bit framebuffer, which is to say an e-ink panel is
-        # asking — whatever the display happens to be CONFIGURED as. The stored
-        # interval is floored by the palette, so a display left on the default
-        # `color` was advising 60 seconds to glass Waveshare rate at 180 and
-        # document as damaged beyond repair below it. The firmware carries its
-        # own floor precisely because this header is advisory, but a server that
-        # advises a number it knows to be unsafe is not much of a defence.
-        seconds = frame["display"]["refresh_seconds"]
-        if fmt == "raw":
-            seconds = max(seconds, SmylteService._REFRESH_MIN_EINK_S)
         headers = {
             "ETag": etag,
             "Cache-Control": "no-store, private",
@@ -3175,6 +3253,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # outside: 250 pixels is 32 bytes and not 31.25, and a client that
             # divided rather than asking gets a picture that shears.
             headers["X-Display-Stride"] = str((width + 7) // 8)
+        # The desk key's headers: which view or screen these bytes are, and where
+        # the strip is. On the 304 as well as the 200, so a client that skips the
+        # repaint still learns what it skipped.
+        headers.update(extra)
         if request.headers.get("if-none-match") == etag:
             # The one that matters: a panel that got a 304 does not repaint, and
             # an eink panel that does not repaint is a panel that is not

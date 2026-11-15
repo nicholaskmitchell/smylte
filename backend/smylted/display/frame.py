@@ -25,6 +25,10 @@ and `now` shows exactly two rows whether the day holds three items or thirty.
 `now` is deliberately not that refused list with a smaller cap. A capped list is
 a truncation the reader cannot see; two rows and a "+6" is the whole day, said in
 the only shape a screen with no scroll can say it in.
+
+The desk unit's key may ask a switchable display for any of the three, and
+that still reads nothing it could not before: each view reads the allowlists
+it always read, and the display has to have opted in.
 """
 from __future__ import annotations
 
@@ -67,7 +71,9 @@ _MONTHS = {
 }
 # The handful of words a display draws that are not data. A display has no
 # chrome to speak of on purpose, so this stays small; anything that grows it is
-# probably a control, and a display has no controls.
+# probably a control, and a display has no controls. The desk unit's key chooses
+# which read-only view to ask for, and the `tab_*` labels name those views; they
+# and the screen texts are words, not controls.
 _TEXT = {
     "en": {
         "today": "Today", "nothing": "Nothing today", "no_events": "No events",
@@ -77,6 +83,12 @@ _TEXT = {
         "not_planned_hint": "This is what opening it would put on it.",
         "too_small": "This screen is too small for a month.",
         "too_small_hint": "Set it to now + next, or habits + today, or use a bigger panel.",
+        "tab_today": "Today", "tab_now": "Now", "tab_calendar": "Calendar",
+        "confirm_title": "Shut down?",
+        "confirm_hint": "Tap the key to confirm. Wait to cancel.",
+        "off_title": "Off",
+        "off_hint": "Press the key to start.",
+        "off_wake": "Waking takes a few minutes. Wait a few seconds before unplugging.",
     },
     "de": {
         "today": "Heute", "nothing": "Heute nichts", "no_events": "Keine Termine",
@@ -86,6 +98,12 @@ _TEXT = {
         "not_planned_hint": "Das käme beim Öffnen darauf.",
         "too_small": "Dieser Bildschirm ist zu klein für einen Monat.",
         "too_small_hint": "Auf Jetzt + als Nächstes oder Gewohnheiten + heute stellen oder ein größeres Panel nehmen.",
+        "tab_today": "Heute", "tab_now": "Jetzt", "tab_calendar": "Kalender",
+        "confirm_title": "Herunterfahren?",
+        "confirm_hint": "Zum Bestätigen die Taste antippen. Warten bricht ab.",
+        "off_title": "Aus",
+        "off_hint": "Zum Starten die Taste drücken.",
+        "off_wake": "Das Aufwachen dauert einige Minuten. Vor dem Ausstecken einige Sekunden warten.",
     },
 }
 
@@ -149,6 +167,26 @@ def plain(value: str | None, *, limit: int = MAX_TEXT_CHARS) -> str:
 def text(language: str, key: str) -> str:
     """One of the few fixed words a display draws, in the owner's language."""
     return _TEXT.get(language, _TEXT["en"]).get(key, _TEXT["en"][key])
+
+
+# The modes in the desk key's order: Today, Now, Calendar.
+TAB_MODES = ("habits", "now", "calendar")
+
+
+def tab_labels(language: str) -> tuple[str, str, str]:
+    """The tab strip's three labels, in `TAB_MODES` order."""
+    return (text(language, "tab_today"), text(language, "tab_now"),
+            text(language, "tab_calendar"))
+
+
+def screen_lines(kind: str, language: str) -> tuple[str, ...]:
+    """The text of a static screen: `confirm` (shut down?) or `off`."""
+    if kind == "confirm":
+        return (text(language, "confirm_title"), text(language, "confirm_hint"))
+    if kind == "off":
+        return (text(language, "off_title"), text(language, "off_hint"),
+                text(language, "off_wake"))
+    raise ValueError(f"unknown screen {kind!r}")
 
 
 def local(value: str, zone: ZoneInfo | None) -> datetime | None:

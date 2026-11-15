@@ -23,7 +23,7 @@ const DISPLAY: Display = {
   token: 'tok-hallway', name: 'Hallway', mode: 'calendar', palette: 'color',
   calendars: [], lists: [], hide_done_habits: true, hide_done_tasks: true,
   refresh_seconds: 300, panel_width: null, panel_height: null, rotation: 0,
-  panel_too_small: null, enabled: true, last_seen_at: null,
+  panel_too_small: null, enabled: true, switchable: false, last_seen_at: null,
   created_at: '2026-08-01T10:00:00Z', updated_at: '2026-08-01T10:00:00Z',
 }
 
@@ -286,6 +286,52 @@ describe('<DisplaysSection>', () => {
     // It IS offered lists, because its queue is scoped by the same allowlist
     // the habits face is.
     expect(screen.getByText(/which lists/i)).toBeInTheDocument()
+  })
+})
+
+describe('the desk key toggle', () => {
+  it('is labelled, and sends switchable when it is clicked', async () => {
+    m.displays.mockResolvedValue([DISPLAY] as never)
+    m.patchDisplay.mockImplementation(((_t: string, body: object) =>
+      Promise.resolve({ ...DISPLAY, ...body })) as never)
+    mount()
+    await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
+    expect(screen.getByText('Desk key (Today · Now · Calendar)')).toBeInTheDocument()
+    expect(screen.getByText(/switch this display between its three views/i))
+      .toBeInTheDocument()
+    const toggle = screen.getByRole('button', { name: 'Desk key (Today · Now · Calendar)' })
+    expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    await userEvent.click(toggle)
+    expect(m.patchDisplay).toHaveBeenCalledWith('tok-hallway', { switchable: true })
+    await waitFor(() => expect(
+      screen.getByRole('button', { name: 'Desk key (Today · Now · Calendar)' }))
+      .toHaveAttribute('aria-pressed', 'true'))
+  })
+
+  it('shows both pickers and the habits options while it is on', async () => {
+    // A calendar-mode display normally offers calendars only; the key can ask
+    // it for Today and Now too, which read the lists allowlist.
+    m.displays.mockResolvedValue([DISPLAY] as never)
+    const { unmount } = mount()
+    await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
+    expect(screen.getByText(/which calendars/i)).toBeInTheDocument()
+    expect(screen.queryByText(/which lists/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/hide habits once done/i)).not.toBeInTheDocument()
+    unmount()
+
+    m.displays.mockResolvedValue([{ ...DISPLAY, switchable: true }] as never)
+    m.patchDisplay.mockImplementation(((_t: string, body: object) =>
+      Promise.resolve({ ...DISPLAY, switchable: true, ...body })) as never)
+    mount()
+    await userEvent.click(await screen.findByRole('button', { name: /set up/i }))
+    expect(screen.getByText(/which calendars/i)).toBeInTheDocument()
+    expect(screen.getByText(/which lists/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Inbox' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Work' })).toBeInTheDocument()
+    expect(screen.getByText(/hide habits once done/i)).toBeInTheDocument()
+    // Each picker writes its own field.
+    await userEvent.click(screen.getByRole('button', { name: 'Home' }))
+    expect(m.patchDisplay).toHaveBeenCalledWith('tok-hallway', { calendars: ['work'] })
   })
 })
 

@@ -316,6 +316,9 @@ export interface Display {
    *  nothing to judge: no size set, or a mode with no grid to not fit. */
   panel_too_small: boolean | null
   enabled: boolean
+  /** Whether the desk unit's key may ask this display for its other views
+   *  (`mode`, `tabs` on the `.bin` route). Off unless the owner turns it on. */
+  switchable: boolean
   last_seen_at: string | null      // null = never fetched a frame
   created_at: string
   updated_at: string
@@ -339,6 +342,7 @@ export interface DisplayInput {
   panel_height?: number
   rotation?: 0 | 90 | 180 | 270
   enabled?: boolean
+  switchable?: boolean
 }
 
 /** What a display shows, already formatted. Fetched with the token and no session.

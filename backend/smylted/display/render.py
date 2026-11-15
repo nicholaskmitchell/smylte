@@ -31,9 +31,12 @@ from __future__ import annotations
 import io
 import os
 from functools import lru_cache
+from collections.abc import Sequence
 from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
+
+from . import frame as frame_mod
 
 
 # What the raw format IS, stated on the wire so a firmware can assert its
@@ -423,6 +426,31 @@ def _scale(height: int) -> float:
     headlines; a bigger screen should show MORE, not the same thing louder.
     """
     return max(0.75, min(2.6, height / 480))
+
+
+def strip_height(layout_h: int) -> int:
+    """Rows the desk key's tab strip takes, for a layout canvas `layout_h` high.
+
+    40 at the 480px reference, scaled like the type. The strip is drawn only at
+    rotation 0 and 180, where the layout height IS the panel's framebuffer
+    height.
+    """
+    return round(40 * _scale(layout_h))
+
+
+def tab_strip_rows(height: int, rotation: int) -> tuple[int, int]:
+    """The strip's rows in the raw buffer, half-open `(y0, y1)`.
+
+    `height` is the panel's framebuffer height. The strip is the bottom of the
+    layout canvas, so a quarter turn would put it in a column rather than rows:
+    that is refused, and the caller draws no strip at 90 and 270.
+    """
+    strip = strip_height(height)
+    if rotation == 0:
+        return (height - strip, height)
+    if rotation == 180:
+        return (0, strip)
+    raise ValueError("a tab strip has rows only at rotation 0 and 180")
 
 
 def _item_scale(scale: float) -> float:
@@ -1120,9 +1148,42 @@ def _render_now(
     }
 
 
+def _draw_strip(
+    img: Image.Image, frame: dict[str, Any], tabs: Sequence[str], *,
+    strip: int, colors: dict[str, Any],
+) -> None:
+    """The desk key's tab strip, into the bottom `strip` rows of `img`.
+
+    A rule of ink at its top, three equal cells, a centred label in each, and
+    the active view's cell filled ink with its label in paper. Only ink and
+    paper, so an eink render stays pure one-bit.
+    """
+    w, h = img.size
+    scale = _scale(h)
+    pad = int(16 * scale)
+    top = h - strip
+    rule = max(2, round(2 * scale))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([0, top, w - 1, top + rule - 1], fill=colors["ink"])
+    mode = frame["display"]["mode"]
+    # An unknown mode draws a month, so it is the Calendar tab.
+    active = (frame_mod.TAB_MODES.index(mode)
+              if mode in frame_mod.TAB_MODES else 2)
+    font = _font("sans", round(0.5 * strip))
+    for i, label in enumerate(tabs):
+        x0, x1 = w * i // 3, w * (i + 1) // 3
+        if i == active:
+            draw.rectangle([x0, top + rule, x1 - 1, h - 1], fill=colors["ink"])
+        draw.text(
+            ((x0 + x1) / 2, top + rule + (strip - rule) / 2),
+            _fit(draw, label, font, (x1 - x0) - 2 * pad), font=font,
+            fill=colors["paper"] if i == active else colors["ink"],
+            anchor="mm")
+
+
 def _compose(
     frame: dict[str, Any], *, width: int, height: int, rotation: int,
-    force_mono: bool = False,
+    force_mono: bool = False, tabs: Sequence[str] | None = None,
 ) -> Image.Image:
     """Everything up to the encode: the drawn, rotated, thresholded image.
 
@@ -1153,6 +1214,12 @@ def _compose(
     colour and ignoring the treatment, so a light-coloured calendar lost its
     chip mark entirely while `_plan_cell` had already reserved the width for it.
     A one-bit target is an eink target; it takes the eink palette.
+
+    `tabs` is the desk key's strip: three labels, or None for none. With labels,
+    the unchanged renderer draws the page onto a canvas `strip_height` shorter
+    and that is pasted at the top, so a view's layout at the reduced height is
+    exactly what it would be on a panel that high. The caller never passes it at
+    a quarter turn, where the strip would be a column.
     """
     eink = force_mono or frame["display"].get("palette") == "eink"
     colors = _EINK if eink else _COLOR
@@ -1169,13 +1236,21 @@ def _compose(
         # Pillow wants a scalar. Flattening here rather than keeping a second
         # palette table means one definition of "ink".
         colors = {k: (0 if v == (0, 0, 0) else 255) for k, v in _EINK.items()}
+    page = img
+    if tabs is not None:
+        strip = strip_height(canvas[1])
+        page = Image.new("L" if eink else "RGB", (canvas[0], canvas[1] - strip),
+                         255 if eink else colors["paper"])
     mode = frame["display"]["mode"]
     if mode == "habits":
-        _render_habits(img, frame, eink=eink, colors=colors)
+        _render_habits(page, frame, eink=eink, colors=colors)
     elif mode == "now":
-        _render_now(img, frame, eink=eink, colors=colors)
+        _render_now(page, frame, eink=eink, colors=colors)
     else:
-        _render_calendar(img, frame, eink=eink, colors=colors)
+        _render_calendar(page, frame, eink=eink, colors=colors)
+    if tabs is not None:
+        img.paste(page, (0, 0))
+        _draw_strip(img, frame, tabs, strip=strip, colors=colors)
     if rotation:
         # Negative: PIL rotates counter-clockwise and `rotation` is stated
         # clockwise, which is how every panel datasheet states it.
@@ -1188,9 +1263,32 @@ def _compose(
     return img
 
 
+def _pack_raw(img: Image.Image, invert: bool) -> bytes:
+    """A mode "1" image as the raw framebuffer. Shared by frames and screens."""
+    # PIL's mode "1" packing IS the framebuffer these panels want, with no
+    # transformation at either end: eight pixels per byte, MSB leftmost,
+    # rows padded to `ceil(width / 8)` — which is also MicroPython's
+    # `framebuf.MONO_HLSB` stride — and bit 1 = white paper, 0 = black ink,
+    # which is Waveshare's own convention (`Clear(0xff)` blanks a panel).
+    # At 800×480 that is exactly 48,000 bytes in 100-byte rows.
+    #
+    # So the client is `sock.readinto(epd.buffer)`. No header to skip, no
+    # row order to flip, no stride to unpad, no decompressor.
+    body = img.tobytes()
+    if invert:
+        # For a controller whose driver takes 0 as white. Done on the packed
+        # bytes and not on the image — see `_INVERT` for why every obvious
+        # Pillow alternative returns a blank white panel instead. The row
+        # padding at a width that is not a multiple of eight is flipped too;
+        # those bits are off-panel for MONO_HLSB, so it costs nothing.
+        body = body.translate(_INVERT)
+    return body
+
+
 def render_frame(
     frame: dict[str, Any], *, width: int, height: int,
     rotation: int = 0, fmt: str = "png", invert: bool = False,
+    tabs: Sequence[str] | None = None,
 ) -> tuple[bytes, str]:
     """Draw `frame` for a `width`×`height` panel. Returns (bytes, media type).
 
@@ -1209,11 +1307,18 @@ def render_frame(
       * `bmp` — a board whose display library reads a bitmap. Closer to the
         metal, but still a 62-byte container, stored BOTTOM-UP, with rows padded
         to a four-byte boundary.
-      * `raw` — the packed one-bit framebuffer itself, and nothing else. See the
-        branch below for what it is byte for byte.
+      * `raw` — the packed one-bit framebuffer itself, and nothing else. See
+        `_pack_raw` for what it is byte for byte.
+
+    `tabs` is three labels for the desk key's strip, or None for none — and None
+    is the path every render took before the strip existed, byte for byte. The
+    strip takes rows off one edge of the LAYOUT canvas, so a quarter turn, where
+    that edge is a column of the buffer, is refused.
     """
     if rotation not in (0, 90, 180, 270):
         raise ValueError("rotation must be 0, 90, 180 or 270")
+    if tabs is not None and rotation in (90, 270):
+        raise ValueError("a tab strip is drawn only at rotation 0 and 180")
     if fmt not in ("png", "bmp", "raw"):
         raise ValueError("format must be png, bmp or raw")
     if width * height > MAX_PIXELS:
@@ -1229,26 +1334,9 @@ def render_frame(
         # as a panel full of black.
         raise ValueError("invert applies only to raw")
     img = _compose(frame, width=width, height=height, rotation=rotation,
-                   force_mono=(fmt == "raw"))
+                   force_mono=(fmt == "raw"), tabs=tabs)
     if fmt == "raw":
-        # PIL's mode "1" packing IS the framebuffer these panels want, with no
-        # transformation at either end: eight pixels per byte, MSB leftmost,
-        # rows padded to `ceil(width / 8)` — which is also MicroPython's
-        # `framebuf.MONO_HLSB` stride — and bit 1 = white paper, 0 = black ink,
-        # which is Waveshare's own convention (`Clear(0xff)` blanks a panel).
-        # At 800×480 that is exactly 48,000 bytes in 100-byte rows.
-        #
-        # So the client is `sock.readinto(epd.buffer)`. No header to skip, no
-        # row order to flip, no stride to unpad, no decompressor.
-        body = img.tobytes()
-        if invert:
-            # For a controller whose driver takes 0 as white. Done on the packed
-            # bytes and not on the image — see `_INVERT` for why every obvious
-            # Pillow alternative returns a blank white panel instead. The row
-            # padding at a width that is not a multiple of eight is flipped too;
-            # those bits are off-panel for MONO_HLSB, so it costs nothing.
-            body = body.translate(_INVERT)
-        return body, _RAW_MEDIA
+        return _pack_raw(img, invert), _RAW_MEDIA
     buf = io.BytesIO()
     if fmt == "png":
         img.save(buf, "PNG", optimize=True)
@@ -1260,3 +1348,50 @@ def render_frame(
         img.save(buf, "BMP")
         return buf.getvalue(), "image/bmp"
     raise ValueError(f"unhandled format {fmt!r}")
+
+
+def render_screen(
+    lines: Sequence[str], *, width: int, height: int,
+    rotation: int = 0, invert: bool = False,
+) -> tuple[bytes, str]:
+    """A static screen — the shutdown prompt, the off notice — as a raw framebuffer.
+
+    Raw only, and always one-bit, with the same size, stride and `invert` rules
+    as `render_frame(fmt="raw")`. Laid out on the canvas a reader sees (the panel
+    transposed at a quarter turn) and rotated at the end, like a frame: line 0 is
+    a heading, line 1 under it, and an optional line 2 smaller still, all centred
+    horizontally with the block centred vertically. Each line is shortened with an
+    ellipsis rather than overrunning the panel.
+    """
+    if rotation not in (0, 90, 180, 270):
+        raise ValueError("rotation must be 0, 90, 180 or 270")
+    if width * height > MAX_PIXELS:
+        raise ValueError(
+            f"{width}×{height} is more than the {MAX_PIXELS:,} pixels a display "
+            "render may cover")
+    canvas = (height, width) if rotation in (90, 270) else (width, height)
+    layout_w, layout_h = canvas
+    scale = _scale(layout_h)
+    pad = int(20 * scale)
+    gap = round(24 * scale)
+    img = Image.new("L", canvas, 255)
+    draw = ImageDraw.Draw(img)
+    fonts = (_font("serif", round(96 * scale)),
+             _font("sans", round(30 * scale)),
+             _font("sans", round(22 * scale)))
+    placed = []
+    for line, font in zip(lines, fonts):
+        shown = _fit(draw, line, font, layout_w - 2 * pad)
+        # The ink box, so the block is centred on what is drawn rather than on
+        # the font's line height.
+        left, top, right, bottom = draw.textbbox((0, 0), shown, font=font)
+        placed.append((shown, font, right - left, bottom - top, left, top))
+    block = (sum(p[3] for p in placed) + gap * max(0, len(placed) - 1))
+    y = (layout_h - block) // 2
+    for shown, font, tw, th, left, top in placed:
+        draw.text(((layout_w - tw) // 2 - left, y - top), shown, font=font, fill=0)
+        y += th + gap
+    if rotation:
+        img = img.rotate(-rotation, expand=True)
+    img = img.convert("1", dither=Image.Dither.NONE)
+    return _pack_raw(img, invert), _RAW_MEDIA

@@ -385,6 +385,10 @@ def focus_settings(blob: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+class DisplayViewsOff(Exception):
+    """The display does not switch views, and a mode or tab strip was asked for."""
+
+
 class SmylteService:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -3770,15 +3774,23 @@ class SmylteService:
             # panel fine and the panel itself then draw "This screen is too
             # small for a month", which is the one disagreement this shared
             # predicate exists to prevent.
+            #
+            # A switchable display's tab strip takes its rows off the bottom of
+            # the layout canvas at 0 and 180, in every mode, so the grid is
+            # judged on what is left. At 90 and 270 no strip is drawn.
             "panel_too_small": (
                 None if row["mode"] != "calendar"
                 or not row["panel_width"] or not row["panel_height"]
                 else not display_render.month_grid_fits(
                     *((row["panel_height"], row["panel_width"])
                       if row["rotation"] in (90, 270)
-                      else (row["panel_width"], row["panel_height"])))
+                      else (row["panel_width"],
+                            row["panel_height"] - display_render.strip_height(
+                                row["panel_height"])
+                            if row["switchable"] else row["panel_height"])))
             ),
             "enabled": bool(row["enabled"]),
+            "switchable": bool(row["switchable"]),
             "last_seen_at": row["last_seen_at"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
@@ -3859,6 +3871,10 @@ class SmylteService:
         for key in ("hide_done_habits", "hide_done_tasks", "enabled"):
             if key in out:
                 out[key] = int(bool(out[key]))
+        if "switchable" in out:
+            if not isinstance(out["switchable"], bool):
+                raise ValueError("switchable must be true or false")
+            out["switchable"] = int(out["switchable"])
         return out
 
     def create_display(self, fields: dict[str, Any]) -> dict[str, Any]:
@@ -3903,8 +3919,17 @@ class SmylteService:
             self._publish({"type": "display_deleted", "display": token})
         return ok
 
-    def display_frame(self, token: str) -> dict[str, Any] | None:
+    def display_frame(
+        self, token: str, mode: str | None = None, tabs: bool = False,
+    ) -> dict[str, Any] | None:
         """Everything one display shows, right now. The only call a token reaches.
+
+        `mode` and `tabs` are the desk key's: they are accepted only from a
+        display that opted in (`switchable`), and raise `DisplayViewsOff` from
+        any other. That is checked AFTER the enabled check, so a disabled or
+        unknown token is still None whatever it asked for. A switchable display
+        reads its `calendars` allowlist for Calendar and its `lists` allowlist
+        for Today and Now, exactly as each mode does when it is the stored one.
 
         None for an unknown OR a disabled display, deliberately collapsed into
         one answer: the route turns both into the same 404, so switching a
@@ -3924,12 +3949,34 @@ class SmylteService:
             if row is None or not row["enabled"]:
                 return None
             display = self._display_dto(row, with_token=False)
+            if (mode is not None or tabs) and not display["switchable"]:
+                raise DisplayViewsOff()
+            if mode is not None:
+                assert mode in self._DISPLAY_MODES, mode
+                display["mode"] = mode
             frame = self._build_display_frame(display)
             # Last, and inside the lock: a display that got its frame is a
             # display that was seen. It is deliberately not awaited on, checked
             # or allowed to fail the read — see `store.touch_display`.
             store.touch_display(self._conn, token)
         return frame
+
+    def display_screen_info(self, token: str) -> dict[str, Any] | None:
+        """What a static screen (confirm, off) needs of one display. No frame.
+
+        The same enabled check and the same `touch_display` as `display_frame`,
+        so a screen fetch counts as the display being seen, and the same None
+        for an unknown or disabled token. It reads no items: a screen is text
+        the app wrote, not anything of the owner's.
+        """
+        with self._lock:
+            row = store.get_display(self._conn, token)
+            if row is None or not row["enabled"]:
+                return None
+            display = self._display_dto(row, with_token=False)
+            language = store.get_settings(self._conn).get("language") or "en"
+            store.touch_display(self._conn, token)
+        return {"display": display, "language": language}
 
     def _build_display_frame(
         self, display: dict[str, Any], *, refs: bool = False,

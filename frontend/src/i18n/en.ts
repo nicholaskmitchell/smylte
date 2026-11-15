@@ -179,6 +179,8 @@ export const en = {
   'disp.imageHint': 'Use .bin on a microcontroller. It is a packed 1-bit framebuffer you write straight to the panel (800×480 is 48,000 bytes). Use .png or .bmp if your board can decode images.',
   'disp.enabled': 'Connected',
   'disp.enabledHint': 'While off, the URL stops working.',
+  'disp.switchable': 'Desk key (Today · Now · Calendar)',
+  'disp.switchableHint': 'Lets the desk unit’s key switch this display between its three views. Its URL can then show all three.',
   'disp.rotateToken': 'New URL',
   'disp.rotateHint': 'A new URL keeps this display’s settings. Point the screen at it afterwards.',
   'disp.delete': 'Delete',

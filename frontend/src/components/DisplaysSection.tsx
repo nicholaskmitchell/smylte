@@ -4,6 +4,9 @@
 // nowhere else. That is the whole reason this section exists rather than the
 // panel itself carrying a mode switch: the screen in the kitchen and the one in
 // the hallway want different things, and neither of them has a settings button.
+// The one exception is the desk unit's key, which chooses which of the three
+// read-only views to ask for — and only from a display that has Desk key turned
+// on here.
 //
 // Shaped like the scheduling links it sits beside, because it is the same kind
 // of object: a row whose primary key is a token that reaches data without a
@@ -39,7 +42,9 @@ const ROTATIONS = [0, 90, 180, 270] as const
 // The order the mode control cycles in, which is also the order they are worth
 // hanging on a wall in: the month is what most people mount one for, habits is
 // what earns a kitchen, and now + next is the one that fits a panel too small
-// for either.
+// for either. A switchable display is asked for any of the three by the desk
+// key, whatever it is stored as, so it shows both allowlist pickers and the
+// habits options too.
 const DISPLAY_MODES: readonly DisplayMode[] = ['calendar', 'habits', 'now']
 
 /** What is being typed into a row's text fields, before it is written.
@@ -250,6 +255,52 @@ export function DisplaysSection(
   const effective = (chosen: string[], all: string[]): string[] =>
     chosen.length === 0 ? all : chosen
 
+  /** One allowlist picker. A switchable display shows both, so each takes its
+   *  own field rather than reading the stored mode. */
+  const picker = (d: Display, which: 'calendars' | 'lists') => {
+    const source = which === 'calendars' ? cals : lists
+    const all = source.map((x) => x.id)
+    const chosen = d[which]
+    return (
+      <>
+        <div className="menu-head">
+          {tr(which === 'calendars' ? 'disp.whichCalendars' : 'disp.whichLists')}
+        </div>
+        <div className="disp-picks">
+          {source.map((c) => {
+            // An empty allowlist means "everything", so the first
+            // click has to materialize the full set before removing
+            // one — otherwise turning one calendar off would turn
+            // every other one off too.
+            const now = effective(chosen, all)
+            const on = now.includes(c.id)
+            // The LAST one on cannot be turned off. An emptied
+            // allowlist is indistinguishable from an unset one, so
+            // writing it would mean "everything" — the click would do
+            // the exact opposite of what it says, and light every
+            // chip the owner had just finished turning off.
+            const last = on && now.length === 1
+            return (
+              <button key={c.id}
+                className={`chip${on ? ' is-on' : ''}`}
+                aria-pressed={on}
+                disabled={last}
+                title={last ? tr('disp.needOneSource') : undefined}
+                onClick={() => {
+                  if (last) return
+                  const next = asAllowlist(toggleId(now, c.id), all)
+                  void patch(d.token, which === 'calendars'
+                    ? { calendars: next } : { lists: next })
+                }}>
+                {c.name}
+              </button>
+            )
+          })}
+        </div>
+      </>
+    )
+  }
+
   if (!loaded) return <div className="empty">{tr('disp.loading')}</div>
   if (failed) return <div className="empty" role="alert">{tr('disp.loadFailed')}</div>
 
@@ -326,6 +377,17 @@ export function DisplaysSection(
                   ) : null}
 
                   <div className="menu-row">
+                    <label>{tr('disp.switchable')}</label>
+                    <button className="menu-toggle"
+                      aria-label={tr('disp.switchable')}
+                      aria-pressed={d.switchable}
+                      onClick={() => void patch(d.token, { switchable: !d.switchable })}>
+                      {tr(d.switchable ? 'disp.on' : 'disp.off')}
+                    </button>
+                  </div>
+                  <div className="hintline">{tr('disp.switchableHint')}</div>
+
+                  <div className="menu-row">
                     <label>{tr('disp.palette')}</label>
                     <button className="menu-toggle"
                       onClick={() => void patch(d.token,
@@ -360,7 +422,7 @@ export function DisplaysSection(
                     <div className="hintline">{tr('disp.refreshEinkHint')}</div>
                   ) : null}
 
-                  {d.mode === 'habits' ? (
+                  {d.mode === 'habits' || d.switchable ? (
                     <>
                       <div className="menu-row">
                         <label>{tr('disp.hideDoneHabits')}</label>
@@ -385,42 +447,8 @@ export function DisplaysSection(
                   {/* The allowlists. Empty means everything — a display made in
                       March should show a calendar made in April without being
                       edited, which is the same default `hidden_calendars` takes. */}
-                  <div className="menu-head">
-                    {tr(d.mode === 'calendar' ? 'disp.whichCalendars' : 'disp.whichLists')}
-                  </div>
-                  <div className="disp-picks">
-                    {(d.mode === 'calendar' ? cals : lists).map((c) => {
-                      const all = (d.mode === 'calendar' ? cals : lists).map((x) => x.id)
-                      const chosen = d.mode === 'calendar' ? d.calendars : d.lists
-                      // An empty allowlist means "everything", so the first
-                      // click has to materialize the full set before removing
-                      // one — otherwise turning one calendar off would turn
-                      // every other one off too.
-                      const now = effective(chosen, all)
-                      const on = now.includes(c.id)
-                      // The LAST one on cannot be turned off. An emptied
-                      // allowlist is indistinguishable from an unset one, so
-                      // writing it would mean "everything" — the click would do
-                      // the exact opposite of what it says, and light every
-                      // chip the owner had just finished turning off.
-                      const last = on && now.length === 1
-                      return (
-                        <button key={c.id}
-                          className={`chip${on ? ' is-on' : ''}`}
-                          aria-pressed={on}
-                          disabled={last}
-                          title={last ? tr('disp.needOneSource') : undefined}
-                          onClick={() => {
-                            if (last) return
-                            const next = asAllowlist(toggleId(now, c.id), all)
-                            void patch(d.token, d.mode === 'calendar'
-                              ? { calendars: next } : { lists: next })
-                          }}>
-                          {c.name}
-                        </button>
-                      )
-                    })}
-                  </div>
+                  {d.switchable || d.mode === 'calendar' ? picker(d, 'calendars') : null}
+                  {d.switchable || d.mode !== 'calendar' ? picker(d, 'lists') : null}
 
                   <div className="menu-head">{tr('disp.url')}</div>
                   <div className="disp-url">

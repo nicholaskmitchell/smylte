@@ -269,6 +269,11 @@ def init_db(conn: sqlite3.Connection) -> None:
             # NULL on rows written before filing existed, which reads as "the
             # default list", as those rows did.
             conn.execute(f"ALTER TABLE mail_suggestions ADD COLUMN {col} TEXT")
+    disp_cols = {r["name"] for r in conn.execute("PRAGMA table_info(displays)")}
+    if "switchable" not in disp_cols:
+        # 0 on every display made before the desk key: each one stays as narrow
+        # as it was, reaching only the view it is set to.
+        conn.execute("ALTER TABLE displays ADD COLUMN switchable INTEGER NOT NULL DEFAULT 0")
 
 
 # ── collections ──────────────────────────────────────────────────────────────
@@ -2298,7 +2303,7 @@ def list_oauth_grants(conn: sqlite3.Connection, *, now: float) -> list[dict]:
 _DISPLAY_FIELDS = {
     "name", "mode", "palette", "calendars", "lists", "hide_done_habits",
     "hide_done_tasks", "refresh_seconds", "panel_width", "panel_height",
-    "rotation", "enabled",
+    "rotation", "enabled", "switchable",
 }
 
 
