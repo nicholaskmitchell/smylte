@@ -28,7 +28,8 @@
 #     refresh is recorded BEFORE it starts, so a crash halfway through still
 #     counts. See floor_ok_at().
 #   * A stop never interrupts a refresh. SIGTERM/SIGINT/SIGHUP are blocked and
-#     only collected while waiting, with sigtimedwait(). A stop that arrives
+#     only collected by one thread, and the loop reads them only between
+#     refreshes (see Collector). A stop that arrives
 #     mid-refresh is honoured as soon as the panel is in deep sleep.
 #   * The panel is in deep sleep between refreshes, and unpowered whenever this
 #     process is not running: close() on every exit, and the unit's
@@ -1063,17 +1064,6 @@ def sd_notify(message: str) -> bool:
         return False
 
 
-def wait_for_signal(timeout: float) -> int | None:
-    """Sleep up to `timeout` s; return a pending WAIT_SIGNALS signal, or None.
-
-    Only works with those signals blocked (main() blocks them first), which is
-    the point: a signal can only ever be taken here, never in the middle of a
-    refresh.
-    """
-    info = signal.sigtimedwait(WAIT_SIGNALS, max(0.0, timeout))
-    return None if info is None else info.si_signo
-
-
 def boottime() -> float:
     return time.clock_gettime(time.CLOCK_BOOTTIME)
 
@@ -1214,6 +1204,10 @@ class Events:
 
     def next_retry(self) -> float | None:
         return self._retry_at if self.key_enabled and self._fd is None else None
+
+    def alive(self) -> bool:
+        """Whether signals are still being collected."""
+        return self.collector.alive()
 
     def _discover(self) -> None:
         now = self._boottime()
@@ -1356,12 +1350,20 @@ class Deps:
     state_dir: pathlib.Path
     panel: object
     epd: object                 # the driver module, for its exception classes
-    fetch: object               # (etag | None) -> result
-    wait: object = wait_for_signal
+    fetch: object               # (etag | None, *, mode=, tabs=, screen=) -> result
+    # .wait(timeout) -> [Item], .next_retry(), .key_open and .alive(): Events
+    events: object = None
     boottime: object = boottime
     walltime: object = time.time
     synced: object = clock_synced
     notify: object = sd_notify
+    request_poweroff: object = lambda: "failed: no run directory"   # () -> "ok" | why not
+    clear_poweroff: object = lambda: None
+    refresh: str = "fast"       # SMYLTE_PANEL_REFRESH
+    idle_s: int = 0             # SMYLTE_PANEL_IDLE_RETURN_S
+    key: str = "auto"           # SMYLTE_PANEL_KEY
+    holds_ok: bool = True       # False when $RUNTIME_DIRECTORY is unusable
+    logind_present: bool | None = None  # the logind drop-in; None is unknown
 
 
 def _showing(s: State) -> str:
@@ -1410,17 +1412,6 @@ def _failed_in(panel) -> str:
     """Where a refresh failed. abort() leaves `phase` at "off", so the driver
     keeps the phase it was in when abort() began."""
     return getattr(panel, "aborted_in", None) or getattr(panel, "phase", "?")
-
-
-def _drain(d: Deps) -> int | None:
-    """Collect every signal already pending; return a stop signal if any."""
-    stop = None
-    while True:
-        sig = d.wait(0)
-        if sig is None:
-            return stop
-        if sig in STOP_SIGNALS:
-            stop = sig
 
 
 def _paint(d: Deps, prev: State, frame: bytes, *, etag: str | None,
@@ -1474,163 +1465,786 @@ def _paint(d: Deps, prev: State, frame: bytes, *, etag: str | None,
     return done, end
 
 
-def run(d: Deps) -> int:
-    """The service loop. Returns an exit code; never returns mid-refresh."""
-    state = load_state(d.state_dir)
-    start = d.boottime()
-    # A paint time later than this process's start is from an earlier boot, so
-    # at least this boot's uptime has passed since it. Record it as boot time
-    # 0, which stays a true lower bound as uptime grows and across a restart
-    # later in this boot. (Compared each time instead, the paint would pass for
-    # this boot's once uptime overtook it.) Only a paint time later than this
-    # start can be told from this boot's: without a synced clock, one at or
-    # before it is due 23 h after it. The last refresh and the last full one
-    # are each rewritten on their own.
-    rewritten = state
-    if state.complete and state.painted_end_bt is not None \
-            and state.painted_end_bt > start:
-        rewritten = dataclasses.replace(rewritten, painted_end_bt=0.0)
-    if state.full_end_bt is not None and state.full_end_bt > start:
-        rewritten = dataclasses.replace(rewritten, full_end_bt=0.0)
-    if rewritten is not state:
-        state = rewritten
-        unsaved = not save_state(d.state_dir, state)
-    else:
-        unsaved = False     # retried after each fetch until it is on disk
-    floor_at = floor_ok_at(state, start)
-    next_poll = start
-    problems = _Problems(d.notify)
-    gate_logged = False
-    healthy = False         # the last fetch was a 304, a dedupe or a paint
-    cap_synced = False      # whether the 23-hour cap last saw a synced clock
-    force_next = False      # a healthy answer left the 23-hour repaint due
-    if floor_at > start:
-        log.info("first refresh allowed in %d s (the 180 s floor is kept across "
-                 "restarts)", math.ceil(floor_at - start))
+class _PanelFailed(Exception):
+    """A refresh failed and abort() has powered the panel down; logged."""
 
-    while True:
-        now = d.boottime()
-        gate_open = now >= CLOCK_SYNC_GRACE_S or d.synced()
-        due = max(next_poll, floor_at)
-        if not gate_open or now < due:
-            if not gate_open and not gate_logged:
-                log.info("waiting for the clock to sync (or %d s of uptime) "
-                         "before the first fetch", CLOCK_SYNC_GRACE_S)
-                gate_logged = True
-            timeout = CLOCK_CHECK_S if not gate_open else min(PING_SLICE_S, due - now)
-            sig = d.wait(timeout)
-            d.notify("WATCHDOG=1")
-            if sig in STOP_SIGNALS:
-                log.info("stopping on signal %d", sig)
-                return EX_OK
-            if sig == REPAINT_SIGNAL:
+
+# What a view fetch's refusal says about this server and this display.
+VIEWS_OFF_TOO_OLD = "smylted is too old for the desk key — update it"
+VIEWS_OFF_SETTING = "turn on Desk key for this display in Settings → Displays"
+
+_STOP, _FAIL, _REQUEUED = "stop", "fail", "requeued"
+
+
+def _views_off_reason(result) -> str | None:
+    """Why the server will not switch views, if `result` says it will not."""
+    if isinstance(result, Refused):
+        if result.code == "views-off":
+            return VIEWS_OFF_SETTING
+        if result.reason == "mode":
+            return VIEWS_OFF_TOO_OLD
+    return None
+
+
+class _Runner:
+    """run()'s state and its loop (design §4.8).
+
+    Each iteration: take in what has happened (signals, the key's edges), let
+    Gestures and Ui turn it into actions, run the actions (strips, pages, the
+    prompt, the off screen, the way back), then the routine fetch and paint,
+    then at most one background fetch, then wait. The routine branch keeps the
+    service's old logic: the floor, the 23-hour repaint and the backoffs. Key
+    refreshes are exempt from the floor and paid for from the key's budget.
+    """
+
+    def __init__(self, d: Deps):
+        self.d = d
+        loaded = load_state(d.state_dir)
+        start = self.start = d.boottime()
+        # From the state AS LOADED, before the rewrite below: a wake is a
+        # start whose glass shows the off screen from an earlier boot.
+        self.wake = bool(loaded.complete and loaded.off
+                         and loaded.painted_end_bt is not None
+                         and loaded.painted_end_bt > start)
+        tokens = start_tokens(loaded, start)
+        # A paint time later than this process's start is from an earlier boot, so
+        # at least this boot's uptime has passed since it. Record it as boot time
+        # 0, which stays a true lower bound as uptime grows and across a restart
+        # later in this boot. (Compared each time instead, the paint would pass for
+        # this boot's once uptime overtook it.) Only a paint time later than this
+        # start can be told from this boot's: without a synced clock, one at or
+        # before it is due 23 h after it. The last refresh and the last full one
+        # are each rewritten on their own.
+        state = rewritten = loaded
+        if state.complete and state.painted_end_bt is not None \
+                and state.painted_end_bt > start:
+            rewritten = dataclasses.replace(rewritten, painted_end_bt=0.0)
+        if state.full_end_bt is not None and state.full_end_bt > start:
+            rewritten = dataclasses.replace(rewritten, full_end_bt=0.0)
+        if rewritten is not state:
+            state = rewritten
+            self.unsaved = not save_state(d.state_dir, state)
+        else:
+            self.unsaved = False    # retried after each fetch until it is on disk
+        self.state = state
+        self.floor_at = floor_ok_at(state, start)
+        self.screens: dict[str, bytes] = {}
+        for kind in SCREENS:
+            frame = load_screen(d.state_dir, kind)
+            if frame is not None:
+                self.screens[kind] = frame
+        self.screen_fetched_at = {kind: start for kind in self.screens}
+        d.clear_poweroff()      # a request left by an earlier process
+        # The first VIEW paint of this process skips the floor once after a
+        # wake, or when the glass shows a screen (the prompt or the off screen)
+        # that a stop or a crash left there. Prompts and leaves do not use it.
+        on_screen = bool(state.complete and state.glass_sha256 is not None
+                         and any(hashlib.sha256(f).hexdigest() == state.glass_sha256
+                                 for f in self.screens.values()))
+        self.exempt_first_view = self.wake or on_screen
+        self.next_poll = start
+        self.bucket = Bucket(tokens, start)
+        self.ui = Ui(state.view if state.view in VIEWS and not self.wake else TODAY,
+                     start, d.idle_s)
+        self.gestures = Gestures()
+        self.actions: collections.deque = collections.deque()
+        self.problems = _Problems(d.notify)
+        # The glass as this process last drew it, and its tab strip's rows.
+        self.glass: bytes | None = None
+        self.glass_strip: tuple[int, int] | None = None
+        # The glass and its record from before the prompt: (bytes, view, etag,
+        # strip rows), repainted on the way back.
+        self.pre_prompt: tuple | None = None
+        self.strip_cache: dict[str, tuple[tuple[int, int], bytes]] = {}
+        self.views = d.key == "auto"
+        self.views_reason: str | None = None    # why not, for the STATUS line
+        self.views_off_at: float | None = None
+        self.last_fetch_ok = False      # the last view fetch was a Frame or a 304
+        self.first_fetch_ok = False
+        self.painted_any = False        # any refresh by this process
+        self.view_painted = False       # a whole view frame painted by this process
+        # A view fetch of this process found the glass already showing it (a 304,
+        # or the same picture). With view_painted, it is what lets taps in: the
+        # rule exists so no tap paints before the clock gate has opened, and a
+        # routine view fetch has passed the gate as surely as a paint has. Without
+        # it, a restart onto an unchanged page left the key dead until the page
+        # next changed, which could be hours.
+        self.view_seen = False
+        # Notices that must outlast the next healthy answer: the STATUS line
+        # carries them after "showing …", like the desk-key-off reason.
+        self.notes: list[str] = []
+        self.healthy = False    # the last routine fetch was a 304, a dedupe or a paint
+        self.cap_synced = False # whether the 23-hour cap last saw a synced clock
+        self.force_next = False # a healthy answer left the 23-hour repaint due
+        self.gate_logged = False
+        self.fetched = False            # this iteration fetched
+        self.last_fetch_t = -math.inf
+        self.last_ping = start
+        self.bg_retry: dict[tuple[str, str], float] = {}
+        self.resting = False
+        self.last_prompt_end: float | None = None
+        self.grace_end: float | None = None
+        self.off_paint_failed = False
+        self.stop_pending = False       # a stop came while an Off was queued
+        if self.floor_at > start and not self.exempt_first_view:
+            log.info("first refresh allowed in %d s (the 180 s floor is kept across "
+                     "restarts)", math.ceil(self.floor_at - start))
+        if self.wake:
+            log.info("woken from the off screen: Today is drawn as soon as the "
+                     "server answers")
+        if d.key == "auto" and not d.holds_ok:
+            self.notes.append("holding the key does nothing: "
+                              "$RUNTIME_DIRECTORY is not a writable directory")
+        if d.key == "auto" and d.logind_present is False:
+            self.notes.append("logind still powers off on a press — re-run panel-setup.sh")
+        elif d.key == "off" and d.logind_present:
+            self.notes.append("the key does nothing — re-run panel-setup.sh")
+        for note in self.notes:
+            log.warning("%s", note)
+        if self.notes:
+            d.notify("STATUS=" + " · ".join(self.notes))
+
+    # ── helpers ─────────────────────────────────────────────────────────────
+
+    def _gate_open(self, now: float) -> bool:
+        return now >= CLOCK_SYNC_GRACE_S or self.d.synced()
+
+    def _due(self) -> float:
+        if self.exempt_first_view:
+            return self.next_poll
+        return max(self.next_poll, self.floor_at)
+
+    def _routine_eligible(self) -> bool:
+        return (self.ui.mode == "browse" and not self.actions
+                and self.ui.page_due is None and not self.gestures.pressed)
+
+    def _tokens(self, now: float) -> int:
+        self.bucket.refill(now)
+        return self.bucket.tokens
+
+    def _take(self, now: float) -> None:
+        self.bucket.refill(now)
+        self.bucket.take()
+
+    def _healthy_line(self) -> str:
+        line = _showing(self.state)
+        if not self.views and self.views_reason:
+            line += f" · desk key off: {self.views_reason}"
+        if self.state.quick_disabled:
+            line += " · fast refresh is off (see firmware/README.md)"
+        for note in self.notes:
+            line += f" · {note}"
+        return line
+
+    @property
+    def view_ready(self) -> bool:
+        """Taps may change the view: a view frame is known to be on the glass."""
+        return self.view_painted or self.view_seen
+
+    def _fetch(self, etag: str | None, **kw):
+        result = self.d.fetch(etag, **kw)
+        self.fetched = True
+        now = self.d.boottime()
+        self.last_fetch_t = now
+        if now - self.last_ping >= 1.0:
+            self.d.notify("WATCHDOG=1")
+            self.last_ping = now
+        return result
+
+    def _kind(self, purpose: str) -> str:
+        """full or fast, in §4.5's order of precedence."""
+        if self.d.refresh == "full" or self.state.quick_disabled:
+            return "full"
+        if purpose == "prompt":
+            return "fast"
+        if purpose in ("off", "forced") or not self.painted_any:
+            return "full"
+        return "full" if self.state.fast_count >= FULL_EVERY else "fast"
+
+    def _strip_ok(self, view: str) -> bool:
+        cached = self.strip_cache.get(view)
+        return (self.d.refresh == "fast" and not self.state.quick_disabled
+                and self.state.fast_count + 1 < FULL_EVERY
+                and self.glass is not None and self.last_fetch_ok and self.views
+                and cached is not None and self.glass_strip is not None
+                and cached[0] == self.glass_strip)
+
+    def _cache_strip(self, view: str, frame: Frame) -> None:
+        if frame.strip is None:
+            return
+        y0, y1 = frame.strip
+        rows = frame.body[y0 * STRIDE:y1 * STRIDE]
+        cached = self.strip_cache.get(view)
+        if cached is not None and cached[1] != rows:
+            self.strip_cache = {}       # the strip changed (language?): all of it
+        self.strip_cache[view] = (frame.strip, rows)
+
+    def _view_result(self, result, view: str) -> bool:
+        """Book a view fetch's result. True if it turned the views off."""
+        if isinstance(result, (Frame, NotModified)):
+            self.last_fetch_ok = True
+            self.first_fetch_ok = True
+            if not self.views:
+                log.info("the server switches views again: the desk key is on")
+                self.views = True
+                self.views_reason = None
+            if isinstance(result, Frame):
+                self._cache_strip(view, result)
+            return False
+        self.last_fetch_ok = False
+        reason = _views_off_reason(result)
+        if reason is None:
+            return False
+        if self.views:
+            log.warning("desk key off: %s", reason)
+            self.views_off_at = self.d.boottime()
+        self.views = False
+        self.views_reason = reason
+        return True
+
+    def _failure(self, result, now: float, flipped: bool) -> float:
+        """Say what went wrong with a fetch; the routine backoff it earns."""
+        if flipped:
+            return 0.0      # not a problem: the legacy fetch follows at once
+        if isinstance(result, Gone):
+            self.problems.set("gone", "the server does not know this display (404): "
+                                      "token rotated, or display disabled or deleted "
+                                      "— `sudo deploy/panel-setup.sh --rotate-token` "
+                                      "after a rotation")
+            return GONE_RETRY_S
+        if isinstance(result, Throttled):
+            self.problems.set("throttled", f"throttled by the server (429); next "
+                                           f"try in {result.retry_s} s")
+            return result.retry_s
+        if isinstance(result, Refused):
+            self.problems.set(f"refused:{result.reason}",
+                              f"refused the server's response ({result.reason}) — "
+                              "server and client disagree about the frame")
+            return GONE_RETRY_S
+        reason = getattr(result, "reason", repr(result))
+        if self.wake and not self.view_painted and now - self.start >= STARTUP_WINDOW_S:
+            self.problems.set("waking", "waking: the server is not answering")
+        else:
+            self.problems.set("transient", f"server not answering ({reason})")
+        if not self.painted_any and now - self.start < STARTUP_WINDOW_S:
+            return STARTUP_RETRY_S
+        return ERROR_RETRY_S
+
+    def _draw(self, frame: bytes, *, purpose: str, kind: str, etag: str | None,
+              view: str | None, off: bool = False, old: bytes | None = None,
+              strip: tuple[int, int] | None = None) -> float | None:
+        """One refresh: its end time, or None if the write-ahead record could
+        not be saved and nothing was sent to the panel. A panel failure is
+        logged and raised as _PanelFailed."""
+        try:
+            done, end = _paint(self.d, self.state, frame, etag=etag, view=view,
+                               kind=kind, off=off, old=old)
+        except Exception as e:
+            phase = _failed_in(self.d.panel)
+            if isinstance(e, self.d.epd.PanelError):
+                log.error("refresh failed during %s: %s", phase, e)
+            else:
+                log.critical("refresh failed during %s", phase, exc_info=True)
+            raise _PanelFailed(purpose) from e
+        if done is None:
+            self.problems.set("state", "could not record the refresh before "
+                                       "starting it, so it was not started "
+                                       "(the floor would not survive a "
+                                       f"crash); retrying every {ERROR_RETRY_S} s")
+            return None
+        self.state = done
+        self.floor_at = end + MIN_REFRESH_S
+        self.glass, self.glass_strip = frame, strip
+        self.painted_any = True
+        last = getattr(self.d.panel, "last_refresh_s", None)
+        if isinstance(last, (int, float)) and not isinstance(last, bool) and (
+                (kind == "partial" and last > QUICK_PARTIAL_MAX_S)
+                or (kind == "fast" and last > QUICK_FAST_MAX_S)):
+            # The batch guard: a panel this slow at quick refreshes is an old
+            # batch, and quick refreshes would harm it.
+            self.state = dataclasses.replace(self.state, quick_disabled=True)
+            save_state(self.d.state_dir, self.state)
+            self.problems.set("quick", "fast refresh is off: this panel looks like a "
+                                       "pre-2023 batch; see firmware/README.md")
+        return end
+
+    def _viewed(self) -> None:
+        """A whole view frame is on the glass, painted by this process."""
+        self.view_painted = True
+        self.exempt_first_view = False
+
+    # ── taking in events ────────────────────────────────────────────────────
+
+    def _ingest(self, items, now: float, current=None) -> bool:
+        """Take in waited-for items. True if a stop means run() must return."""
+        for item in items:
+            if isinstance(item, Stop):
+                if isinstance(current, Off) or any(isinstance(a, Off) for a in self.actions):
+                    # The confirmed power-off is still drawn and requested.
+                    if not self.stop_pending:
+                        log.info("stopping on signal %d once the power-off is "
+                                 "requested", item.sig)
+                    self.stop_pending = True
+                    continue
+                log.info("stopping on signal %d", item.sig)
+                return True
+            if isinstance(item, Repaint):
                 log.info("repaint requested; it happens at the next allowed time")
-                state = dataclasses.replace(state, etag=None, glass_sha256=None)
-                next_poll = d.boottime()
-            elif healthy and not cap_synced and d.synced():
-                # The clock synced after the next fetch was scheduled without
-                # it. Ask now, once, so the wall-clock bound on the 23-hour
-                # repaint applies, or a repaint it says is overdue happens.
-                # Never after a failure: that would cut its backoff short.
-                log.info("clock synced; checking the 23-hour repaint against it")
-                cap_synced = True
-                next_poll = d.boottime()
-            continue
+                self.state = dataclasses.replace(self.state, etag=None, glass_sha256=None,
+                                                 fast_count=FULL_EVERY)
+                self.next_poll = self.d.boottime()
+                self.glass = self.glass_strip = self.pre_prompt = None
+                self.strip_cache = {}
+            elif isinstance(item, Key):
+                if item.value == 1:
+                    self.gestures.press(item.t)
+                else:
+                    for gesture in self.gestures.release(item.t):
+                        self._gesture(gesture, now)
+            elif isinstance(item, KeyReset):
+                self.gestures.reset()
+        return False
 
-        # The sync flag is read once per fetch: a sync that lands during the
-        # fetch is then picked up by the wait branch, not lost in between.
-        synced = d.synced()
-        forced = force_next or forced_due(state, now, d.walltime(), synced)
-        force_next = False
-        result = d.fetch(None if forced else state.etag)
+    def _gesture(self, gesture, now: float) -> None:
+        """Filter a tap or a hold (§4.8 step 2), then hand it to Ui."""
+        kind, press_t = gesture
+        if kind == "tap" and self.ui.mode == "browse":
+            if not (self.views and self.view_ready and self._tokens(now) >= 2):
+                if self.views and self.view_ready:
+                    self.resting = True
+                    self.problems.set("resting", "key resting; try again in "
+                                      f"{math.ceil(self.bucket.next_at(2) - now)} s")
+                return
+        elif kind == "hold" and self.ui.mode == "browse":
+            if not self.d.holds_ok:
+                return
+            if "confirm" not in self.screens:
+                self.problems.set("no-confirm", "no confirm screen yet")
+                return
+            if self._tokens(now) >= 1:
+                self.bucket.take()
+            elif self.last_prompt_end is not None \
+                    and now - self.last_prompt_end < HOLD_EMPTY_GAP_S:
+                log.info("key: hold ignored; the key is resting")
+                return
+        self.actions.extend(getattr(self.ui, kind)(press_t, now))
+
+    def _drain(self, current):
+        """Before a paint: take in what is pending. _STOP if a stop must end
+        run() first, _REQUEUED if the key went down (the action waits at the
+        head of the queue), else None."""
+        items = self.d.events.wait(0)
+        if self._ingest(items, self.d.boottime(), current=current) \
+                or (self.stop_pending and not isinstance(current, Off)):
+            log.info("stopping before the refresh it would have started")
+            return _STOP
+        if self.gestures.pressed:
+            self.actions.appendleft(current)
+            return _REQUEUED
+        return None
+
+    # ── actions (§4.8 step 4) ───────────────────────────────────────────────
+
+    def _collapse(self) -> None:
+        """Consecutive strips collapse to the last; a strip or a page queued
+        before a prompt is dropped. Prompt, Off and Leave are never dropped."""
+        acts = list(self.actions)
+        last_prompt = max((i for i, a in enumerate(acts) if isinstance(a, Prompt)),
+                          default=-1)
+        out: list = []
+        for i, a in enumerate(acts):
+            if isinstance(a, (Strip, Page)) and i < last_prompt:
+                continue
+            if isinstance(a, Strip) and out and isinstance(out[-1], Strip):
+                out[-1] = a
+                continue
+            out.append(a)
+        self.actions = collections.deque(out)
+
+    def _run_actions(self) -> int | None:
+        while True:
+            self._collapse()
+            if not self.actions or self.gestures.pressed:
+                return None
+            action = self.actions.popleft()
+            r = getattr(self, "_do_" + type(action).__name__.lower())(action)
+            if r == _STOP:
+                return EX_OK
+            if r == _FAIL:
+                return EX_FAIL
+            if r == _REQUEUED:
+                return None
+
+    def _do_strip(self, action: Strip):
+        view = action.view
+        if not (self._strip_ok(view) and self._tokens(self.d.boottime()) >= 1):
+            return None
+        r = self._drain(action)
+        if r:
+            return r
+        if not self._strip_ok(view):    # USR1 forgot the glass meanwhile
+            return None
+        y0, y1 = self.glass_strip
+        new = self.glass[:y0 * STRIDE] + self.strip_cache[view][1] + self.glass[y1 * STRIDE:]
+        end = self._draw(new, purpose="strip", kind="partial", etag=None, view=None,
+                         old=self.glass, strip=self.glass_strip)
+        if end is not None:
+            self._take(end)
+        return None
+
+    def _do_page(self, action: Page):
+        view = action.view
+        result = self._fetch(None, mode=view, tabs=True)
+        flipped = self._view_result(result, view)
+        now = self.d.boottime()
+        if not isinstance(result, Frame):
+            # No retry here: the routine branch fetches ui.view on its own
+            # schedule, unconditionally, since the record's view is not it.
+            backoff = self._failure(result, now, flipped)
+            if isinstance(result, Throttled):
+                self.next_poll = now + result.retry_s
+            else:
+                self.next_poll = min(self.next_poll, now + backoff)
+            return None
+        if self.glass is not None and result.body == self.glass:
+            if (self.state.view, self.state.etag) != (view, result.etag):
+                self.state = dataclasses.replace(self.state, view=view, etag=result.etag)
+                save_state(self.d.state_dir, self.state)
+            self.ui.painted_view(view)
+            return None
+        r = self._drain(action)
+        if r:
+            return r
+        if self.ui.view != view:
+            return None     # another tap moved on: its own page follows
+        now = self.d.boottime()
+        if self._tokens(now) < 1:
+            self.next_poll = min(self.next_poll, now)   # the routine draws it
+            return None
+        end = self._draw(result.body, purpose="page", kind=self._kind("page"),
+                         etag=result.etag, view=view, strip=result.strip)
+        if end is not None:
+            self._take(end)
+            self.ui.painted_view(view)
+            self._viewed()
+        return None
+
+    def _do_prompt(self, action: Prompt):
+        self.pre_prompt = ((self.glass, self.state.view, self.state.etag, self.glass_strip)
+                           if self.glass is not None else None)
+        r = self._drain(action)
+        if r:
+            return r
+        end = self._draw(self.screens["confirm"], purpose="prompt",
+                         kind=self._kind("prompt"), etag=None, view=None)
+        if end is None:
+            self.actions.extend(self.ui.prompt_failed(self.d.boottime()))
+            return None
+        self.ui.shown_prompt(end)
+        self.last_prompt_end = end
+        return None
+
+    def _do_off(self, action: Off):
+        r = self._drain(action)
+        if r:
+            return r
+        failed = False
+        if "off" in self.screens:
+            try:
+                self._draw(self.screens["off"], purpose="off", kind=self._kind("off"),
+                           etag=None, view=None, off=True)
+            except _PanelFailed:
+                failed = True       # powered off anyway; the panel is broken
+        else:
+            log.warning("no off screen yet; powering off with the glass as it is")
+        result = self.d.request_poweroff()
+        now = self.d.boottime()
+        if result != "ok":
+            log.error("could not request the power-off: %s", result)
+            self.problems.set("poweroff", f"could not power off: {result}")
+            if failed:
+                return _FAIL
+            self.actions.extend(self.ui.resume(now, why="failed"))
+        else:
+            log.info("power-off requested")
+            self.grace_end = now + POWEROFF_GRACE_S
+            self.off_paint_failed = failed
+        if self.stop_pending:
+            log.info("stopping: the power-off is requested")
+            return _STOP
+        return None
+
+    def _do_leave(self, action: Leave):
+        r = self._drain(action)
+        if r:
+            return r
+        pre = self.pre_prompt
+        if pre is not None:
+            frame, view, etag, strip = pre
+            self._draw(frame, purpose="leave", kind=self._kind("leave"), etag=etag,
+                       view=view, strip=strip)
+        else:
+            # Nothing to go back to: white, so the glass never shows a prompt
+            # that is no longer armed, until the routine fetch can draw.
+            self._draw(WHITE, purpose="leave", kind="full", etag=None, view=None)
+            self.next_poll = self.d.boottime()
+        self.pre_prompt = None
+        if pre is not None and pre[1] is not None:
+            self.ui.painted_view(pre[1])
+        self.ui.leave_done(self.d.boottime())
+        return None
+
+    def _do_idle(self, action: Idle):
+        self.next_poll = self.d.boottime()
+        return None
+
+    def _grace_expired(self, now: float) -> int | None:
+        self.grace_end = None
+        self.d.clear_poweroff()
+        if self.off_paint_failed:
+            log.error("nothing acted on the power-off request within %d s, and the "
+                      "off screen could not be drawn", POWEROFF_GRACE_S)
+            return EX_FAIL
+        log.error("nothing acted on the power-off request within %d s",
+                  POWEROFF_GRACE_S)
+        self.problems.set("poweroff", "could not power off: nothing acted on the "
+                                      f"request within {POWEROFF_GRACE_S} s")
+        self.actions.extend(self.ui.resume(now))
+        return None
+
+    # ── the routine branch (§4.8 step 5) ────────────────────────────────────
+
+    def _routine(self) -> int | None:
+        d = self.d
         now = d.boottime()
-        healthy = False
+        if not (self._routine_eligible() and self._gate_open(now) and now >= self._due()):
+            return None
+        # The sync flag is read once per fetch: a sync that lands during the
+        # fetch is then picked up by the next iteration, not lost in between.
+        synced = d.synced()
+        forced = self.force_next or forced_due(self.state, now, d.walltime(), synced)
+        self.force_next = False
+        view = self.ui.view
+        recheck = (not self.views and d.key == "auto" and self.views_off_at is not None
+                   and now - self.views_off_at >= VIEWS_RECHECK_S)
+        if self.views or recheck:
+            if recheck:
+                log.info("asking the server for the desk key's views again")
+                self.views_off_at = now
+            sent = self.state.etag if self.state.view == view and not forced else None
+            result = self._fetch(sent, mode=view, tabs=True)
+            flipped = self._view_result(result, view)
+            shown = view
+        else:
+            sent = self.state.etag if self.state.view is None and not forced else None
+            result = self._fetch(sent)
+            flipped, shown = False, None
+            if isinstance(result, (Frame, NotModified)):
+                self.first_fetch_ok = True
+        now = d.boottime()
+        self.healthy = False
 
         if isinstance(result, Frame):
             sha = hashlib.sha256(result.body).hexdigest()
-            if sha == state.glass_sha256 and not forced:
+            if sha == self.state.glass_sha256 and not forced:
                 # Same picture under a new ETag (or a server that ignored
                 # If-None-Match): remember the tag, leave the glass alone.
-                if result.etag != state.etag:
-                    state = dataclasses.replace(state, etag=result.etag)
-                    save_state(d.state_dir, state)
-                problems.ok(_showing(state))
-                next_poll = now + result.refresh_s
-                healthy = True
+                if (result.etag, shown) != (self.state.etag, self.state.view):
+                    self.state = dataclasses.replace(self.state, etag=result.etag,
+                                                     view=shown)
+                    save_state(d.state_dir, self.state)
+                if shown:
+                    self.view_seen = True
+                self.problems.ok(self._healthy_line())
+                self.next_poll = now + result.refresh_s
+                self.healthy = True
             else:
-                if _drain(d) is not None:
+                if self._ingest(d.events.wait(0), d.boottime()):
                     log.info("stopping before the refresh it would have started")
                     return EX_OK
-                if d.boottime() < floor_at:     # cannot happen; belt and braces
+                if self.gestures.pressed or self.actions:
+                    return None     # the key first; next_poll as it was
+                if not self.exempt_first_view and d.boottime() < self.floor_at:
+                    # cannot happen; belt and braces
                     log.error("refusing to refresh %.0f s inside the floor",
-                              floor_at - d.boottime())
-                    next_poll = floor_at
-                    continue
-                try:
-                    done, end = _paint(d, state, result.body, etag=result.etag,
-                                       view=None, kind="full", off=False)
-                except Exception as e:
-                    phase = _failed_in(d.panel)
-                    if isinstance(e, d.epd.PanelError):
-                        log.error("refresh failed during %s: %s", phase, e)
-                    else:
-                        log.critical("refresh failed during %s", phase,
-                                     exc_info=True)
-                    return EX_FAIL
-                if done is None:
-                    problems.set("state", "could not record the refresh before "
-                                          "starting it, so it was not started "
-                                          "(the floor would not survive a "
-                                          f"crash); retrying every {ERROR_RETRY_S} s")
-                    next_poll = now + ERROR_RETRY_S
-                    continue
-                state = done
-                floor_at = end + MIN_REFRESH_S
-                next_poll = end + result.refresh_s
-                problems.ok(_showing(state))
-                healthy = True
+                              self.floor_at - d.boottime())
+                    self.next_poll = self.floor_at
+                    return None
+                end = self._draw(result.body, purpose="routine",
+                                 kind=self._kind("forced" if forced else "routine"),
+                                 etag=result.etag, view=shown,
+                                 strip=result.strip if shown else None)
+                if end is None:
+                    self.next_poll = now + ERROR_RETRY_S
+                    return None
+                if shown:
+                    self.ui.painted_view(shown)
+                self._viewed()
+                self.next_poll = end + result.refresh_s
+                self.problems.ok(self._healthy_line())
+                self.healthy = True
         elif isinstance(result, NotModified):
-            problems.ok(_showing(state))
-            next_poll = now + result.refresh_s
-            healthy = True
-        elif isinstance(result, Gone):
-            problems.set("gone", "the server does not know this display (404): "
-                                 "token rotated, or display disabled or deleted "
-                                 "— `sudo deploy/panel-setup.sh --rotate-token` "
-                                 "after a rotation")
-            next_poll = now + GONE_RETRY_S
-        elif isinstance(result, Throttled):
-            problems.set("throttled", f"throttled by the server (429); next "
-                                      f"try in {result.retry_s} s")
-            next_poll = now + result.retry_s
-        elif isinstance(result, Refused):
-            problems.set(f"refused:{result.reason}",
-                         f"refused the server's response ({result.reason}) — "
-                         "server and client disagree about the frame")
-            next_poll = now + GONE_RETRY_S
+            if shown:
+                self.view_seen = True
+            self.problems.ok(self._healthy_line())
+            self.next_poll = now + result.refresh_s
+            self.healthy = True
         else:
-            reason = getattr(result, "reason", repr(result))
-            problems.set("transient", f"server not answering ({reason})")
-            next_poll = now + ERROR_RETRY_S
+            self.next_poll = now + self._failure(result, now, flipped)
 
-        if unsaved:
-            unsaved = not save_state(d.state_dir, state)
+        if self.unsaved:
+            self.unsaved = not save_state(d.state_dir, self.state)
 
         # Keep the 23-hour repaint on time even if the server advises 24 h,
         # and across a reboot, but only after a healthy answer: a failure's
         # backoff is never cut short, and a forced fetch follows it anyway.
         # The clocks are read again, since the fetch (or paint) took time.
-        cap_synced = synced
-        if healthy:
+        self.cap_synced = synced
+        if self.healthy:
             bt, wall = d.boottime(), d.walltime()
-            if forced_due(state, bt, wall, cap_synced):
+            if forced_due(self.state, bt, wall, self.cap_synced):
                 # It came due during the fetch: fetch again now, forced.
-                force_next = True
-                next_poll = bt
+                self.force_next = True
+                self.next_poll = bt
             else:
-                force_at = force_poll_at(state, bt, wall, cap_synced)
+                force_at = force_poll_at(self.state, bt, wall, self.cap_synced)
                 if force_at is not None:
-                    next_poll = min(next_poll, force_at)
+                    self.next_poll = min(self.next_poll, force_at)
+        return None
+
+    # ── background fetches (§4.8 step 6) ────────────────────────────────────
+
+    def _bg_items(self, now: float) -> list[tuple[str, str]]:
+        """What is worth fetching in the background, in order: missing
+        screens, the strips of views not cached yet, stale screens."""
+        if self.d.key != "auto":
+            return []
+        items = [("screen", k) for k in SCREENS if k not in self.screens
+                 and (self.painted_any or self.first_fetch_ok)]
+        # Only while the glass has a strip: with none (rotated 90/270) no strip
+        # is ever drawn, so there is nothing to prefetch for.
+        if self.view_painted and self.views and self.glass_strip is not None:
+            items += [("view", v) for v in VIEWS if v not in self.strip_cache]
+        if self.painted_any:
+            items += [("screen", k) for k in SCREENS if k in self.screens
+                      and now - self.screen_fetched_at[k] >= SCREEN_REVALIDATE_S]
+        return [it for it in items if self.bg_retry.get(it, -math.inf) <= now]
+
+    def _background(self) -> None:
+        d = self.d
+        if self.fetched or not (self.ui.mode == "browse" and not self.actions
+                                and not self.gestures.pressed
+                                and self.ui.page_due is None):
+            return
+        now = d.boottime()
+        if now - self.last_fetch_t < BG_GAP_S:
+            return
+        items = self._bg_items(now)
+        if not items:
+            return
+        item = items[0]
+        kind, name = item
+        if kind == "screen":
+            result = self._fetch(None, screen=name)
+            if isinstance(result, Frame):
+                self.screens[name] = result.body
+                self.screen_fetched_at[name] = d.boottime()
+                save_screen(d.state_dir, name, result.body)
+                return
+        else:
+            result = self._fetch(None, mode=name, tabs=True)
+            self._view_result(result, name)
+            if isinstance(result, Frame):
+                return
+        self.bg_retry[item] = d.boottime() + BG_RETRY_S
+
+    # ── the loop ────────────────────────────────────────────────────────────
+
+    def _timeout(self, now: float) -> float:
+        """How long the wait may be (§4.8 step 7)."""
+        pressed = self.gestures.pressed
+        terms = [float(PING_SLICE_S)]
+        if self.actions and not pressed:
+            terms.append(0.0)
+        if not self._gate_open(now):
+            if not self.gate_logged:
+                log.info("waiting for the clock to sync (or %d s of uptime) "
+                         "before the first fetch", CLOCK_SYNC_GRACE_S)
+                self.gate_logged = True
+            terms.append(float(CLOCK_CHECK_S))
+        elif self._routine_eligible():
+            terms.append(self._due() - now)
+        for at in (self.ui.next_deadline(pressed), self.gestures.next_deadline(),
+                   self.d.events.next_retry(), self.grace_end):
+            if at is not None:
+                terms.append(at - now)
+        if self.painted_any and self._bg_items(now):
+            terms.append(float(BG_GAP_S))
+        if self.resting:
+            terms.append(self.bucket.next_at(2) - now)
+        return max(0.0, min(terms))
+
+    def run(self) -> int:
+        try:
+            return self._loop()
+        except _PanelFailed:
+            return EX_FAIL
+
+    def _loop(self) -> int:
+        d = self.d
+        items: list = []
+        while True:
+            now = d.boottime()
+            self.fetched = False
+            # 2. Everything that happened, then the late clock sync.
+            if self._ingest(items + d.events.wait(0), now):
+                return EX_OK
+            if self.healthy and not self.cap_synced and d.synced():
+                # The clock synced after the next fetch was scheduled without
+                # it. Ask now, once, so the wall-clock bound on the 23-hour
+                # repaint applies, or a repaint it says is overdue happens.
+                # Never after a failure: that would cut its backoff short.
+                log.info("clock synced; checking the 23-hour repaint against it")
+                self.cap_synced = True
+                self.next_poll = now
+            # 3. Gestures and Ui.
+            for gesture in self.gestures.poll(now):
+                self._gesture(gesture, now)
+            if self.ui.mode == "off" and self.grace_end is not None \
+                    and now >= self.grace_end:
+                code = self._grace_expired(now)
+                if code is not None:
+                    return code
+            if not self.gestures.pressed:
+                self.actions.extend(self.ui.tick(now, gate_open=self._gate_open(now),
+                                                 floor_at=self.floor_at))
+            # 4-6. Actions, the routine fetch, a background fetch.
+            code = self._run_actions()
+            if code is not None:
+                return code
+            code = self._routine()
+            if code is not None:
+                return code
+            self._background()
+            # 7. Wait.
+            now = d.boottime()
+            if self.resting and self._tokens(now) >= 2:
+                self.resting = False
+                if self.problems.current == "resting":
+                    self.problems.ok(self._healthy_line())
+            timeout = self._timeout(now)
+            items = d.events.wait(timeout)
+            if timeout > 0:
+                d.notify("WATCHDOG=1")
+                self.last_ping = d.boottime()
+            if not d.events.alive():
+                log.critical("signals are no longer being collected")
+                return EX_FAIL
+
+
+def run(d: Deps) -> int:
+    """The service loop. Returns an exit code; never returns mid-refresh."""
+    return _Runner(d).run()
 
 
 def clear(d: Deps) -> int:
@@ -1641,8 +2255,8 @@ def clear(d: Deps) -> int:
         log.info("clearing in %d s (the 180 s floor)",
                  math.ceil(floor_at - d.boottime()))
     while d.boottime() < floor_at:
-        sig = d.wait(min(PING_SLICE_S, floor_at - d.boottime()))
-        if sig in STOP_SIGNALS:
+        items = d.events.wait(min(PING_SLICE_S, floor_at - d.boottime()))
+        if any(isinstance(item, Stop) for item in items):
             return EX_OK
     try:
         done, _ = _paint(d, state, WHITE, etag=None, view=None, kind="full",
@@ -1883,8 +2497,9 @@ def main(argv=None) -> int:
         return keytest()
 
     # Before anything else can take a signal: from here on, stops are only
-    # ever collected by wait_for_signal().
+    # ever collected by the Collector's thread, which run and --clear start.
     signal.pthread_sigmask(signal.SIG_BLOCK, WAIT_SIGNALS)
+    start_bt = boottime()
     fmt = setup_logging()
 
     if os.geteuid() == 0:
@@ -1898,9 +2513,9 @@ def main(argv=None) -> int:
         state_dir = state_dir_from_env() \
             if mode in ("run", "--clear", "--reset-refresh") else None
         # Read now, so a bad value stops the unit before the hardware is touched.
-        refresh_from_env()
-        idle_from_env()
-        key_from_env()
+        refresh = refresh_from_env()
+        idle = idle_from_env()
+        key = key_from_env()
     except ConfigError as e:
         log.critical("%s", e)
         return EX_CONFIG
@@ -1946,16 +2561,32 @@ def main(argv=None) -> int:
                      "(no refresh)")
             return EX_OK
         assert state_dir is not None
+        collector = start_collector(WAIT_SIGNALS)
         if mode == "--clear":
-            return clear(Deps(state_dir=state_dir, panel=panel, epd=epd,
-                              fetch=None))
+            # Holds and the key mean nothing here: stops only.
+            return clear(Deps(state_dir=state_dir, panel=panel, epd=epd, fetch=None,
+                              events=Events(collector, sysfs_root=pathlib.Path(SYSFS_INPUT),
+                                            open_key=open_key, boottime=boottime,
+                                            key_enabled=False)))
 
-        def do_fetch(etag):
-            return fetch(token, etag, tick=tick)
+        def do_fetch(etag, *, mode=None, tabs=False, screen=None):
+            return fetch(token, etag, mode=mode, tabs=tabs, screen=screen, tick=tick)
 
+        # Where a power-off request goes ($RUNTIME_DIRECTORY, RuntimeDirectory=).
+        raw = os.environ.get("RUNTIME_DIRECTORY", "")
+        run_dir = raw.split(":")[0] if raw else None
+        holds_ok = run_dir is not None and os.path.isdir(run_dir) \
+            and os.access(run_dir, os.W_OK)
+        events = Events(collector, sysfs_root=pathlib.Path(SYSFS_INPUT),
+                        open_key=open_key, boottime=boottime,
+                        key_enabled=(key == "auto"))
         sd_notify("READY=1\nSTATUS=ready; waiting for the first allowed refresh")
-        return run(Deps(state_dir=state_dir, panel=panel, epd=epd,
-                        fetch=do_fetch))
+        return run(Deps(state_dir=state_dir, panel=panel, epd=epd, fetch=do_fetch,
+                        events=events,
+                        request_poweroff=lambda: request_poweroff(run_dir, start_bt),
+                        clear_poweroff=lambda: clear_poweroff(run_dir),
+                        refresh=refresh, idle_s=idle, key=key, holds_ok=holds_ok,
+                        logind_present=logind_dropin_present()))
     except Exception:
         log.critical("unexpected failure", exc_info=True)
         return EX_FAIL

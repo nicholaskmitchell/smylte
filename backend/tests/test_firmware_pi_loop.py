@@ -16,7 +16,10 @@ every kind of state file, and at the level of `floor_ok_at()` itself.
 """
 from __future__ import annotations
 
+import collections
 import contextlib
+import dataclasses
+import errno
 import hashlib
 import importlib.util
 import json
@@ -38,6 +41,8 @@ E = F.load_driver()
 
 INIT_COST = 0.2
 DISPLAY_COST = 4.0
+FAST_COST = 2.5
+PARTIAL_COST = 1.0
 SLEEP_COST = 0.5
 PAINT_COST = INIT_COST + DISPLAY_COST + SLEEP_COST
 TOKEN = "Ab" + "c" * 41     # 43 characters, as secrets.token_urlsafe(32)
@@ -64,36 +69,54 @@ class Clock:
 
 
 class FakePanel:
-    """Stands in for epd.Panel: records each call, and each call costs time."""
+    """Stands in for epd.Panel: records each call, and each call costs time.
+
+    The refresh costs by mode, and the BUSY time each reports as
+    `last_refresh_s` (the batch guard's input), are the critique's model's.
+    """
 
     COSTS = {"init": INIT_COST, "display": DISPLAY_COST, "sleep": SLEEP_COST}
+    DISPLAY_COSTS = {"full": DISPLAY_COST, "fast": FAST_COST, "partial": PARTIAL_COST}
+    REFRESH_S = {"full": 3.9, "fast": 1.6, "partial": 0.4}
     PHASES = {"init": "init", "display": "refresh", "sleep": "power-off"}
 
-    def __init__(self, clock: Clock, fail: dict | None = None):
+    def __init__(self, clock: Clock, fail: dict | None = None,
+                 refresh_s: dict | None = None):
         self.clock = clock
         self.fail = dict(fail or {})
+        self.refresh_s = {**self.REFRESH_S, **(refresh_s or {})}
         self.calls: list[tuple] = []
         self.modes: list[str] = []
+        self.drawn: list[tuple[str, bytes | None, bytes]] = []    # (mode, old, new)
+        self.glass: bytes | None = None
+        self.last_refresh_s: float | None = None
         self.phase = "idle"
         self.aborted_in = None
 
-    def _step(self, name: str, extra=None) -> None:
+    def _step(self, name: str, extra=None, cost=None) -> None:
         if name in self.PHASES:
             self.phase = self.PHASES[name]
         self.calls.append((name, self.clock.t, extra))
         if name in self.fail:
             raise self.fail[name]
-        self.clock.t += self.COSTS.get(name, 0.0)
+        self.clock.t += self.COSTS.get(name, 0.0) if cost is None else cost
 
     def init(self, mode: str = "full") -> None:
         self.modes.append(mode)
         self._step("init")
 
+    def _refresh(self, old, new) -> None:
+        mode = self.modes[-1] if self.modes else "full"
+        self._step("display", hashlib.sha256(new).hexdigest(), self.DISPLAY_COSTS[mode])
+        self.drawn.append((mode, old, new))
+        self.glass = new
+        self.last_refresh_s = self.refresh_s[mode]
+
     def display(self, frame: bytes) -> None:
-        self._step("display", hashlib.sha256(frame).hexdigest())
+        self._refresh(None, frame)
 
     def display_partial(self, old: bytes, new: bytes) -> None:
-        self._step("display", hashlib.sha256(new).hexdigest())
+        self._refresh(old, new)
 
     def sleep(self) -> None:
         self._step("sleep")
@@ -122,55 +145,196 @@ class FakePanel:
         return [c[2] for c in self.calls if c[0] == "display"]
 
 
-class Harness:
-    """P.Deps on fakes: a scripted fetch and a waiter that advances the clock."""
+Fetch = collections.namedtuple("Fetch", "t etag mode tabs screen")
+Painted = collections.namedtuple("Painted", "purpose kind t0 t1 frame exempt tokens")
 
-    def __init__(self, tmp_path, clock: Clock, responder, *, panel=None,
-                 stop_after=None, signals=()):
+
+class FakeEvents:
+    """Deps.events on the fake clock: scheduled signals and key edges.
+
+    A positive wait advances the clock to the earlier of its timeout and the
+    next scheduled item, and returns every item due by then, in time order; a
+    wait of 0 returns what is already due and does not advance. A loop that
+    keeps waiting 0 with nothing happening in between is spinning, and fails.
+    """
+
+    SPIN_LIMIT = 20
+
+    def __init__(self, h: "Harness", keys=(), key_open: bool = False):
+        self.h = h
+        self.pending: list[tuple[float, int, object]] = []
+        self._seq = 0
+        for t, value in keys:
+            self.schedule(t, P.Key(value, t))
+        self.key_open = key_open or bool(keys)
+        self.is_alive = True
+        self.empty_zero = 0
+        self._activity = None
+
+    def schedule(self, t: float, item) -> None:
+        self.pending.append((t, self._seq, item))
+        self._seq += 1
+        self.pending.sort(key=lambda p: (p[0], p[1]))
+
+    def _take_signals(self) -> None:
+        # Tests (and responders) append (t, signo) to h.signals at any time.
+        while self.h.signals:
+            t, signo = self.h.signals.pop(0)
+            self.schedule(t, P.Repaint() if signo == signal.SIGUSR1 else P.Stop(signo))
+
+    def _due(self) -> list:
+        out = []
+        while self.pending and self.pending[0][0] <= self.h.clock.t:
+            t, _, item = self.pending.pop(0)
+            if callable(item):
+                item()          # a test's poke at the runner, at its time
+                continue
+            if isinstance(item, P.Stop) and self.h.stop_seen is None:
+                self.h.stop_seen = t
+            out.append(item)
+        return out
+
+    def wait(self, timeout: float) -> list:
+        h = self.h
+        h.waits.append(timeout)
+        self._take_signals()
+        if timeout > 0:
+            h.unwaited = 0
+            self._watch_glass(timeout)
+            if self.pending and self.pending[0][0] <= h.clock.t + timeout:
+                h.clock.t = max(h.clock.t, self.pending[0][0])
+            elif h.stop_after is not None and len(h.requests) >= h.stop_after:
+                # Only a real wait ends the run: wait(0) is a drain.
+                if h.stop_seen is None:
+                    h.stop_seen = h.clock.t
+                return self._due() + [P.Stop(signal.SIGTERM)]
+            else:
+                h.clock.t += timeout
+        got = self._due()
+        activity = (len(h.requests), len(h.panel.calls))
+        if timeout > 0 or got or activity != self._activity:
+            self.empty_zero = 0
+        else:
+            self.empty_zero += 1
+            assert self.empty_zero <= self.SPIN_LIMIT, (
+                f"spinning: {self.empty_zero} empty zero-timeout waits in a row "
+                f"at t={h.clock.t}")
+        self._activity = activity
+        return got
+
+    def _watch_glass(self, timeout: float) -> None:
+        """A prompt or the off screen this process drew, still on the glass
+        while Ui is back in browse, is stale."""
+        r = self.h.runner
+        if r is not None and r.ui.mode == "browse" and self.h.panel.glass in SCREEN_FRAMES:
+            self.h.stale.append((self.h.clock.t, timeout))
+
+    def next_retry(self):
+        return None
+
+    def alive(self) -> bool:
+        return self.is_alive
+
+
+class RecordingRunner(P._Runner):
+    """The real runner, with each refresh's purpose recorded for the checks."""
+
+    def __init__(self, d, h: "Harness"):
+        self.h = h
+        super().__init__(d)
+
+    def _draw(self, frame, *, purpose, kind, **kw):
+        t0 = self.d.boottime()
+        tokens = self._tokens(t0) if purpose in ("strip", "page") else None
+        exempt = self.exempt_first_view
+        end = super()._draw(frame, purpose=purpose, kind=kind, **kw)
+        if end is not None:
+            self.h.painted.append(Painted(purpose, kind, t0, end, frame, exempt, tokens))
+        return end
+
+
+class Harness:
+    """P.Deps on fakes: a scripted fetch and Events that advance the clock.
+
+    `responder(n, sent, clock)` is an old-style responder: a server that knows
+    nothing of views. A view or screen fetch to it is refused as an old server
+    would be. `server(n, sent, clock, mode, tabs, screen)` answers every fetch.
+    The key is off unless a test says otherwise, so the routine loop runs as
+    it did before the key existed.
+    """
+
+    def __init__(self, tmp_path, clock: Clock, responder=None, *, server=None, panel=None,
+                 stop_after=None, signals=(), keys=(), key_open=False, poweroff="ok",
+                 path_unit=True, **deps):
         self.clock = clock
         self.responder = responder
+        self.server = server
         self.panel = panel or FakePanel(clock)
         self.stop_after = stop_after
         self.signals = list(signals)
-        self.fetches: list[tuple[float, str | None]] = []
+        self.requests: list[Fetch] = []
         self.notes: list[str] = []
         self.unwaited = 0       # fetches since the last real wait
         self.waits: list[float] = []
+        self.painted: list[Painted] = []
+        self.stale: list[tuple[float, float]] = []
+        self.stop_seen: float | None = None
+        self.poweroff = poweroff
+        self.path_unit = path_unit
+        self.poweroffs: list[tuple[float, str]] = []
+        self.cleared: list[float] = []
+        self.keys = list(keys)
+        self.runner = None
+        self.events = FakeEvents(self, keys, key_open)
+        deps.setdefault("key", "off")
         self.deps = P.Deps(state_dir=tmp_path, panel=self.panel, epd=E,
-                           fetch=self.fetch, wait=self.wait,
+                           fetch=self.fetch, events=self.events,
                            boottime=clock.boottime, walltime=clock.walltime,
-                           synced=clock.synced_fn, notify=self.notify)
+                           synced=clock.synced_fn, notify=self.notify,
+                           request_poweroff=self.request_poweroff,
+                           clear_poweroff=lambda: self.cleared.append(clock.t), **deps)
 
-    def fetch(self, etag):
+    @property
+    def fetches(self) -> list[tuple[float, str | None]]:
+        """(t, etag sent) of each fetch, as the tests from before views read."""
+        return [(f.t, f.etag) for f in self.requests]
+
+    def fetch(self, etag, *, mode=None, tabs=False, screen=None):
         # A loop that fetches without ever waiting would spin here for ever;
         # fail instead, so a regression turns CI red rather than hanging it.
         self.unwaited += 1
         assert self.unwaited <= 3, "fetched again and again without waiting"
-        n = len(self.fetches)
-        self.fetches.append((self.clock.t, etag))
+        n = len(self.requests)
+        self.requests.append(Fetch(self.clock.t, etag, mode, tabs, screen))
+        if self.server is not None:
+            return self.server(n, etag, self.clock, mode, tabs, screen)
+        if mode is not None or tabs:
+            return P.Refused("mode", 200)       # no X-Display-Mode: an old server
+        if screen is not None:
+            return P.Refused("screen", 200)
         return self.responder(n, etag, self.clock)
 
-    def wait(self, timeout):
-        self.waits.append(timeout)
-        if timeout > 0:             # wait(0) is run()'s drain, not a wait
-            self.unwaited = 0
-        if self.signals and self.signals[0][0] <= self.clock.t + timeout:
-            at_t, signo = self.signals.pop(0)
-            self.clock.t = max(self.clock.t, at_t)
-            return signo
-        # Only a real wait ends the run: wait(0) is run()'s drain, which loops
-        # until nothing is pending, so it must see scheduled signals only.
-        if timeout > 0 and self.stop_after is not None \
-                and len(self.fetches) >= self.stop_after:
-            return signal.SIGTERM
-        self.clock.t += timeout
-        return None
+    def request_poweroff(self):
+        self.poweroffs.append((self.clock.t, self.poweroff))
+        if self.poweroff == "ok" and self.path_unit:
+            # smylte-panel-poweroff.path starts `systemctl poweroff`, which
+            # stops the service a few seconds later.
+            self.signals.append((self.clock.t + 3.0, signal.SIGTERM))
+        return self.poweroff
+
+    def at(self, t: float, fn) -> None:
+        """Call fn() once the fake clock reaches t."""
+        self.events.schedule(t, fn)
 
     def notify(self, msg):
         self.notes.append(msg)
 
+    def statuses(self) -> list[str]:
+        return [n for n in self.notes if n.startswith("STATUS=")]
+
     def run(self) -> int:
-        return P.run(self.deps)
+        self.runner = RecordingRunner(self.deps, self)
+        return self.runner.run()
 
 
 class LateSync(Clock):
@@ -199,6 +363,12 @@ def frame(n: int) -> bytes:
 
 def etag(n: int) -> str:
     return '"%032x"' % n
+
+
+# The server's two static screens, as the desk key's tests cache and serve them.
+CONFIRM = bytes([0xC1]) * P.BUF_BYTES
+OFF = bytes([0xC2]) * P.BUF_BYTES
+SCREEN_FRAMES = (CONFIRM, OFF)
 
 
 def sha(data: bytes) -> str:
@@ -243,10 +413,25 @@ def restored_mask():
         signal.pthread_sigmask(signal.SIG_SETMASK, old)
 
 
+class _NoCollector:
+    """main()'s signal collector, in-process: no thread, so none of pytest's
+    signals is ever taken. The tests that reach it replace run()."""
+
+    fd = -1
+
+    def pop(self):
+        return []
+
+    def alive(self):
+        return True
+
+
 @pytest.fixture
-def guarded_main():
+def guarded_main(monkeypatch):
     """Call P.main() with the root logger and the signal mask restored after:
-    main() blocks signals and replaces the root logger's handlers."""
+    main() blocks signals and replaces the root logger's handlers. Its signal
+    collector is a stand-in; the real one is tested in a child process."""
+    monkeypatch.setattr(P, "start_collector", lambda sigset: _NoCollector())
     root = logging.getLogger()
     handlers, level = root.handlers[:], root.level
 
@@ -539,7 +724,8 @@ def test_usr1_forgets_the_glass_and_repaints_when_allowed(tmp_path):
     (P.NotModified(etag(1), 300), 300),
 ])
 def test_the_next_fetch_is_scheduled_by_the_result(tmp_path, result, expected_gap):
-    after_frame = isinstance(result, P.NotModified)
+    # A Transient after the first paint: before it, the startup retry applies.
+    after_frame = isinstance(result, (P.NotModified, P.Transient))
 
     def responder(n, sent, clock):
         if after_frame and n == 0:
@@ -1012,13 +1198,13 @@ def test_an_earlier_boot_record_that_fails_to_save_is_saved_later(tmp_path, monk
 @pytest.mark.parametrize("t, synced, saved, answer, gap", [
     # overdue by the wall clock only (boot bound far off)
     (1000.0, True, dict(painted_end_bt=10.0, painted_wall=W0 + 1000.0 - 30 * 3600),
-     P.Transient("down"), None),
+     P.Transient("down"), P.STARTUP_RETRY_S),
     # same boot, overdue by boot time, no wall clock
     (83_000.0, False, dict(painted_end_bt=10.0, painted_wall=None),
-     P.Transient("down"), None),
+     P.Transient("down"), P.STARTUP_RETRY_S),
     # an earlier boot, with this boot's uptime past 23 h
     (83_000.0, False, dict(painted_end_bt=500_000.0, painted_wall=None),
-     P.Transient("down"), None),
+     P.Transient("down"), P.STARTUP_RETRY_S),
     # due by the wall clock, the boot bound still 800 s off
     (83_000.0, True, dict(painted_end_bt=1000.0, painted_wall=W0 + 83_000.0 - 24 * 3600),
      P.Throttled(3600), 3600),
@@ -1030,7 +1216,8 @@ def test_an_earlier_boot_record_that_fails_to_save_is_saved_later(tmp_path, monk
 def test_an_overdue_repaint_does_not_shorten_the_retry_backoff(tmp_path, t, synced, saved,
                                                                answer, gap):
     """Once any bound says the repaint is due, the next fetch is forced whenever
-    it comes, so the cap must not pull it inside the backoff."""
+    it comes, so the cap must not pull it inside the backoff. (A Transient
+    before the process's first paint backs off STARTUP_RETRY_S.)"""
     clock = Clock(t=t)
     clock.synced = synced
     save(tmp_path, etag=etag(1), glass_sha256=sha(frame(1)),
@@ -1045,9 +1232,7 @@ def test_an_overdue_repaint_does_not_shorten_the_retry_backoff(tmp_path, t, sync
     times = [t for t, _ in h.fetches]
     gaps = [b - a for a, b in zip(times, times[1:])]
     assert len(gaps) == 3
-    assert all(g >= P.ERROR_RETRY_S for g in gaps), gaps
-    if gap is not None:
-        assert gaps == pytest.approx([gap] * 3, abs=1), gaps
+    assert gaps == pytest.approx([gap] * 3, abs=1), gaps
 
 
 # ── clock gate ───────────────────────────────────────────────────────────────
@@ -1091,47 +1276,34 @@ def test_a_stop_pending_at_paint_time_prevents_the_paint(tmp_path):
 
 
 def test_a_stop_during_a_refresh_lets_it_finish(tmp_path):
-    """With the stop signals blocked, a SIGTERM raised mid-refresh stays
-    pending and is only collected by the next wait, after sleep()."""
+    """A stop that arrives mid-refresh is only taken in by the next wait,
+    after sleep(): the signals are blocked, and only the collector takes them."""
 
     class Stopping(FakePanel):
         def display(self, data):
-            signal.raise_signal(signal.SIGTERM)
+            h.signals.append((self.clock.t, signal.SIGTERM))
             super().display(data)
 
     clock = Clock()
-    old = signal.pthread_sigmask(signal.SIG_BLOCK, [])
-    try:
-        signal.pthread_sigmask(signal.SIG_BLOCK, P.WAIT_SIGNALS)
-        h = Harness(tmp_path, clock, new_frames(), panel=Stopping(clock))
-
-        def wait(timeout):
-            sig = P.wait_for_signal(0)
-            if sig:
-                return sig
-            clock.t += timeout
-            return None
-
-        h.deps.wait = wait
-        assert h.run() == 0
-        assert h.panel.names() == ["init", "display", "sleep"]
-    finally:
-        while signal.sigtimedwait(P.WAIT_SIGNALS, 0):
-            pass
-        signal.pthread_sigmask(signal.SIG_SETMASK, old)
+    h = Harness(tmp_path, clock, new_frames(), panel=Stopping(clock))
+    assert h.run() == 0
+    assert h.panel.names() == ["init", "display", "sleep"]
 
 
 WAITER_SCRIPT = """
-import importlib.util, os, signal, sys, threading, time
+import importlib.util, os, pathlib, signal, sys, threading, time
 spec = importlib.util.spec_from_file_location("panel_under_test", sys.argv[1])
 panel = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(panel)
 signal.pthread_sigmask(signal.SIG_BLOCK, panel.WAIT_SIGNALS)
+events = panel.Events(panel.start_collector(panel.WAIT_SIGNALS),
+                      sysfs_root=pathlib.Path("/nonexistent"), open_key=None,
+                      boottime=panel.boottime, key_enabled=False)
 threading.Timer(0.1, os.kill, (os.getpid(), signal.SIGTERM)).start()
 start = time.monotonic()
-sig = panel.wait_for_signal(5)
+items = events.wait(5)
 elapsed = time.monotonic() - start
-print(f"{sig} {elapsed:.3f}")
+print(f"{[int(i.sig) for i in items]} {elapsed:.3f}")
 """
 
 
@@ -1140,8 +1312,8 @@ def test_the_real_waiter_collects_a_signal_sent_from_another_thread():
     out = subprocess.run([sys.executable, "-I", "-c", WAITER_SCRIPT, str(F.PANEL_PY)],
                          timeout=10, capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
-    sig, elapsed = out.stdout.split()
-    assert int(sig) == int(signal.SIGTERM)
+    sigs, elapsed = out.stdout.split()
+    assert sigs == f"[{int(signal.SIGTERM)}]"
     assert float(elapsed) < 1.0
 
 
@@ -1554,3 +1726,1092 @@ def test_sd_notify_sends_to_an_abstract_socket(monkeypatch):
         monkeypatch.setenv("NOTIFY_SOCKET", "@" + name)
         assert P.sd_notify("WATCHDOG=1") is True
         assert server.recv(4096) == b"WATCHDOG=1"
+
+
+# ── the desk key, on the real loop ───────────────────────────────────────────
+#
+# Design §4.10's run-loop tests and the critique's timelines T1–T16, on the
+# real run(): a switchable smylted (Server), the key's edges on FakeEvents, the
+# screens cached on disk. As in the timelines, the process starts at boot time
+# 20 s with the clock synced and no state, so its first paint (routine, full)
+# is at 200 s, and the background has fetched the other views' strips by
+# about 210 s. Each test ends with checks(): no stale prompt or off screen
+# while Ui browses, no unconfirmed power-off, the routine floor, at most one
+# paint after a stop, and the budget. FakeEvents fails any run that spins.
+
+STRIP = (440, 480)
+STRIP_BYTES = (STRIP[1] - STRIP[0]) * P.STRIDE
+PAGE_BYTES = P.BUF_BYTES - STRIP_BYTES
+
+
+def page_of(view: str, ver: int = 1) -> bytes:
+    return bytes([0x10 * (P.VIEWS.index(view) + 1) + ver]) * PAGE_BYTES
+
+
+def strip_of(view: str) -> bytes:
+    return bytes([0xA0 + P.VIEWS.index(view)]) * STRIP_BYTES
+
+
+def view_frame(view: str, ver: int = 1) -> bytes:
+    return page_of(view, ver) + strip_of(view)
+
+
+def legacy_frame(ver: int = 1) -> bytes:
+    return bytes([0x60 + ver]) * P.BUF_BYTES
+
+
+def tag(body: bytes) -> str:
+    return '"%s"' % sha(body)[:32]
+
+
+def what(body: bytes | None) -> str | None:
+    """What a frame shows, as the timelines name it."""
+    if body is None:
+        return None
+    names = {CONFIRM: "confirm", OFF: "off", P.WHITE: "white"}
+    if body in names:
+        return names[body]
+    if 0x60 <= body[0] < 0x70:
+        return "legacy"
+    top, tab = P.VIEWS[(body[0] >> 4) - 1], P.VIEWS[body[-1] - 0xA0]
+    return f"view:{top}" if top == tab else f"mixed:{top}-page/{tab}-tab"
+
+
+class Server:
+    """smylted for the desk key: three views, each a page and its tab strip;
+    the two screens; and the stored view for a legacy request."""
+
+    def __init__(self, *, switchable=True, old=False, render_s=0.4, refresh_s=3600,
+                 rotation=0, refuse_screens=()):
+        self.switchable, self.old = switchable, old
+        self.render_s, self.refresh_s, self.rotation = render_s, refresh_s, rotation
+        self.refuse_screens = set(refuse_screens)
+        self.version = lambda view, t: 1
+        self.down: list[tuple[float, float]] = []
+
+    def __call__(self, n, sent, clock, mode, tabs, screen):
+        t = clock.t
+        if any(a <= t < b for a, b in self.down):
+            clock.t += 0.002
+            return P.Transient("ECONNREFUSED")
+        if screen is not None:
+            clock.t += 0.05
+            if self.old or screen in self.refuse_screens:
+                return P.Refused("screen", 200)
+            body = CONFIRM if screen == "confirm" else OFF
+            return P.Frame(body, tag(body), self.refresh_s)
+        clock.t += self.render_s
+        strip = None
+        if mode is not None:
+            if self.old:
+                return P.Refused("mode", 200)
+            if not self.switchable:
+                return P.Refused("HTTP 422", 422, code="views-off")
+            if tabs and self.rotation in (0, 180):
+                body, strip = view_frame(mode, self.version(mode, t)), STRIP
+            else:
+                body = page_of(mode, self.version(mode, t))[:1] * P.BUF_BYTES
+        else:
+            body = legacy_frame(self.version(None, t))
+        if sent == tag(body):
+            return P.NotModified(sent, self.refresh_s)
+        return P.Frame(body, tag(body), self.refresh_s, strip=strip, mode=mode)
+
+
+def tap(t: float, d: float = 0.12) -> list[tuple[float, int]]:
+    return [(t, 1), (t + d, 0)]
+
+
+def hold(t: float, d: float = 1.3) -> list[tuple[float, int]]:
+    return [(t, 1), (t + d, 0)]
+
+
+def desk(tmp_path, *, keys=(), until=None, start=20.0, clock=None, screens=SCREEN_FRAMES,
+         state=None, server=None, signals=(), **kw) -> Harness:
+    """A Harness for the desk key: KEY=auto, a Server, the screens on disk."""
+    clock = clock or Clock(start)
+    for kind, body in zip(P.SCREENS, (CONFIRM, OFF)):
+        if body in screens:
+            assert P.save_screen(tmp_path, kind, body)
+    if state is not None:
+        assert P.save_state(tmp_path, state)
+    signals = list(signals) + ([(until, signal.SIGTERM)] if until is not None else [])
+    kw.setdefault("key", "auto")
+    return Harness(tmp_path, clock, server=server or Server(), keys=sorted(keys),
+                   signals=signals, **kw)
+
+
+def set_tokens(h: Harness, n: int):
+    def poke():
+        h.runner.bucket.tokens = n
+        h.runner.bucket.last = h.clock.t
+    return poke
+
+
+def set_fast_count(h: Harness, n: int):
+    def poke():
+        h.runner.state = dataclasses.replace(h.runner.state, fast_count=n)
+    return poke
+
+
+def checks(*hs: Harness) -> None:
+    """The critique's checks, over one process or several in turn."""
+    painted = [p for h in hs for p in h.painted]
+    for h in hs:
+        assert not h.stale, f"a screen on the glass while Ui browses: {h.stale}"
+        prompts = [p for p in h.painted if p.purpose == "prompt"]
+        presses = [t for t, v in h.keys if v == 1]
+        for t_req, _ in h.poweroffs:
+            before = [p for p in prompts if p.t1 <= t_req]
+            assert before, f"a power-off at {t_req} with no prompt drawn"
+            shown = before[-1].t1
+            assert any(shown <= t <= shown + P.PROMPT_S and t <= t_req for t in presses), \
+                f"a power-off at {t_req} that no tap during the prompt confirmed"
+        if h.stop_seen is not None:
+            after = [p for p in h.painted if p.t0 >= h.stop_seen]
+            assert len(after) <= 1, f"{len(after)} paints after the stop at {h.stop_seen}"
+        for p in h.painted:
+            if p.purpose in ("strip", "page"):
+                assert p.tokens >= 1, f"a key paint with {p.tokens} tokens: {p}"
+        if h.runner is not None:
+            assert h.runner.bucket.tokens >= 0
+    for prev, p in zip(painted, painted[1:]):
+        if p.purpose == "routine" and not p.exempt:
+            assert p.t0 >= prev.t1 + P.MIN_REFRESH_S - 1e-6, \
+                f"a routine paint {p.t0 - prev.t1:.1f} s after the last refresh"
+
+
+def key_paints(h: Harness, after: float = 300.0) -> list[tuple[str, str]]:
+    return [(p.purpose, p.kind) for p in h.painted if p.t0 >= after]
+
+
+def fetched(h: Harness, after: float = 300.0, **match) -> list[Fetch]:
+    return [f for f in h.requests if f.t >= after
+            and all(getattr(f, k) == v for k, v in match.items())]
+
+
+# ── taps: strips and pages ───────────────────────────────────────────────────
+
+def test_t1a_a_tap_draws_the_strip_then_one_fast_page(tmp_path):
+    """§4.10: a tap gives a strip with the exact old/new bytes, then one fast
+    page 0.5 s later."""
+    h = desk(tmp_path, keys=tap(400), until=430)
+    assert h.run() == 0
+    assert key_paints(h) == [("strip", "partial"), ("page", "fast")]
+    mode, old, new = h.panel.drawn[-2]
+    assert mode == "partial"
+    assert old == view_frame("habits")
+    assert new == page_of("habits") + strip_of("now")
+    [page] = fetched(h)
+    assert page == Fetch(page.t, None, "now", True, None)
+    assert page.t >= 400.12 + P.COALESCE_S
+    assert what(h.panel.glass) == "view:now"
+    assert h.runner.ui.view == "now"
+    checks(h)
+
+
+def test_t1b_two_quick_taps_give_two_strips_and_one_page(tmp_path):
+    h = desk(tmp_path, keys=tap(400) + tap(400.3), until=430)
+    assert h.run() == 0
+    assert key_paints(h) == [("strip", "partial"), ("strip", "partial"), ("page", "fast")]
+    assert [f.mode for f in fetched(h)] == ["calendar"]
+    assert what(h.panel.glass) == "view:calendar"
+    checks(h)
+
+
+def test_t1c_three_taps_back_to_the_start_fetch_once_and_paint_nothing(tmp_path):
+    """v3: three taps cycling back to the start view give exactly one Page
+    fetch, no page paint, then a positive wait."""
+    h = desk(tmp_path, keys=tap(400) + tap(400.3) + tap(400.6), until=430)
+    waits_at_fetch = []
+    server = h.server
+
+    def recording(n, sent, clock, mode, tabs, screen):
+        waits_at_fetch.append(len(h.waits))
+        return server(n, sent, clock, mode, tabs, screen)
+
+    h.server = recording
+    assert h.run() == 0
+    assert key_paints(h) == [("strip", "partial"), ("strip", "partial")]
+    [page] = fetched(h)
+    assert page.mode == "habits"
+    assert what(h.panel.glass) == "view:habits"
+    assert h.panel.glass == view_frame("habits")
+    assert h.waits[waits_at_fetch[-1]] > 0
+    checks(h)
+
+
+def test_t2a_four_edges_during_the_first_paint_give_two_taps_and_no_prompt(tmp_path):
+    h = desk(tmp_path, keys=tap(201.0) + tap(202.0), until=240)
+    assert h.run() == 0
+    assert [(p.purpose, p.kind) for p in h.painted] == [("routine", "full"), ("page", "fast")]
+    assert h.runner.ui.view == "calendar"
+    assert what(h.panel.glass) == "view:calendar"
+    checks(h)
+
+
+def test_t2b_four_edges_during_a_full_routine_refresh(tmp_path):
+    server = Server(refresh_s=300)
+    server.version = lambda view, t: 1 if t < 500 else 2
+    h = desk(tmp_path, keys=tap(506.0) + tap(507.0), until=540, server=server)
+    h.at(480, set_fast_count(h, P.FULL_EVERY))
+    assert h.run() == 0
+    assert key_paints(h, 500) == [("routine", "full"), ("strip", "partial"), ("page", "fast")]
+    assert h.panel.drawn[-2][2] == page_of("habits", 2) + strip_of("calendar")
+    assert h.panel.glass == view_frame("calendar", 2)
+    checks(h)
+
+
+# ── holds: the prompt, the off screen and the way back ───────────────────────
+
+@pytest.mark.parametrize("render_s", [1.0, 20.0])
+def test_t3a_a_hold_during_a_routine_fetch_skips_its_paint_for_the_prompt(tmp_path,
+                                                                         render_s):
+    server = Server(refresh_s=300, render_s=render_s)
+    server.version = lambda view, t: 1 if t < 500 else 2
+    first_end = 200 + render_s + PAINT_COST
+    fetch_at = first_end + 300
+    h = desk(tmp_path, keys=hold(fetch_at + 0.1), until=fetch_at + 250, server=server)
+    assert h.run() == 0
+    after = [p for p in h.painted if p.t0 >= fetch_at]
+    assert [(p.purpose, p.kind) for p in after[:2]] == [("prompt", "fast"), ("leave", "fast")]
+    # The prompt follows the hold (or, for a slow fetch, the fetch) at once.
+    assert after[0].t0 <= max(fetch_at + 0.1 + P.HOLD_S, fetch_at + render_s) + 0.01
+    assert after[1].frame == view_frame("habits", 1)
+    # The new frame is drawn later, by the routine branch, on the floor.
+    [routine] = [p for p in after if p.purpose == "routine"]
+    assert routine.frame == view_frame("habits", 2)
+    checks(h)
+
+
+@pytest.mark.parametrize("held", [1.3, 1.5])
+def test_t3b_a_hold_during_the_first_paint_shows_the_prompt_after_it(tmp_path, held):
+    h = desk(tmp_path, keys=hold(201.0, held), until=240)
+    assert h.run() == 0
+    assert [(p.purpose, p.kind) for p in h.painted] == [
+        ("routine", "full"), ("prompt", "fast"), ("leave", "fast")]
+    assert h.painted[2].frame == view_frame("habits")
+    checks(h)
+
+
+def test_t4a_a_tap_after_the_prompt_draws_off_in_full_and_requests_the_power_off(
+        tmp_path):
+    h = desk(tmp_path, keys=hold(400) + tap(405), until=440)
+    assert h.run() == 0
+    assert key_paints(h) == [("prompt", "fast"), ("off", "full")]
+    assert h.panel.glass == OFF
+    assert [why for _, why in h.poweroffs] == ["ok"]
+    assert P.load_state(tmp_path).off is True
+    checks(h)
+
+
+def test_t4b_a_tap_pressed_during_the_prompt_paint_does_not_confirm(tmp_path):
+    h = desk(tmp_path, keys=hold(400) + tap(402.0), until=440)
+    assert h.run() == 0
+    assert key_paints(h) == [("prompt", "fast"), ("leave", "fast")]
+    assert h.poweroffs == []
+    checks(h)
+
+
+def test_t4c_the_prompt_times_out_back_to_the_glass_before_it(tmp_path):
+    h = desk(tmp_path, keys=hold(400), until=440)
+    assert h.run() == 0
+    prompt, leave = h.painted[-2:]
+    assert (prompt.purpose, leave.purpose) == ("prompt", "leave")
+    assert leave.t0 == pytest.approx(prompt.t1 + P.PROMPT_S, abs=0.01)
+    assert leave.frame == view_frame("habits")
+    assert fetched(h) == []
+    s = P.load_state(tmp_path)
+    assert (s.view, s.etag) == ("habits", tag(view_frame("habits")))
+    checks(h)
+
+
+def test_t4d_no_confirm_screen_means_no_prompt(tmp_path):
+    h = desk(tmp_path, keys=hold(203.0), screens=(), until=240)
+    assert h.run() == 0
+    assert [p.purpose for p in h.painted] == ["routine"]
+    assert any("no confirm screen yet" in s for s in h.statuses())
+    # ...and the background fetches both screens, for next time.
+    assert [f.screen for f in h.requests if f.screen] == ["confirm", "off"]
+    assert P.load_screen(tmp_path, "confirm") == CONFIRM
+    checks(h)
+
+
+def test_off_with_no_off_screen_still_requests_the_power_off(tmp_path):
+    h = desk(tmp_path, keys=hold(400) + tap(405), screens=(CONFIRM,), until=440,
+             server=Server(refuse_screens={"off"}))
+    assert h.run() == 0
+    assert key_paints(h) == [("prompt", "fast")]
+    assert [why for _, why in h.poweroffs] == ["ok"]
+    checks(h)
+
+
+class OffFails(FakePanel):
+    def display(self, frame_):
+        if frame_ == OFF:
+            self._step("display", "off", 0.1)
+            raise E.BusyTimeout("refresh", 60.0)
+        super().display(frame_)
+
+
+@pytest.mark.parametrize("poweroff, path_unit, code, when", [
+    ("ok", True, 0, "at the stop"),
+    ("ok", False, 1, "when the grace runs out"),
+    ("failed: EACCES", True, 1, "at once"),
+])
+def test_off_whose_paint_fails_still_requests_the_power_off(tmp_path, poweroff, path_unit,
+                                                             code, when):
+    """m13: request it anyway; a stop ends it as usual; EX_FAIL only once the
+    grace has run out, or at once if the request failed."""
+    clock = Clock(20.0)
+    h = desk(tmp_path, clock=clock, keys=hold(400) + tap(405), until=700,
+             panel=OffFails(clock), poweroff=poweroff, path_unit=path_unit)
+    assert h.run() == code
+    [(t_req, _)] = h.poweroffs
+    if when == "when the grace runs out":
+        assert clock.t == pytest.approx(t_req + P.POWEROFF_GRACE_S, abs=0.01)
+    elif when == "at once":
+        assert clock.t == pytest.approx(t_req, abs=0.01)
+    else:
+        assert clock.t == pytest.approx(t_req + 3.0, abs=0.01)
+    checks(h)
+
+
+def test_t8a_a_failed_power_off_request_goes_back_at_once(tmp_path):
+    h = desk(tmp_path, keys=hold(400) + tap(405), until=440, poweroff="failed: EACCES")
+    assert h.run() == 0
+    off, leave = h.painted[-2:]
+    assert (off.purpose, leave.purpose) == ("off", "leave")
+    assert leave.t0 == pytest.approx(off.t1, abs=0.01)
+    assert leave.frame == view_frame("habits")
+    assert h.runner.ui.mode == "browse"
+    assert any("could not power off: failed: EACCES" in s for s in h.statuses())
+    checks(h)
+
+
+def test_t8b_a_power_off_nobody_acts_on_goes_back_after_the_grace(tmp_path):
+    h = desk(tmp_path, keys=hold(400) + tap(405), until=560, path_unit=False)
+    assert h.run() == 0
+    off, leave = h.painted[-2:]
+    assert (off.purpose, leave.purpose) == ("off", "leave")
+    assert leave.t0 == pytest.approx(off.t1 + P.POWEROFF_GRACE_S, abs=0.01)
+    assert h.cleared[-1] == pytest.approx(leave.t0, abs=0.01)    # the request removed
+    assert any("could not power off" in s for s in h.statuses())
+    checks(h)
+
+
+def test_p1_a_tap_pressed_before_the_deadline_and_released_after_it_confirms(tmp_path):
+    """v3: the press decides. While the key is down the deadline passes, and
+    the loop must neither spin nor time the prompt out under the finger."""
+    h = desk(tmp_path, keys=hold(400), until=440)
+    shown = 400 + P.HOLD_S + INIT_COST + FAST_COST + SLEEP_COST
+    deadline = shown + P.PROMPT_S
+    h.keys += [(deadline - 0.1, 1), (deadline + 0.15, 0)]
+    for t, v in h.keys[-2:]:
+        h.events.schedule(t, P.Key(v, t))
+    assert h.run() == 0
+    assert key_paints(h) == [("prompt", "fast"), ("off", "full")]
+    [prompt] = [p for p in h.painted if p.purpose == "prompt"]
+    assert prompt.t1 == pytest.approx(shown)
+    assert len(h.poweroffs) == 1
+    checks(h)
+
+
+# ── the budget ───────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("tokens, expected", [
+    (0, [("prompt", "fast"), ("leave", "fast")]),
+    (1, [("prompt", "fast"), ("leave", "fast")]),
+    (2, [("strip", "partial"), ("page", "fast"), ("prompt", "fast"), ("leave", "fast")]),
+    (3, [("strip", "partial"), ("page", "fast"), ("prompt", "fast"), ("leave", "fast")]),
+])
+def test_t5_a_tap_needs_two_tokens_and_a_hold_and_its_way_back_never_wait(tmp_path, tokens,
+                                                                         expected):
+    """v3: with 2 tokens a tap draws its strip and its page; with 1 it is
+    rejected. An empty bucket still allows the prompt and the leave paint."""
+    h = desk(tmp_path, keys=tap(400) + hold(415), until=440)
+    h.at(390, set_tokens(h, tokens))
+    assert h.run() == 0
+    assert key_paints(h, 390) == expected
+    resting = [s for s in h.statuses() if "key resting" in s]
+    assert bool(resting) == (tokens < 2)
+    checks(h)
+
+
+def test_an_empty_bucket_still_confirms_and_powers_off(tmp_path):
+    h = desk(tmp_path, keys=hold(400) + tap(405), until=440)
+    h.at(390, set_tokens(h, 0))
+    assert h.run() == 0
+    assert key_paints(h, 390) == [("prompt", "fast"), ("off", "full")]
+    assert len(h.poweroffs) == 1
+    checks(h)
+
+
+def test_t5x_a_tap_during_its_page_fetch_drops_that_page(tmp_path):
+    """M4: the page whose drain moved the view is dropped, unpainted and
+    unpaid; the new view's strip and page follow, within the budget."""
+    h = desk(tmp_path, keys=tap(400) + tap(402.0), until=440, server=Server(render_s=1.0))
+    h.at(390, set_tokens(h, 3))
+    assert h.run() == 0
+    assert key_paints(h, 390) == [("strip", "partial"), ("strip", "partial"),
+                                  ("page", "fast")]
+    assert [f.mode for f in fetched(h, 390)] == ["now", "calendar"]
+    assert what(h.panel.glass) == "view:calendar"
+    assert h.runner.bucket.tokens == 0
+    checks(h)
+
+
+def test_t5e_holds_on_an_empty_bucket_come_no_more_than_the_budget_allows(tmp_path):
+    keys = [k for i in range(40) for k in hold(400 + 15 * i)]
+    h = desk(tmp_path, keys=keys, until=1000)
+    h.at(390, set_tokens(h, 0))
+    assert h.run() == 0
+    prompts = [p.t0 for p in h.painted if p.purpose == "prompt"]
+    assert 4 <= len(prompts) <= 14
+    assert all(b - a >= 40 for a, b in zip(prompts, prompts[1:])), prompts
+    checks(h)
+
+
+def test_the_budget_a_crash_loop_start_rests_the_key_then_refills(tmp_path):
+    """§4.10's budget: a start 160 s after the last refresh, in the same boot,
+    has 3 tokens. A tap spends 2 (its strip and its page), so the next tap
+    rests the key until the refill brings it back to 2. (The glass holds a
+    legacy frame, so the first fetch is painted and the key is live.)"""
+    s = P.State(etag=tag(legacy_frame()), glass_sha256=sha(legacy_frame()),
+                painted_end_bt=840.0, attempt_start_bt=835.0, complete=True,
+                fast_count=1, full_end_bt=840.0)
+    h = desk(tmp_path, start=1000.0, state=s, until=1100,
+             keys=tap(1035) + tap(1045) + tap(1060))
+    assert h.run() == 0
+    assert P.start_tokens(s, 1000.0) == 3
+    assert key_paints(h, 1030) == [("strip", "partial"), ("page", "fast"),
+                                   ("strip", "partial"), ("page", "fast")]
+    assert [f.mode for f in fetched(h, 1030)] == ["now", "calendar"]
+    resting = [s for s in h.statuses() if "key resting" in s]
+    assert resting == ["STATUS=key resting; try again in 5 s; the glass keeps its last frame"]
+    # Back to what is on the glass once the bucket holds 2 again.
+    i = h.notes.index(resting[0])
+    assert any(n.startswith("STATUS=showing") for n in h.notes[i:])
+    checks(h)
+
+
+def test_a_reboot_start_has_a_full_bucket(tmp_path):
+    s = P.State(etag=tag(view_frame("habits")), glass_sha256=sha(view_frame("habits")),
+                painted_end_bt=50_000.0, attempt_start_bt=49_995.0, complete=True,
+                view="habits", full_end_bt=50_000.0)
+    h = desk(tmp_path, start=20.0, state=s, until=25)
+    assert h.run() == 0
+    assert h.runner.bucket.tokens == P.KEY_BURST
+
+
+def test_an_owed_page_with_no_token_is_drawn_by_the_routine_branch(tmp_path):
+    """M4: a key page is painted only with a token; otherwise the routine
+    branch draws the view when the floor allows. A hold before the page
+    spends the last token; after the prompt the page is due again (m2)."""
+    h = desk(tmp_path, keys=tap(400) + hold(400.3), until=800)
+    h.at(390, set_tokens(h, 2))
+    assert h.run() == 0
+    assert key_paints(h, 390)[:3] == [("strip", "partial"), ("prompt", "fast"),
+                                      ("leave", "fast")]
+    leave = h.painted[3]
+    [page] = [f for f in fetched(h, 390) if f.t < leave.t1 + 1]
+    assert page.mode == "now"
+    [routine] = [p for p in h.painted if p.purpose == "routine" and p.t0 > 390]
+    assert routine.frame == view_frame("now")
+    assert routine.t0 >= leave.t1 + P.MIN_REFRESH_S
+    checks(h)
+
+
+# ── the view API and legacy servers ──────────────────────────────────────────
+
+@pytest.mark.parametrize("server, reason", [
+    (Server(switchable=False, refresh_s=300), P.VIEWS_OFF_SETTING),
+    (Server(old=True, refresh_s=300), P.VIEWS_OFF_TOO_OLD),
+], ids=["views-off", "old-server"])
+def test_t6_a_legacy_display_is_drawn_at_once_and_rechecked(tmp_path, server, reason):
+    """B1: the view fetch that turns the views off is followed by the legacy
+    fetch at once, not after a problem backoff; the views are asked for again
+    every VIEWS_RECHECK_S; the legacy page is painted when it changes."""
+    server.version = lambda view, t: 1 + int(t // 600)
+    h = desk(tmp_path, until=6000, server=server)
+    assert h.run() == 0
+    first, second = h.requests[:2]
+    assert (first.mode, second.mode) == ("habits", None)
+    assert second.t == pytest.approx(first.t + server.render_s)
+    assert h.painted[0].t0 < 210
+    assert all(p.purpose == "routine" and what(p.frame) == "legacy" for p in h.painted)
+    assert len(h.painted) >= 8
+    rechecks = [f.t for f in h.requests[1:] if f.mode is not None]
+    assert len(rechecks) >= 5
+    assert all(b - a >= P.VIEWS_RECHECK_S for a, b in zip(rechecks, rechecks[1:]))
+    assert any(s.endswith(" · desk key off: " + reason) for s in h.statuses())
+    checks(h)
+
+
+def test_t6_legacy_a_hold_and_its_timeout_repaint_the_glass_with_no_fetch(tmp_path):
+    """v3: legacy mode, a tap is ignored, a hold shows the prompt, and the
+    timeout repaints the glass from before it, fetching nothing."""
+    h = desk(tmp_path, keys=tap(400) + hold(420), until=460,
+             server=Server(switchable=False, refresh_s=300))
+    assert h.run() == 0
+    assert key_paints(h) == [("prompt", "fast"), ("leave", "fast")]
+    assert h.painted[-1].frame == legacy_frame()
+    assert fetched(h) == []
+    s = P.load_state(tmp_path)
+    assert (s.view, s.etag) == (None, tag(legacy_frame()))
+    checks(h)
+
+
+def test_t6_legacy_a_confirming_tap_powers_off(tmp_path):
+    h = desk(tmp_path, keys=tap(400) + hold(420) + tap(425), until=460,
+             server=Server(switchable=False, refresh_s=300))
+    assert h.run() == 0
+    assert key_paints(h) == [("prompt", "fast"), ("off", "full")]
+    assert len(h.poweroffs) == 1
+    checks(h)
+
+
+def test_key_off_never_asks_for_views_screens_or_the_key(tmp_path):
+    h = desk(tmp_path, key="off", until=1500,
+             server=Server(switchable=False, refresh_s=300))
+    assert h.run() == 0
+    assert all((f.mode, f.tabs, f.screen) == (None, False, None) for f in h.requests)
+    assert [p.purpose for p in h.painted] == ["routine"]
+    assert not any("desk key off" in s for s in h.statuses())
+    checks(h)
+
+
+# ── outages, stops, USR1 ─────────────────────────────────────────────────────
+
+def test_p8_a_key_page_that_fails_leaves_the_view_to_the_routine_schedule(tmp_path):
+    """v3: one fetch, no key-path retry; the routine branch then fetches the
+    tapped view, unconditionally, when the floor allows."""
+    server = Server()
+    server.down = [(401.0, 411.0)]
+    h = desk(tmp_path, keys=tap(400), until=700, server=server)
+    assert h.run() == 0
+    strip = h.painted[1]
+    assert strip.purpose == "strip"
+    page, routine = fetched(h, 390)[:2]
+    assert (page.mode, page.etag) == ("now", None)
+    assert routine.t >= strip.t1 + P.MIN_REFRESH_S
+    assert (routine.mode, routine.etag) == ("now", None)
+    assert h.painted[-1].frame == view_frame("now")
+    checks(h)
+
+
+def test_t7a_the_server_down_from_the_start_keeps_the_glass_white_after_a_prompt(tmp_path):
+    s = P.State(etag=tag(view_frame("habits")), glass_sha256=sha(view_frame("habits")),
+                painted_end_bt=10.0, attempt_start_bt=5.0, complete=True,
+                view="habits", fast_count=1, full_end_bt=10.0)
+    server = Server()
+    server.down = [(0, 2000)]
+    h = desk(tmp_path, state=s, keys=tap(300) + tap(310) + hold(320), until=2300,
+             server=server)
+    assert h.run() == 0
+    assert [(p.purpose, what(p.frame)) for p in h.painted] == [
+        ("prompt", "confirm"), ("leave", "white"), ("routine", "view:habits")]
+    white_end, routine = h.painted[1].t1, h.painted[2]
+    assert routine.t0 >= 2000 and routine.t0 >= white_end + P.MIN_REFRESH_S
+    # 5 s retries before the first paint, then the usual 60 s.
+    gaps = [b.t - a.t for a, b in zip(h.requests, h.requests[1:]) if b.t < 2000]
+    assert gaps[0] == pytest.approx(P.STARTUP_RETRY_S, abs=0.01)
+    assert min(g for g, f in zip(gaps, h.requests[1:]) if f.t > 340) >= P.ERROR_RETRY_S - 0.01
+    checks(h)
+
+
+def test_t7b_the_server_going_down_leaves_the_taps_to_the_routine_schedule(tmp_path):
+    server = Server()
+    server.down = [(380, 2000)]
+    h = desk(tmp_path, keys=tap(400) + tap(420) + hold(440), until=2300, server=server)
+    assert h.run() == 0
+    assert [p.purpose for p in h.painted if p.t0 > 300] == [
+        "strip", "prompt", "leave", "routine"]
+    assert h.painted[-1].frame == view_frame("calendar")
+    assert h.painted[-1].t0 >= 2000
+    times = [f.t for f in fetched(h, 470)]
+    assert all(b - a >= P.ERROR_RETRY_S - 0.01 for a, b in zip(times, times[1:]) if b < 2000)
+    checks(h)
+
+
+@pytest.mark.parametrize("stop_at, painted", [
+    (400.5, [("strip", "partial")]),     # during the strip: it finishes, no page
+    (402.3, [("strip", "partial")]),     # during the page's fetch: the page is skipped
+])
+def test_t9_a_stop_during_a_strip_lets_it_finish_and_skips_its_page(tmp_path, stop_at,
+                                                                   painted):
+    """§4.10: a stop during a key refresh lets it finish, and a stop pending
+    before a page skips it."""
+    h = desk(tmp_path, keys=tap(400), signals=[(stop_at, signal.SIGTERM)],
+             server=Server(render_s=1.0))
+    assert h.run() == 0
+    assert key_paints(h) == painted
+    assert h.panel.names()[-1] == "sleep"
+    checks(h)
+
+
+def test_t9a_a_restart_after_a_stop_during_a_strip_keeps_the_floor(tmp_path):
+    clock = Clock(20.0)
+    h1 = desk(tmp_path, clock=clock, keys=tap(400), signals=[(400.5, signal.SIGTERM)])
+    assert h1.run() == 0
+    clock.t = 401.9
+    h2 = desk(tmp_path, clock=clock, until=700)
+    assert h2.run() == 0
+    assert h2.runner.bucket.tokens <= 1         # a crash-loop start
+    assert h2.painted[0].purpose == "routine"
+    assert h2.painted[0].t0 >= h1.painted[-1].t1 + P.MIN_REFRESH_S
+    checks(h1, h2)
+
+
+def test_t9c_a_stop_while_an_off_is_queued_still_draws_it_and_requests_once(tmp_path):
+    """v3: the confirming tap, a second press and a stop all at once: the
+    press holds the queue, then the off screen is drawn and requested."""
+    keys = hold(400) + [(405.0, 1), (405.12, 0), (405.12, 1), (405.6, 0)]
+    h = desk(tmp_path, keys=keys, signals=[(405.12, signal.SIGTERM)])
+    assert h.run() == 0
+    assert key_paints(h) == [("prompt", "fast"), ("off", "full")]
+    assert h.painted[-1].t0 >= 405.6
+    assert len(h.poweroffs) == 1
+    checks(h)
+
+
+def test_t9d_a_restart_with_the_prompt_on_the_glass_repaints_at_once(tmp_path):
+    """m3: the prompt a stop left on the glass is replaced as soon as the
+    server answers, floor-exempt and free."""
+    clock = Clock(20.0)
+    h1 = desk(tmp_path, clock=clock, keys=hold(400), signals=[(405.0, signal.SIGTERM)])
+    assert h1.run() == 0
+    assert h1.panel.glass == CONFIRM
+    clock.t = 406.0
+    h2 = desk(tmp_path, clock=clock, until=800)
+    assert h2.run() == 0
+    first = h2.painted[0]
+    assert (first.purpose, first.kind, first.exempt) == ("routine", "full", True)
+    assert first.t0 == pytest.approx(406.4)
+    assert what(first.frame) == "view:habits"
+    checks(h1, h2)
+
+
+def test_t10_usr1_during_the_prompt_goes_back_to_white_then_the_view(tmp_path):
+    h = desk(tmp_path, keys=hold(400), signals=[(405.0, signal.SIGUSR1)], until=700)
+    assert h.run() == 0
+    assert [(p.purpose, p.kind, what(p.frame)) for p in h.painted if p.t0 > 300] == [
+        ("prompt", "fast", "confirm"), ("leave", "full", "white"),
+        ("routine", "fast", "view:habits")]
+    checks(h)
+
+
+def test_usr1_drops_the_glass_so_the_next_tap_draws_no_strip(tmp_path):
+    """§4.5: USR1 forgets the glass (no strip until a paint) and asks for a
+    full refresh next."""
+    h = desk(tmp_path, keys=tap(400) + tap(420), signals=[(410.0, signal.SIGUSR1)],
+             until=440)
+    assert h.run() == 0
+    assert key_paints(h) == [("strip", "partial"), ("page", "fast"), ("page", "full")]
+    checks(h)
+
+
+# ── wake, the clock gate, the idle return ────────────────────────────────────
+
+OFF_STATE = P.State(painted_end_bt=5000.0, attempt_start_bt=4995.0, complete=True,
+                    off=True, glass_sha256=sha(OFF), full_end_bt=5000.0)
+
+
+def test_t11a_a_wake_draws_today_as_soon_as_the_server_answers(tmp_path):
+    server = Server()
+    server.down = [(0, 200)]
+    h = desk(tmp_path, clock=LateSync(15.0, 25.0), state=OFF_STATE, until=400,
+             server=server)
+    assert h.run() == 0
+    assert h.runner.wake
+    first = h.painted[0]
+    assert (first.purpose, first.kind, first.exempt) == ("routine", "full", True)
+    assert 200 <= first.t0 < 206
+    assert what(first.frame) == "view:habits"
+    assert not any("waking" in s for s in h.statuses())
+    checks(h)
+
+
+def test_a_wake_with_the_server_down_for_long_says_so(tmp_path):
+    server = Server()
+    server.down = [(0, 2000)]
+    h = desk(tmp_path, clock=LateSync(15.0, 25.0), state=OFF_STATE, until=900,
+             server=server)
+    assert h.run() == 0
+    assert h.painted == []
+    assert any("waking: the server is not answering" in s for s in h.statuses())
+    checks(h)
+
+
+def test_a_restart_in_the_same_boot_does_not_wake_again(tmp_path):
+    s = dataclasses.replace(OFF_STATE, painted_end_bt=100.0, attempt_start_bt=95.0,
+                            full_end_bt=100.0, view="calendar")
+    h = desk(tmp_path, start=150.0, state=s, until=200)
+    assert h.run() == 0
+    assert not h.runner.wake
+    assert h.runner.ui.view == "calendar"
+    assert h.runner.bucket.tokens == 1
+    checks(h)
+
+
+def test_t11b_a_prompt_before_the_wake_paint_does_not_spend_its_exemption(tmp_path):
+    """m12: the wake's floor exemption is the first VIEW paint's."""
+    server = Server()
+    server.down = [(0, 100)]
+    h = desk(tmp_path, clock=LateSync(15.0, 25.0), state=OFF_STATE, keys=hold(60),
+             until=600, server=server)
+    assert h.run() == 0
+    assert [p.purpose for p in h.painted] == ["prompt", "leave", "routine"]
+    routine = h.painted[2]
+    assert routine.exempt
+    assert routine.t0 < h.painted[1].t1 + P.MIN_REFRESH_S
+    assert routine.t0 == pytest.approx(next(f.t for f in h.requests if f.t >= 100)
+                                       + server.render_s)
+    checks(h)
+
+
+def test_t11c_a_wake_on_a_legacy_display_leaves_the_off_screen_at_once(tmp_path):
+    h = desk(tmp_path, clock=LateSync(15.0, 25.0), state=OFF_STATE, until=400,
+             server=Server(switchable=False, refresh_s=300))
+    assert h.run() == 0
+    first = h.painted[0]
+    assert what(first.frame) == "legacy" and first.exempt
+    assert first.t0 < 27
+    checks(h)
+
+
+def test_t12a_a_sync_during_the_gate_wait_fetches_without_spinning(tmp_path):
+    h = desk(tmp_path, clock=LateSync(20.0, 250.0), until=320)
+    assert h.run() == 0
+    assert 250 <= h.requests[0].t < 250 + P.CLOCK_CHECK_S + 0.01
+    assert len(h.waits) < 200
+    checks(h)
+
+
+def test_t12b_before_the_gate_opens_a_hold_works_and_a_tap_does_not(tmp_path):
+    """m5: the prompt is not "the first paint" a tap needs."""
+    clock = Clock(20.0)
+    clock.synced = False
+    h = desk(tmp_path, clock=clock, keys=hold(60) + tap(100), until=320)
+    assert h.run() == 0
+    assert [p.purpose for p in h.painted] == ["prompt", "leave", "routine"]
+    assert h.painted[1].frame == P.WHITE
+    assert all(f.t >= P.CLOCK_SYNC_GRACE_S for f in h.requests)
+    checks(h)
+
+
+def test_t13a_the_idle_return_waits_for_the_floor_and_costs_no_token(tmp_path):
+    h = desk(tmp_path, keys=tap(445.4), until=700, idle_s=60,
+             server=Server(refresh_s=300))
+    h.at(460, set_tokens(h, 0))
+    assert h.run() == 0
+    strip, page, back = h.painted[1:4]
+    assert (strip.purpose, page.purpose, back.purpose) == ("strip", "page", "routine")
+    assert back.frame == view_frame("habits")
+    assert back.t0 >= page.t1 + P.MIN_REFRESH_S
+    assert h.runner.ui.view == "habits"
+    assert h.runner.bucket.tokens == 0      # it needed none
+    checks(h)
+
+
+def test_t13b_the_idle_return_does_not_come_during_the_prompt(tmp_path):
+    h = desk(tmp_path, keys=tap(400) + hold(450), until=520, idle_s=60)
+    assert h.run() == 0
+    assert key_paints(h) == [("strip", "partial"), ("page", "fast"), ("prompt", "fast"),
+                             ("leave", "fast")]
+    assert h.painted[-1].frame == view_frame("now")
+    assert [f.mode for f in fetched(h)] == ["now"]
+    checks(h)
+
+
+def test_t13c_the_idle_return_does_not_come_during_the_power_off_grace(tmp_path):
+    h = desk(tmp_path, keys=tap(400) + hold(440) + tap(445), until=640, idle_s=60,
+             path_unit=False)
+    assert h.run() == 0
+    assert key_paints(h)[-2:] == [("off", "full"), ("leave", "fast")]
+    assert h.painted[-1].frame == view_frame("now")
+    assert [f.mode for f in fetched(h)] == ["now"]
+    checks(h)
+
+
+# ── refresh kinds ────────────────────────────────────────────────────────────
+
+def test_t14_the_batch_guard_turns_quick_refresh_off(tmp_path):
+    clock = Clock(20.0)
+    h = desk(tmp_path, clock=clock, keys=tap(400) + tap(420) + hold(440), until=480,
+             panel=FakePanel(clock, refresh_s={"partial": 1.4}))
+    assert h.run() == 0
+    assert key_paints(h) == [("strip", "partial"), ("page", "full"), ("page", "full"),
+                             ("prompt", "full"), ("leave", "full")]
+    assert P.load_state(tmp_path).quick_disabled is True
+    assert any("fast refresh is off: this panel looks like a pre-2023 batch" in s
+               for s in h.statuses())
+    checks(h)
+
+
+@pytest.mark.parametrize("count, expected", [
+    (3, [("strip", "partial"), ("page", "fast"), ("prompt", "fast"), ("leave", "full")]),
+    (4, [("page", "fast"), ("prompt", "fast"), ("leave", "full")]),
+    (5, [("page", "full"), ("prompt", "fast"), ("leave", "fast")]),
+])
+def test_t15_full_every_five_and_the_prompt_always_fast(tmp_path, count, expected):
+    h = desk(tmp_path, keys=tap(400) + hold(420), until=460)
+    h.at(390, set_fast_count(h, count))
+    assert h.run() == 0
+    assert key_paints(h, 390) == expected
+    checks(h)
+
+
+def test_under_refresh_full_every_paint_is_full_and_there_are_no_strips(tmp_path):
+    h = desk(tmp_path, keys=tap(400) + hold(420), until=460, refresh="full")
+    assert h.run() == 0
+    assert key_paints(h, 390) == [("page", "full"), ("prompt", "full"), ("leave", "full")]
+    assert set(h.panel.modes) == {"full"}
+    checks(h)
+
+
+def test_t16_the_23_hour_repaint_counts_from_the_last_full_refresh(tmp_path):
+    h = desk(tmp_path, keys=tap(400) + tap(600), until=84_000)
+    assert h.run() == 0
+    first, forced = h.painted[0], h.painted[-1]
+    assert [p.kind for p in h.painted[1:-1]] == ["partial", "fast", "partial", "fast"]
+    assert (forced.purpose, forced.kind) == ("routine", "full")
+    assert first.t1 + P.FORCE_REPAINT_S <= forced.t0 <= first.t1 + P.FORCE_REPAINT_S + 1
+    assert forced.frame == view_frame("calendar")
+    checks(h)
+
+
+# ── the key held down, the background, liveness ──────────────────────────────
+
+def test_a_press_blocks_a_routine_paint_until_it_is_let_go(tmp_path):
+    """§4.10: `pressed` blocks a routine paint until the release; a press of
+    0.6–1.0 s is no gesture at all."""
+    server = Server(refresh_s=300, render_s=1.0)
+    server.version = lambda view, t: 1 if t < 500 else 2
+    fetch_at = 200 + 1.0 + PAINT_COST + 300
+    h = desk(tmp_path, keys=[(fetch_at + 0.5, 1), (fetch_at + 1.3, 0)], until=fetch_at + 60,
+             server=server)
+    assert h.run() == 0
+    [routine] = [p for p in h.painted if p.t0 > 300]
+    assert routine.purpose == "routine" and routine.frame == view_frame("habits", 2)
+    assert routine.t0 >= fetch_at + 1.3
+    assert len(fetched(h, 300)) == 2        # fetched again once let go
+    assert h.runner.ui.mode == "browse"
+    checks(h)
+
+
+def test_a_stuck_key_is_forgotten_and_the_loop_goes_on(tmp_path, caplog):
+    h = desk(tmp_path, keys=[(400.0, 1)], until=440, holds_ok=False)
+    with caplog.at_level(logging.WARNING, logger="smylte-panel"):
+        assert h.run() == 0
+    assert not h.runner.gestures.down
+    assert any("taking it as stuck" in m for m in caplog.messages)
+    checks(h)
+
+
+def test_background_fetches_are_one_at_a_time_apart_and_never_paint(tmp_path):
+    h = desk(tmp_path, screens=(), until=260)
+    assert h.run() == 0
+    bg = h.requests[1:]
+    assert [(f.screen, f.mode) for f in bg] == [("confirm", None), ("off", None),
+                                                (None, "now"), (None, "calendar")]
+    ends = [f.t + (0.05 if f.screen else 0.4) for f in h.requests]
+    assert all(f.t - end >= P.BG_GAP_S for f, end in zip(bg, ends))
+    assert [p.purpose for p in h.painted] == ["routine"]
+    assert set(h.runner.strip_cache) == set(P.VIEWS)
+    checks(h)
+
+
+def test_the_routine_floor_holds_with_key_refreshes_in_between(tmp_path):
+    server = Server(refresh_s=300)
+    server.version = lambda view, t: 1 + int(t // 250)
+    keys = [k for t in range(400, 3000, 420) for k in tap(t)]
+    h = desk(tmp_path, keys=keys, until=3000, server=server)
+    assert h.run() == 0
+    assert sum(p.purpose == "routine" for p in h.painted) >= 3
+    assert sum(p.purpose == "page" for p in h.painted) >= 5
+    checks(h)
+
+
+def test_the_harness_fails_a_loop_that_spins(tmp_path):
+    h = Harness(tmp_path, Clock(), new_frames())
+    for _ in range(FakeEvents.SPIN_LIMIT + 1):
+        assert h.events.wait(0) == []
+    with pytest.raises(AssertionError, match="spinning"):
+        h.events.wait(0)
+
+
+class _PipeCollector:
+    def __init__(self):
+        self.r, self.w = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+        self.items = []
+
+    @property
+    def fd(self):
+        return self.r
+
+    def send(self, sig):
+        self.items.append(int(sig))
+        os.write(self.w, b"\0")
+
+    def pop(self):
+        try:
+            os.read(self.r, 4096)
+        except BlockingIOError:
+            pass
+        out, self.items = self.items, []
+        return out
+
+    def alive(self):
+        return True
+
+
+@pytest.mark.parametrize("case", ["late", "no-clock"])
+def test_the_real_events_find_a_key_that_appears_late(tmp_path, monkeypatch, caplog, case):
+    """§4.10: the key device appearing late is found and used; one whose
+    clock cannot be set (EVIOCSCLOCKID) is no key, logged once, and the loop
+    runs on. Real Events, on a fake sysfs, a pipe for the node and select()
+    on the fake clock."""
+    clock = Clock(20.0)
+    sysfs = tmp_path / "sys"
+    sysfs.mkdir()
+    collector = _PipeCollector()
+    r, w = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+
+    def open_key(path):
+        if case == "no-clock":
+            raise OSError(errno.ENOTTY, "Inappropriate ioctl for device")
+        return r
+
+    def make_node():
+        dev = sysfs / "event4" / "device"
+        (dev / "capabilities").mkdir(parents=True)
+        (dev / "name").write_text("pwr_button\n")
+        (dev / "capabilities" / "ev").write_text("3\n")
+        (dev / "capabilities" / "key").write_text("10000000000000 0\n")
+
+    def edge(value):
+        def write():
+            sec = int(clock.t)
+            os.write(w, P.INPUT_EVENT.pack(sec, round((clock.t - sec) * 1e6),
+                                           P.EV_KEY, P.KEY_POWER, value))
+        return write
+
+    script = [(250.0, make_node), (400.0, edge(1)), (400.12, edge(0)),
+              (440.0, lambda: collector.send(signal.SIGTERM))]
+
+    def select(rl, wl, xl, timeout):
+        target = clock.t + timeout
+        if script and script[0][0] <= target:
+            clock.t = max(clock.t, script[0][0])
+            script.pop(0)[1]()
+        else:
+            clock.t = target
+        return [], [], []
+
+    monkeypatch.setattr(P, "select", types.SimpleNamespace(select=select))
+    monkeypatch.setattr(P, "_many_keys_logged", False)
+    for kind, body in zip(P.SCREENS, SCREEN_FRAMES):
+        P.save_screen(tmp_path, kind, body)
+    h = Harness(tmp_path, clock, server=Server(), key="auto")
+    real = P.Events(collector, sysfs_root=sysfs, open_key=open_key,
+                    boottime=clock.boottime, key_enabled=True)
+
+    class Counted:
+        zero = 0
+
+        def wait(self, timeout):
+            h.waits.append(timeout)
+            if timeout > 0:
+                h.unwaited = 0
+                Counted.zero = 0
+            else:
+                Counted.zero += 1
+                assert Counted.zero < 50, "spinning"
+            return real.wait(timeout)
+
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+    h.deps.events = Counted()
+    try:
+        with caplog.at_level(logging.INFO, logger="smylte-panel"):
+            assert h.run() == 0
+    finally:
+        os.close(w)
+        os.close(r)
+        os.close(collector.r)
+        os.close(collector.w)
+    assert h.painted[0].purpose == "routine"
+    # While there is no key it is looked for every KEY_RETRY_S, so no wait is longer.
+    assert max(t for t in h.waits[:40]) <= P.KEY_RETRY_S
+    if case == "late":
+        assert real.key_open
+        assert [p.purpose for p in h.painted[1:]] == ["strip", "page"]
+    else:
+        assert not real.key_open
+        assert len(h.painted) == 1
+        assert len([m for m in caplog.messages if m.startswith("key: cannot open")]) == 1
+    checks(h)
+
+
+# ── start-up checks ──────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("deps, says", [
+    (dict(holds_ok=False), "holding the key does nothing"),
+    (dict(logind_present=False), "logind still powers off on a press"),
+    (dict(key="off", logind_present=True), "the key does nothing — re-run panel-setup.sh"),
+])
+def test_what_is_wrong_with_the_setup_is_said_at_start(tmp_path, deps, says):
+    h = desk(tmp_path, until=30, **deps)
+    assert h.run() == 0
+    assert any(says in s for s in h.statuses())
+
+
+def test_a_poweroff_request_left_over_is_cleared_at_start(tmp_path):
+    h = desk(tmp_path, until=30)
+    assert h.run() == 0
+    assert h.cleared == [20.0]
+
+
+def test_a_hold_does_nothing_without_a_run_directory(tmp_path):
+    h = desk(tmp_path, keys=hold(400), until=440, holds_ok=False)
+    assert h.run() == 0
+    assert [p.purpose for p in h.painted] == ["routine"]
+    checks(h)
+
+
+def test_a_restart_onto_an_unchanged_page_still_takes_taps(tmp_path):
+    """The tap filter needs a view frame known to be on the glass. A restart
+    whose first fetch is a 304 paints nothing, yet the glass is known: taps
+    must work at once, not only after the page next changes."""
+    clock = Clock(20.0)
+    h1 = desk(tmp_path, clock=clock, until=400)
+    assert h1.run() == 0
+    assert [p.purpose for p in h1.painted] == ["routine"]
+    clock.t = 1000.0
+    h2 = desk(tmp_path, clock=clock, keys=tap(1100), until=1200)
+    assert h2.run() == 0
+    assert "routine" not in [p.purpose for p in h2.painted]     # the 304: no repaint
+    pages = [p for p in h2.painted if p.purpose == "page"]
+    assert pages, [(p.purpose, p.kind) for p in h2.painted]
+    assert h2.runner.ui.view == "now"
+    checks(h2)
+
+
+def test_a_logind_warning_stays_on_the_status_line_after_a_healthy_answer(tmp_path):
+    """A notice that needs the owner (re-run panel-setup.sh) must not vanish
+    at the first 304, as an ordinary problem does."""
+    h = desk(tmp_path, until=4000, logind_present=False)
+    assert h.run() == 0
+    statuses = [n for n in h.notes if n.startswith("STATUS=")]
+    assert statuses[-1].startswith("STATUS=showing "), statuses
+    assert "logind still powers off on a press" in statuses[-1], statuses
+
+
+def test_the_batch_guard_stays_on_the_status_line(tmp_path):
+    state = P.State(quick_disabled=True)
+    h = desk(tmp_path, until=400, state=state)
+    assert h.run() == 0
+    statuses = [n for n in h.notes if n.startswith("STATUS=")]
+    assert "fast refresh is off" in statuses[-1], statuses

@@ -451,3 +451,60 @@ def test_fetch_gives_up_on_a_server_that_stalls_before_replying(live, good):
     result, _ = _fetch(token, [stall], timeout=0.2)
     assert isinstance(result, P.Transient)
     assert time.monotonic() - started < 3
+
+
+# ── the desk key's views and screens, against the live server ───────────────
+
+def new_switchable_display(c) -> str:
+    return c.post("/api/displays", json={"name": "Desk", "palette": "eink", "panel_width": 800,
+                                         "panel_height": 480, "switchable": True}).json()["token"]
+
+
+def _live_fetch(c, token, etag=None, **kw):
+    """fetch() of what the live server answers to the same request, replayed
+    over a real socket. Returns (result, the live response)."""
+    target = P.request_target(token, **kw)
+    r = c.get(target, headers={"If-None-Match": etag} if etag else {})
+    raw = F.raw_response(r.status_code, r.headers.multi_items(), r.content,
+                         r.reason_phrase or "X")
+    result, server = _fetch(token, [raw], etag, **kw)
+    assert server.requests[0].decode("latin-1").split("\r\n")[0] == f"GET {target} HTTP/1.1"
+    return result, r
+
+
+def test_a_view_fetch_of_a_switchable_display_is_that_view_with_its_strip(live):
+    c, _ = live
+    token = new_switchable_display(c)
+    result, r = _live_fetch(c, token, mode="now", tabs=True)
+    assert isinstance(result, P.Frame), result
+    assert (result.mode, result.strip) == ("now", (440, 480))
+    assert result.body == r.content
+    assert result.etag == r.headers["etag"]
+
+
+def test_a_screen_fetch_is_a_frame_with_no_view_and_no_strip(live):
+    c, _ = live
+    token = new_switchable_display(c)
+    result, r = _live_fetch(c, token, screen="confirm")
+    assert isinstance(result, P.Frame), result
+    assert (result.mode, result.strip) == (None, None)
+    assert result.body == r.content
+
+
+def test_a_view_fetch_with_its_own_etag_is_not_modified(live):
+    c, _ = live
+    token = new_switchable_display(c)
+    first, _ = _live_fetch(c, token, mode="now", tabs=True)
+    assert isinstance(first, P.Frame), first
+    again, r = _live_fetch(c, token, etag=first.etag, mode="now", tabs=True)
+    assert r.status_code == 304
+    assert again == P.NotModified(first.etag, first.refresh_s)
+
+
+def test_a_view_fetch_of_a_display_that_does_not_switch_is_refused_as_views_off(live):
+    c, _ = live
+    token = new_display(c)
+    result, r = _live_fetch(c, token, mode="now")
+    assert r.status_code == 422
+    assert isinstance(result, P.Refused), result
+    assert (result.status, result.code) == (422, "views-off")
