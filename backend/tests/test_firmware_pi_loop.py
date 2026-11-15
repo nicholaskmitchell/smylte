@@ -534,20 +534,33 @@ NOW_BT = 100_000.0
 NOW_WALL = 1.8e9
 
 
-@pytest.mark.parametrize("state, synced, expected", [
-    (P.State(complete=False, attempt_start_bt=1.0), True, False),
-    (P.State(complete=True, painted_end_bt=NOW_BT - 82800), True, True),
-    (P.State(complete=True, painted_end_bt=NOW_BT - 82799), True, False),
-    # An earlier boot: only the synced wall clock can tell.
-    (P.State(complete=True, painted_end_bt=NOW_BT + 5,
-             painted_wall=NOW_WALL - 82800), True, True),
-    (P.State(complete=True, painted_end_bt=NOW_BT + 5,
-             painted_wall=NOW_WALL - 82800), False, False),
+EARLY_BT = 1_000.0      # an uptime well under 23 h
+
+
+@pytest.mark.parametrize("state, now_bt, synced, expected", [
+    (P.State(complete=False, attempt_start_bt=1.0), NOW_BT, True, False),
+    (P.State(complete=True, painted_end_bt=NOW_BT - 82800), NOW_BT, True, True),
+    (P.State(complete=True, painted_end_bt=NOW_BT - 82799), NOW_BT, True, False),
+    # A paint time later than now is from an earlier boot, so at least `now`
+    # has passed since it: 23 h of this boot's uptime is enough on its own.
     (P.State(complete=True, painted_end_bt=NOW_BT + 5, painted_wall=None),
-     True, False),
+     NOW_BT, False, True),
+    (P.State(complete=True, painted_end_bt=82800 + 5, painted_wall=None),
+     82800, False, True),
+    (P.State(complete=True, painted_end_bt=82799 + 5, painted_wall=None),
+     82799, False, False),
+    # Early in a boot, only the synced wall clock can tell.
+    (P.State(complete=True, painted_end_bt=EARLY_BT + 5,
+             painted_wall=NOW_WALL - 82800), EARLY_BT, True, True),
+    (P.State(complete=True, painted_end_bt=EARLY_BT + 5,
+             painted_wall=NOW_WALL - 82800), EARLY_BT, False, False),
+    (P.State(complete=True, painted_end_bt=EARLY_BT + 5,
+             painted_wall=NOW_WALL - 82799), EARLY_BT, True, False),
+    (P.State(complete=True, painted_end_bt=EARLY_BT + 5, painted_wall=None),
+     EARLY_BT, True, False),
 ])
-def test_the_forced_due_table(state, synced, expected):
-    assert P.forced_due(state, NOW_BT, NOW_WALL, synced) is expected
+def test_the_forced_due_table(state, now_bt, synced, expected):
+    assert P.forced_due(state, now_bt, NOW_WALL, synced) is expected
 
 
 # ── clock gate ───────────────────────────────────────────────────────────────

@@ -28,11 +28,25 @@ UNIT_SRC=$REPO/deploy/$UNIT_NAME
 UNIT=/etc/systemd/system/$UNIT_NAME
 CREDSTORE=/etc/credstore
 CRED=$CREDSTORE/smylte-panel-token
+# Optional, and only for a Driver HAT: SMYLTE_PANEL_PWR_PIN=18. The unit reads
+# it as its EnvironmentFile, and the one-off runs below are given it too.
+PANEL_ENV=/etc/default/smylte-panel
 PY=/usr/bin/python3
 FILES="panel.py epd7in5_v2.py"
 
 die() { echo "panel-setup: $*" >&2; exit 1; }
 say() { echo "== $* =="; }
+
+# The PWR pin in $PANEL_ENV, read as the unit's EnvironmentFile= reads it: the
+# last assignment wins and quotes are dropped. Empty when there is none.
+pwr_setting() {
+  local v=
+  if [ -r "$PANEL_ENV" ]; then
+    v=$(sed -n 's/^[[:space:]]*SMYLTE_PANEL_PWR_PIN[[:space:]]*=//p' "$PANEL_ENV" | tail -n 1)
+  fi
+  v=${v//[\"\'[:space:]]/}
+  printf '%s' "$v"
+}
 
 [ "$(id -u)" -eq 0 ] || die "run with sudo"
 
@@ -77,6 +91,14 @@ preflight() {
     fi
   else
     echo "  ? gpiodetect not installed (sudo apt install gpiod) — chip not checked"
+  fi
+  v=$(pwr_setting)
+  if [ -z "$v" ]; then
+    echo "  ✓ no PWR pin (right for the Pico module; a Driver HAT sets one in $PANEL_ENV)"
+  elif [[ $v =~ ^[0-9]{1,2}$ ]]; then
+    echo "  ✓ PWR pin BCM$v, from $PANEL_ENV"
+  else
+    echo "  ✗ SMYLTE_PANEL_PWR_PIN in $PANEL_ENV is '$v', not a BCM pin number"; bad=1
   fi
   return "$bad"
 }
@@ -135,15 +157,30 @@ store_token() {
 
 # ── one-off runs under the service's own sandbox ─────────────────────────────
 # --selftest and --clear need the GPIO lines, so the service is stopped first.
-# They run as a transient unit with the same identity and device rules as the
-# service, then the lines are driven low again whatever happened.
+# They run as a transient unit with the same identity, device rules and PWR
+# setting as the service, then the lines are driven low again whatever
+# happened.
 WAS_ACTIVE=no
 stop_service() {
-  if systemctl is-active --quiet "$UNIT_NAME"; then
-    WAS_ACTIVE=yes
-    echo "  stopping $UNIT_NAME (it finishes any refresh first)"
-    systemctl stop "$UNIT_NAME"
-  fi
+  local state
+  state=$(systemctl show -P ActiveState "$UNIT_NAME" 2>/dev/null || true)
+  case "$state" in
+    # A unit waiting out RestartSec after a fault reads "activating", not
+    # "active", and only a stop cancels the restart it is waiting to make.
+    active|activating|reloading|refreshing) WAS_ACTIVE=yes ;;
+    deactivating) ;;    # a stop is under way: wait for it below
+    *) return 0 ;;      # inactive or failed: nothing holds the lines
+  esac
+  echo "  stopping $UNIT_NAME (it finishes any refresh first)"
+  systemctl stop "$UNIT_NAME"
+}
+
+# Every start this script makes is deliberate, so it clears the unit's start
+# count first. StartLimitBurst counts manual starts too, and a bring-up that
+# re-runs this script within the hour would otherwise be refused.
+start_service() {   # $1: start or restart
+  systemctl reset-failed "$UNIT_NAME" 2>/dev/null || true
+  systemctl "$1" "$UNIT_NAME"
 }
 
 run_oneoff() {   # $1: --selftest or --clear
@@ -154,8 +191,9 @@ run_oneoff() {   # $1: --selftest or --clear
     -p StateDirectory=smylte-panel -p StateDirectoryMode=0700 \
     -p DevicePolicy=closed -p "DeviceAllow=char-spi rw" -p "DeviceAllow=char-gpiochip rw" \
     -p NoNewPrivileges=yes -p ProtectSystem=strict -p ProtectHome=yes \
+    -p "EnvironmentFile=-$PANEL_ENV" \
     "$PY" -I -B "$LIB/panel.py" "$1" || rc=$?
-  "$PY" -I -B "$LIB/panel.py" --power-off || true
+  SMYLTE_PANEL_PWR_PIN=$(pwr_setting) "$PY" -I -B "$LIB/panel.py" --power-off || true
   return "$rc"
 }
 
@@ -210,7 +248,7 @@ case "$MODE" in
     # restart, not enable --now: on an update the unit is already running the
     # old code, and `start` on an active unit does nothing (see setup.sh).
     systemctl enable "$UNIT_NAME"
-    systemctl restart "$UNIT_NAME"
+    start_service restart
     show_service
     echo
     echo "The first refresh comes once the clock has synced and the 180 s floor has"
@@ -219,10 +257,16 @@ case "$MODE" in
   --rotate-token)
     say "display token"
     read_token; probe_token; store_token
-    if systemctl is-enabled --quiet "$UNIT_NAME" 2>/dev/null; then
-      systemctl restart "$UNIT_NAME"
-      echo "  ✓ restarted $UNIT_NAME"
-    fi
+    # The client reads the token once, at start. Restart it if it is running,
+    # waiting to restart, or failed (a bad token fails it); leave a stopped one
+    # stopped, such as a panel cleared for storage.
+    state=$(systemctl show -P ActiveState "$UNIT_NAME" 2>/dev/null || true)
+    case "$state" in
+      active|activating|reloading|refreshing|failed)
+        start_service restart
+        echo "  ✓ restarted $UNIT_NAME" ;;
+      *) echo "  $UNIT_NAME is not running; it reads the new token when it next starts" ;;
+    esac
     ;;
   --selftest|--clear)
     [ -f "$LIB/panel.py" ] || die "not installed — run this script without options first"
@@ -230,10 +274,12 @@ case "$MODE" in
     stop_service
     rc=0; run_oneoff "$MODE" || rc=$?
     if [ "$MODE" = --clear ]; then
+      if [ "$rc" -eq 0 ]; then echo "  ✓ cleared to white"; else
+        echo "  ✗ the clear failed (above); the glass may still show a frame"; fi
       echo "  The service is stopped and the panel is unpowered. It starts again at boot,"
       echo "  or now with: sudo systemctl start $UNIT_NAME"
     elif [ "$WAS_ACTIVE" = yes ]; then
-      systemctl start "$UNIT_NAME"
+      start_service start
     fi
     exit "$rc"
     ;;
@@ -260,8 +306,10 @@ case "$MODE" in
       run_oneoff --clear || echo "  ! clear failed; continuing with the removal"
     fi
     say "removing"
-    rm -f "$UNIT" "$CRED"
-    rm -rf "$LIB" /var/lib/private/smylte-panel
+    # Including what `systemctl edit` added and the PWR setting, so a later
+    # install starts from the shipped unit.
+    rm -f "$UNIT" "$CRED" "$PANEL_ENV"
+    rm -rf "$UNIT.d" "$LIB" /var/lib/private/smylte-panel
     rm -f /var/lib/smylte-panel
     systemctl daemon-reload
     echo "  Removed. Delete the display in Settings → Displays too, so its token stops working."

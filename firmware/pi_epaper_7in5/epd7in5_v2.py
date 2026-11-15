@@ -200,7 +200,7 @@ def find_chip(gpiod, label: str = CHIP_LABEL, paths=None) -> str:
         except OSError as e:
             raise HardwareMissing("/dev", f"cannot list it ({e})") from e
         paths = sorted("/dev/" + n for n in names if n.startswith("gpiochip"))
-    found, errors, seen = [], [], set()
+    found, errors, denied, seen = [], [], [], set()
     for path in paths:
         real = os.path.realpath(path)
         if real in seen:
@@ -214,12 +214,22 @@ def find_chip(gpiod, label: str = CHIP_LABEL, paths=None) -> str:
                     found.append(real)
         except OSError as e:
             errors.append(f"{real}: {e}")
+            if e.errno in (errno.EACCES, errno.EPERM):
+                denied.append(real)
     if len(found) == 1:
         return found[0]
     if found:
         raise HardwareMissing(
             "GPIO chip", f"{len(found)} chips are labelled {label!r} "
                          f"({', '.join(found)}); expected one")
+    if denied:
+        # Every chip node has the same owner and mode, so one this process may
+        # not open is the likelier story than a board that is not a Pi 5.
+        raise HardwareMissing(
+            "GPIO chip", f"permission denied opening {', '.join(denied[:3])} — "
+                         "the service needs group `gpio` and "
+                         "DeviceAllow=char-gpiochip, or the sandbox blocks the "
+                         "device")
     hint = (f"no GPIO chip labelled {label!r} — this is not a Pi 5, or "
             "`gpiodetect` will show what is there")
     if errors:
@@ -330,6 +340,9 @@ class Panel:
         self._spi = None
         self._deep_sleep_at = None
         self.phase = "idle"
+        # The phase a failure happened in: abort() records it before it powers
+        # down, because cut_power() then sets `phase` to "off".
+        self.aborted_in = None
 
     # ── wire framing ─────────────────────────────────────────────────────────
     # A command is DC low and one one-byte transfer. Parameters are DC high and
@@ -397,6 +410,7 @@ class Panel:
     def init(self) -> None:
         """Power up, reset, and configure. Takes the panel out of deep sleep."""
         self.phase = "init"
+        self.aborted_in = None
         if self._pwr_pin is not None:
             self._lines.set(self._pwr_pin, 1)
         if self._spi is None:
@@ -487,6 +501,7 @@ class Panel:
         Never raises. With `busy_stuck` the commands are still sent but BUSY is
         not waited on again, since it has just shown it will not answer.
         """
+        self.aborted_in = self.phase
         if self._spi is not None:
             try:
                 self._send(VCOM_DATA_INTERVAL, bytes([VCOM_FOR_POWER_OFF]))

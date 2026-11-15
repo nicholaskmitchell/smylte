@@ -110,8 +110,14 @@ def test_the_token_arrives_as_a_credential_the_script_stores(unit, script):
     assert cred and cred.group(1) == "smylte-panel-token"
 
 
-def test_the_token_is_never_in_the_environment(unit):
-    assert unit.values("Service", "EnvironmentFile") == []
+def test_the_token_is_never_in_the_environment(unit, script):
+    # The one EnvironmentFile is the optional PWR setting, which the script
+    # also hands to its one-off runs. The token is only ever the credential.
+    assert unit.values("Service", "EnvironmentFile") == ["-/etc/default/smylte-panel"]
+    env = re.search(r"^PANEL_ENV=(\S+)$", script, re.M)
+    assert env and env.group(1) == "/etc/default/smylte-panel"
+    assert "$PANEL_ENV" not in "\n".join(
+        line for line in script.splitlines() if "TOKEN" in line)
     for value in unit.values("Service", "Environment"):
         assert "token" not in value.lower(), value
 
@@ -130,7 +136,10 @@ def test_the_exec_lines_run_the_root_owned_copy_under_isolated_python(unit, scri
 def test_a_failure_restarts_but_a_configuration_error_does_not(unit):
     assert unit.one("Service", "Restart") == "on-failure"
     assert int(unit.one("Service", "RestartSec")) >= 1
-    assert unit.one("Service", "RestartPreventExitStatus") == str(P.EX_CONFIG)
+    # 78 is the client's EX_CONFIG. 243 is systemd's EXIT_CREDENTIALS: a
+    # missing token file fails the unit before the client runs.
+    assert unit.one("Service", "RestartPreventExitStatus").split() == \
+        [str(P.EX_CONFIG), "243"]
 
 
 def test_stopping_waits_out_a_refresh_and_a_fetch(unit):

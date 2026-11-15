@@ -216,7 +216,8 @@ wires.
   is not running.
 - It paints only a frame whose headers say exactly 800×480 `mono-hlsb-inverted`,
   48,000 bytes.
-- It repaints at least every 23 h, even if nothing changed.
+- It repaints at least every 23 h, even if nothing changed, and a reboot does not
+  push that back.
 - It waits for the clock to sync after boot (at most 300 s of uptime), because
   the server on the same box would otherwise draw the wrong day.
 - On a 404 it keeps the frame and retries every 15 min.
@@ -238,9 +239,12 @@ wires.
   root-owned copy in `/usr/local/lib/smylte-panel`. `--status` shows whether the
   copy differs.
 - Before storing the panel: `--clear` paints it white and stops the service.
-- `--uninstall` removes everything. Then delete the display in Settings.
+- `--uninstall` removes everything, including any `systemctl edit` override and
+  `/etc/default/smylte-panel`. Then delete the display in Settings.
 - After five failed starts in an hour the unit stays failed:
   `sudo systemctl reset-failed smylte-panel && sudo systemctl start smylte-panel`.
+  Manual starts count towards the five; `panel-setup.sh` resets the count before
+  each start it makes.
 
 ### Is it broken?
 
@@ -253,6 +257,7 @@ wires.
 | `BUSY stayed low for … during power-on` | The panel has no power, or BUSY is not wired | Check the 3V3 lead to pins 36 and 39, the RST lead, and BUSY |
 | `BUSY stayed low … during refresh` | A cold room or a panel fault | Warm the room and try again. If it repeats, suspect the panel |
 | `is not a display token` | The stored token is wrong. Exit 78, no restarts | `sudo ~/smylte/deploy/panel-setup.sh --rotate-token` |
+| `Failed to set up credentials` (status `243/CREDENTIALS`) | `/etc/credstore/smylte-panel-token` is missing. No restarts | `sudo ~/smylte/deploy/panel-setup.sh --rotate-token` |
 | `does not know this display (404)` | The token was rotated, or the display was disabled or deleted | Check Settings → Displays. After a rotation, `--rotate-token` |
 | `server not answering` | smylted is down. The glass keeps its frame | `systemctl status smylte` |
 | `refused the server's response (…)` | The server and client disagree about the frame | Update both: pull, restart smylte, re-run `panel-setup.sh` |
@@ -267,10 +272,17 @@ Do these once, at bring-up.
 - With the service stopped, measure the module's 3V3 rail. Near 0 V is right.
   1–3 V means the panel is being fed through CS: the Pi's kernel holds CE0 high.
   Report it. The options are wiring CS to a spare GPIO, or a Driver HAT.
-- Start the service, wait until it is idle, then
-  `sudo systemctl kill -s SIGKILL smylte-panel`. `pinctrl get 17` must read low,
-  which shows that `ExecStopPost` ran. This matters because the Pi 5 keeps a GPIO
-  output's level after its process dies.
+- The kill check. It only proves something if RST is high when the client dies,
+  and RST is high only after a refresh in that run:
+  1. `sudo systemctl start smylte-panel`, then
+     `sudo systemctl kill -s USR1 smylte-panel` to ask for a repaint.
+  2. Wait for `painted … in N s` in the journal: up to about three minutes,
+     because of the floor. `pinctrl get 17` now reads high (deep sleep,
+     powered).
+  3. `sudo systemctl kill -s SIGKILL smylte-panel`, and within a minute, before
+     systemd restarts it, `pinctrl get 17` must read low. That shows
+     `ExecStopPost` ran. This matters because the Pi 5 keeps a GPIO output's
+     level after its process dies.
 - `systemd-analyze security smylte-panel.service`.
 - If the first start fails on the sandbox rather than the hardware, relax
   `MemoryDenyWriteExecute` first, then `SystemCallFilter`, with
@@ -291,8 +303,10 @@ The panel's life is only guaranteed between 0 and 40 °C. A Pi 5 gives off about
 ### Other boards
 
 - An e-Paper Driver HAT Rev2.3 or later has a real power switch on BCM18. Set
-  Display Config B and Interface 0, and add `Environment=SMYLTE_PANEL_PWR_PIN=18`
-  with `sudo systemctl edit smylte-panel`.
+  Display Config B and Interface 0, and before running `panel-setup.sh`:
+  `echo SMYLTE_PANEL_PWR_PIN=18 | sudo tee /etc/default/smylte-panel`. The
+  service, the self-test and `--clear` all read that file, and `--status` shows
+  the pin.
 - Other Waveshare panels need a different command sequence. This driver is for
   the 7.5" V2 only.
 

@@ -121,8 +121,10 @@ STATE_FILE = "state.json"
 STATE_MAX_BYTES = 4096
 STATE_VERSION = 1
 # Only for an e-Paper Driver HAT Rev2.3 or later, which switches the panel's
-# power on BCM18. The Pico module has no such pin. Set it in a drop-in
-# (`systemctl edit smylte-panel`): Environment=SMYLTE_PANEL_PWR_PIN=18
+# power on BCM18. The Pico module has no such pin. Set it in
+# /etc/default/smylte-panel (SMYLTE_PANEL_PWR_PIN=18): the unit reads that file
+# as its EnvironmentFile, and panel-setup.sh hands the same file to its
+# --selftest and --clear runs and to its own --power-off.
 PWR_PIN_ENV = "SMYLTE_PANEL_PWR_PIN"
 
 EX_OK = 0
@@ -144,6 +146,7 @@ REPAINT_SIGNAL = signal.SIGUSR1     # forget the glass; repaint when allowed
 WAIT_SIGNALS = STOP_SIGNALS | {REPAINT_SIGNAL}
 
 WHITE = bytes(BUF_BYTES)            # 1 = black, so all zeros is white paper
+WHITE_SHA256 = hashlib.sha256(WHITE).hexdigest()
 
 
 class ConfigError(Exception):
@@ -429,13 +432,46 @@ def floor_ok_at(s: State, start_bt: float) -> float:
 
 
 def forced_due(s: State, now_bt: float, now_wall: float, synced: bool) -> bool:
-    """True once the glass has shown the same picture for 23 hours."""
+    """True once the glass has shown the same picture for 23 hours.
+
+    Each test is a lower bound on the real time since the paint, as in
+    floor_ok_at(): a paint time later than `now_bt` is from an earlier boot, so
+    at least `now_bt` has passed since it.
+    """
     if not s.complete or s.painted_end_bt is None:
         return False
     if s.painted_end_bt <= now_bt and now_bt - s.painted_end_bt >= FORCE_REPAINT_S:
         return True
+    if s.painted_end_bt > now_bt and now_bt >= FORCE_REPAINT_S:
+        return True
     return (synced and s.painted_wall is not None
             and now_wall - s.painted_wall >= FORCE_REPAINT_S)
+
+
+def force_poll_at(s: State, now_bt: float, now_wall: float,
+                  synced: bool) -> float | None:
+    """The CLOCK_BOOTTIME by which to fetch so the 23-hour repaint is on time.
+
+    None when nothing is painted, or when the repaint is already due: then the
+    next fetch is forced anyway, and pulling it earlier would only defeat the
+    retry backoff. The boot-time bound alone is late after a reboot (it cannot
+    see the time the box was down), so the wall clock bounds it too once it is
+    synced, and a paint from an earlier boot is due by 23 h of this boot's
+    uptime at the latest.
+    """
+    if not s.complete or s.painted_end_bt is None:
+        return None
+    at = []
+    if s.painted_end_bt <= now_bt:
+        if s.painted_end_bt + FORCE_REPAINT_S > now_bt:
+            at.append(s.painted_end_bt + FORCE_REPAINT_S)
+    elif FORCE_REPAINT_S > now_bt:
+        at.append(float(FORCE_REPAINT_S))
+    if synced and s.painted_wall is not None:
+        left = s.painted_wall + FORCE_REPAINT_S - now_wall
+        if left > 0:
+            at.append(now_bt + left)
+    return min(at) if at else None
 
 
 # ── I/O ──────────────────────────────────────────────────────────────────────
@@ -568,25 +604,52 @@ class Deps:
     notify: object = sd_notify
 
 
+def _showing(s: State) -> str:
+    """The STATUS line for a healthy panel: what is on the glass."""
+    if s.etag:
+        what = s.etag[1:9]
+    elif s.glass_sha256 == WHITE_SHA256:
+        what = "white"
+    else:
+        what = "the last frame"
+    since = f" since {_hm(s.painted_wall)}" if s.painted_wall is not None else ""
+    return f"showing {what}{since}"
+
+
 class _Problems:
-    """Log each problem once when it starts, and once when it clears."""
+    """Log each problem once when it starts, and once when it clears, and keep
+    systemd's STATUS line saying either what is wrong or what is on the glass."""
 
     def __init__(self, notify):
         self.current = None
         self._message = ""
         self._notify = notify
+        self._sent = None
 
-    def set(self, key: str | None, message: str = "") -> None:
+    def set(self, key: str, message: str) -> None:
         if key == self.current:
             return
-        if key is None:
-            log.info("recovered from: %s", self._message)
-            self._notify("STATUS=server answering again")
-        else:
-            log.warning("%s", message)
-            self._notify(f"STATUS={message}; the glass keeps its last frame")
+        log.warning("%s", message)
+        self._notify(f"STATUS={message}; the glass keeps its last frame")
         self.current = key
         self._message = message
+        self._sent = None
+
+    def ok(self, showing: str) -> None:
+        """The server answered and the glass is what it should be."""
+        if self.current is not None:
+            log.info("recovered from: %s", self._message)
+            self.current = None
+            self._message = ""
+        if showing != self._sent:
+            self._notify(f"STATUS={showing}")
+            self._sent = showing
+
+
+def _failed_in(panel) -> str:
+    """Where a refresh failed. abort() leaves `phase` at "off", so the driver
+    keeps the phase it was in when abort() began."""
+    return getattr(panel, "aborted_in", None) or getattr(panel, "phase", "?")
 
 
 def _drain(d: Deps) -> int | None:
@@ -669,7 +732,6 @@ def run(d: Deps) -> int:
         now = d.boottime()
 
         if isinstance(result, Frame):
-            problems.set(None)
             sha = hashlib.sha256(result.body).hexdigest()
             if sha == state.glass_sha256 and not forced:
                 # Same picture under a new ETag (or a server that ignored
@@ -677,6 +739,7 @@ def run(d: Deps) -> int:
                 if result.etag != state.etag:
                     state = dataclasses.replace(state, etag=result.etag)
                     save_state(d.state_dir, state)
+                problems.ok(_showing(state))
                 next_poll = now + result.refresh_s
             else:
                 if _drain(d) is not None:
@@ -690,7 +753,7 @@ def run(d: Deps) -> int:
                 try:
                     done, end = _paint(d, result.body, etag=result.etag)
                 except Exception as e:
-                    phase = getattr(d.panel, "phase", "?")
+                    phase = _failed_in(d.panel)
                     if isinstance(e, d.epd.PanelError):
                         log.error("refresh failed during %s: %s", phase, e)
                     else:
@@ -706,10 +769,9 @@ def run(d: Deps) -> int:
                 state = done
                 floor_at = end + MIN_REFRESH_S
                 next_poll = end + result.refresh_s
-                d.notify(f"STATUS=showing {result.etag[1:9]} since "
-                         f"{_hm(d.walltime())}")
+                problems.ok(_showing(state))
         elif isinstance(result, NotModified):
-            problems.set(None)
+            problems.ok(_showing(state))
             next_poll = now + result.refresh_s
         elif isinstance(result, Gone):
             problems.set("gone", "the server does not know this display (404): "
@@ -731,15 +793,12 @@ def run(d: Deps) -> int:
             problems.set("transient", f"server not answering ({reason})")
             next_poll = now + ERROR_RETRY_S
 
-        # Keep the 23-hour repaint on time even if the server advises 24 h.
-        # The clock is read again: after a paint, `now` (taken before it) is
-        # earlier than painted_end_bt, and the cap would be skipped.
-        now = d.boottime()
-        if state.complete and state.painted_end_bt is not None \
-                and state.painted_end_bt <= now:
-            force_at = state.painted_end_bt + FORCE_REPAINT_S
-            if force_at > now:
-                next_poll = min(next_poll, force_at)
+        # Keep the 23-hour repaint on time even if the server advises 24 h,
+        # and across a reboot. The clock is read again: after a paint, `now`
+        # (taken before it) is earlier than painted_end_bt.
+        force_at = force_poll_at(state, d.boottime(), d.walltime(), d.synced())
+        if force_at is not None:
+            next_poll = min(next_poll, force_at)
 
 
 def clear(d: Deps) -> int:
@@ -756,7 +815,7 @@ def clear(d: Deps) -> int:
     try:
         done, _ = _paint(d, WHITE, etag=None)
     except Exception as e:
-        log.error("clear failed during %s: %s", getattr(d.panel, "phase", "?"), e)
+        log.error("clear failed during %s: %s", _failed_in(d.panel), e)
         return EX_FAIL
     if done is None:
         log.error("could not record the refresh before starting it; not cleared")
@@ -915,7 +974,7 @@ def main(argv=None) -> int:
                 panel.sleep()
             except Exception as e:
                 panel.abort(busy_stuck=isinstance(e, epd.BusyTimeout))
-                log.error("self-test failed during %s: %s", panel.phase, e)
+                log.error("self-test failed during %s: %s", _failed_in(panel), e)
                 return EX_FAIL
             log.info("self-test passed: the controller powered up and down "
                      "(no refresh)")

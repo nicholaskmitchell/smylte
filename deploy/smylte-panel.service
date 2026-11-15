@@ -45,8 +45,18 @@
 # every refresh. A fetch whose headers trickle in can stall http.client
 # indefinitely; the watchdog is what ends that.
 # StartLimit: a panel fault exits 1 and is retried a minute later, five times
-# an hour, then the unit stays failed until `systemctl reset-failed`. Exit 78
-# (no token, bad token, bad setting) is not retried at all.
+# an hour, then the unit stays failed until `systemctl reset-failed`. Manual
+# starts count too; panel-setup.sh resets the count before its own. Neither a
+# configuration error (exit 78: empty or bad token, bad setting) nor a missing
+# token file is retried: systemd fails the latter before the client runs, with
+# 243/CREDENTIALS, because the credential's path is absolute.
+#
+# ── Settings ─────────────────────────────────────────────────────────────────
+# /etc/default/smylte-panel is optional and holds only SMYLTE_PANEL_PWR_PIN, for
+# an e-Paper Driver HAT Rev2.3 (firmware/README.md, "Other boards"). It is a
+# file rather than a drop-in so that panel-setup.sh's one-off runs read the
+# same setting, and so it can be written before the first install. Never the
+# token: that is the credential above.
 #
 # If a first boot fails and the journal points at the sandbox rather than the
 # hardware, relax in this order: MemoryDenyWriteExecute, then SystemCallFilter.
@@ -61,13 +71,14 @@ NotifyAccess=main
 DynamicUser=yes
 SupplementaryGroups=gpio spi
 LoadCredential=display-token:/etc/credstore/smylte-panel-token
+EnvironmentFile=-/etc/default/smylte-panel
 StateDirectory=smylte-panel
 StateDirectoryMode=0700
 ExecStart=/usr/bin/python3 -I -B /usr/local/lib/smylte-panel/panel.py
 ExecStopPost=-/usr/bin/python3 -I -B /usr/local/lib/smylte-panel/panel.py --power-off
 Restart=on-failure
 RestartSec=60
-RestartPreventExitStatus=78
+RestartPreventExitStatus=78 243
 TimeoutStartSec=30
 TimeoutStopSec=120
 WatchdogSec=60
