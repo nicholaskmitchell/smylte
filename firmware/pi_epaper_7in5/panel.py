@@ -39,8 +39,9 @@
 #     and the body is exactly 48,000 bytes.
 #   * A refresh at least once every 23 hours, because the spec asks for one a
 #     day against ghosting, even if the server's frame has not changed. It is
-#     measured on the wall clock when the last refresh had a synced one, and
-#     otherwise on uptime, which a reboot restarts.
+#     measured on the wall clock when the last refresh recorded a synced one
+#     and the clock is synced now, and otherwise on uptime, which a reboot
+#     restarts: never later than 23 hours after this process started.
 #
 # Run by deploy/smylte-panel.service. Install and update with
 # `sudo deploy/panel-setup.sh`; firmware/README.md has the wiring and the rest.
