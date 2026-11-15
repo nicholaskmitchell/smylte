@@ -13,8 +13,11 @@ point the client and driver touch, so the REAL sequencing code runs:
   * `waveshare_ops()` / `waveshare_transfers()` read the vendored copy of
     Waveshare's own driver (tests/vendor/waveshare/) as DATA: parsed with
     `ast`, never imported or executed, since it is downloaded third-party
-    code. They turn its init()/display()/sleep() into the SPI stream it would
-    send, so ours can be compared with it byte for byte.
+    code. They turn its init()/display()/sleep() (and init_fast(), init_part())
+    into the SPI stream it would send, so ours can be compared with it byte for
+    byte. `waveshare_partial_transfers()` does the same for display_Partial(),
+    whose window arithmetic it evaluates from the parsed source with a small
+    interpreter of the few node types that function uses.
   * `ReplayServer` is a real TCP server on 127.0.0.1 that answers each
     connection with scripted bytes, so `fetch()` is tested through
     http.client and a real socket rather than a mock of either.
@@ -214,6 +217,18 @@ def _ws_literal(node):
     return ast.unparse(node)
 
 
+def _ws_function(method: str):
+    """(module tree, FunctionDef) of one method of Waveshare's EPD class, parsed
+    from the pinned vendored file's text. Nothing is executed."""
+    data = VENDOR_WAVESHARE.read_bytes()
+    assert hashlib.sha256(data).hexdigest() == VENDOR_WAVESHARE_SHA256, \
+        "the vendored Waveshare driver changed; re-verify it before trusting it"
+    tree = ast.parse(data.decode("ascii"))
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "EPD")
+    fn = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == method)
+    return tree, fn
+
+
 def waveshare_ops(method: str) -> list[tuple]:
     """What one method of Waveshare's EPD class does, read from its SOURCE.
 
@@ -233,12 +248,7 @@ def waveshare_ops(method: str) -> list[tuple]:
 
     Calls to builtins (int, range) and logging are ignored.
     """
-    data = VENDOR_WAVESHARE.read_bytes()
-    assert hashlib.sha256(data).hexdigest() == VENDOR_WAVESHARE_SHA256, \
-        "the vendored Waveshare driver changed; re-verify it before trusting it"
-    tree = ast.parse(data.decode("ascii"))
-    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "EPD")
-    fn = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == method)
+    _, fn = _ws_function(method)
     found = []
     for node in ast.walk(fn):
         if isinstance(node, ast.Assign) and isinstance(node.value, ast.UnaryOp) \
@@ -295,6 +305,121 @@ def waveshare_transfers(method: str, frame: bytes | None = None) -> list[tuple[i
                 out.append((1, bytes(255 - b for b in frame)))
             else:
                 raise AssertionError(f"send_data2({op[1]}) is not understood")
+    return out
+
+
+_WS_BINOPS = {
+    ast.Add: lambda a, b: a + b, ast.Sub: lambda a, b: a - b,
+    ast.Mult: lambda a, b: a * b, ast.Div: lambda a, b: a / b,
+    ast.FloorDiv: lambda a, b: a // b, ast.Mod: lambda a, b: a % b,
+    ast.BitAnd: lambda a, b: a & b, ast.BitOr: lambda a, b: a | b,
+}
+_WS_CMPOPS = {
+    ast.Eq: lambda a, b: a == b, ast.NotEq: lambda a, b: a != b,
+    ast.Lt: lambda a, b: a < b, ast.LtE: lambda a, b: a <= b,
+    ast.Gt: lambda a, b: a > b, ast.GtE: lambda a, b: a >= b,
+}
+
+
+def _ws_eval(node, env: dict):
+    """The value of an expression from Waveshare's source, in `env` (names, and
+    "self.x" for attributes). Only the node types display_Partial() uses are
+    understood; anything else is an AssertionError, not a guess."""
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        return env[node.id]
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+        return env[f"{node.value.id}.{node.attr}"]
+    if isinstance(node, ast.BinOp) and type(node.op) in _WS_BINOPS:
+        return _WS_BINOPS[type(node.op)](_ws_eval(node.left, env), _ws_eval(node.right, env))
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):
+        return ~_ws_eval(node.operand, env)
+    if isinstance(node, ast.Compare):     # chained, as Python evaluates it
+        left = _ws_eval(node.left, env)
+        for op, comparator in zip(node.ops, node.comparators):
+            right = _ws_eval(comparator, env)
+            if not _WS_CMPOPS[type(op)](left, right):
+                return False
+            left = right
+        return True
+    if isinstance(node, ast.List):
+        return [_ws_eval(e, env) for e in node.elts]
+    if isinstance(node, ast.Subscript):
+        return _ws_eval(node.value, env)[_ws_eval(node.slice, env)]
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+            and node.func.id in ("int", "range"):
+        args = [_ws_eval(a, env) for a in node.args]
+        return int(*args) if node.func.id == "int" else range(*args)
+    raise AssertionError(f"the reader does not understand {ast.unparse(node)!r}")
+
+
+def _ws_exec(body, env: dict, ops: list) -> None:
+    """Run the statements of Waveshare's display_Partial(): if, assignment, for
+    over range(), and the calls on self/epdconfig that become ops."""
+    for stmt in body:
+        if isinstance(stmt, ast.If):
+            _ws_exec(stmt.body if _ws_eval(stmt.test, env) else stmt.orelse, env, ops)
+        elif isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            target = stmt.targets[0]
+            value = _ws_eval(stmt.value, env)
+            if isinstance(target, ast.Name):
+                env[target.id] = value
+            elif isinstance(target, ast.Subscript):
+                _ws_eval(target.value, env)[_ws_eval(target.slice, env)] = value
+            else:
+                raise AssertionError(f"assignment to {ast.unparse(target)!r}")
+        elif isinstance(stmt, ast.For) and isinstance(stmt.target, ast.Name):
+            for i in _ws_eval(stmt.iter, env):
+                env[stmt.target.id] = i
+                _ws_exec(stmt.body, env, ops)
+        elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call) \
+                and isinstance(stmt.value.func, ast.Attribute):
+            call = stmt.value
+            name = call.func.attr
+            args = [_ws_eval(a, env) for a in call.args]
+            ops.append({
+                "send_command": lambda: ("cmd", args[0]),
+                "send_data": lambda: ("data", args[0]),
+                "send_data2": lambda: ("data2", args[0]),
+                "delay_ms": lambda: ("delay_ms", args[0]),
+                "ReadBusy": lambda: ("busy",),
+            }[name]())
+        else:
+            raise AssertionError(f"the reader does not understand {ast.unparse(stmt)!r}")
+
+
+def waveshare_partial_transfers(image: bytes, xs: int = 0, ys: int = 0,
+                                xe: int = 800, ye: int = 480) -> list[tuple[int, bytes]]:
+    """The (dc, payload) SPI transfers of Waveshare's display_Partial(image, xs,
+    ys, xe, ye), GET_STATUS polls left out. Its X rounding, window bytes and
+    ~image loop are evaluated from the parsed source with these arguments; none
+    of the result is written down here. `image` is the 1 = black frame the
+    driver is given, and the source inverts it with `~`."""
+    tree, fn = _ws_function("display_Partial")
+    env = {name: value for name, value in zip(
+        [a.arg for a in fn.args.args][1:], (bytes(image), xs, ys, xe, ye))}
+    for n in tree.body:                 # EPD_WIDTH, EPD_HEIGHT
+        if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant) \
+                and isinstance(n.targets[0], ast.Name):
+            env[n.targets[0].id] = n.value.value
+    init = next(n for n in next(c for c in tree.body if isinstance(c, ast.ClassDef)
+                                and c.name == "EPD").body
+                if isinstance(n, ast.FunctionDef) and n.name == "__init__")
+    for n in init.body:                 # self.width, self.height
+        if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Attribute) \
+                and n.targets[0].attr in ("width", "height"):
+            env["self." + n.targets[0].attr] = _ws_eval(n.value, env)
+    ops: list[tuple] = []
+    _ws_exec(fn.body, env, ops)
+    out = []
+    for op in ops:
+        if op[0] == "cmd":
+            out.append((0, bytes([op[1] & 0xFF])))
+        elif op[0] == "data":
+            out.append((1, bytes([op[1] & 0xFF])))
+        elif op[0] == "data2":
+            out.append((1, bytes(v & 0xFF for v in op[1])))
     return out
 
 

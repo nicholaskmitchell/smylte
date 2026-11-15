@@ -39,6 +39,7 @@ P = F.load_panel()
 E = F.load_driver()
 
 FRAME = hashlib.sha256(b"smylte").digest() * 1500
+OLD_FRAME = hashlib.sha256(b"what the glass shows").digest() * 1500
 SPI_STATUS = (0, b"\x71")
 
 
@@ -372,6 +373,326 @@ def test_without_a_power_pin_bcm18_is_never_touched():
     assert [e for e in rec.events if e[0] == "gpio" and e[1] == 18] == []
 
 
+# ── fast and partial refresh ─────────────────────────────────────────────────
+
+def _refresh(panel, mode):
+    """The one refresh that `mode`'s init() allows."""
+    if mode == "partial":
+        panel.display_partial(OLD_FRAME, FRAME)
+    else:
+        panel.display(FRAME)
+
+
+@pytest.mark.parametrize("mode, method", [("fast", "init_fast"), ("partial", "init_part")])
+def test_init_in_a_quick_mode_sends_waveshares_init_bytes(mode, method):
+    panel, rec, lines, factory, clock = F.make_panel(
+        busy=lambda n: 1 if n % 3 == 2 else 0)
+    panel.init(mode)
+    assert rec.spi(drop_status_polls=True) == F.waveshare_transfers(method)
+
+
+@pytest.mark.parametrize("mode, method", [("fast", "init_fast"), ("partial", "init_part")])
+def test_the_quick_modes_keep_the_settle_and_the_power_on_wait_in_the_same_place(mode, method):
+    ws = F.waveshare_ops(method)
+    i = ws.index(("cmd", 0x04))
+    assert ws[i + 1:i + 3] == [("delay_ms", 100), ("busy",)]
+    panel, rec, lines, factory, clock = F.make_panel()
+    panel.init(mode)
+    ev = [e for e in rec.events if e[0] in ("spi", "sleep", "read")]
+    j = ev.index(("spi", 0, b"\x04"))
+    assert ev[j + 1] == ("sleep", E.CMD_SETTLE_S)
+    assert ev[j + 2] == ("spi", 0, b"\x71")
+
+
+def test_init_full_is_the_default_mode():
+    panel, rec, lines, factory, clock = F.make_panel()
+    panel.init()
+    default = rec.spi()
+    panel, rec, lines, factory, clock = F.make_panel()
+    panel.init("full")
+    assert rec.spi() == default
+
+
+def test_display_in_fast_mode_sends_the_same_frame_bytes_as_full():
+    panel, rec, lines, factory, clock = F.make_panel(
+        busy=lambda n: 1 if n % 3 == 2 else 0)
+    panel.init("fast")
+    panel.display(FRAME)
+    panel.sleep()
+    assert rec.spi(drop_status_polls=True) == (
+        F.waveshare_transfers("init_fast")
+        + F.waveshare_transfers("display", FRAME)
+        + F.waveshare_transfers("sleep"))
+
+
+def test_display_partial_is_waveshares_display_partial_plus_the_old_frame():
+    panel, rec, lines, factory, clock = F.make_panel(
+        busy=lambda n: 1 if n % 3 == 2 else 0)
+    panel.init("partial")
+    n = len(rec.spi(drop_status_polls=True))
+    panel.display_partial(OLD_FRAME, FRAME)
+    sent = rec.spi(drop_status_polls=True)[n:]
+    ws = F.waveshare_partial_transfers(FRAME)
+    i = ws.index((0, b"\x13"))
+    assert sent == (ws[:i] + [(0, b"\x10"), (1, OLD_FRAME.translate(E.INVERT))] + ws[i:])
+    # Waveshare writes ~Image, which for a 1 = black frame is INVERT.
+    assert ws[i + 1] == (1, FRAME.translate(E.INVERT))
+    assert ws[i + 1] == (1, bytes(255 - b for b in FRAME))
+    assert sent[-1] == (0, b"\x12")
+
+
+def test_display_partial_sends_the_frames_as_two_blocks_and_the_rest_a_byte_at_a_time():
+    panel, rec, lines, factory, clock = F.make_panel()
+    panel.init("partial")
+    n = len(rec.spi())
+    panel.display_partial(OLD_FRAME, FRAME)
+    transfers = rec.spi()[n:]
+    assert all(len(p) == 1 for dc, p in transfers if dc == 0)
+    assert [len(p) for dc, p in transfers if dc == 1 and len(p) != 1] \
+        == [E.BUF_BYTES, E.BUF_BYTES]
+
+
+def test_the_full_window_is_what_waveshares_source_computes_for_the_whole_screen():
+    ws = F.waveshare_partial_transfers(FRAME, 0, 0, 800, 480)
+    i = ws.index((0, b"\x90"))
+    window = b"".join(p for dc, p in ws[i + 1:i + 10])
+    assert all(dc == 1 for dc, p in ws[i + 1:i + 10])
+    assert window == E.FULL_WINDOW
+    assert ws[i - 1] == (0, bytes([E.PARTIAL_IN]))
+    assert E.PARTIAL_VCOM == b"\xa9\x07"
+    assert ws[:3] == [(0, bytes([E.VCOM_DATA_INTERVAL])), (1, b"\xa9"), (1, b"\x07")]
+    assert E.PARTIAL_WINDOW == 0x90 and E.PARTIAL_IN == 0x91
+
+
+def test_the_reader_really_evaluates_the_window_it_is_asked_for():
+    """The full-screen result above is not a constant in the reader: a band of
+    the bottom 40 rows gives Waveshare's own bytes for that band."""
+    ws = F.waveshare_partial_transfers(FRAME, 0, 440, 800, 480)
+    i = ws.index((0, b"\x90"))
+    assert b"".join(p for dc, p in ws[i + 1:i + 10]) \
+        == bytes([0x00, 0x00, 0x03, 0x1F, 0x01, 0xB8, 0x01, 0xDF, 0x01])
+    assert len(ws[ws.index((0, b"\x13")) + 1][1]) == E.BUF_BYTES
+
+
+def test_waveshares_partial_data_is_the_inverted_frame_then_white_beyond_the_window():
+    ws = F.waveshare_partial_transfers(FRAME, 0, 440, 800, 480)
+    data = ws[ws.index((0, b"\x13")) + 1][1]
+    assert data[:4000] == bytes(255 - b for b in FRAME[:4000])
+    assert data[4000:] == b"\xff" * (E.BUF_BYTES - 4000)
+
+
+# ── the order of the calls ───────────────────────────────────────────────────
+
+@pytest.mark.parametrize("mode", ["bogus", "Full", "", None, 1])
+def test_init_with_an_unknown_mode_raises_before_any_gpio_or_spi(mode):
+    panel, rec, lines, factory, clock = F.make_panel(pwr_pin=18)
+    with pytest.raises(ValueError, match="unknown refresh mode"):
+        panel.init(mode)
+    assert rec.events == []
+    assert factory.opened == []
+
+
+def test_init_with_an_unknown_mode_leaves_a_panel_that_is_up_untouched():
+    panel, rec, lines, factory, clock = F.make_panel()
+    panel.init("partial")
+    before = list(rec.events)
+    with pytest.raises(ValueError):
+        panel.init("bogus")
+    assert rec.events == before
+    panel.display_partial(OLD_FRAME, FRAME)       # still the partial init's
+
+
+def test_display_after_init_partial_raises_before_any_spi_or_gpio():
+    panel, rec, lines, factory, clock = F.make_panel()
+    panel.init("partial")
+    before = list(rec.events)
+    with pytest.raises(RuntimeError, match="init\\('full'\\) or init\\('fast'\\)"):
+        panel.display(FRAME)
+    assert rec.events == before
+
+
+@pytest.mark.parametrize("mode", ["full", "fast"])
+def test_display_partial_after_init_full_or_fast_raises_before_any_spi_or_gpio(mode):
+    panel, rec, lines, factory, clock = F.make_panel()
+    panel.init(mode)
+    before = list(rec.events)
+    with pytest.raises(RuntimeError, match="init\\('partial'\\)"):
+        panel.display_partial(OLD_FRAME, FRAME)
+    assert rec.events == before
+
+
+def test_display_partial_before_init_raises_before_any_spi_or_gpio():
+    panel, rec, lines, factory, clock = F.make_panel()
+    with pytest.raises(RuntimeError):
+        panel.display_partial(OLD_FRAME, FRAME)
+    assert rec.events == []
+
+
+@pytest.mark.parametrize("mode", ["full", "fast", "partial"])
+def test_a_second_refresh_without_a_new_init_raises_before_any_spi_or_gpio(mode):
+    panel, rec, lines, factory, clock = F.make_panel()
+    panel.init(mode)
+    _refresh(panel, mode)
+    before = list(rec.events)
+    with pytest.raises(RuntimeError, match="one refresh per init"):
+        _refresh(panel, mode)
+    assert rec.events == before
+
+
+@pytest.mark.parametrize("mode", ["full", "fast", "partial"])
+def test_a_new_init_allows_another_refresh(mode):
+    panel, rec, lines, factory, clock = F.make_panel()
+    panel.init(mode)
+    _refresh(panel, mode)
+    panel.init(mode)
+    _refresh(panel, mode)
+
+
+def test_a_refresh_that_times_out_does_not_count_as_done():
+    panel, rec, lines, factory, clock = F.make_panel(
+        busy=lambda n: 1 if n == 0 else 0)
+    panel.init("fast")
+    with pytest.raises(E.BusyTimeout):
+        panel.display(FRAME)
+    assert panel._refreshed is False
+
+
+@pytest.mark.parametrize("bad", [
+    bytearray(48000),
+    bytes(47999),
+    bytes(48001),
+    memoryview(bytes(48000)),
+], ids=["bytearray", "one-short", "one-long", "memoryview"])
+@pytest.mark.parametrize("which", ["old", "new"])
+def test_display_partial_refuses_a_bad_frame_before_any_spi_or_gpio(bad, which):
+    panel, rec, lines, factory, clock = F.make_panel()
+    panel.init("partial")
+    before = list(rec.events)
+    old, new = (bad, FRAME) if which == "old" else (OLD_FRAME, bad)
+    with pytest.raises(ValueError):
+        panel.display_partial(old, new)
+    assert rec.events == before
+    panel.display_partial(OLD_FRAME, FRAME)       # and the panel is still usable
+
+
+# ── deadlines, timing and getting out, per mode ──────────────────────────────
+
+@pytest.mark.parametrize("mode, deadline", [
+    ("full", E.REFRESH_TIMEOUT_S),
+    ("fast", E.FAST_REFRESH_TIMEOUT_S),
+    ("partial", E.PARTIAL_TIMEOUT_S),
+])
+def test_a_stuck_busy_times_out_after_the_modes_own_deadline(mode, deadline):
+    panel, rec, lines, factory, clock = F.make_panel(
+        busy=lambda n: 1 if n == 0 else 0)
+    panel.init(mode)
+    t0 = clock.t
+    with pytest.raises(E.BusyTimeout) as info:
+        _refresh(panel, mode)
+    assert info.value.phase == "refresh"
+    assert deadline <= info.value.waited_s < deadline + 1
+    assert clock.t - t0 < deadline + 1 + E.CMD_SETTLE_S
+
+
+def test_the_quick_modes_deadlines_are_the_ones_the_plan_names():
+    assert E.MODES == ("full", "fast", "partial")
+    assert E.FAST_REFRESH_TIMEOUT_S == 30
+    assert E.PARTIAL_TIMEOUT_S == 15
+
+
+def _timed_panel(**kw):
+    """A panel whose BUSY goes high at the fake time `until["t"]`."""
+    until = {"t": 0.0}
+    made = F.make_panel(busy=lambda n: 1 if made[4].t >= until["t"] else 0, **kw)
+    return made, until
+
+
+@pytest.mark.parametrize("mode", ["full", "fast", "partial"])
+def test_last_refresh_s_is_the_time_busy_took_after_the_settle_sleep(mode):
+    (panel, rec, lines, factory, clock), until = _timed_panel()
+    assert panel.last_refresh_s is None
+    panel.init(mode)
+    assert panel.last_refresh_s is None
+    start = clock.t
+    until["t"] = start + 3.0
+    _refresh(panel, mode)
+    # Nothing but the settle and the BUSY wait takes fake time in a refresh.
+    expected = clock.t - start - E.CMD_SETTLE_S
+    assert panel.last_refresh_s == pytest.approx(expected)
+    assert 3.0 - E.CMD_SETTLE_S <= panel.last_refresh_s <= 3.0 + E.BUSY_POLL_S + E.BUSY_RELEASE_S
+
+
+@pytest.mark.parametrize("mode", ["full", "fast", "partial"])
+def test_sleep_after_any_mode_sends_waveshares_power_off_and_clears_the_mode(mode):
+    panel, rec, lines, factory, clock = F.make_panel(
+        busy=lambda n: 1 if n % 3 == 2 else 0)
+    panel.init(mode)
+    _refresh(panel, mode)
+    n = len(rec.spi(drop_status_polls=True))
+    panel.sleep()
+    assert rec.spi(drop_status_polls=True)[n:] == F.waveshare_transfers("sleep")
+    assert lines.levels[E.RST_PIN] == 1
+    assert lines.levels[E.DC_PIN] == 0
+    assert factory.opened[-1].closed is True
+    assert panel._mode is None
+    with pytest.raises(E.PanelError):
+        panel.display(FRAME)
+    with pytest.raises(RuntimeError):
+        panel.display_partial(OLD_FRAME, FRAME)
+
+
+@pytest.mark.parametrize("mode", ["full", "fast", "partial"])
+def test_the_mode_is_cleared_by_sleep_so_a_reopened_spi_still_refuses(mode):
+    """SPI is closed by sleep(), but a later init() of another mode must not
+    inherit this one: the mode is whatever the last init() set."""
+    panel, rec, lines, factory, clock = F.make_panel()
+    panel.init(mode)
+    _refresh(panel, mode)
+    panel.sleep()
+    other = "partial" if mode != "partial" else "full"
+    panel.init(other)
+    with pytest.raises(RuntimeError):
+        _refresh(panel, mode)
+    _refresh(panel, other)
+
+
+@pytest.mark.parametrize("mode", ["full", "fast", "partial"])
+@pytest.mark.parametrize("stage", ["power-on", "refresh"])
+def test_abort_after_a_failure_in_any_mode_ends_with_rst_dc_and_pwr_low(mode, stage):
+    if stage == "power-on":
+        busy = 0
+    else:
+        busy = lambda n: 1 if n == 0 else 0     # noqa: E731
+    panel, rec, lines, factory, clock = F.make_panel(busy=busy, pwr_pin=18)
+    with pytest.raises(E.BusyTimeout) as info:
+        panel.init(mode)
+        _refresh(panel, mode)
+    assert info.value.phase == stage
+    panel.abort(busy_stuck=True)
+    assert panel.aborted_in == stage
+    assert panel.phase == "off"
+    assert lines.levels[E.RST_PIN] == 0
+    assert lines.levels[E.DC_PIN] == 0
+    assert lines.levels[18] == 0
+    assert factory.opened[-1].closed is True
+    assert [rec.gpio(p)[-1] for p in (17, 25, 18)] == [(17, 0), (25, 0), (18, 0)]
+
+
+def _worst_s(refresh_timeout_s):
+    """init() + refresh + sleep() with every wait running to its deadline, from
+    the constants: the same sum PAINT_WORST_S is written as."""
+    return (sum(E.RESET_MS) / 1000 + 2 * E.CMD_SETTLE_S + 3 * E.BUSY_RELEASE_S
+            + E.POWER_ON_TIMEOUT_S + refresh_timeout_s + E.POWER_OFF_TIMEOUT_S
+            + 5)
+
+
+def test_paint_worst_s_bounds_every_mode():
+    assert E.PAINT_WORST_S == _worst_s(E.REFRESH_TIMEOUT_S)
+    for t in (E.FAST_REFRESH_TIMEOUT_S, E.PARTIAL_TIMEOUT_S):
+        assert t <= E.REFRESH_TIMEOUT_S
+        assert E.PAINT_WORST_S >= _worst_s(t)
+
+
 # ── fake gpiod / spidev ──────────────────────────────────────────────────────
 
 class FakeRequest:
@@ -627,6 +948,19 @@ def test_open_hardware_with_the_lines_held_elsewhere_points_at_gpioinfo(hardware
     g.request_error = OSError(errno.EBUSY, "busy")
     with pytest.raises(E.HardwareMissing, match="gpioinfo"):
         E.open_hardware(None)
+
+
+@pytest.mark.parametrize("pwr_pin, named", [
+    (None, "17/25/24"),
+    (18, "17/25/18/24"),
+])
+def test_the_lines_held_hint_names_every_line_requested_including_the_power_pin(
+        hardware, pwr_pin, named):
+    g, s = hardware
+    g.request_error = OSError(errno.EBUSY, "busy")
+    with pytest.raises(E.HardwareMissing) as info:
+        E.open_hardware(pwr_pin)
+    assert info.value.hint == f"{named} are held by another program — `gpioinfo` names it"
 
 
 def test_open_hardware_without_gpiod_names_the_package(hardware, monkeypatch):

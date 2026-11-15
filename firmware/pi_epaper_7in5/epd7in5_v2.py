@@ -100,12 +100,20 @@ DEEP_SLEEP_SETTLE_S = 2.0   # deep sleep, then this long before power is cut
 POWER_ON_TIMEOUT_S = 10
 REFRESH_TIMEOUT_S = 60
 POWER_OFF_TIMEOUT_S = 10
+# Fast and partial refreshes take about 1.5 s and 0.4 s, and the quick modes
+# fix the panel's temperature, so the cold room does not slow them. Both bounds
+# stay below REFRESH_TIMEOUT_S.
+FAST_REFRESH_TIMEOUT_S = 30
+PARTIAL_TIMEOUT_S = 15
 
 # The longest init()+display()+sleep() can take before it either finishes or
 # raises: every fixed delay, every BUSY deadline, and 5 s for the 96,000 bytes
 # of SPI traffic (about 0.2 s at 4 MHz) and scheduling. The systemd unit's
 # TimeoutStopSec is checked against this in CI, because a stop that lands
-# mid-refresh waits for the refresh to finish.
+# mid-refresh waits for the refresh to finish. A full refresh is the longest
+# (FAST_REFRESH_TIMEOUT_S and PARTIAL_TIMEOUT_S are below REFRESH_TIMEOUT_S, and
+# a partial refresh sends the same 96,000 bytes), so this bounds every mode; a
+# test computes it per mode from the constants.
 PAINT_WORST_S = (sum(RESET_MS) / 1000 + 2 * CMD_SETTLE_S + 3 * BUSY_RELEASE_S
                  + POWER_ON_TIMEOUT_S + REFRESH_TIMEOUT_S + POWER_OFF_TIMEOUT_S
                  + 5)
@@ -125,6 +133,10 @@ VCOM_DATA_INTERVAL = 0x50
 TCON = 0x60
 RESOLUTION = 0x61
 GET_STATUS = 0x71
+CASCADE_SETTING = 0xE0      # with FORCE_TEMPERATURE: use the temperature below, not the sensor's
+FORCE_TEMPERATURE = 0xE5    # the temperature the OTP waveform is picked for, in degrees C
+PARTIAL_WINDOW = 0x90       # the window the next frame goes to
+PARTIAL_IN = 0x91           # enter partial mode
 
 DEEP_SLEEP_CHECK = 0xA5     # the byte DEEP_SLEEP needs, or it is ignored
 VCOM_FOR_POWER_OFF = 0xF7
@@ -141,6 +153,35 @@ INIT_AFTER_POWER_ON = (
     (VCOM_DATA_INTERVAL, b"\x10\x07"),
     (TCON, b"\x22"),
 )
+
+# Fast and partial refresh, as Waveshare's init_fast() and init_part(), in the
+# same two halves. Both work only on panels sold after September 2023: on an
+# older batch the image is bad, but nothing documents damage. The client has a
+# guard and a setting for that.
+MODES = ("full", "fast", "partial")
+FAST_BEFORE_POWER_ON = (
+    (PANEL_SETTING, b"\x1f"),
+    (VCOM_DATA_INTERVAL, b"\x10\x07"),
+)
+FAST_AFTER_POWER_ON = (
+    (BOOSTER_SOFT_START, b"\x27\x27\x18\x17"),
+    (CASCADE_SETTING, b"\x02"),
+    (FORCE_TEMPERATURE, b"\x5a"),                # 90 C
+)
+PART_BEFORE_POWER_ON = (
+    (PANEL_SETTING, b"\x1f"),
+)
+PART_AFTER_POWER_ON = (
+    (CASCADE_SETTING, b"\x02"),
+    (FORCE_TEMPERATURE, b"\x6e"),                # 110 C
+)
+INIT_STEPS = {
+    "full": (INIT_BEFORE_POWER_ON, INIT_AFTER_POWER_ON),
+    "fast": (FAST_BEFORE_POWER_ON, FAST_AFTER_POWER_ON),
+    "partial": (PART_BEFORE_POWER_ON, PART_AFTER_POWER_ON),
+}
+PARTIAL_VCOM = b"\xa9\x07"     # as Waveshare's display_Partial(): 1 = white from here on
+FULL_WINDOW = bytes([0x00, 0x00, 0x03, 0x1F, 0x00, 0x00, 0x01, 0xDF, 0x01])   # all 800 x 480
 
 # Complements every byte. The OLD frame is the NEW frame inverted, as
 # Waveshare's display() sends it.
@@ -237,11 +278,11 @@ def find_chip(gpiod, label: str = CHIP_LABEL, paths=None) -> str:
     raise HardwareMissing("GPIO chip", hint)
 
 
-def _gpio_error(e: OSError) -> HardwareMissing:
+def _gpio_error(e: OSError, pins) -> HardwareMissing:
     if e.errno == errno.EBUSY:
         return HardwareMissing(
-            "GPIO lines", f"{RST_PIN}/{DC_PIN}/{BUSY_PIN} are held by another "
-                          "program — `gpioinfo` names it")
+            "GPIO lines", "/".join(str(p) for p in pins) + " are held by "
+                          "another program — `gpioinfo` names it")
     if e.errno in (errno.EACCES, errno.EPERM):
         return HardwareMissing(
             "GPIO lines", "permission denied — the service needs group `gpio` "
@@ -294,7 +335,7 @@ def open_hardware(pwr_pin=None):
     try:
         request = gpiod.request_lines(chip, consumer=CONSUMER, config=config)
     except OSError as e:
-        raise _gpio_error(e) from e
+        raise _gpio_error(e, outputs + (BUSY_PIN,)) from e
     lines = Lines(request, Value)
 
     def spi_factory():
@@ -339,6 +380,9 @@ class Panel:
         self._tick = tick or (lambda: None)
         self._spi = None
         self._deep_sleep_at = None
+        self._mode = None           # set by init(), cleared by sleep()
+        self._refreshed = False     # one refresh per init()
+        self.last_refresh_s = None  # BUSY's length in the last refresh, if it finished
         self.phase = "idle"
         # The phase a failure happened in: abort() records it before it powers
         # down, because cut_power() then sets `phase` to "off".
@@ -407,8 +451,16 @@ class Panel:
 
     # ── the three steps ──────────────────────────────────────────────────────
 
-    def init(self) -> None:
-        """Power up, reset, and configure. Takes the panel out of deep sleep."""
+    def init(self, mode: str = "full") -> None:
+        """Power up, reset, and configure. Takes the panel out of deep sleep.
+
+        `mode` picks Waveshare's init(), init_fast() or init_part(). Each is
+        good for one refresh: display() after "full" or "fast", display_partial()
+        after "partial". An unknown mode raises before any GPIO or SPI.
+        """
+        if mode not in MODES:
+            raise ValueError(f"unknown refresh mode {mode!r}")
+        before, after = INIT_STEPS[mode]
         self.phase = "init"
         self.aborted_in = None
         if self._pwr_pin is not None:
@@ -417,15 +469,29 @@ class Panel:
             self._spi = self._spi_factory()
         self._deep_sleep_at = None
         self._reset()
-        for cmd, data in INIT_BEFORE_POWER_ON:
+        for cmd, data in before:
             self._send(cmd, data)
         self.phase = "power-on"
         self._command(POWER_ON)
         self._sleep(CMD_SETTLE_S)
         self.wait_idle("power-on", POWER_ON_TIMEOUT_S)
         self.phase = "init"
-        for cmd, data in INIT_AFTER_POWER_ON:
+        for cmd, data in after:
             self._send(cmd, data)
+        self._mode = mode
+        self._refreshed = False
+
+    def _refresh(self, timeout_s: float) -> None:
+        self.phase = "refresh"
+        self._command(DISPLAY_REFRESH)
+        self._sleep(CMD_SETTLE_S)
+        # Cleared first, so a refresh that times out leaves no stale timing
+        # behind for the client's batch guard to read.
+        self.last_refresh_s = None
+        start = self._clock()
+        self.wait_idle("refresh", timeout_s)
+        self.last_refresh_s = self._clock() - start
+        self._refreshed = True
 
     def display(self, frame: bytes) -> None:
         """Send one frame (1 = black, MSB leftmost, rows of 100 bytes) and refresh.
@@ -433,21 +499,58 @@ class Panel:
         Refuses anything but exactly 48,000 bytes BEFORE any SPI traffic. A
         short buffer would make Waveshare's loop raise halfway through a
         transfer, and a long one sends the extra bytes into the controller.
+        Needs init("full") or init("fast"), and only one refresh per init():
+        after init("partial") the controller's border/data polarity is the
+        other way round and the image would come out inverted.
         """
         if type(frame) is not bytes:
             raise ValueError(f"frame must be bytes, not {type(frame).__name__}")
         if len(frame) != BUF_BYTES:
             raise ValueError(f"frame is {len(frame)} bytes, not {BUF_BYTES}")
         self._require_spi()
+        if self._mode not in ("full", "fast"):
+            raise RuntimeError("display() needs init('full') or init('fast')")
+        if self._refreshed:
+            raise RuntimeError("one refresh per init()")
         self.phase = "transfer"
         self._command(DATA_START_OLD)
         self._frame(frame.translate(INVERT))
         self._command(DATA_START_NEW)
         self._frame(frame)
-        self.phase = "refresh"
-        self._command(DISPLAY_REFRESH)
-        self._sleep(CMD_SETTLE_S)
-        self.wait_idle("refresh", REFRESH_TIMEOUT_S)
+        self._refresh(REFRESH_TIMEOUT_S if self._mode == "full"
+                      else FAST_REFRESH_TIMEOUT_S)
+
+    def display_partial(self, old: bytes, new: bytes) -> None:
+        """Refresh only the pixels that differ between `old` (what the glass
+        shows now) and `new`. Both are full frames, 1 = black, 48,000 bytes.
+
+        Needs init("partial"), and one refresh per init(). Waveshare's
+        display_Partial() sends only the NEW frame and relies on the OLD one
+        still being in the controller's RAM; deep sleep loses it (the
+        datasheets say "Ram data not retain"), so the 0x10 transfer of `old` is
+        the one addition to Waveshare's bytes. The window is the whole screen, as in
+        Waveshare's own demo call display_Partial(buf, 0, 0, 800, 480). Both
+        frames go out inverted because the 0xA9 setting reads 1 as white.
+        """
+        for name, frame in (("old", old), ("new", new)):
+            if type(frame) is not bytes:
+                raise ValueError(f"{name} must be bytes, not {type(frame).__name__}")
+            if len(frame) != BUF_BYTES:
+                raise ValueError(f"{name} is {len(frame)} bytes, not {BUF_BYTES}")
+        if self._mode != "partial":
+            raise RuntimeError("display_partial() needs init('partial')")
+        if self._refreshed:
+            raise RuntimeError("one refresh per init()")
+        self._require_spi()
+        self.phase = "transfer"
+        self._send(VCOM_DATA_INTERVAL, PARTIAL_VCOM)
+        self._command(PARTIAL_IN)
+        self._send(PARTIAL_WINDOW, FULL_WINDOW)
+        self._command(DATA_START_OLD)
+        self._frame(old.translate(INVERT))
+        self._command(DATA_START_NEW)
+        self._frame(new.translate(INVERT))
+        self._refresh(PARTIAL_TIMEOUT_S)
 
     def sleep(self) -> None:
         """Turn the high voltage off and put the controller in deep sleep.
@@ -468,6 +571,7 @@ class Panel:
         self._deep_sleep_at = self._clock()
         self._close_spi()
         self._lines.set(DC_PIN, 0)
+        self._mode = None
         self.phase = "idle"
         if self._cut_between:
             self.cut_power()
