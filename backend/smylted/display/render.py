@@ -1375,40 +1375,57 @@ def render_screen(
     # By the narrow side as well as the height: at a quarter turn the layout is
     # 480 wide and 800 high, and a scale taken from the height alone (1.67)
     # draws type the width cannot hold.
-    scale = min(_scale(layout_h), _scale(layout_w * 480 // 800))
-    pad = int(20 * scale)
-    gap = round(24 * scale)
+    base = min(_scale(layout_h), _scale(layout_w * 480 // 800))
     img = Image.new("L", canvas, 255)
     draw = ImageDraw.Draw(img)
-    room = layout_w - 2 * pad
-    sizes = (round(96 * scale), round(30 * scale), round(22 * scale))
-    placed = []
 
-    def place(shown: str, font) -> None:
-        # The ink box, so the block is centred on what is drawn rather than on
-        # the font's line height.
-        left, top, right, bottom = draw.textbbox((0, 0), shown, font=font)
-        placed.append((shown, font, right - left, bottom - top, left, top))
+    def lay_out(scale: float, rows_max: int):
+        pad = int(20 * scale)
+        gap = round(24 * scale)
+        room = layout_w - 2 * pad
+        sizes = (round(96 * scale), round(30 * scale), round(22 * scale))
+        placed = []
 
-    for index, line in enumerate(lines[:3]):
-        if index == 0:
-            # The heading is made smaller before it is cut, down to the size of
-            # the line under it; `_fit` is the last resort below that.
-            size = sizes[0]
-            while (_text_width(draw, line, _font("serif", size)) > room
-                   and size > sizes[1]):
-                size -= 2
-            font = _font("serif", size)
-            place(_fit(draw, line, font, room), font)
+        def place(shown: str, font) -> None:
+            # The ink box, so the block is centred on what is drawn rather than
+            # on the font's line height.
+            left, top, right, bottom = draw.textbbox((0, 0), shown, font=font)
+            placed.append((shown, font, right - left, bottom - top, left, top))
+
+        for index, line in enumerate(lines[:3]):
+            if index == 0:
+                # The heading is made smaller before it is cut, down to the size
+                # of the line under it; `_fit` is the last resort below that.
+                size = sizes[0]
+                while (_text_width(draw, line, _font("serif", size)) > room
+                       and size > sizes[1]):
+                    size -= 2
+                font = _font("serif", size)
+                place(_fit(draw, line, font, room), font)
+            else:
+                # The instructions are sentences: wrapped, not cut, so the
+                # cancel and confirm wording and the wait-before-unplugging
+                # warning survive a narrow layout.
+                font = _font("sans", sizes[index])
+                rows, _ = _wrap(draw, line, font, room, rows_max)
+                for row in rows:
+                    place(row, font)
+        block = sum(p[3] for p in placed) + gap * max(0, len(placed) - 1)
+        return placed, block, gap, pad
+
+    # Wrapping can make the block taller than a small panel. Smaller type
+    # first, then fewer rows: a block that runs off the glass loses more of
+    # its words than one cut short at the end of a line.
+    scale, rows_max = base, 3
+    placed, block, gap, pad = lay_out(scale, rows_max)
+    while block > layout_h - 2 * pad:
+        if scale > base * 0.6:
+            scale *= 0.9
+        elif rows_max > 1:
+            rows_max -= 1
         else:
-            # The instructions are sentences: wrapped, not cut, so the cancel
-            # and confirm wording and the wait-before-unplugging warning
-            # survive a narrow layout.
-            font = _font("sans", sizes[index])
-            rows, _ = _wrap(draw, line, font, room, 3)
-            for row in rows:
-                place(row, font)
-    block = (sum(p[3] for p in placed) + gap * max(0, len(placed) - 1))
+            break
+        placed, block, gap, pad = lay_out(scale, rows_max)
     y = (layout_h - block) // 2
     for shown, font, tw, th, left, top in placed:
         draw.text(((layout_w - tw) // 2 - left, y - top), shown, font=font, fill=0)

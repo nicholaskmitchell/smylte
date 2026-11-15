@@ -3112,3 +3112,38 @@ def test_the_batch_guard_stays_on_the_status_line(tmp_path):
     assert h.run() == 0
     statuses = [n for n in h.notes if n.startswith("STATUS=")]
     assert "fast refresh is off" in statuses[-1], statuses
+
+
+
+def test_the_resting_count_is_corrected_once_the_page_takes_the_last_token(tmp_path):
+    """Item 22: the first rejected tap says "try again in ~39 s" while one
+    token is left; the page then takes it, and the count must be sent again
+    (about 85 s), not left at 39 until the bucket refills."""
+    import re
+    h = desk(tmp_path, keys=tap(400) + tap(400.3), until=520)
+    h.at(390, set_tokens(h, 2))
+    assert h.run() == 0
+    ns = [int(m.group(1)) for s in h.statuses()
+          for m in [re.search(r"try again in (\d+) s", s)] if m]
+    assert ns and ns[0] <= 45, ns
+    assert any(n >= 80 for n in ns[1:]), ns
+    checks(h)
+
+
+def test_a_key_page_that_finds_desk_key_off_falls_back_at_once_inside_a_429(tmp_path):
+    """B1 with `healthy` False: a routine 429 is running when the owner turns
+    Desk key off and taps. The page gets views-off; the legacy fetch must
+    follow at once, not wait out the 429's hour."""
+    def rule(t, mode, screen):
+        if screen is None and mode is not None and 380 <= t < 390:
+            return P.Throttled(3600)
+        return None
+    srv = Scripted(rule, refresh_s=180)
+    h = desk(tmp_path, keys=tap(400), until=430, server=srv)
+    h.at(395, lambda: setattr(srv, "switchable", False))
+    assert h.run() == 0
+    assert not h.runner.views
+    page = next(f for f in fetched(h, 399) if f.mode == "now")
+    legacy = [f for f in fetched(h, page.t) if f.mode is None and f.screen is None]
+    assert legacy and legacy[0].t - page.t < 2.0, fetched(h, 380)
+    checks(h)

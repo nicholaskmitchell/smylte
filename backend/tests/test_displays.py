@@ -2740,3 +2740,29 @@ def test_panel_too_small_for_a_switchable_display_is_judged_without_the_strip(ap
         "name": "D", "mode": "now", "panel_width": 400, "panel_height": 240,
         "switchable": True}).json()
     assert now["panel_too_small"] is None
+
+
+@pytest.mark.parametrize("kind", ["confirm", "off"])
+@pytest.mark.parametrize("language", ["en", "de"])
+@pytest.mark.parametrize("width,height", [(296, 128), (250, 122), (400, 300), (800, 480)])
+@pytest.mark.parametrize("rotation", [0, 90])
+def test_a_screen_stays_on_the_glass_at_every_preset_size(kind, language, width, height,
+                                                         rotation, monkeypatch):
+    """Wrapping can make the text block taller than a small panel; it must
+    shrink or wrap less, never run off the top and bottom of the glass."""
+    from PIL import ImageDraw
+    drawn = []
+    real = ImageDraw.ImageDraw.text
+
+    def spy(self, xy, text, *a, **kw):
+        box = self.textbbox(xy, text, font=kw.get("font"))
+        drawn.append(box)
+        return real(self, xy, text, *a, **kw)
+
+    monkeypatch.setattr(ImageDraw.ImageDraw, "text", spy)
+    R.render_screen(F.screen_lines(kind, language), width=width, height=height,
+                    rotation=rotation)
+    layout_h = width if rotation in (90, 270) else height
+    assert drawn
+    assert min(b[1] for b in drawn) >= 0, drawn
+    assert max(b[3] for b in drawn) <= layout_h, drawn
