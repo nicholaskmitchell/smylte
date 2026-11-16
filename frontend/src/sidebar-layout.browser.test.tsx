@@ -173,7 +173,7 @@ describe('priority', () => {
     expect(tick('list-high')).toBe(tokenColor(host, '--pri-high'))
     expect(tick('list-parent')).toBe(tokenColor(host, '--pri-med'))
     expect(tick('card-low')).toBe(tokenColor(host, '--pri-low'))
-    expect(tick('list-none')).toBe(tokenColor(host, '--fg-faint'))
+    expect(tick('list-none')).toBe(tokenColor(host, '--mark-quiet'))
     for (const bar of host.querySelectorAll('.pri-bar')) {
       expect(getComputedStyle(bar).display).toBe('none')
     }
@@ -318,7 +318,7 @@ describe('the composer', () => {
       </div></div>`)
     const boxEl = getComputedStyle(host.querySelector('.composer-foot > .quickadd')!)
     const field = getComputedStyle(host.querySelector('.composer-foot .input')!)
-    expect(boxEl.borderTopLeftRadius).toBe('18px')      // --r-lg
+    expect(boxEl.borderTopLeftRadius).toBe('22px')      // --r-lg, Field notes' 22
     expect(boxEl.boxShadow).not.toBe('none')
     expect(field.borderTopColor).toBe('rgba(0, 0, 0, 0)')
     expect(getComputedStyle(host.querySelector('.composer-foot .btn')!).borderTopLeftRadius).toBe('12px')
@@ -344,7 +344,7 @@ describe('Classic is not touched', () => {
     expect(getComputedStyle(host.querySelector('.content-head')!).borderBottomColor).not.toBe('rgba(0, 0, 0, 0)')
     expect(getComputedStyle(host.querySelector('.pri-bar')!).display).not.toBe('none')
     expect(box(host.querySelector('.pri-bar')!).w).toBe(3)
-    expect(getComputedStyle(host.querySelector('.check')!).borderTopColor).toBe(tokenColor(host, '--fg-faint'))
+    expect(getComputedStyle(host.querySelector('.check')!).borderTopColor).toBe(tokenColor(host, '--mark-quiet'))
   })
 
   it('keeps its title size and full-width rows', async () => {

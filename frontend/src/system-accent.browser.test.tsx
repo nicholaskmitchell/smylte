@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { applySystemAccent, normaliseColor, pickAccent } from './system-accent'
 import { RAMP } from './test/accent'
+import { applyDesign } from './appearance'
 
 const root = document.documentElement
 const added: Element[] = []
@@ -41,7 +42,7 @@ describe('the wallpaper accent in a browser engine', () => {
     [['light', '#005ac1'], ['dark', '#adc6ff']] as const).map(([mode, tone]) => ({ name, preset, mode, tone })))
 
   it.each(cases)('takes $tone on $name in $mode', ({ preset, mode, tone }) => {
-    if (preset) root.dataset.preset = preset
+    if (preset) applyDesign(root, preset)
     root.dataset.theme = mode
     expect(applySystemAccent(root, mode, RAMP)).toBe(tone)
     expect(computedAccent()).toBe(tone)

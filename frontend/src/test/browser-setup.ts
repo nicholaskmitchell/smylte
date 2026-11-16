@@ -37,6 +37,14 @@ import '../styles/fieldnotes.css'
 // and about `document.fonts`, neither of which jsdom has.
 import '../styles/display.css'
 
+// The shipped design is Field notes, which index.html's static
+// `<html data-surface="app">` switches on. This harness serves its own page, so
+// it says the same thing here, and again after every test: a test that measures
+// a preset takes it off (applyDesign), and the next file must start on the
+// shipped design again.
+const shipped = () => { document.documentElement.dataset.surface = 'app' }
+shipped()
+
 afterEach(() => {
   // index.html's pre-paint script does not run in this project — vitest browser
   // mode serves its own harness page — so `<html>` starts clean, which is what
@@ -48,6 +56,8 @@ afterEach(() => {
   delete root.dataset.theme
   delete root.dataset.preset
   delete root.dataset.sans
+  delete root.dataset.custom
   root.removeAttribute('style')
+  shipped()
   try { localStorage.clear() } catch { /* private mode */ }
 })

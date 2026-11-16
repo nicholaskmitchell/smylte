@@ -12,6 +12,7 @@ Replace a placeholder by editing its key in `frontend/src/i18n/en.ts` and
 
 | Screen | Purpose | Key |
 |---|---|---|
+| Settings → Appearance, theme picker | The name of the Sep 2026 design, now a preset beside Classic and Workspace | `PRESETS` in `frontend/src/appearance.ts` (`preset:refined`; preset names are not in the catalogue, like "Classic" and "Workspace") |
 
 ## Removed
 

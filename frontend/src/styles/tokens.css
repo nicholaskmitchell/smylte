@@ -502,6 +502,27 @@
   --stroke-tick: 2.6px;
   --stroke-strike: 2px;
   --wobble: 1px;
+
+  /* Density: Field notes rows run 8px with a 60px floor (tokens.json). One of
+     the 23 Appearance tokens, so appearance.ts's SHARED_DEFAULTS says 8px too,
+     and a saved theme's inline value still outranks this. */
+  --row-y: 8px;
+}
+
+/* A saved theme that moves its surfaces or its accent away from Field notes'
+   own takes the six roles a theme cannot set from its own tokens instead
+   (CUSTOM_ROLES in appearance.ts, which sets the attribute; index.html's
+   pre-paint script does too). Three attributes, so these win over the design
+   system's dark block, which has three as well, on source order. */
+:root[data-surface="app"][data-custom~="surfaces"] {
+  --bg-float: var(--bg-elev);
+  --rule-strong: var(--fg-muted);
+  --highlight: var(--paper);
+  --wash: var(--paper);
+}
+:root[data-surface="app"][data-custom~="accent"] {
+  --accent-fill: var(--accent);
+  --on-accent: var(--bg);
 }
 
 /* M5 · reduced motion keeps the fades and drops the travel: a press does not

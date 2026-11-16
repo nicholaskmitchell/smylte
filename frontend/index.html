@@ -1,11 +1,12 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-surface="app">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <!-- Light by default; the pre-paint script below (and App on toggle) flips
-         it to dark so mobile browser chrome matches the theme. -->
-    <meta name="theme-color" content="#FBFAF7" />
+         it to dark so mobile browser chrome matches the theme. Field notes'
+         paper (styles/ds/themes.css, --bg). -->
+    <meta name="theme-color" content="#F3EDE1" />
     <title>Smylte</title>
     <!-- SVG for modern browsers; PNG fallback for those that won't render an SVG
          tab icon (e.g. older Safari). ?v= busts aggressive favicon caching. -->
@@ -62,7 +63,21 @@
         // slugs is what stops a tampered blob writing an arbitrary attribute.
         var PRESET_BG = {
           'workspace': { 'light': '#FBFBFC', 'dark': '#191919' },
-          'classic': { 'light': '#FBFAF7', 'dark': '#0C0C10' }
+          'classic': { 'light': '#FBFAF7', 'dark': '#0C0C10' },
+          'refined': { 'light': '#FBFAF7', 'dark': '#0C0C10' }
+        }
+        // Field notes' own values for the tokens CUSTOM_ROLES watches
+        // (appearance.ts): a saved theme that moves one of them away takes the
+        // design system's six extra roles from its own tokens (data-custom).
+        var FIELD_NOTES = {
+          'light': { '--bg': '#F3EDE1', '--bg-elev': '#FBF8F1', '--paper': '#ECE4D6',
+            '--fg': '#2A2622', '--accent': '#A3432A' },
+          'dark': { '--bg': '#272420', '--bg-elev': '#312D28', '--paper': '#36312B',
+            '--fg': '#EFE8DC', '--accent': '#F09C7E' }
+        }
+        var CUSTOM_ROLES = {
+          'surfaces': ['--bg', '--bg-elev', '--paper', '--fg'],
+          'accent': ['--accent']
         }
         // The face T9 is fitted to (FITTED_SANS in appearance.ts).
         var FITTED_SANS = 'Hanken Grotesk'
@@ -96,7 +111,7 @@
         // tokens.css is imported by the bundle, so nothing is in the cascade yet
         // and getComputedStyle('--bg') would come back empty here. Carry the two
         // shipped backgrounds instead, and let a custom --bg override them.
-        var bg = mode === 'dark' ? '#0C0C10' : '#FBFAF7'
+        var bg = FIELD_NOTES[mode]['--bg']
         try {
           // Same promotion for the appearance cache; readCachedAppearance()
           // in appearance.ts does the matching read on the bundle side.
@@ -118,7 +133,9 @@
             if (Object.prototype.hasOwnProperty.call(PRESET_BG, slug)) {
               // A preset and a saved theme are mutually exclusive, and nothing
               // is written inline for one — tokens.css does the work.
+              // and Field notes is switched off, as applyDesign() does.
               root.dataset.preset = slug
+              root.removeAttribute('data-surface')
               bg = PRESET_BG[slug][mode]
             } else {
               var themes = (a && a.themes) || []
@@ -136,6 +153,18 @@
                     if (TOKENS[k] === '--sans' && !fitsSans(v)) root.dataset.sans = 'other'
                   }
                 }
+                var custom = []
+                for (var group in CUSTOM_ROLES) {
+                  var names = CUSTOM_ROLES[group]
+                  for (var n = 0; n < names.length; n++) {
+                    var cv = map[names[n]]
+                    if (typeof cv === 'string' && cv && cv !== FIELD_NOTES[mode][names[n]]) {
+                      custom.push(group)
+                      break
+                    }
+                  }
+                }
+                if (custom.length) root.dataset.custom = custom.join(' ')
                 break
               }
             }

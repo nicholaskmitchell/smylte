@@ -10,11 +10,12 @@ import { contrast } from './test/contrast'
 const read = (rel: string) =>
   readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
 const tokensCss = read('./styles/tokens.css')
+const dsCss = read('./styles/ds/themes.css')
 const indexHtml = read('../index.html')
 import {
-  APPEARANCE_KEY, APPEARANCE_KEY_LEGACY, DEFAULTS, FONT_CHOICES, GROUPS, MAX_THEMES, PRESETS, PRESET_PREFIX,
+  APPEARANCE_KEY, APPEARANCE_KEY_LEGACY, CUSTOM_ROLES, DEFAULTS, FONT_CHOICES, GROUPS, MAX_THEMES, PRESETS, PRESET_PREFIX,
   FITTED_SANS, SHARED_DEFAULTS, TOKENS, TOKEN_NAMES,
-  applyTokens, cacheAppearance, defaultValue, findPreset, fitsSans, isValidToken, isValidValue,
+  applyDesign, applyTokens, cacheAppearance, customRoles, defaultValue, findPreset, fitsSans, isValidToken, isValidValue,
   parseTheme, presetSlug, readCachedAppearance, resolve, sanitizeAppearance,
   sanitizeTokens, serializeTheme, type CustomTheme, type Mode,
 } from './appearance'
@@ -39,25 +40,48 @@ function parseBlock(css: string, selector: string): Record<string, string> {
 // override is in force, which rules out reading it back from the DOM) — these
 // cases are what stop the mirror from drifting off the real stylesheet.
 
+/**
+ * What the shipped design, Field notes, says for each token: the repo's base
+ * `:root` (the shared levers it keeps), the design system's app block over it
+ * (ds/themes.css, which wins by specificity), and the repo's Field notes lever
+ * block over that. `var(--font-mono)` is the design system's own alias for the
+ * mono slot and is resolved, because the editor needs a stack it can offer.
+ */
+function fieldNotes(mode: Mode): Record<string, string> {
+  const ds = parseBlock(dsCss, ':root[data-surface="app"]')
+  const merged = {
+    ...parseBlock(tokensCss, ':root'),
+    ...ds,
+    ...parseBlock(tokensCss, ':root[data-surface="app"]'),
+    ...(mode === 'dark' ? parseBlock(dsCss, ':root[data-surface="app"][data-theme="dark"]') : {}),
+  }
+  for (const [k, v] of Object.entries(merged)) {
+    const alias = /^var\((--[\w-]+)\)$/.exec(v)
+    if (alias && ds[alias[1]]) merged[k] = ds[alias[1]]
+  }
+  return merged
+}
+
 describe('shipped defaults', () => {
-  const light = parseBlock(tokensCss, ':root')
-  const dark = parseBlock(tokensCss, ':root[data-theme="dark"]')
+  const light = fieldNotes('light')
+  const dark = fieldNotes('dark')
 
   it('mirrors every light-mode color in tokens.css', () => {
     for (const [token, value] of Object.entries(DEFAULTS.light)) {
-      expect(light[token], `${token} drifted from tokens.css`).toBe(value)
+      expect(light[token], `${token} drifted from Field notes`).toBe(value)
     }
   })
 
   it('mirrors every dark-mode color in tokens.css', () => {
     for (const [token, value] of Object.entries(DEFAULTS.dark)) {
-      expect(dark[token], `${token} drifted from tokens.css`).toBe(value)
+      expect(dark[token], `${token} drifted from Field notes`).toBe(value)
     }
   })
 
   it('mirrors the shared type / shape / density tokens', () => {
     for (const [token, value] of Object.entries(SHARED_DEFAULTS)) {
-      expect(light[token], `${token} drifted from tokens.css`).toBe(value)
+      expect(light[token], `${token} drifted from Field notes`).toBe(value)
+      expect(dark[token], `${token} drifted from Field notes in dark`).toBe(value)
     }
   })
 
@@ -96,9 +120,12 @@ describe('shipped defaults', () => {
 // palette decision recorded separately, not something this test settles.
 
 describe('shipped contrast', () => {
+  // The Sep 2026 design is the base :root blocks (now the "refined" preset);
+  // Field notes' own contrast is src/contrast-table.test.ts, against its own
+  // floors (its --fg-faint is decoration only, by design).
   const BLOCKS: Array<[string, string]> = [
-    ['light', ':root'],
-    ['dark', ':root[data-theme="dark"]'],
+    ['refined light', ':root'],
+    ['refined dark', ':root[data-theme="dark"]'],
     ['workspace light', ':root[data-preset="workspace"]'],
     ['workspace dark', ':root[data-preset="workspace"][data-theme="dark"]'],
     ['classic light', ':root[data-preset="classic"]'],
@@ -151,8 +178,13 @@ describe('shipped presets', () => {
   it('mirror the tokens.css block they are applied from', () => {
     for (const preset of PRESETS) {
       const slug = preset.id.slice(PRESET_PREFIX.length)
-      const light = parseBlock(tokensCss, `:root[data-preset="${slug}"]`)
-      const dark = parseBlock(tokensCss, `:root[data-preset="${slug}"][data-theme="dark"]`)
+      // The Sep 2026 design has no block of its own: it is what tokens.css's
+      // base blocks say once Field notes is switched off (applyDesign).
+      const light = slug === 'refined' ? parseBlock(tokensCss, ':root')
+        : parseBlock(tokensCss, `:root[data-preset="${slug}"]`)
+      const dark = slug === 'refined'
+        ? { ...parseBlock(tokensCss, ':root'), ...parseBlock(tokensCss, ':root[data-theme="dark"]') }
+        : parseBlock(tokensCss, `:root[data-preset="${slug}"][data-theme="dark"]`)
       expect(preset.light, `${preset.id} light drifted from tokens.css`).toEqual(light)
       expect(preset.dark, `${preset.id} dark drifted from tokens.css`).toEqual(dark)
     }
@@ -319,6 +351,98 @@ describe('pre-paint script in index.html', () => {
       expect(inline[slug].light, `${slug} light background drifted`).toBe(preset.light['--bg'])
       expect(inline[slug].dark, `${slug} dark background drifted`).toBe(preset.dark['--bg'])
     }
+  })
+})
+
+describe('pre-paint script: Field notes and the presets', () => {
+  const code = indexHtml.match(/<script>\s*([\s\S]*?)<\/script>/)![1]
+  const root = document.documentElement
+  const run = (appearance: unknown, theme: Mode = 'light') => {
+    for (const k of ['sans', 'preset', 'custom', 'theme']) delete root.dataset[k]
+    root.dataset.surface = 'app'          // as index.html's <html> carries it
+    root.removeAttribute('style')
+    localStorage.setItem('smylte-theme', theme)
+    if (appearance === null) localStorage.removeItem(APPEARANCE_KEY)
+    else localStorage.setItem(APPEARANCE_KEY, JSON.stringify(appearance))
+    new Function(code)()
+    return document.querySelector('meta[name="theme-color"]')?.getAttribute('content')
+  }
+  const meta = document.createElement('meta')
+  meta.name = 'theme-color'
+
+  it('ships <html data-surface="app">: Field notes is on before anything runs', () => {
+    expect(indexHtml).toMatch(/<html[^>]*\sdata-surface="app"/)
+  })
+
+  it('switches Field notes off under a preset, and paints its background', () => {
+    document.head.appendChild(meta)
+    try {
+      for (const preset of PRESETS) {
+        const slug = preset.id.slice(PRESET_PREFIX.length)
+        for (const mode of ['light', 'dark'] as Mode[]) {
+          expect(run({ active: preset.id, themes: [] }, mode)).toBe(preset[mode]['--bg'])
+          expect(root.dataset.preset).toBe(slug)
+          expect(root.dataset.surface, `${slug} keeps Field notes on`).toBeUndefined()
+        }
+      }
+      expect(run(null), 'the shipped design paints Field notes paper').toBe(DEFAULTS.light['--bg'])
+      expect(root.dataset.surface).toBe('app')
+      expect(run(null, 'dark')).toBe(DEFAULTS.dark['--bg'])
+    } finally {
+      meta.remove()
+      for (const k of ['sans', 'preset', 'custom', 'theme']) delete root.dataset[k]
+      root.removeAttribute('style')
+      localStorage.clear()
+    }
+  })
+
+  it('marks a theme that moves its surfaces or accent, as applyTokens does', () => {
+    const theme = (light: Record<string, string>) => ({ active: 't', themes: [{ id: 't', name: 'T', light, dark: {} }] })
+    try {
+      run(theme({ '--bg': '#FFFFFF' }))
+      expect(root.dataset.custom).toBe('surfaces')
+      run(theme({ '--accent': '#0055AA', '--bg': DEFAULTS.light['--bg'] }))
+      expect(root.dataset.custom).toBe('accent')
+      run(theme({ '--radius': '4px' }))
+      expect(root.dataset.custom).toBeUndefined()
+      // And the module agrees on every case.
+      expect(customRoles({ '--bg': '#FFFFFF' }, 'light')).toEqual(['surfaces'])
+      expect(customRoles({ '--accent': '#0055AA' }, 'light')).toEqual(['accent'])
+      expect(customRoles({ '--radius': '4px', '--bg': DEFAULTS.light['--bg'] }, 'light')).toEqual([])
+    } finally {
+      for (const k of ['sans', 'preset', 'custom', 'theme']) delete root.dataset[k]
+      root.removeAttribute('style')
+      localStorage.clear()
+    }
+  })
+
+  it('restates Field notes\' values for the tokens CUSTOM_ROLES watches', () => {
+    const start = indexHtml.indexOf('var FIELD_NOTES = {')
+    expect(start).toBeGreaterThan(-1)
+    const literal = indexHtml.slice(start, indexHtml.indexOf('\n        }', start))
+    for (const mode of ['light', 'dark'] as Mode[]) {
+      const m = new RegExp(`'${mode}':\\s*\\{([^}]*)\\}`).exec(literal)
+      expect(m, `no ${mode} map`).toBeTruthy()
+      const inline = Object.fromEntries([...m![1].matchAll(/'(--[\w-]+)':\s*'([^']*)'/g)].map((x) => [x[1], x[2]]))
+      for (const name of Object.values(CUSTOM_ROLES).flat()) {
+        expect(inline[name], `${mode} ${name}`).toBe(DEFAULTS[mode][name])
+      }
+    }
+  })
+})
+
+describe('applyDesign', () => {
+  it('puts Field notes on for the shipped design and off under a preset', () => {
+    const el = document.createElement('div')
+    applyDesign(el, null)
+    expect(el.dataset.surface).toBe('app')
+    expect(el.dataset.preset).toBeUndefined()
+    applyDesign(el, 'classic')
+    expect(el.dataset.preset).toBe('classic')
+    expect(el.dataset.surface).toBeUndefined()
+    applyDesign(el, null)
+    expect(el.dataset.surface).toBe('app')
+    expect(el.dataset.preset).toBeUndefined()
   })
 })
 

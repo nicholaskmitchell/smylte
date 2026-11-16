@@ -8,7 +8,7 @@ import { DataProvider } from './data'
 import { FoldFollower } from './components/FoldFollower'
 import { clearCache, setCacheUser, sweepOldVersions } from './cache'
 import {
-  applyTokens, cacheAppearance, ensureFonts, presetSlug, readCachedAppearance,
+  applyDesign, applyTokens, cacheAppearance, ensureFonts, presetSlug, readCachedAppearance,
   resolve, sanitizeAppearance, syncThemeColor, type Appearance, type Mode,
 } from './appearance'
 import {
@@ -454,9 +454,7 @@ export function App() {
   // so it wins over both.
   useEffect(() => {
     const mode: Mode = theme === 'dark' ? 'dark' : 'light'
-    const slug = presetSlug(appearance?.active)
-    if (slug) document.documentElement.dataset.preset = slug
-    else delete document.documentElement.dataset.preset
+    applyDesign(document.documentElement, presetSlug(appearance?.active))
     const tokens = resolve(appearance, mode)
     applyTokens(document.documentElement, tokens)
     ensureFonts(tokens)

@@ -25,6 +25,7 @@
  */
 import { describe, expect, it, beforeEach } from 'vitest'
 import { box, mount, viewport } from './test/browser-measure'
+import { applyDesign } from './appearance'
 
 beforeEach(() => { document.body.innerHTML = '' })
 
@@ -218,7 +219,7 @@ describe('2026-09-03 — a dimmed subtree still clears 3:1 where it is a control
       const root = document.documentElement
       delete root.dataset.theme; delete root.dataset.preset
       if (t.theme) root.dataset.theme = t.theme
-      if (t.preset) root.dataset.preset = t.preset
+      if (t.preset) applyDesign(root, t.preset)
       const host = await mount(DIMMED_CONTROLS)
       for (const [sel, what] of CONTROLS) {
         const el = host.querySelector(sel)
@@ -616,10 +617,10 @@ describe('2026-09-03 — a <select class="menu-toggle"> clears the iOS 16px floo
   const controlPx = () =>
     parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--fs-control'))
 
-  it.each([[undefined, 14], ['classic', 11]] as const)(
+  it.each([[undefined, 15], ['refined', 14], ['classic', 11]] as const)(
     'and keeps the desktop size where there is no zoom to arm (preset=%s)', async (preset, px) => {
       await viewport(1200)
-      if (preset) document.documentElement.dataset.preset = preset
+      if (preset) applyDesign(document.documentElement, preset)
       const host = await mount('<div class="shell"><select class="menu-toggle"><option>x</option></select></div>')
       expect(controlPx()).toBe(px)
       expect(parseFloat(getComputedStyle(host.querySelector('select')!).fontSize)).toBe(px)

@@ -24,6 +24,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 // one arrived, and the reasoning that used to live here (why `document.fonts.
 // ready` is awaited AFTER the mount, in particular) moved with it.
 import { box, mount, viewport } from './test/browser-measure'
+import { applyDesign } from './appearance'
 
 beforeEach(() => { document.body.innerHTML = '' })
 
@@ -77,7 +78,7 @@ describe('every text input on a phone clears the 16px iOS floor', () => {
   // floor's rule without anything here noticing if only the default ran.
   it.each([undefined, 'workspace', 'classic'])('computes to at least 16px at 390px (preset=%s)', async (preset) => {
     await viewport(390)
-    if (preset) document.documentElement.dataset.preset = preset
+    if (preset) applyDesign(document.documentElement, preset)
     const host = await mount(`<div class="shell">${FIELDS.join('')}</div>`)
     const under: string[] = []
     for (const el of host.querySelectorAll<HTMLElement>('.input')) {
@@ -326,7 +327,7 @@ describe('the Today tab has one left edge on a phone', () => {
   // agenda row's 2px calendar rule is a border, not part of either, as before.
   it.each([undefined, 'workspace', 'classic'])('under preset=%s', async (preset) => {
     await viewport(390)
-    if (preset) document.documentElement.dataset.preset = preset
+    if (preset) applyDesign(document.documentElement, preset)
     const host = await mount(TODAY_TAB)
     const origin = host.getBoundingClientRect().left
 
@@ -492,6 +493,9 @@ describe("a Today row's cells sit on the title's first line", () => {
 // ── the cells under a title they would squeeze ──────────────────────────────
 
 describe("a Today row's cells move under its title instead of squeezing it", () => {
+  // These widths and scales were chosen to make the Sep 2026 design's triage
+  // row wrap; Field notes' row is a different shape and has its own fixtures.
+  beforeEach(() => applyDesign(document.documentElement, 'refined'))
   // Reported by eye on a 390px phone: with the was-due chip beside it, "Ritter
   // Chapter Review Poster" had ~28px and broke after every three or four
   // letters, eleven lines. The cells after the title are fixed width, so the
@@ -813,7 +817,7 @@ describe("a list's coloured square sits on the tick beside it", () => {
     [1200, undefined], [390, undefined], [1200, 'classic'], [390, 'classic'],
   ] as const)('at %ipx (preset=%s)', async (w, preset) => {
     await viewport(w)
-    if (preset) document.documentElement.dataset.preset = preset
+    if (preset) applyDesign(document.documentElement, preset)
     const host = await mount(ROWS)
     for (const row of ['.task', '.day-card']) {
       const r = host.querySelector(row)!
