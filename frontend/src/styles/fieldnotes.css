@@ -266,3 +266,20 @@
   font-family: var(--serif); font-size-adjust: none; font-weight: 500; letter-spacing: 0;
   font-size: calc(var(--fs-app-item) * var(--fs-scale));
 }
+
+/* An undrawn ink stroke is a dash of length zero, and a round cap still paints
+   a dot for it. Hidden while undrawn: shown at once when it starts to draw on,
+   and hidden only once it has finished drawing back off. */
+[data-surface="app"] .check:not(.on) .check-tick,
+[data-surface="app"] .tab:not(.active) .tab-ink path,
+[data-surface="app"] .strike-ink:not(.on) path {
+  opacity: 0;
+  transition: stroke-dashoffset var(--dur-ink) var(--ease-ink), opacity var(--dur-ink) step-end;
+}
+[data-surface="app"] .check.on .check-tick,
+[data-surface="app"] .tab.active .tab-ink path,
+[data-surface="app"] .strike-ink.on path { opacity: 1; }
+
+[data-surface="app"] .fn-date .today-nav { align-self: flex-start; }
+[data-surface="app"] .fn-list-head { flex-wrap: wrap; row-gap: 8px; }
+[data-surface="app"] .fn-list-head .today-count { border: 0; padding: 0; margin: 0; white-space: nowrap; }
