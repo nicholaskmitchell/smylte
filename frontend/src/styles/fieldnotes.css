@@ -139,3 +139,130 @@
   [data-surface="app"] .tabbar { gap: 0; padding-inline: 4px; }
   [data-surface="app"] .tabbar .tab { padding-inline: 1px; font-size: calc(12px * var(--fs-scale)); }
 }
+
+/* ---- the day's drawing ---------------------------------------------------------
+   Inline SVG from the server (DayDrawing.tsx). Roles, not colours: a line is the
+   pen in ink, a wash is the sage (by day) or the glow round a light (by night),
+   an accent is the coral reward. Strokes stay --stroke-pen at any size. */
+[data-surface="app"] .day-drawing { display: block; overflow: visible; }
+[data-surface="app"] .day-drawing .dm-line path {
+  fill: none; stroke: var(--fg); stroke-width: var(--stroke-pen);
+  stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke;
+}
+[data-surface="app"] .day-drawing .dm-wash { fill: var(--wash); }
+[data-surface="app"] .day-drawing .dm-accent { fill: var(--accent-fill); }
+
+/* A reward grows in with the reward easing when its task is ticked, and goes
+   back when it is unticked. A condition that is not a reward (everything done,
+   Start, the hour, overdue work) fades in and out. */
+[data-surface="app"] .day-drawing .dm-reward {
+  transform-box: fill-box; transform-origin: center; scale: 0;
+  transition: scale var(--dur-reward) var(--ease-reward);
+}
+[data-surface="app"] .day-drawing .dm-reward.on { scale: 1; }
+[data-surface="app"] .day-drawing .dm-cond {
+  opacity: 0; transition: opacity var(--dur-slow) var(--ease);
+}
+[data-surface="app"] .day-drawing .dm-cond.on { opacity: 1; }
+
+/* The focus loop: one frame of --n at a time, at the design system's ambient
+   rate, while Start is on. The loop's length is --n / --ambient-fps seconds,
+   written from the boil's own cycle (3 frames at 8fps) so no time is a
+   literal. */
+[data-surface="app"] .day-drawing .dm-ambient { display: none; }
+[data-surface="app"] .day-drawing .dm-ambient.on { display: inline; }
+[data-surface="app"] .day-drawing .amb {
+  visibility: hidden;
+  animation: fn-ambient calc(var(--boil-cycle) * 8 / 3 * var(--n) / var(--ambient-fps)) steps(1, end) infinite;
+  animation-delay: calc(var(--boil-cycle) * -8 / 3 * var(--k) / var(--ambient-fps));
+}
+@keyframes fn-ambient {
+  0% { visibility: visible; }
+  16.66%, 100% { visibility: hidden; }
+}
+[data-surface="app"] .day-drawing[data-paused] .boil,
+[data-surface="app"] .day-drawing[data-paused] .amb { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+  [data-surface="app"] .day-drawing .amb { visibility: hidden !important; }
+  [data-surface="app"] .day-drawing .amb:first-child { visibility: visible !important; }
+}
+
+/* ---- Today ---------------------------------------------------------------------
+   The date and the day's drawing, the focus card, then the list under a plain
+   "Today" and its count (TodayView's Field notes composition). */
+:root[data-surface="app"] {
+  /* The row's first line, which its check and cells sit on, is the title's:
+     Newsreader at the item size. */
+  --today-line: calc(var(--fs-app-item) * var(--fs-scale) * 1.25);
+}
+[data-surface="app"] .today-head.fn-head {
+  display: flex; flex-wrap: nowrap; align-items: flex-end; justify-content: space-between; gap: 12px;
+  padding: 28px var(--gutter) 0; border-bottom-color: transparent;
+}
+[data-surface="app"] .fn-date { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding-bottom: 14px; }
+[data-surface="app"] .fn-weekday {
+  font-family: var(--serif); font-size-adjust: none; font-style: italic;
+  font-size: calc(var(--fs-app-section) * var(--fs-scale)); color: var(--fg-muted);
+}
+[data-surface="app"] .fn-day {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500; line-height: 1; letter-spacing: -0.025em;
+  font-size: calc(var(--fs-app-display) * var(--fs-scale)); color: var(--fg);
+}
+[data-surface="app"] .fn-date .today-nav { margin-top: 12px; }
+/* The drawing is 160 x 200; it is never drawn below 160px tall. */
+[data-surface="app"] .fn-drawing { flex: none; width: 128px; height: 160px; }
+@media (min-width: 721px) {
+  [data-surface="app"] .fn-drawing { width: 192px; height: 240px; }
+}
+
+[data-surface="app"] .focus-card {
+  display: flex; flex-direction: column; gap: 10px;
+  margin: 6px var(--gutter) 0; padding: 18px;
+  background: var(--bg-elev); border: 1px solid var(--rule); border-radius: var(--r-md);
+  animation: fn-rise var(--dur-slow) var(--ease) both;
+}
+[data-surface="app"] .focus-card__time {
+  font-family: var(--serif); font-size-adjust: none; font-style: italic; font-variant-numeric: tabular-nums;
+  font-size: calc(var(--fs-app-note) * var(--fs-scale)); color: var(--accent);
+}
+[data-surface="app"] .focus-card__title {
+  position: relative; align-self: flex-start; padding: 0; border: 0; background: none;
+  text-align: left; color: var(--fg); cursor: pointer;
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500; line-height: 1.15; letter-spacing: -0.012em;
+  font-size: calc(var(--fs-app-headline) * var(--fs-scale));
+}
+/* The highlighter, swept once behind the title as the card arrives. */
+[data-surface="app"] .focus-card__mark {
+  position: absolute; left: -4px; right: -6px; bottom: 2px; height: 46%;
+  border-radius: var(--r-xs); background: var(--highlight);
+  transform-origin: left center; transform: skewX(-8deg);
+  animation: fn-swipe var(--dur-marker) var(--ease-ink) both;
+  animation-delay: calc(var(--stagger) * 6);
+}
+[data-surface="app"] .focus-card__text { position: relative; }
+[data-surface="app"] .focus-card__foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+[data-surface="app"] .focus-card__meta { font-size: calc(var(--fs-app-ui) * var(--fs-scale)); color: var(--fg-muted); }
+[data-surface="app"] .focus-card__go { margin-left: auto; min-height: 44px; padding-inline: 18px; }
+[data-surface="app"] .focus-card__go.on { background: var(--highlight); color: var(--fg); }
+@keyframes fn-swipe {
+  from { transform: scaleX(0) skewX(-8deg); }
+  to { transform: scaleX(1) skewX(-8deg); }
+}
+@keyframes fn-rise {
+  from { opacity: 0; translate: 0 var(--enter-y); }
+  to { opacity: 1; translate: 0 0; }
+}
+
+[data-surface="app"] .fn-list-head { display: flex; align-items: baseline; gap: 10px; padding: 26px var(--gutter) 6px; }
+[data-surface="app"] .fn-list-head .content-title {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500;
+  font-size: calc(var(--fs-app-section) * var(--fs-scale));
+}
+[data-surface="app"] .fn-list-head .today-count {
+  font-family: var(--serif); font-size-adjust: none; font-style: italic; text-transform: none; letter-spacing: 0;
+  font-variant-numeric: tabular-nums; font-size: calc(var(--fs-app-note) * var(--fs-scale)); color: var(--fg-muted);
+}
+[data-surface="app"] .today-row .today-title {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500; letter-spacing: 0;
+  font-size: calc(var(--fs-app-item) * var(--fs-scale));
+}

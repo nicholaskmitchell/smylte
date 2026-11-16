@@ -133,7 +133,7 @@ describe('fieldnotes.css', () => {
       return [...out, cur.trim()]
     }
     const loose = selectors.flatMap(split)
-      .filter((s) => s && !/^(:root)?\[data-surface="app"\]/.test(s) && !/^(from|to|\d+%)$/.test(s))
+      .filter((s) => s && !/^(:root)?\[data-surface="app"\]/.test(s) && !/^(from|to|[\d.]+%)$/.test(s))
     expect(loose).toEqual([])
   })
 

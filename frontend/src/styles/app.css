@@ -4075,3 +4075,4 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
    are not drawn, so Classic, Workspace and the Sep 2026 design keep exactly
    the check, the line-through and the tabs they always had. */
 .check-ink, .strike-ink, .tab-ink, .tab-icon, .tab-add { display: none; }
+.day-drawing { display: none; }

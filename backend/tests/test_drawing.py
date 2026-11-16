@@ -589,6 +589,8 @@ def test_registered_subject_keeps_the_contract(subject):
         rewards = {m.reward for m in sketch.marks if m.reward is not None}
         assert rewards == set(range(12)), f"{subject.id} {theme}: reward slots {sorted(rewards)}"
         assert sketch.ambient is not None, f"{subject.id} {theme}: no focus loop"
+        # The client's loop keyframes are written for one second at 6fps.
+        assert len(sketch.ambient.frames) == 6, f"{subject.id} {theme}: the focus loop is not 6 frames"
         assert best[1] < 0.05, f"{subject.id} {theme}: {best[1] * 1000:.1f}ms to draw"
         roles = {m.role for m in sketch.marks}
         assert 'line' in roles and 'accent' in roles, roles

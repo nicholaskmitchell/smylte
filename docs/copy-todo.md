@@ -22,5 +22,6 @@ can come back. Accessible names (`aria-label`) were kept everywhere.
 
 | Screen | What it was | Key | English text |
 |---|---|---|---|
+| Today, header | The hover tooltip on Start working (its accessible name stays) | `today.startWorking` | Start working |
 
 ## Notes

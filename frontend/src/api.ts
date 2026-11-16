@@ -1590,6 +1590,10 @@ export const api = {
   // null for a day with no session; `startFocus` never opens a day (422 on one
   // nobody planned — Today is the only opener, as it is for the dashboard).
   focus: (day: string) => j<FocusSession | null>('GET', `/api/focus/${day}`),
+  /** The day's drawing (drawing.ts validates it). `day` is the local day the
+   *  drawing is for; the static view drawings ignore it. */
+  drawing: (view: 'today' | 'tasks' | 'calendar' | 'settings', day: string, theme: 'light' | 'dark') =>
+    j<unknown>('GET', `/api/drawing?view=${view}&day=${encodeURIComponent(day)}&theme=${theme}`),
   startFocus: (day: string) => j<FocusSession>('POST', `/api/focus/${day}/start`),
   focusClock: (day: string, body: FocusClockBody) =>
     j<FocusSession>('POST', `/api/focus/${day}/clock`, body),

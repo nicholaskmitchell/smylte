@@ -140,3 +140,42 @@ export function useSegmentThumb(
     // while it is hidden, and nothing else would re-run this once it appears.
   }, [track, active, shown])
 }
+
+/** An attribute of <html>, kept current: the design (`data-surface`, which
+ *  applyDesign sets) and the theme (`data-theme`) change at runtime. */
+function useRootAttr(name: string): string | null {
+  const read = () => (typeof document === 'undefined' ? null : document.documentElement.getAttribute(name))
+  const [value, setValue] = useState(read)
+  useEffect(() => {
+    const root = document.documentElement
+    const mo = new MutationObserver(() => setValue(root.getAttribute(name)))
+    mo.observe(root, { attributes: true, attributeFilter: [name] })
+    setValue(root.getAttribute(name))
+    return () => mo.disconnect()
+  }, [name])
+  return value
+}
+
+/** Is Field notes the design in force? (appearance.ts, applyDesign.) A view
+ *  that composes itself differently under Field notes asks this; presets keep
+ *  the composition they always had. */
+export function useFieldNotes(): boolean {
+  return useRootAttr('data-surface') === 'app'
+}
+
+/** The theme in force, light unless <html> says dark. */
+export function useThemeName(): 'light' | 'dark' {
+  return useRootAttr('data-theme') === 'dark' ? 'dark' : 'light'
+}
+
+/** The local hour, re-read at the top of each hour. */
+export function useHour(): number {
+  const [hour, setHour] = useState(() => new Date().getHours())
+  useEffect(() => {
+    const now = new Date()
+    const next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours() + 1, 0, 1)
+    const t = setTimeout(() => setHour(new Date().getHours()), next.getTime() - now.getTime())
+    return () => clearTimeout(t)
+  }, [hour])
+  return hour
+}
