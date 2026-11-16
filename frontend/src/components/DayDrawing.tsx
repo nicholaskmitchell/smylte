@@ -5,6 +5,12 @@
 // them `.on`. So a tick grows its fruit at once, an untick takes it away, and
 // none of it waits on the network.
 //
+// React draws the picture once per drawing. A change of state does not
+// re-render it: a layout effect evaluates each conditional mark and switches
+// `.on` on the few whose answer changed, before the frame paints. A tick then
+// costs a few dozen condition checks and a class or two, which keeps it inside
+// the 2ms budget on slow hardware too.
+//
 // Motion is CSS only (fieldnotes.css), so the reduced-motion rule in
 // ds/app-motion.css stops all of it: the line boil (three frames at 8fps, the
 // one thing on screen that moves at rest), the focus loop at 6fps, and the
@@ -12,51 +18,58 @@
 // CSS animation by itself.
 //
 // `aria-hidden`: everything the drawing shows is also said in text beside it.
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   evaluate, fetchDrawing, readCachedDrawing, type DayState, type DrawMark, type DrawingPayload,
 } from '../drawing'
 import { useThemeName } from '../hooks'
 
-/** One mark. Memoised on the mark (the same object for the life of a drawing)
- *  and on whether it is showing, so a tick re-renders only the marks it turns
- *  on or off, not the whole picture. */
-const Mark = memo(function Mark({ m, on }: { m: DrawMark; on: boolean }) {
+/** One mark, drawn once per drawing. A conditional mark is drawn without
+ *  `.on`; the drawing's layout effect owns that class from then on. */
+function Mark({ m, cond }: { m: DrawMark; cond?: number }) {
   const conditional = m.when.length > 0
   const cls = [
     'dm', `dm-${m.role}`,
-    conditional ? (m.reward !== null ? 'dm-reward' : 'dm-cond') : '',
-    on ? 'on' : '',
+    conditional ? (m.reward !== null ? 'dm-reward' : 'dm-cond') : 'on',
   ].filter(Boolean).join(' ')
   if (m.role === 'line' && m.frames.length === 3) {
     return (
-      <g className={cls}>
+      <g className={cls} data-c={cond}>
         <path className="boil f1" d={m.frames[0]} />
         <path className="boil f2" d={m.frames[1]} />
         <path className="boil f3" d={m.frames[2]} />
       </g>
     )
   }
-  return <path className={cls} d={m.frames[0]} />
-})
-
-/** The marks that show whatever the day: drawn once per drawing and never
- *  re-rendered by a state change. */
-const Still = memo(function Still({ marks }: { marks: DrawMark[] }) {
-  return <>{marks.map((m) => <Mark key={m.id} m={m} on />)}</>
-})
+  return <path className={cls} d={m.frames[0]} data-c={cond} />
+}
 
 const ROLES = ['wash', 'accent', 'line'] as const
 
-/** The focus loop's frames, drawn once per drawing; only its `.on` moves. */
-const Ambient = memo(function Ambient({ frames }: { frames: DrawMark[][] }) {
+/** The whole picture for a drawing: every mark, in paint order (by role, as
+ *  the server sends them), and the focus loop's frames. Memoised on the
+ *  drawing alone, so a change of state never re-renders it. Each conditional
+ *  mark carries its index into `cond` as `data-c`. */
+const Picture = memo(function Picture({ drawing, cond }: { drawing: DrawingPayload; cond: DrawMark[] }) {
+  const index = new Map(cond.map((m, i) => [m, i]))
+  const amb = drawing.ambient
   return (
     <>
-      {frames.map((frame, f) => (
-        <g key={f} className="amb" style={{ ['--k' as string]: f }}>
-          {frame.map((m) => <Mark key={m.id} m={m} on />)}
+      {ROLES.map((role) => (
+        <g key={role}>
+          {drawing.marks.filter((m) => m.role === role).map((m) => <Mark key={m.id} m={m} cond={index.get(m)} />)}
         </g>
       ))}
+      {/* The loop's keyframes are written for six frames (one second at 6fps). */}
+      {amb && amb.frames.length === 6 && (
+        <g className="dm-ambient" style={{ ['--n' as string]: amb.frames.length }}>
+          {amb.frames.map((frame, f) => (
+            <g key={f} className="amb" style={{ ['--k' as string]: f }}>
+              {frame.map((m) => <Mark key={m.id} m={m} />)}
+            </g>
+          ))}
+        </g>
+      )}
     </>
   )
 })
@@ -80,32 +93,41 @@ export const DayDrawing = memo(function DayDrawing({ drawing, state, className =
     return () => io.disconnect()
   }, [])
 
-  // Paint order is by role (the server sends them so), and within a role the
-  // marks that always show are one memoised layer: a tick touches only the
-  // handful of marks that have a condition.
-  const layers = useMemo(() => ROLES.map((role) => {
-    const of = drawing.marks.filter((m) => m.role === role)
-    return { role, still: of.filter((m) => m.when.length === 0), cond: of.filter((m) => m.when.length > 0) }
-  }), [drawing])
-  const amb = drawing.ambient
-  const ambOn = amb ? evaluate(amb.when, state) : false
+  const cond = useMemo(() => drawing.marks.filter((m) => m.when.length > 0), [drawing])
+
+  // The marks' elements, found once per drawing, and what each showed last.
+  // A new drawing starts from nothing known, so every mark is set once.
+  const shown = useRef<{ drawing: DrawingPayload | null; els: Element[]; on: boolean[]; amb: Element | null; ambOn: boolean | null }>(
+    { drawing: null, els: [], on: [], amb: null, ambOn: null })
+  useLayoutEffect(() => {
+    const svg = ref.current
+    if (!svg) return
+    const s = shown.current
+    if (s.drawing !== drawing) {
+      const els: Element[] = []
+      svg.querySelectorAll('[data-c]').forEach((el) => { els[Number(el.getAttribute('data-c'))] = el })
+      shown.current = { drawing, els, on: [], amb: svg.querySelector('.dm-ambient'), ambOn: null }
+    }
+    const now = shown.current
+    for (let i = 0; i < cond.length; i++) {
+      const on = evaluate(cond[i].when, state)
+      if (now.on[i] !== on) {
+        now.els[i]?.classList.toggle('on', on)
+        now.on[i] = on
+      }
+    }
+    const ambOn = drawing.ambient ? evaluate(drawing.ambient.when, state) : false
+    if (now.amb && now.ambOn !== ambOn) {
+      now.amb.classList.toggle('on', ambOn)
+      now.ambOn = ambOn
+    }
+  }, [drawing, cond, state])
+
   const [x, y, w, h] = drawing.viewBox
   return (
     <svg ref={ref} className={`day-drawing ${className}`.trim()} viewBox={`${x} ${y} ${w} ${h}`}
       aria-hidden="true" focusable="false" data-subject={drawing.subject}>
-      {layers.map((l) => (
-        <g key={l.role}>
-          <Still marks={l.still} />
-          {l.cond.map((m) => <Mark key={m.id} m={m} on={evaluate(m.when, state)} />)}
-        </g>
-      ))}
-      {/* The loop's keyframes are written for six frames (one second at 6fps). */}
-      {amb && amb.frames.length === 6 && (
-        <g className={`dm-ambient ${ambOn ? 'on' : ''}`.trim()}
-          style={{ ['--n' as string]: amb.frames.length }}>
-          <Ambient frames={amb.frames} />
-        </g>
-      )}
+      <Picture drawing={drawing} cond={cond} />
     </svg>
   )
 })
