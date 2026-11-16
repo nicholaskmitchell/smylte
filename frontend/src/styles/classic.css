@@ -69,6 +69,12 @@
   --ghost-hover-bg-on-paper: none;
   --row-hover-on-elev: var(--bg-elev);
   --thumb-edge: var(--rule-faint);
+  --tx-quiet: var(--fg-faint);
+  --mark-quiet: var(--fg-faint);
+  --edge-control: var(--rule);
+  --float-bg: var(--bg-elev);
+  --scrim-bg: rgba(0, 0, 0, 0.32);
+  --eink-paper: #FFFFFF;
   --font-glyph: var(--sans);
 
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.20);

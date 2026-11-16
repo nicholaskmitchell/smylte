@@ -153,7 +153,7 @@ function CalendarTasksSection({ lists, shown, onShownChange, showDone, onShowDon
                 <span className="swatch" style={on
                   ? (cssColor(l.color) ? { background: cssColor(l.color)! } : undefined)
                   : { background: 'transparent',
-                      boxShadow: `inset 0 0 0 1.5px ${cssColor(l.color) ?? 'var(--fg-faint)'}` }} />
+                      boxShadow: `inset 0 0 0 1.5px ${cssColor(l.color) ?? 'var(--mark-quiet)'}` }} />
                 <span className="name">{l.name}</span>
                 <span className="count">{l.open_count}</span>
               </div>

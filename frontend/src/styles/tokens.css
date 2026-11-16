@@ -363,6 +363,20 @@
      system font the stack falls back to. */
   --font-glyph: var(--mono);
 
+  /* Field notes roles. Each lever holds the value this design always used,
+     so nothing here changes how it renders; the Field notes lever block below
+     points each one at a role the design system defines, because Field notes
+     reads these colours differently. Its --fg-faint is decoration only (2.5:1,
+     never text), so quiet TEXT and the glyph-only controls that wore it take
+     --tx-quiet (Field notes: --fg-muted), and quiet MARKS (an empty swatch, a
+     checkbox frame) take --mark-quiet (Field notes: --rule-strong, 3:1). */
+  --tx-quiet: var(--fg-faint);
+  --mark-quiet: var(--fg-faint);
+  --edge-control: var(--rule);        /* the border of an input, a ghost or icon button */
+  --float-bg: var(--bg-elev);         /* popovers, menus, modals, sheets, toasts */
+  --scrim-bg: rgba(0, 0, 0, 0.32);    /* behind a modal or sheet */
+  --eink-paper: #FFFFFF;              /* a 1-bit render's paper, which is white on the glass */
+
   /* E1 · elevation. Two layers, contact plus ambient, in this app's own ink
      rather than black, so a shadow is the same temperature as the page. Only
      things that float take one. */
@@ -530,7 +544,7 @@ input, select, textarea { font-family: inherit; }
 /* ---- primitives ---- */
 .label {
   font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
-  letter-spacing: calc(0.1em * var(--tracking)); color: var(--fg-faint);
+  letter-spacing: calc(0.1em * var(--tracking)); color: var(--tx-quiet);
 }
 .mono { font-family: var(--mono); font-size-adjust: none; }
 .serif { font-family: var(--serif); font-size-adjust: none; font-weight: var(--wght-serif); }
@@ -567,13 +581,13 @@ input, select, textarea { font-family: inherit; }
     border-color var(--dur-fast) var(--ease), scale var(--dur) var(--ease);
 }
 .btn:disabled { opacity: 0.5; cursor: default; }
-.btn.ghost { background: none; color: var(--ghost-fg); border: 1px solid var(--rule); }
+.btn.ghost { background: none; color: var(--ghost-fg); border: 1px solid var(--edge-control); }
 
 /* Compact on purpose: an icon button is a toolbar glyph, and the phone gives
    the topbar's gear a 44px invisible tap area (app.css) rather than a 44px
    box; icon buttons elsewhere keep their drawn size. */
 .icon-btn {
-  background: none; color: var(--fg-muted); border: 1px solid var(--rule); border-radius: var(--r-sm);
+  background: none; color: var(--fg-muted); border: 1px solid var(--edge-control); border-radius: var(--r-sm);
   padding: 7px; display: inline-flex; align-items: center; justify-content: center;
   cursor: pointer;
   transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
@@ -605,7 +619,7 @@ input, select, textarea { font-family: inherit; }
 .icon-btn:active { scale: var(--press-scale); }
 
 .input {
-  background: var(--bg); color: var(--fg); border: 1px solid var(--rule); border-radius: var(--r-sm);
+  background: var(--bg); color: var(--fg); border: 1px solid var(--edge-control); border-radius: var(--r-sm);
   padding: var(--input-pad); min-height: var(--control-h); font-size: calc(14px * var(--fs-scale)); width: 100%;
   font-weight: var(--wght-ui);   /* T9 · the value, and the placeholder, which inherits it; not adjusted (see button {}) */
   transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur) var(--ease);
@@ -635,7 +649,7 @@ button.chip:active { scale: var(--press-scale); }
    delimited string — each one is held whole, with its own remove control. */
 .tag-input {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
-  background: var(--bg); border: 1px solid var(--rule); border-radius: var(--r-sm);
+  background: var(--bg); border: 1px solid var(--edge-control); border-radius: var(--r-sm);
   padding: 5px 6px; min-height: var(--control-h);
   transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur) var(--ease);
 }

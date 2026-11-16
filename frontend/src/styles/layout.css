@@ -71,7 +71,7 @@
 .appnav-fold {
   border-color: transparent; padding: 5px 8px;
   font-family: var(--font-glyph); font-size-adjust: none; font-size: calc(13px * var(--fs-scale));
-  line-height: 1; color: var(--fg-faint);
+  line-height: 1; color: var(--tx-quiet);
 }
 
 /* The views. The strip's own buttons — `.tabs .tab`, `aria-current` — turned

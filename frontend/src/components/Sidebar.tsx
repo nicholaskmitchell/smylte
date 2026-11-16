@@ -368,7 +368,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
     // far more freely than a plain `background:` does.
     const c = cssColor(l.color)
     if (canToggle && hidden.has(l.id)) {
-      return { background: 'transparent', boxShadow: `inset 0 0 0 1.5px ${c ?? 'var(--fg-faint)'}` }
+      return { background: 'transparent', boxShadow: `inset 0 0 0 1.5px ${c ?? 'var(--mark-quiet)'}` }
     }
     return c ? { background: c } : undefined
   }
