@@ -1,0 +1,13 @@
+/* Field notes — the app look from the N.K.M. design system (Nov 2026).
+
+   Every rule in this file is scoped under [data-surface="app"], which <html>
+   carries only while no preset is active (see applyDesign in appearance.ts).
+   So Classic, Workspace and the Sep 2026 design never see a rule from here:
+   they render the cascade they always had.
+
+   Values come only from tokens: ds/themes.css and ds/app-motion.css (copied
+   verbatim from the design system) and the Field notes lever block in
+   tokens.css. No colour, radius, duration or easing is written here as a
+   literal; design-tokens.test.ts holds that.
+
+   Loaded after layout.css and before display.css (main.tsx). */

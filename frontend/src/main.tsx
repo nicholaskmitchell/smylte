@@ -1,6 +1,12 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles/fonts.css'
+// The design system's Field notes tokens, copied verbatim (styles/ds/SOURCE.md).
+// They win by specificity ([data-surface="app"]), not by order, so they load
+// first: tokens.css after them lets the repo's own Workspace blocks shadow the
+// design system's copy of Workspace.
+import './styles/ds/themes.css'
+import './styles/ds/app-motion.css'
 import './styles/tokens.css'
 import './styles/app.css'
 import './styles/classic.css'
@@ -8,6 +14,8 @@ import './styles/classic.css'
 // scoped to that frame, so where it sits in the order matters only as the
 // tiebreak for rules of equal specificity (see the sheet's header).
 import './styles/layout.css'
+// Field notes' own rules, all scoped under [data-surface="app"].
+import './styles/fieldnotes.css'
 import './styles/display.css'
 import { App } from './App'
 import { BookingPage } from './components/BookingPage'

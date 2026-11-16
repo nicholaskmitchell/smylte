@@ -91,7 +91,7 @@ describe('a long press selects content, never a control\'s label', () => {
       'input', 'textarea', '.task-body', '.day-card-body', '.cal-ev', '.cal-task',
       '.task-main', '.agenda-ev']
     let seen = 0
-    for (const file of ['tokens', 'app', 'classic', 'layout', 'display', 'fonts']) {
+    for (const file of ['tokens', 'app', 'classic', 'layout', 'fieldnotes', 'display', 'fonts', 'ds/themes', 'ds/app-motion']) {
       for (const r of rulesOf(strip(read(`src/styles/${file}.css`)))) {
         if (!/user-select:\s*none/.test(r.body)) continue
         seen++

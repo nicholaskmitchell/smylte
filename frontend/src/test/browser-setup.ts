@@ -19,6 +19,9 @@ import '@testing-library/jest-dom/vitest'
 // because of source order). Importing them in the wrong order here would make
 // this project measure a cascade the app never has.
 import '../styles/fonts.css'
+// The design system's Field notes tokens, before tokens.css as in main.tsx.
+import '../styles/ds/themes.css'
+import '../styles/ds/app-motion.css'
 import '../styles/tokens.css'
 import '../styles/app.css'
 // Classic's lever block, after app.css: `:root[data-preset="classic"]` ties the
@@ -26,6 +29,8 @@ import '../styles/app.css'
 import '../styles/classic.css'
 // The sidebar layout's frame, in main.tsx's place after classic.css.
 import '../styles/layout.css'
+// Field notes' own rules, after layout.css as in main.tsx.
+import '../styles/fieldnotes.css'
 // The display page's own sheet, last, as main.tsx loads it. It is here because
 // what it asserts cannot be asserted anywhere else: a display is drawn in the
 // app's three typefaces, and "which face won" is a question about the cascade
