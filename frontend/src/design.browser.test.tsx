@@ -72,6 +72,8 @@ describe('Field notes is the shipped design', () => {
     expect(btn.fontSize).toBe('15px')
     expect(btn.textTransform).toBe('none')
     expect(parseFloat(btn.minHeight)).toBe(40)
+    expect(btn.fontWeight).toBe('600')
+    expect(btn.borderTopLeftRadius).toBe('12px')   // --r-md: buttons are cards' kin
   })
 
   it('takes the design system radii: 3 for a check, 12 for a menu, 22 for a modal', async () => {

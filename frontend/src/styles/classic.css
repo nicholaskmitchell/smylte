@@ -75,6 +75,11 @@
   --float-bg: var(--bg-elev);
   --scrim-bg: rgba(0, 0, 0, 0.32);
   --eink-paper: #FFFFFF;
+  --r-control: var(--r-sm);
+  --wght-btn: 500;
+  --btn-hover-bg: var(--accent);
+  --btn-hover-fg: var(--bg);
+  --ease-press: var(--ease);
   --font-glyph: var(--sans);
 
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.20);

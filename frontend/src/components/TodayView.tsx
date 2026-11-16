@@ -313,6 +313,8 @@ import { DateTimeInput } from './DateTimeInput'
 import { WasDue } from './WasDue'
 import { PlanRitual } from './PlanRitual'
 import { ShutdownRitual } from './ShutdownRitual'
+import { CheckInk, StrikeInk } from './Marks'
+import { useAddAction } from '../addaction'
 import { useT } from '../i18n'
 
 /** How far ahead the "next 7 days" suggestions reach. Same horizon as the Home
@@ -1563,6 +1565,11 @@ export function TodayView({
 
   // ── the add box ──────────────────────────────────────────────────────────
   const [text, setText] = useState('')
+  // Field notes on a phone: the composer is put away until the tab bar's coral
+  // add opens it (fieldnotes.css hides an unopened one), and goes away again
+  // on Escape or when the field is left empty. Elsewhere it is always there.
+  const [composing, setComposing] = useState(false)
+  const addInput = useRef<HTMLInputElement>(null)
   /**
    * What the owner has said this line should BECOME, or null to let the reading
    * decide. This replaces a boolean `declined`, and the widening is the point.
@@ -2446,6 +2453,11 @@ export function TodayView({
   // sidebar layout, on a desktop, past TODAY_SIDE_COLUMN_MIN. Only while the
   // day is live — a review has no strip to move (see the look-back below).
   const sideCal = layout === 'sidebar' && !isMobile && wide && !reviewing
+  // The coral add (addaction.tsx) opens this composer, on the live day only.
+  useAddAction('today', isToday ? () => {
+    setComposing(true)
+    requestAnimationFrame(() => addInput.current?.focus())
+  } : null)
   const addForm = isToday && (
     <form className="quickadd today-add"
       onSubmit={(e) => { e.preventDefault(); void commit() }}>
@@ -2465,8 +2477,13 @@ export function TodayView({
           idempotent on (day, task) and on (day, note text), and a row added
           to a day nobody has opened does not suppress its later snapshot
           (`service.open_day` merges around what is already there). */}
-      <input className="input" value={text} aria-label={tr('today.addAria')}
+      <input ref={addInput} className="input" value={text} aria-label={tr('today.addAria')}
         disabled={dayError && entries === null}
+        onBlur={(e) => {
+          // Leaving the field for a chip or a button inside the form keeps it open.
+          if (!text.trim() && !e.currentTarget.form?.contains(e.relatedTarget as Node | null)) setComposing(false)
+        }}
+        onKeyDown={(e) => { if (e.key === 'Escape' && composing) { setComposing(false); e.currentTarget.blur() } }}
         placeholder={tr('today.addPlaceholder')}
         // The chip below DESCRIBES this field rather than announcing at it.
         // It used to be a `role="status"` live region, which was tolerable
@@ -3365,7 +3382,9 @@ export function TodayView({
         })}
         </TodayColumns>
       </div>
-      {footComposer && addForm && <div className="composer-foot">{addForm}</div>}
+      {footComposer && addForm && (
+        <div className="composer-foot" data-open={composing ? '' : undefined}>{addForm}</div>
+      )}
     </div>
   )
 }
@@ -3865,7 +3884,7 @@ function TodayRow({
             ? tr('today.uncheck', { entry: title || tr('today.entry') })
             : tr('today.check', { entry: title || tr('today.entry') })}
           onClick={() => void (isTask && task ? onToggleTask(task) : onToggleEntry(entry))}>
-          ✓
+          <CheckInk seed={entry.entry_id} />✓
         </button>
       )
 
@@ -3989,7 +4008,7 @@ function TodayRow({
             style={isTask && color ? { background: color } : undefined} />
         ) : null}
       </span>
-      <span className="today-title" dir={textDir(title)}>{title}</span>
+      <span className="today-title" dir={textDir(title)}>{title}<StrikeInk on={done} seed={entry.entry_id} /></span>
       {/* Omitted ENTIRELY below two occurrences — see MIN_WEEK_COUNT. Rendered
           in --fg-faint whatever the ratio says, and never in --warn: "1 of 5
           this week" is a record, and colouring it as a failure turns the one

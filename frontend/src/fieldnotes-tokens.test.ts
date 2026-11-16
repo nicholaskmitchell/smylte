@@ -112,10 +112,27 @@ describe('the Field notes lever block', () => {
 
 describe('fieldnotes.css', () => {
   const css = strip(read('src/styles/fieldnotes.css'))
-  const selectors = [...css.matchAll(/([^{}@;]+)\{/g)].map((m) => m[1].trim()).filter((s) => !s.startsWith('@'))
+  // At-rule preludes (`@media (hover: hover) {`) are not selectors.
+  const selectors = [...css.replace(/@[^{;]+\{/g, '{').matchAll(/([^{}]+)\{/g)]
+    .map((m) => m[1].trim()).filter(Boolean)
+
+  it('has rules to check', () => {
+    expect(selectors.length).toBeGreaterThan(10)
+  })
 
   it('scopes every rule to [data-surface="app"], so a preset never sees one', () => {
-    const loose = selectors.flatMap((s) => s.split(',').map((x) => x.trim()))
+    // Split a selector list on its top-level commas only: `:is(.a, .b)` is one.
+    const split = (list: string) => {
+      const out: string[] = []
+      let depth = 0, cur = ''
+      for (const ch of list) {
+        if (ch === '(') depth++
+        if (ch === ')') depth--
+        if (ch === ',' && depth === 0) { out.push(cur.trim()); cur = '' } else cur += ch
+      }
+      return [...out, cur.trim()]
+    }
+    const loose = selectors.flatMap(split)
       .filter((s) => s && !/^(:root)?\[data-surface="app"\]/.test(s) && !/^(from|to|\d+%)$/.test(s))
     expect(loose).toEqual([])
   })
@@ -130,6 +147,7 @@ describe('fieldnotes.css', () => {
   })
 
   it('scales every font size with --fs-scale', () => {
-    for (const m of css.matchAll(/font-size\s*:\s*([^;]+);/g)) expect(m[1]).toMatch(/var\(--fs-scale\)/)
+    // `0` is the one exception: it hides a glyph the drawn mark replaces.
+    for (const m of css.matchAll(/font-size\s*:\s*([^;]+);/g)) expect(m[1].trim()).toMatch(/var\(--fs-scale\)|^0$/)
   })
 })

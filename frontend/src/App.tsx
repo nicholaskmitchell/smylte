@@ -20,6 +20,7 @@ import {
   readCachedLayout, readCachedSidebarCollapsed, type Layout,
 } from './layout'
 import { ShellProvider } from './shell'
+import { AddActionProvider, useAddRegistry } from './addaction'
 import { useIsMobile } from './hooks'
 import { isSessionTtl, nextSessionTtl } from './session'
 import {
@@ -88,6 +89,8 @@ export function App() {
   // yanked the view to Home, which is precisely the flash this seed exists to
   // remove. `isTab` narrows away the 'last' case, which names no tab to paint;
   // with nothing remembered "last" resolves to the strip's head anyway.
+  // What the phone's coral add button does on each view (addaction.tsx).
+  const adds = useAddRegistry()
   const [tab, setTab] = useState<Tab>(
     () => readCachedTab() ?? (isTab(DEFAULT_TAB_START) ? DEFAULT_TAB_START : DEFAULT_TAB_ORDER[0]))
   const [tabOrder, setTabOrder] = useState<Tab[]>(DEFAULT_TAB_ORDER)
@@ -1559,6 +1562,7 @@ export function App() {
     // the boot markup away and mount a fresh tree — losing the very frame this
     // exists to paint (and any click already in flight against it).
     <ShellProvider value={shell}>
+    <AddActionProvider register={adds.register}>
     <div className="shell" data-layout={layout}
       data-display={displayMode ? '' : undefined}>
       {focusOpen ? (
@@ -1601,7 +1605,7 @@ export function App() {
           {isMobile && (
             <TabBar tabOrder={tabOrder} tab={tab} onTab={changeTab} booting={booting}
               gearRef={gearRef} settingsOpen={settingsOpen}
-              onToggleSettings={toggleSettings} />
+              onToggleSettings={toggleSettings} onAdd={adds.opens[tab]} />
           )}
           {settingsMenu}
         </div>
@@ -1673,6 +1677,7 @@ export function App() {
         </div>
       )}
     </div>
+    </AddActionProvider>
     </ShellProvider>
         )}
       </TimeFormatProvider>

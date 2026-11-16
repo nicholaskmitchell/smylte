@@ -22,6 +22,7 @@ import { DayPopover } from './DayPopover'
 import type { SettingsSection } from './SettingsMenu'
 import { WasDue } from './WasDue'
 import { entryTitle, orderEntries, rowDone, STALE_OVERDUE_DAYS } from './TodayView'
+import { CheckInk, StrikeInk } from './Marks'
 import { readCachedDayPlan } from '../cache'
 import { useI18n, useT } from '../i18n'
 import { weekdayNames } from '../names'
@@ -1125,7 +1126,7 @@ function DayPlanList({ plan, tasks, tasksLoaded, failedLists, partial, colorOf, 
                 ? tr('home.planUncheck', { entry: title || tr('today.entry') })
                 : tr('home.planCheck', { entry: title || tr('today.entry') })}
               onClick={() => void (task ? toggleTask(task) : orphan ? null : toggleEntry(e))}>
-              ✓
+              <CheckInk seed={e.entry_id} />✓
             </button>
             {/* The Today tab's own three-way mark, class for class. It is
                 self-contained (`--today-mark-w` is on `:root`) and it is the
@@ -1139,7 +1140,7 @@ function DayPlanList({ plan, tasks, tasksLoaded, failedLists, partial, colorOf, 
                 : <span className="today-kind-box" style={e.kind === 'task' && colorOf(e.list ?? '')
                   ? { background: colorOf(e.list ?? '')! } : undefined} />}
             </span>
-            <span className="dash-task-title" dir={textDir(title)}>{title}</span>
+            <span className="dash-task-title" dir={textDir(title)}>{title}<StrikeInk on={done} seed={e.entry_id} /></span>
             <PlanRowMeta entry={e} task={task} />
           </li>
         )

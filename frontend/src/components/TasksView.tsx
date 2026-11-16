@@ -16,6 +16,7 @@ import { WasDue } from './WasDue'
 import { dateOut, TaskModal } from './TaskModal'
 import { Sidebar } from './Sidebar'
 import { SuggestionsPane } from './SuggestionsPane'
+import { CheckInk, StrikeInk } from './Marks'
 import { useMailSuggestions } from '../mail'
 import { useI18n } from '../i18n'
 import { useT } from '../i18n'
@@ -1167,7 +1168,7 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
       <div className={`pri-bar ${priClass}`} />
       <button className={`check ${task.completed ? 'on' : ''}`} title={tr('tasks.toggleComplete')}
         aria-label={tr('tasks.toggleComplete')} aria-pressed={task.completed}
-        onClick={() => onToggle(task)}>✓</button>
+        onClick={() => onToggle(task)}><CheckInk seed={task.uid} />✓</button>
       {/* The role/tabIndex/keydown trio the calendar's task chip has: this is
           the card's only route to the editor, and a plain div with onClick
           left the check button as the sole thing a keyboard could reach. */}
@@ -1181,6 +1182,7 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
         <div className="day-card-title">
           {dot !== undefined && <span className="list-dot" style={dot ? { background: dot } : undefined} />}
           {task.summary || tr('common.untitled')}
+          <StrikeInk on={task.completed} seed={task.uid} />
         </div>
         {/* `slippedFrom` in the gate as well as in the row: a deadline can be
             CLEARED while the remembered one survives (the sidecar route keeps
@@ -1254,7 +1256,7 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
       )}
       <button className={`check ${task.completed ? 'on' : ''}`} title={tr('tasks.toggleComplete')}
         aria-label={tr('tasks.toggleComplete')} aria-pressed={task.completed}
-        onClick={() => onToggle(task)}>✓</button>
+        onClick={() => onToggle(task)}><CheckInk seed={task.uid} />✓</button>
       {/* Keyboard-openable, like the calendar's chips and DayPopover's rows.
           Tabbing through a row reached the twisty, the checkbox, "+ sub" and
           "✕" — every control but the one that opens the task, and for an
@@ -1275,6 +1277,7 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
               two non-completions and the whole point is that they read
               differently: one is a verdict, the other is "not now". */}
           {task.parked && <span className="chip">{tr('tasks.parkedChip')}</span>}
+          <StrikeInk on={task.completed} seed={task.uid} />
         </div>
         {(task.due || slippedFrom(task) || movedFrom(task) || progress
           || task.tags.length > 0) && (

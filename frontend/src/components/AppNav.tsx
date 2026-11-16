@@ -11,6 +11,7 @@
 import type { Ref, RefObject } from 'react'
 import { useT } from '../i18n'
 import { TAB_LABELS, type Tab } from '../tabs'
+import { AddInk, TabIcon, TabInk } from './Marks'
 
 interface NavProps {
   tabOrder: Tab[]
@@ -23,6 +24,18 @@ interface NavProps {
   gearRef: RefObject<HTMLButtonElement>
   settingsOpen: boolean
   onToggleSettings: () => void
+  /** The open view's add (addaction.tsx): the phone bar's coral button, drawn
+   *  only when the view has one. */
+  onAdd?: () => void
+}
+
+/** Each view's add, named by the label its own add field already carries. */
+const ADD_LABEL: Record<Tab, string> = {
+  today: 'today.addAria',
+  home: 'home.quickAddAria',
+  tasks: 'home.quickAddAria',
+  calendar: 'cal.newEvent',
+  scheduling: 'sched.newLink',
 }
 
 /** The gear. A functional glyph, the one Classic's top bar draws. */
@@ -44,7 +57,11 @@ function ViewButtons({ tabOrder, tab, onTab }: Pick<NavProps, 'tabOrder' | 'tab'
         <button key={t} type="button" className={`tab ${tab === t ? 'active' : ''}`}
           aria-current={tab === t ? 'page' : undefined}
           onClick={() => onTab(t)}>
-          {tr(TAB_LABELS[t])}
+          {/* Field notes draws an icon above and an underline under the label;
+              both are hidden under the presets (Marks.tsx). */}
+          <TabIcon tab={t} />
+          <span className="tab-label">{tr(TAB_LABELS[t])}</span>
+          <TabInk />
         </button>
       ))}
     </>
@@ -118,6 +135,13 @@ export function TabBar(p: NavProps) {
           title={tr('app.settings')} aria-label={tr('app.settings')}
           aria-expanded={p.settingsOpen} onClick={p.onToggleSettings}>
           <GearIcon />
+        </button>
+      )}
+      {/* Field notes' coral add (hidden under the presets, which keep the
+          composer they always had). Its name is the open view's own add label. */}
+      {!p.booting && p.onAdd && (
+        <button type="button" className="tab-add" aria-label={tr(ADD_LABEL[p.tab])} onClick={p.onAdd}>
+          <AddInk />
         </button>
       )}
     </nav>

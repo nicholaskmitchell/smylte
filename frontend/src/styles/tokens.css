@@ -376,6 +376,13 @@
   --float-bg: var(--bg-elev);         /* popovers, menus, modals, sheets, toasts */
   --scrim-bg: rgba(0, 0, 0, 0.32);    /* behind a modal or sheet */
   --eink-paper: #FFFFFF;              /* a 1-bit render's paper, which is white on the glass */
+  /* A button's corner, weight, hover and press. Field notes rounds it a step
+     further, sets it at 600, hovers to coral and presses with a small spring. */
+  --r-control: var(--r-sm);
+  --wght-btn: 500;
+  --btn-hover-bg: var(--accent);
+  --btn-hover-fg: var(--bg);
+  --ease-press: var(--ease);
 
   /* E1 · elevation. Two layers, contact plus ambient, in this app's own ink
      rather than black, so a shadow is the same temperature as the page. Only
@@ -469,6 +476,11 @@
 
   --tx-quiet: var(--fg-muted);
   --mark-quiet: var(--rule-strong);
+  --r-control: var(--r-md);
+  --wght-btn: 600;
+  --btn-hover-bg: var(--accent-fill);
+  --btn-hover-fg: var(--on-accent);
+  --ease-press: var(--ease-spring);
   --edge-control: var(--rule-strong);
   --ghost-hover-edge: var(--rule-strong);
   --thumb-edge: var(--rule-strong);
@@ -656,12 +668,12 @@ input, select, textarea { font-family: inherit; }
    --press-scale — the individual `scale` property, never `transform`, which
    several rules below already use for positioning and would be clobbered. */
 .btn {
-  background: var(--fg); color: var(--bg); border: 1px solid transparent; border-radius: var(--r-sm);
-  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control) * var(--fs-scale)); font-weight: 500; text-transform: var(--label-case);
+  background: var(--fg); color: var(--bg); border: 1px solid transparent; border-radius: var(--r-control);
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control) * var(--fs-scale)); font-weight: var(--wght-btn); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); line-height: var(--lh-control);
   padding: var(--btn-pad); min-height: var(--control-h); cursor: pointer;
   transition: background var(--dur) var(--ease), color var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease), scale var(--dur) var(--ease);
+    border-color var(--dur-fast) var(--ease), scale var(--dur) var(--ease-press);
 }
 .btn:disabled { opacity: 0.5; cursor: default; }
 .btn.ghost { background: none; color: var(--ghost-fg); border: 1px solid var(--edge-control); }
@@ -692,11 +704,11 @@ input, select, textarea { font-family: inherit; }
    already filled, and keeps its fill: hovering it used to paint its glyph in
    the accent on an accent ground, which is to say not at all. */
 @media (hover: hover) {
-  .btn:hover { background: var(--accent); }
+  .btn:hover { background: var(--btn-hover-bg); color: var(--btn-hover-fg); }
   .btn.ghost:hover { color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg); }
   .icon-btn:not(.active):hover { color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg); }
 }
-.btn:active { background: var(--accent); scale: var(--press-scale); }
+.btn:active { background: var(--btn-hover-bg); color: var(--btn-hover-fg); scale: var(--press-scale); }
 .btn.ghost:active { color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg); }
 .icon-btn:not(.active):active { color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg); }
 .icon-btn:active { scale: var(--press-scale); }

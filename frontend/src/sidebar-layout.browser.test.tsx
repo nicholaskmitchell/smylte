@@ -8,7 +8,8 @@
 // the first version of this file wrote a Tasks row with the tick straight
 // after the priority bar, which the real row never does (a twisty sits
 // between them), and so passed a rule that matched no row in the app.
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { applyDesign } from './appearance'
 import { box, mount, viewport } from './test/browser-measure'
 
 beforeEach(() => { document.body.innerHTML = '' })
@@ -74,7 +75,27 @@ describe('on a desktop', () => {
     expect(box(host.querySelector('.appnav-settings')!).bottom).toBeGreaterThan(760)
   })
 
-  it('draws the views as C3 rows: no rule, the open one filled with an accent bar', async () => {
+  it('marks the open view with a drawn coral underline under Field notes', async () => {
+    // AppNav's own markup for two views (Marks.tsx's TabIcon and TabInk).
+    const tab = (active: boolean, label: string) => `
+      <button type="button" class="tab ${active ? 'active' : ''}">
+        <svg class="tab-icon" viewBox="0 0 24 24"><path d="M4 4h16"/></svg>
+        <span class="tab-label">${label}</span>
+        <svg class="tab-ink" viewBox="0 0 34 6"><path class="ink" pathLength="1" d="M2 4C9 2.4 18 2 32 3.2"/></svg>
+      </button>`
+    await viewport(1280, 800)
+    const host = await mount(`<div class="shell" data-layout="sidebar"><div class="frame">
+      <nav class="appnav"><div class="appnav-tabs">${tab(true, 'Today')}${tab(false, 'Tasks')}</div></nav>
+    </div></div>`)
+    const [open, other] = [...host.querySelectorAll('.tab-ink path')].map((p) => getComputedStyle(p))
+    expect(open.strokeDashoffset).toBe('0px')
+    expect(open.stroke).toBe(tokenColor(host, '--accent'))
+    expect(other.strokeDashoffset, 'only the open view is underlined').not.toBe('0px')
+    expect(getComputedStyle(host.querySelector('.tab.active')!).backgroundColor).toBe('rgba(0, 0, 0, 0)')
+  })
+
+  it('draws the views as C3 rows: no rule, the open one filled with an accent bar (the refined preset)', async () => {
+    applyDesign(document.documentElement, 'refined')
     await viewport(1280, 800)
     const host = await mount(desk())
     const [today, home] = host.querySelectorAll('.appnav .tab')
@@ -166,7 +187,21 @@ describe('priority', () => {
         <button class="check">✓</button><div class="day-card-body">D</div></div>
     </div></div>`
 
-  it('is the tick\'s edge on every row shape, and the bar is gone', async () => {
+  it('is a 3px mark beside the title under Field notes, and the tick is left clear', async () => {
+    await viewport(1280, 800)
+    const host = await mount(rows)
+    const bar = (id: string) => getComputedStyle(host.querySelector(`#${id} > .pri-bar`)!)
+    expect(bar('list-high').backgroundColor).toBe(tokenColor(host, '--pri-high'))
+    expect(bar('list-parent').backgroundColor).toBe(tokenColor(host, '--pri-med'))
+    expect(bar('card-low').backgroundColor).toBe(tokenColor(host, '--pri-low'))
+    for (const id of ['list-high', 'list-parent', 'card-low']) {
+      expect(box(host.querySelector(`#${id} > .pri-bar`)!).w, id).toBe(3)
+      expect(getComputedStyle(host.querySelector(`#${id} > .check`)!).borderTopColor, id).toBe('rgba(0, 0, 0, 0)')
+    }
+  })
+
+  it('is the tick\'s edge on every row shape, and the bar is gone (the refined preset)', async () => {
+    applyDesign(document.documentElement, 'refined')
     await viewport(1280, 800)
     const host = await mount(rows)
     const tick = (id: string) => getComputedStyle(host.querySelector(`#${id} > .check`)!).borderTopColor
@@ -277,7 +312,8 @@ describe('on a phone', () => {
     expect(gear.h).toBeGreaterThanOrEqual(44)
   })
 
-  it('marks the open view with the accent, not only a fill', async () => {
+  it('marks the open view with the accent, not only a fill (the refined preset)', async () => {
+    applyDesign(document.documentElement, 'refined')
     await viewport(390, 844)
     const host = await mount(phone(VIEWS_EN))
     const on = getComputedStyle(host.querySelector('.tabbar .tab.active')!)
@@ -344,7 +380,8 @@ describe('Classic is not touched', () => {
     expect(getComputedStyle(host.querySelector('.content-head')!).borderBottomColor).not.toBe('rgba(0, 0, 0, 0)')
     expect(getComputedStyle(host.querySelector('.pri-bar')!).display).not.toBe('none')
     expect(box(host.querySelector('.pri-bar')!).w).toBe(3)
-    expect(getComputedStyle(host.querySelector('.check')!).borderTopColor).toBe(tokenColor(host, '--mark-quiet'))
+    // Field notes draws the tick's frame, so the box's own border is clear.
+    expect(getComputedStyle(host.querySelector('.check')!).borderTopColor).toBe('rgba(0, 0, 0, 0)')
   })
 
   it('keeps its title size and full-width rows', async () => {

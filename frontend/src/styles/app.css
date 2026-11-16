@@ -4067,3 +4067,11 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
 .dmode-bar__tab.active { color: var(--accent); border-color: var(--accent); }
 .dmode-bar__gap { flex: 1; }
 .dmode-bar__close { width: 44px; height: 44px; }
+
+/* ---- Field notes' marks, off under the presets --------------------------
+   Marks.tsx puts a drawn check, a wavy strike, a tab underline, a tab icon and
+   the add button into the existing markup. They belong to Field notes only;
+   fieldnotes.css shows them under [data-surface="app"]. Everywhere else they
+   are not drawn, so Classic, Workspace and the Sep 2026 design keep exactly
+   the check, the line-through and the tabs they always had. */
+.check-ink, .strike-ink, .tab-ink, .tab-icon, .tab-add { display: none; }

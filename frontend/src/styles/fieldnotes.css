@@ -11,3 +11,131 @@
    literal; design-tokens.test.ts holds that.
 
    Loaded after layout.css and before display.css (main.tsx). */
+
+/* ---- the check --------------------------------------------------------------
+   The `.check` button keeps its box (--check-size, the row's geometry) and its
+   semantics; Field notes draws on it instead of filling it. The frame is the
+   pen in ink; the tick is coral ink and draws itself over --dur-ink when the
+   button goes on. 28px of drawing on a box of 17–21px: the hand overruns. */
+[data-surface="app"] .check {
+  position: relative; overflow: visible;
+  border-color: transparent; background: none; color: transparent; font-size: 0;
+}
+[data-surface="app"] .check.on { border-color: transparent; background: none; color: transparent; }
+[data-surface="app"] .check-ink {
+  display: block; position: absolute; left: 50%; top: 50%; width: 28px; height: 28px;
+  translate: -50% -50%; overflow: visible; pointer-events: none;
+  fill: none; stroke-linecap: round; stroke-linejoin: round;
+}
+[data-surface="app"] .check-frame {
+  stroke: var(--fg); stroke-width: var(--stroke-pen);
+  transition: stroke var(--dur-fast) var(--ease);
+}
+[data-surface="app"] .check-tick { stroke: var(--accent); stroke-width: var(--stroke-tick); }
+[data-surface="app"] .check.on .check-tick { stroke-dashoffset: 0; }
+[data-surface="app"] .check:disabled .check-frame { stroke: var(--rule-strong); }
+@media (hover: hover) {
+  [data-surface="app"] .check:not(:disabled):hover .check-frame { stroke: var(--accent); }
+}
+
+/* ---- the strike ---------------------------------------------------------------
+   A finished title keeps its words and gets a wavy coral-ink strike, one per
+   line, that draws itself a beat after the tick. --tx-quiet already moved its
+   colour to --fg-muted. */
+[data-surface="app"] .today-title,
+[data-surface="app"] .task-title,
+[data-surface="app"] .dash-task-title,
+[data-surface="app"] .day-card-title { position: relative; }
+[data-surface="app"] .today-row.done .today-title,
+[data-surface="app"] .task.done .task-title,
+[data-surface="app"] .dash-task.done .dash-task-title,
+[data-surface="app"] .day-card.done .day-card-title { text-decoration: none; }
+[data-surface="app"] .strike-ink {
+  display: block; position: absolute; left: 0; top: 0;
+  overflow: visible; pointer-events: none; fill: none;
+}
+[data-surface="app"] .strike-ink path {
+  stroke: var(--accent); stroke-width: var(--stroke-strike); stroke-linecap: round;
+  stroke-dasharray: 1; stroke-dashoffset: 1;
+  transition: stroke-dashoffset var(--dur-stroke) var(--ease-ink);
+}
+[data-surface="app"] .strike-ink.on path {
+  stroke-dashoffset: 0;
+  transition-delay: calc(var(--stagger) * (2 + var(--line, 0)));
+}
+
+/* ---- tabs ----------------------------------------------------------------------
+   The open view gets a drawn underline; every tab carries one, so moving
+   between them draws one on and the other off. */
+[data-surface="app"] .tab-ink { display: block; width: 34px; height: 6px; overflow: visible; fill: none; }
+[data-surface="app"] .tab-ink path { stroke: var(--accent); stroke-width: var(--stroke-strike); stroke-linecap: round; }
+[data-surface="app"] .tab.active .tab-ink path { stroke-dashoffset: 0; transition-duration: var(--dur-stroke); }
+[data-surface="app"] .tab-icon {
+  display: block; width: 24px; height: 24px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: var(--stroke-pen);
+  stroke-linecap: round; stroke-linejoin: round;
+}
+
+/* The desktop column: the icon, the label, and the underline under the label,
+   in place of the fill and inset bar the Sep 2026 design draws. */
+[data-surface="app"] .appnav .tab {
+  position: relative; gap: 12px; padding-block: 10px 12px;
+  font-size: calc(var(--fs-app-ui) * var(--fs-scale)); font-weight: 500;
+}
+[data-surface="app"] .appnav .tab.active { background: transparent; box-shadow: none; font-weight: 600; }
+[data-surface="app"] .appnav .tab-ink { position: absolute; left: 48px; bottom: 3px; }
+
+/* The phone's bar: the views as drawn icons over their labels, the gear, and
+   the coral add button. */
+[data-surface="app"] .tabbar {
+  gap: 4px; padding: 10px 12px calc(12px + env(safe-area-inset-bottom));
+  border-top-color: var(--rule);
+}
+[data-surface="app"] .tabbar .tab {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  min-height: 52px; padding: 2px 2px 0; border-radius: var(--r-md);
+  color: var(--fg-muted); background: transparent; box-shadow: none;
+  font-size: calc(var(--fs-app-small) * var(--fs-scale)); font-weight: 500;
+}
+[data-surface="app"] .tabbar .tab.active { color: var(--fg); background: transparent; box-shadow: none; font-weight: 600; }
+[data-surface="app"] .tabbar .tab-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+[data-surface="app"] .tab-add {
+  display: grid; place-items: center; flex: none; position: relative;
+  width: 56px; height: 56px; padding: 0; border: 0; border-radius: var(--r-md);
+  background: var(--accent-fill); color: var(--on-accent); cursor: pointer;
+  transition: background var(--dur) var(--ease), scale var(--dur) var(--ease-spring);
+}
+[data-surface="app"] .tab-add:active { scale: var(--press-scale); }
+[data-surface="app"] .add-ink { width: 56px; height: 56px; overflow: visible; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+[data-surface="app"] .add-edge { stroke: var(--fg); stroke-width: var(--stroke-pen); }
+[data-surface="app"] .add-cross { stroke: currentColor; stroke-width: var(--stroke-tick); }
+
+/* ---- Today's composer on a phone ---------------------------------------------
+   Put away until the tab bar's coral add opens it (TodayView, `data-open`), so
+   the page is the day and its drawing rather than a field. */
+@media (max-width: 720px) {
+  [data-surface="app"] .today-pane > .composer-foot:not([data-open]) { display: none; }
+}
+
+/* The check's 44px tap area (app.css, `.today-row button::after`) has to stay
+   on top of the title beside it, which the strike makes a positioned box. */
+[data-surface="app"] .check { z-index: 1; }
+
+/* ---- priority -----------------------------------------------------------------
+   A 3px mark beside the task's own title, in the tier's colour. The Sep 2026
+   design carried the tier on the tick's border instead; Field notes draws the
+   tick, so it puts the mark back and the border stays clear. */
+[data-surface="app"] .shell[data-layout="sidebar"] .pri-bar { display: block; }
+[data-surface="app"] .shell[data-layout="sidebar"] :is(.task, .day-card)[data-pri] > .check:not(.on) {
+  border-color: transparent;
+}
+[data-surface="app"] .pri-bar:is(.pri-high, .pri-med, .pri-low) {
+  align-self: flex-start; height: calc(15px * var(--fs-scale) * 1.5); border-radius: var(--r-pill);
+}
+
+/* The narrowest phones (320px): five labels, the gear and the add fit a step
+   smaller and tighter, as the Sep 2026 bar does. */
+@media (max-width: 359px) {
+  [data-surface="app"] .tabbar { gap: 0; padding-inline: 4px; }
+  [data-surface="app"] .tabbar .tab { padding-inline: 1px; font-size: calc(12px * var(--fs-scale)); }
+}
