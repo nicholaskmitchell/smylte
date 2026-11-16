@@ -594,7 +594,10 @@ describe('every custom property a rule reads is actually defined', () => {
     // shorthand's longhands fell back to `unset`, `border-bottom-style` became
     // `none`, and the partial-month banner had no bottom rule at all. Nothing
     // could ever have supplied it.
-    const tokens = read('src/styles/tokens.css')
+    // The design system's own token files declare the Field notes roles
+    // (--bg-float, --rule-strong, the motion), which app.css may read.
+    const tokens = read('src/styles/tokens.css') + read('src/styles/ds/themes.css')
+      + read('src/styles/ds/app-motion.css')
     const declared = new Set<string>()
     for (const m of (tokens + css).matchAll(/(--[a-z0-9-]+)\s*:/gi)) declared.add(m[1])
     // Locally-scoped fallbacks a rule sets on itself count as declared above.

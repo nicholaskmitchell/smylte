@@ -76,3 +76,60 @@ describe('load order', () => {
     expect(order(read('src/test/browser-setup.ts'))).toEqual(expected)
   })
 })
+
+describe('the Field notes lever block', () => {
+  const tokens = strip(read('src/styles/tokens.css'))
+  const ds = strip(read('src/styles/ds/themes.css'))
+  const block = (css: string, sel: string) => {
+    const m = new RegExp(`(^|\\n)${sel.replace(/[[\]().*+?^$|]/g, '\\$&')}\\s*\\{([^}]*)\\}`).exec(css)
+    return m ? m[2] : ''
+  }
+  const value = (body: string, prop: string) => new RegExp(`${prop}\\s*:\\s*([^;]+);`).exec(body)?.[1].trim()
+  const fn = block(tokens, ':root[data-surface="app"]')
+  const upstream = block(ds, ':root[data-surface="app"]')
+  const base = block(tokens, ':root')
+
+  it('finds both blocks', () => {
+    expect(fn).toContain('--r-xs')
+    expect(upstream).toContain('--r-xs')
+    expect(value(base, '--radius')).toBe('8px')
+  })
+
+  it.each(['--r-xs', '--r-lg'])('%s, derived from --radius, equals the design system at the default', (prop) => {
+    // The slider has to keep moving every corner, so the repo derives the two
+    // steps the design system writes as literals; at the default radius the
+    // derivation must land exactly on the design system's value.
+    const radius = parseFloat(value(base, '--radius')!)
+    const k = /calc\(var\(--radius\)\s*\*\s*([\d.]+)\)/.exec(value(fn, prop) ?? '')
+    expect(k, `${prop} is not derived from --radius`).not.toBeNull()
+    expect(`${radius * parseFloat(k![1])}px`).toBe(value(upstream, prop))
+  })
+
+  it('sets no colour of its own: colours come from the design system', () => {
+    expect(fn).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(|oklch\(|hsla?\(/i)
+  })
+})
+
+describe('fieldnotes.css', () => {
+  const css = strip(read('src/styles/fieldnotes.css'))
+  const selectors = [...css.matchAll(/([^{}@;]+)\{/g)].map((m) => m[1].trim()).filter((s) => !s.startsWith('@'))
+
+  it('scopes every rule to [data-surface="app"], so a preset never sees one', () => {
+    const loose = selectors.flatMap((s) => s.split(',').map((x) => x.trim()))
+      .filter((s) => s && !/^(:root)?\[data-surface="app"\]/.test(s) && !/^(from|to|\d+%)$/.test(s))
+    expect(loose).toEqual([])
+  })
+
+  it('writes no colour, duration, easing or radius as a literal', () => {
+    expect(css).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(|oklch\(|hsla?\(/i)
+    expect(css).not.toMatch(/cubic-bezier\(/)
+    expect(css).not.toMatch(/(?<![\w-])\d*\.?\d+m?s\b/)
+    for (const m of css.matchAll(/border(?:-[a-z-]+)?-radius\s*:\s*([^;]+);/g)) {
+      expect(m[1].trim(), 'a corner takes a --r-* step').toMatch(/^(0|var\(--r-[\w-]+\)(\s+var\(--r-[\w-]+\)|\s+0)*)$/)
+    }
+  })
+
+  it('scales every font size with --fs-scale', () => {
+    for (const m of css.matchAll(/font-size\s*:\s*([^;]+);/g)) expect(m[1]).toMatch(/var\(--fs-scale\)/)
+  })
+})

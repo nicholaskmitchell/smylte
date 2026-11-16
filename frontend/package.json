@@ -11,7 +11,8 @@
     "test": "vitest run --project unit",
     "test:watch": "vitest --project unit",
     "preview": "vite preview",
-    "test:browser": "vitest run --project browser"
+    "test:browser": "vitest run --project browser",
+    "contrast": "CONTRAST_OUT=../docs/contrast.md vitest run --project unit src/contrast-table.test.ts"
   },
   "dependencies": {
     "react": "^18.3.1",
