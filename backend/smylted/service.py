@@ -3655,6 +3655,19 @@ class SmylteService:
         """Tell open tabs the Suggested list or the mail status changed."""
         self._publish({"type": "mail_updated"})
 
+    def drawing_salt(self) -> str:
+        """The account's secret that seeds the daily drawing, made on first use.
+
+        Secret so the drawings ahead cannot be read off the date alone. The
+        connection is in autocommit, so the write is durable when `set_meta`
+        returns, the same as the mail pipeline's meta writes."""
+        with self._lock:
+            salt = store.get_meta(self._conn, 'drawing_salt')
+            if salt is None:
+                salt = secrets.token_hex(16)
+                store.set_meta(self._conn, 'drawing_salt', salt)
+            return salt
+
     def search_open_tasks_any(
         self, terms: list[str], *, limit: int = 5, lists: Iterable[str] | None = None,
     ) -> list[dict[str, Any]]:

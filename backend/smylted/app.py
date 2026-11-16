@@ -47,6 +47,7 @@ from .auth import Authenticator, HashBudget, RateLimiter, hash_password, limiter
 from .config import Settings, normalize_dav_url
 from .db import store
 from .display import frame as frame_mod
+from .drawing import drawing_payload
 from .display import render
 from .notify.rules import TRIGGERS as NOTIFY_TRIGGERS
 from .dav.errors import AuthError as DavAuthError
@@ -2226,6 +2227,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not await _run(_svc(request).delete_habit, habit_id):
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown habit {habit_id}")
         return Response(status_code=204)
+
+    # -- the daily drawing --
+    @api.get("/drawing")
+    async def get_drawing(
+        request: Request,
+        # The one spelling the client sends. `date.fromisoformat` alone also
+        # takes `20261116` and `2026-W47-1`, which would cache a second copy of
+        # the same day under another key.
+        day: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}$"),
+        theme: Literal["light", "dark"] = "light",
+        view: Literal["today", "tasks", "calendar", "settings"] = "today",
+    ):
+        """The drawing for `day` (YYYY-MM-DD): its marks and the conditions
+        each shows under, so the client toggles them against the day's state
+        without asking again. Seeded by the account's salt, which never leaves
+        the server."""
+        try:
+            d = date.fromisoformat(day)
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+        salt = await _run(_svc(request).drawing_salt)
+        payload = await _run(drawing_payload, d, theme, salt, view=view)
+        if payload is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no drawing")
+        return JSONResponse(payload, headers={"Cache-Control": "private, max-age=3600"})
 
     # -- calendars / events --
     @api.get("/calendars")
