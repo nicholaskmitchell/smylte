@@ -169,18 +169,19 @@ class _Clearance:
     CELL = 12.0
 
     def __init__(self, avoid: Sequence[Circle]):
-        self.grid: dict[tuple[int, int], list[Circle]] = {}
+        self.grid: dict[tuple[int, int], list[tuple[Point, float]]] = {}
         c = self.CELL
         for x, y, r in avoid:
+            circle = ((x, y), r)
             for gx in range(math.floor((x - r) / c), math.floor((x + r) / c) + 1):
                 for gy in range(math.floor((y - r) / c), math.floor((y + r) / c) + 1):
-                    self.grid.setdefault((gx, gy), []).append((x, y, r))
+                    self.grid.setdefault((gx, gy), []).append(circle)
 
     def clear(self, p: Point) -> bool:
         px, py = p
         c = self.CELL
-        for x, y, r in self.grid.get((math.floor(px / c), math.floor(py / c)), ()):
-            if (px - x) ** 2 + (py - y) ** 2 < r * r:
+        for center, radius in self.grid.get((math.floor(px / c), math.floor(py / c)), ()):
+            if math.dist(p, center) < radius:
                 return False
         return True
 
@@ -222,15 +223,14 @@ def scatter_all(rng: Rng, count: int, cx: float, cy: float, rx: float, ry: float
             candidates.append(p)
     g = gap
     while True:
-        g2 = g * g
         for attempt in range(ATTEMPTS):
             pick = rng.fork(f'order{attempt}|{g:.2f}')
             left = candidates
             out: list[Point] = []
             while left and len(out) < count:
-                px, py = left[int(pick.random() * len(left))]
-                out.append((px, py))
-                left = [q for q in left if (q[0] - px) ** 2 + (q[1] - py) ** 2 >= g2]
+                point = left[int(pick.random() * len(left))]
+                out.append(point)
+                left = [q for q in left if math.dist(q, point) >= g]
             if len(out) == count:
                 return out
         if g <= floor:
