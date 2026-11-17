@@ -22,11 +22,13 @@ import {
   type MailModel, type MailSecretStatus, type MailSettingsPatch,
   type MailSettingsPayload, type MailStatus,
 } from '../api'
+import { useFieldNotes } from '../hooks'
 import { useI18n } from '../i18n'
 import { fmtWhen } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { makeGuard } from '../util'
 import { useUnsent } from '../layers'
+import { Hint } from './Hint'
 
 type Check = { ok: boolean; detail: string }
 type ImapCheck = Check & { data: MailImapTest | null }
@@ -56,6 +58,7 @@ export function MailSection({ onExpire, mailRev }: {
 }) {
   const { locale, t: tr } = useI18n()
   const tf = useTimeFormat()
+  const fieldNotes = useFieldNotes()
   const guard = makeGuard(onExpire)
   const [payload, setPayload] = useState<MailSettingsPayload | null>(null)
   const [failed, setFailed] = useState(false)
@@ -246,7 +249,7 @@ export function MailSection({ onExpire, mailRev }: {
           if (sameList(next, s[key])) return false
           return save({ [key]: next })
         }} />
-      <div className="hintline">{tr(hintKey)}</div>
+      {!fieldNotes && <div className="hintline">{tr(hintKey)}</div>}
     </>
   )
 
@@ -320,7 +323,7 @@ export function MailSection({ onExpire, mailRev }: {
               : save({ anthropic_workspace_id: v })
           }} />
       </div>
-      <div className="hintline">{tr('mail.workspace.hint')}</div>
+      <Hint>{tr('mail.workspace.hint')}</Hint>
 
       <div className="menu-row">
         <label htmlFor="mail-model">{tr('mail.model')}</label>
@@ -348,11 +351,13 @@ export function MailSection({ onExpire, mailRev }: {
             onCommit={(raw) => commitText(raw, s.model, (model) => save({ model }))} />
         </div>
       )}
-      <div className="hintline">
-        {keySet
-          ? (modelsError ?? tr('mail.model.hint'))
-          : tr('mail.model.needKey')}
-      </div>
+      {(!fieldNotes || (keySet && modelsError)) && (
+        <div className="hintline">
+          {keySet
+            ? (modelsError ?? tr('mail.model.hint'))
+            : tr('mail.model.needKey')}
+        </div>
+      )}
 
       <div className="menu-actions">
         <button className="btn ghost" disabled={testing === 'key' || !keySet}
@@ -392,7 +397,7 @@ export function MailSection({ onExpire, mailRev }: {
         status={payload.secrets.imap_password} envVar="SMYLTE_MAIL_IMAP_PASSWORD"
         onSave={(v) => saveSecret('imap_password', v)}
         onClear={() => saveSecret('imap_password', '')} />
-      <div className="hintline">{tr('mail.imap.hint')}</div>
+      <Hint>{tr('mail.imap.hint')}</Hint>
 
       <div className="menu-row">
         <label htmlFor="mail-imap-tls">{tr('mail.imap.tls')}</label>
@@ -422,11 +427,13 @@ export function MailSection({ onExpire, mailRev }: {
             value={s.imap_pinned_cert}
             onCommit={async (raw) => raw.trim() === s.imap_pinned_cert.trim() ? false
               : save({ imap_pinned_cert: raw.trim() })} />
-          <div className="hintline">
-            {payload.pinned_cert_fingerprint
-              ? tr('mail.cert.fingerprint', { fp: payload.pinned_cert_fingerprint })
-              : tr('mail.cert.pemHint')}
-          </div>
+          {(!fieldNotes || payload.pinned_cert_fingerprint) && (
+            <div className="hintline">
+              {payload.pinned_cert_fingerprint
+                ? tr('mail.cert.fingerprint', { fp: payload.pinned_cert_fingerprint })
+                : tr('mail.cert.pemHint')}
+            </div>
+          )}
         </>
       )}
       {s.imap_cert_mode === 'insecure_localhost' && (
@@ -464,7 +471,7 @@ export function MailSection({ onExpire, mailRev }: {
       )}
       {listField('mail-self', 'mail.self', 'self_addresses', 'mail.self.hint')}
       {listField('mail-always', 'mail.always', 'always_parse', 'mail.always.hint')}
-      <div className="hintline">{tr('mail.patterns.hint')}</div>
+      <Hint>{tr('mail.patterns.hint')}</Hint>
       {listField('mail-never', 'mail.never', 'never_parse', 'mail.patterns.hint')}
       {toggle('mail-notes-self', s.capture_notes_to_self,
         (capture_notes_to_self) => ({ capture_notes_to_self }), 'mail.notesSelf')}
@@ -479,7 +486,7 @@ export function MailSection({ onExpire, mailRev }: {
         <Draft id="mail-jev-model" className="input" value={s.jev_model}
           onCommit={(raw) => commitText(raw, s.jev_model, (jev_model) => save({ jev_model }))} />
       </div>
-      <div className="hintline">{tr('mail.jev.hint')}</div>
+      <Hint>{tr('mail.jev.hint')}</Hint>
       <div className="menu-actions">
         <button className="btn ghost"
           disabled={testing === 'jev' || !payload.secrets.typesafe_api_key.set}

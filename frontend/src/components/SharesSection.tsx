@@ -21,6 +21,8 @@ import { usePending, useUnsent } from '../layers'
 import { isOn, seenText } from '../shares'
 import { useTimeFormat } from '../timeformat'
 import { useI18n } from '../i18n'
+import { useFieldNotes } from '../hooks'
+import { Hint } from './Hint'
 import { ShareBody, type Translate } from './SharePage'
 
 // What the agenda may reach, in days. The server accepts exactly these four and
@@ -45,6 +47,7 @@ export function SharesSection(
   { onExpire, archived = [] }: { onExpire: () => void; archived?: string[] },
 ) {
   const { locale, t: tr } = useI18n()
+  const fieldNotes = useFieldNotes()
   const guard = makeGuard(onExpire)
   const tf = useTimeFormat()
   const [rows, setRows] = useState<Share[]>([])
@@ -307,7 +310,7 @@ export function SharesSection(
                         }}
                         onKeyDown={escapeReverts(d.id)} />
                     </div>
-                    <div className="hintline">{tr('shares.nameHint')}</div>
+                    <Hint>{tr('shares.nameHint')}</Hint>
 
                     <div className="menu-head">{tr('shares.whatTheySee')}</div>
 
@@ -342,7 +345,7 @@ export function SharesSection(
                             <button key={c.id}
                               className={`chip${on ? ' is-on' : ''}${old ? ' is-archived' : ''}`}
                               aria-pressed={on}
-                              title={old ? tr('shares.archived') : undefined}
+                              title={old && !fieldNotes ? tr('shares.archived') : undefined}
                               onClick={() => void patch(d.id, { calendars: toggled(d.calendars, c.id) })}>
                               {c.name}
                             </button>
@@ -350,7 +353,7 @@ export function SharesSection(
                         })}
                       </div>
                     )}
-                    <div className="hintline">{tr('shares.privateHint')}</div>
+                    <Hint>{tr('shares.privateHint')}</Hint>
 
                     <div className="menu-head" id={`share-horizon-${d.id}`}>{tr('shares.horizon')}</div>
                     <div className="disp-picks" role="group" aria-labelledby={`share-horizon-${d.id}`}>
@@ -374,7 +377,7 @@ export function SharesSection(
                         {tr(d.show_focus ? 'shares.on' : 'shares.off')}
                       </button>
                     </div>
-                    <div className="hintline">{tr('shares.focusHint')}</div>
+                    <Hint>{tr('shares.focusHint')}</Hint>
 
                     {nothing ? (
                       <div className="hintline warn" role="status">{tr('shares.nothingSelected')}</div>
@@ -388,7 +391,7 @@ export function SharesSection(
                         {tr(isOn(d) ? 'shares.on' : 'shares.off')}
                       </button>
                     </div>
-                    <div className="hintline">{tr('shares.enabledHint')}</div>
+                    <Hint>{tr('shares.enabledHint')}</Hint>
 
                     <div className="disp-url">
                       <code className="mono">{urlFor(d)}</code>
@@ -408,7 +411,7 @@ export function SharesSection(
                       <div className="hintline" role="alert">{tr('shares.previewFailed')}</div>
                     ) : preview ? (
                       <>
-                        <div className="hintline">{tr('shares.previewNote')}</div>
+                        <Hint>{tr('shares.previewNote')}</Hint>
                         <div className="share-preview">
                           <ShareBody view={preview} nowMs={Date.now()} skewMs={0}
                             tr={tr} locale={locale} justDone={new Set()} />

@@ -24,6 +24,8 @@ import { usePending, useUnsent } from '../layers'
 import { fmtWhen } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { useI18n } from '../i18n'
+import { useFieldNotes } from '../hooks'
+import { Hint } from './Hint'
 
 // What a display may be set to refresh at, by palette.
 //
@@ -61,6 +63,7 @@ export function DisplaysSection(
   { onExpire, archived = [] }: { onExpire: () => void; archived?: string[] },
 ) {
   const { locale, t: tr } = useI18n()
+  const fieldNotes = useFieldNotes()
   const guard = makeGuard(onExpire)
   const tf = useTimeFormat()
   const [rows, setRows] = useState<Display[]>([])
@@ -285,7 +288,7 @@ export function DisplaysSection(
                 className={`chip${on ? ' is-on' : ''}`}
                 aria-pressed={on}
                 disabled={last}
-                title={last ? tr('disp.needOneSource') : undefined}
+                title={last && !fieldNotes ? tr('disp.needOneSource') : undefined}
                 onClick={() => {
                   if (last) return
                   const next = asAllowlist(toggleId(now, c.id), all)
@@ -373,7 +376,7 @@ export function DisplaysSection(
                   </div>
 
                   {d.mode === 'now' ? (
-                    <div className="hintline">{tr('disp.modeNowHint')}</div>
+                    <Hint>{tr('disp.modeNowHint')}</Hint>
                   ) : null}
 
                   <div className="menu-row">
@@ -385,7 +388,7 @@ export function DisplaysSection(
                       {tr(d.switchable ? 'disp.on' : 'disp.off')}
                     </button>
                   </div>
-                  <div className="hintline">{tr('disp.switchableHint')}</div>
+                  <Hint>{tr('disp.switchableHint')}</Hint>
 
                   <div className="menu-row">
                     <label>{tr('disp.palette')}</label>
@@ -395,7 +398,7 @@ export function DisplaysSection(
                       {tr(`disp.palette.${d.palette}`)}
                     </button>
                   </div>
-                  <div className="hintline">{tr('disp.paletteHint')}</div>
+                  <Hint>{tr('disp.paletteHint')}</Hint>
 
                   <div className="menu-row">
                     <label>{tr('disp.refresh')}</label>
@@ -432,7 +435,7 @@ export function DisplaysSection(
                           {tr(d.hide_done_habits ? 'disp.on' : 'disp.off')}
                         </button>
                       </div>
-                      <div className="hintline">{tr('disp.hideDoneHabitsHint')}</div>
+                      <Hint>{tr('disp.hideDoneHabitsHint')}</Hint>
                       <div className="menu-row">
                         <label>{tr('disp.hideDoneTasks')}</label>
                         <button className="menu-toggle"
@@ -460,7 +463,7 @@ export function DisplaysSection(
                   <div className="hintline">{tr('disp.urlHint')}</div>
 
                   <div className="menu-head">{tr('disp.panel')}</div>
-                  <div className="hintline">{tr('disp.panelHint')}</div>
+                  <Hint>{tr('disp.panelHint')}</Hint>
                   {/* Held locally and written on BLUR, not on every keystroke.
                       Typing "800" passes through 8 and 80 on the way, and the
                       server floors a panel at 100 — so a per-keystroke PATCH
@@ -518,7 +521,7 @@ export function DisplaysSection(
                       {copied === `${d.token}-img` ? tr('disp.copied') : tr('disp.copy')}
                     </button>
                   </div>
-                  <div className="hintline">{tr('disp.imageHint')}</div>
+                  <Hint>{tr('disp.imageHint')}</Hint>
 
                   <div className="menu-row">
                     <label>{tr('disp.enabled')}</label>
@@ -527,7 +530,7 @@ export function DisplaysSection(
                       {tr(d.enabled ? 'disp.on' : 'disp.off')}
                     </button>
                   </div>
-                  <div className="hintline">{tr('disp.enabledHint')}</div>
+                  <Hint>{tr('disp.enabledHint')}</Hint>
 
                   <div className="menu-actions">
                     <button className="btn ghost" onClick={() => void rotate(d.token)}>
@@ -567,7 +570,7 @@ export function DisplaysSection(
           {tr('disp.addButton')}
         </button>
       </div>
-      <div className="hintline">{tr('disp.hint')}</div>
+      <Hint>{tr('disp.hint')}</Hint>
     </>
   )
 }

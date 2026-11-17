@@ -14,6 +14,7 @@
 import { useEffect, useState } from 'react'
 import { api, AuthError } from '../api'
 import { useT } from '../i18n'
+import { useFieldNotes } from '../hooks'
 import {
   DEFAULT_DIGEST_TIME, DEFAULT_EVENING_TIME, DEFAULT_EVENT_LEAD_MINUTES,
   DEFAULT_OFF, DEFAULT_ON, DEFAULT_TASK_LEAD_MINUTES, MAX_EVENT_LEAD_MINUTES, MIN_EVENT_LEAD_MINUTES,
@@ -22,6 +23,7 @@ import {
 } from '../notifications'
 import { DateTimeInput } from './DateTimeInput'
 import { Fold } from './SettingsFold'
+import { Hint } from './Hint'
 
 export function NotificationsSection({
   enabled, onEnabledChange,
@@ -64,6 +66,7 @@ export function NotificationsSection({
   onExpire: () => void
 }) {
   const tr = useT()
+  const fieldNotes = useFieldNotes()
   // A write-only field: it starts empty even when a token IS stored, because
   // there is nothing to prefill it with. Emptying it is therefore not "clear
   // the token" — the row has its own Remove for that, so a stray click in a
@@ -126,14 +129,14 @@ export function NotificationsSection({
             {tr(on ? 'notif.on' : 'notif.off')}
           </button>
         </div>
-        <div className="hintline">
+        {!fieldNotes && <div className="hintline">
           {tr(TRIGGER_HINTS[t])}
           {/* Where its timing comes from, said once per rule rather than left
               to be inferred: a wall-clock rule is governed by a field further
               down this page, and knowing which one is the difference between
               "why did this arrive at 9pm" and knowing where to change it. */}
           {on && TRIGGER_IS_EVENING[t] && ` ${tr('notif.firesEvening')}`}
-        </div>
+        </div>}
       </div>
     )
   }
@@ -154,7 +157,7 @@ export function NotificationsSection({
           {tr(enabled ? 'notif.on' : 'notif.off')}
         </button>
       </div>
-      <div className="hintline">{withDefault(tr('notif.enabled.hint'), tr('notif.off'))}</div>
+      <Hint>{withDefault(tr('notif.enabled.hint'), tr('notif.off'))}</Hint>
 
       <div className="menu-head">{tr('notif.telegram')}</div>
       <Fold defaultOpen={connectionOpen}
@@ -204,7 +207,7 @@ export function NotificationsSection({
           autoComplete="off" spellCheck={false} value={chatId}
           onChange={(e) => onChatIdChange(e.target.value.trim())} />
       </div>
-      <div className="hintline">{tr('notif.chatId.hint')}</div>
+      <Hint>{tr('notif.chatId.hint')}</Hint>
 
       <div className="menu-actions">
         <button className="btn ghost" onClick={() => { void runTest() }} disabled={testing}>
@@ -255,9 +258,9 @@ export function NotificationsSection({
           deploy, so "07:30" would land in the middle of the night — and a rule
           that is on but never fires is worse than one that is off. */}
       {homeTz && (
-        <div className="hintline">
+        <Hint>
           {withDefault(tr('notif.digestTime.hint', { tz: homeTz }), DEFAULT_DIGEST_TIME)}
-        </div>
+        </Hint>
       )}
 
       <div className="menu-row">
@@ -271,30 +274,30 @@ export function NotificationsSection({
             if (e.key === 'Escape') { setEveningDraft(eveningTime); e.stopPropagation() }
           }} />
       </div>
-      <div className="hintline">
+      <Hint>
         {withDefault(tr('notif.eveningTime.hint'), DEFAULT_EVENING_TIME)}
-      </div>
+      </Hint>
 
       <div className="menu-row">
         <label htmlFor="notif-task-lead">{tr('notif.taskLead')}</label>
         <LeadField id="notif-task-lead" value={taskLead}
           min={MIN_EVENT_LEAD_MINUTES} max={1440} onCommit={onTaskLeadChange} />
       </div>
-      <div className="hintline">
+      <Hint>
         {withDefault(tr('notif.taskLead.hint'), `${DEFAULT_TASK_LEAD_MINUTES} ${tr('settings.focus.minutes')}`)}
-      </div>
+      </Hint>
 
       <div className="menu-row">
         <label htmlFor="notif-lead">{tr('notif.eventLead')}</label>
         <LeadField id="notif-lead" value={eventLead}
           min={MIN_EVENT_LEAD_MINUTES} max={MAX_EVENT_LEAD_MINUTES} onCommit={onEventLeadChange} />
       </div>
-      <div className="hintline">
+      <Hint>
         {withDefault(tr('notif.eventLead.hint'), `${DEFAULT_EVENT_LEAD_MINUTES} ${tr('settings.focus.minutes')}`)}
-      </div>
+      </Hint>
       </Fold>
 
-      <div className="hintline">{tr('notif.ceiling.hint')}</div>
+      <Hint>{tr('notif.ceiling.hint')}</Hint>
     </>
   )
 }

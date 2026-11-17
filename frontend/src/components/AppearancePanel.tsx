@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { canSaveFiles, saveTextFile } from '../android'
 import { clientId } from '../api'
-import { useEscape, useSegmentThumb } from '../hooks'
+import { useEscape, useFieldNotes, useSegmentThumb } from '../hooks'
 import { UnsentInput, useLayer, useUnsent, useUnsentCount } from '../layers'
 import { useT } from '../i18n'
 import { showNotice } from '../util'
+import { Hint } from './Hint'
 import {
   DEFAULTS, FONT_CHOICES, GROUPS, MAX_NAME_LEN, MAX_THEMES, PRESETS, SHARED_DEFAULTS,
   GROUP_LABEL, TOKENS, defaultValue, ensureFont, findPreset, isSharedToken, isValidToken,
@@ -45,6 +46,7 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose, w
   wallpaperAccent?: { on: boolean; onToggle: (on: boolean) => void }
 }) {
   const tr = useT()
+  const fieldNotes = useFieldNotes()
   // The mode as a WORD, twice on this screen: inside a sentence ("2 overrides
   // in dark") and on a button ("Reset dark"). Both want the lowercase form —
   // German capitalises nouns, not adjectives — while the two tabs above want
@@ -299,17 +301,17 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose, w
             </div>
           )}
 
-          <p className="hintline">
+          <Hint as="p">
             {isPreset
               ? tr('appear.presetHint', { name: active!.name })
               : active
                 ? tr('appear.editingHint')
                 : tr('appear.shippedHint')}
-          </p>
+          </Hint>
           {/* Classic is more than its 23 tokens — the rest is classic.css, keyed
               on the preset attribute a fork does not carry — so a fork of it is
               not a copy of it, and the panel says so before anyone finds out. */}
-          {active?.id === 'preset:classic' && <p className="hintline">{tr('appear.classicHint')}</p>}
+          {active?.id === 'preset:classic' && <Hint as="p">{tr('appear.classicHint')}</Hint>}
 
           {/* ---- this phone only ---- */}
           {/* Not part of the theme: it is stored on this phone, never saved to the
@@ -321,12 +323,13 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose, w
               <div className="menu-row">
                 <label htmlFor="appear-wallpaper-accent">{tr('appear.systemAccent')}</label>
                 <button className="menu-toggle" id="appear-wallpaper-accent"
-                  aria-pressed={wallpaperAccent.on} aria-describedby="appear-wallpaper-accent-hint"
+                  aria-pressed={wallpaperAccent.on}
+                  aria-describedby={fieldNotes ? undefined : 'appear-wallpaper-accent-hint'}
                   onClick={() => wallpaperAccent.onToggle(!wallpaperAccent.on)}>
                   {tr(wallpaperAccent.on ? 'appear.systemAccentOn' : 'appear.systemAccentOff')}
                 </button>
               </div>
-              <p className="hintline" id="appear-wallpaper-accent-hint">{tr('appear.systemAccentHint')}</p>
+              <Hint as="p" id="appear-wallpaper-accent-hint">{tr('appear.systemAccentHint')}</Hint>
             </>
           )}
 
@@ -361,7 +364,7 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose, w
                 <section key={group} className="appear-group">
                   <div className="menu-head">{tr(GROUP_LABEL[group] ?? group)}</div>
                   {entries.map(([token, spec]) => (
-                    <TokenRow key={token} token={token} spec={spec}
+                    <TokenRow key={token} token={token} spec={spec} fieldNotes={fieldNotes}
                       value={current[token]} isOverride={token in overridden}
                       onChange={(v) => edit({ [token]: v })}
                       onClear={() => {
@@ -408,9 +411,11 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose, w
 
 // ── one token, one row ──────────────────────────────────────────────────────
 
-function TokenRow({ token, spec, value, isOverride, onChange, onClear }: {
+function TokenRow({ token, spec, fieldNotes, value, isOverride, onChange, onClear }: {
   token: string
   spec: TokenSpec
+  /** Passed down rather than read here: one row per token. */
+  fieldNotes: boolean
   value: string
   isOverride: boolean
   onChange: (value: string) => void
@@ -421,7 +426,7 @@ function TokenRow({ token, spec, value, isOverride, onChange, onClear }: {
     <div className="appear-row">
       <label className="appear-label" htmlFor={`tok${token}`}>
         {tr(spec.label)}
-        {spec.hint && <span className="appear-hint">{tr(spec.hint)}</span>}
+        {!fieldNotes && spec.hint && <span className="appear-hint">{tr(spec.hint)}</span>}
       </label>
       <div className="appear-control">
         {spec.kind === 'color' && (
@@ -432,7 +437,7 @@ function TokenRow({ token, spec, value, isOverride, onChange, onClear }: {
         {(spec.kind === 'length' || spec.kind === 'scale') &&
           <RangeControl id={token} token={token} spec={spec} value={value} onChange={onChange} />}
         <button className="appear-clear" onClick={onClear} disabled={!isOverride}
-          title={tr('appear.resetToken')}
+          title={fieldNotes ? undefined : tr('appear.resetToken')}
           aria-label={tr('appear.resetNamed', { token: tr(spec.label) })}>↺</button>
       </div>
     </div>
