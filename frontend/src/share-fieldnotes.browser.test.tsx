@@ -86,3 +86,21 @@ describe('the share page’s rows under Field notes', () => {
     expect(box(text).right).toBeLessThanOrEqual(box(text.closest('.share-card')!).right + 0.5)
   })
 })
+
+describe('Display mode under Field notes', () => {
+  it('keeps a 44px tap height on the mode switch', async () => {
+    // A tablet you tap to check things off: the presets' buttons are 44px
+    // (app.css .dmode-bar .btn), and the segmented switch keeps that height.
+    const host = await mount(`
+      <div class="dmode-bar">
+        <div class="view-tabs" style="--n: 3; --i: 0">
+          <button type="button" class="view-tab active" aria-pressed="true">Today</button>
+          <button type="button" class="view-tab" aria-pressed="false">Tasks</button>
+          <button type="button" class="view-tab" aria-pressed="false">Calendar</button>
+        </div>
+      </div>`)
+    for (const b of host.querySelectorAll<HTMLElement>('.view-tab')) {
+      expect(b.getBoundingClientRect().height, b.textContent!).toBeGreaterThanOrEqual(44)
+    }
+  })
+})

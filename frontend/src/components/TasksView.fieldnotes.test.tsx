@@ -150,7 +150,7 @@ describe('<TasksView> under Field notes', () => {
     await waitFor(() => expect(field).toHaveFocus())
   })
 
-  it('says nothing in the editor about moving or parking', async () => {
+  it('says nothing in the editor about moving, and keeps what parking does elsewhere', async () => {
     const { user } = setup()
     await user.click(await screen.findByText('Trip planning'))
     const dialog = await screen.findByRole('dialog', { name: 'Task' })
@@ -158,6 +158,7 @@ describe('<TasksView> under Field notes', () => {
     // The controls stay; only the sentences about them go.
     expect(within(dialog).getByRole('button', { name: 'Park it' })).toBeInTheDocument()
     expect(within(dialog).queryByText(/Its subtasks move with it/)).not.toBeInTheDocument()
-    expect(within(dialog).queryByText(/Hides it from your lists/)).not.toBeInTheDocument()
+    // What parking does outside Smylte is a consequence, so it stays.
+    expect(within(dialog).getByText(/Other apps still show it/)).toBeInTheDocument()
   })
 })

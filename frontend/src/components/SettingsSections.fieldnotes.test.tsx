@@ -223,10 +223,11 @@ describe('Shares under Field notes', () => {
 
   it('drops the explanations, and the title on an archived calendar', async () => {
     await open({ ...SHARE, calendars: ['old'] }, ['old'])
-    for (const gone of [
-      /Only you see this name/, /Items marked private in other apps show as Busy/,
-      /Whether you’re focusing or on a break/, /While off, the link stops working/,
-    ]) expect(screen.queryByText(gone), String(gone)).toBeNull()
+    for (const gone of [/Only you see this name/, /While off, the link stops working/])
+      expect(screen.queryByText(gone), String(gone)).toBeNull()
+    // What a share shows other people is a privacy note, so these stay.
+    for (const kept of [/Items marked private in other apps show as Busy/, /Whether you’re focusing or on a break/])
+      expect(screen.getByText(kept), String(kept)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Old' })).toHaveClass('is-archived')
     noTitles()
   })

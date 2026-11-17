@@ -494,3 +494,9 @@
   font-size: calc(var(--fs-app-ui) * var(--fs-scale)); min-height: var(--control-h);
 }
 [data-surface="app"] :is(.booking-day .dow, .busy-chip) { font-size: calc(var(--fs-app-small) * var(--fs-scale)); }
+
+/* ==== cp3 · review fixes ==== */
+/* Display mode is a tablet you tap to check things off: its mode switch keeps
+   the 44px tap height the presets' buttons have (app.css .dmode-bar .btn),
+   which a .view-tab does not get on its own. */
+[data-surface="app"] .dmode-bar .view-tabs > .view-tab { min-height: 44px; }

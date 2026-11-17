@@ -472,7 +472,7 @@ export function SettingsMenu({
                 onChange={onArchivedCalsChange} onExpire={onExpire}
                 viewing={viewingCal} onViewing={setViewingCal} />
               {!viewingCal && (
-                <Hint>{tr('settings.archived.hint')}</Hint>
+                <div className="hintline">{tr('settings.archived.hint')}</div>
               )}
             </Fold>
           </>

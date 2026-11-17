@@ -368,11 +368,11 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
               </button>
             )}
             <span className="spacer" />
-            {!fieldNotes && (
-              <span className="hintline">
-                {tr(task.parked ? 'tasks.parkedHint' : 'tasks.parkHint')}
-              </span>
-            )}
+            {/* Kept under Field notes: what parking does outside Smylte (other
+                apps still show it) is a consequence, not an explanation. */}
+            <span className="hintline">
+              {tr(task.parked ? 'tasks.parkedHint' : 'tasks.parkHint')}
+            </span>
           </div>
         )}
         <div className="modal-actions">

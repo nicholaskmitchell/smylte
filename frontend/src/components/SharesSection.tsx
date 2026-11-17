@@ -353,7 +353,7 @@ export function SharesSection(
                         })}
                       </div>
                     )}
-                    <Hint>{tr('shares.privateHint')}</Hint>
+                    <div className="hintline">{tr('shares.privateHint')}</div>
 
                     <div className="menu-head" id={`share-horizon-${d.id}`}>{tr('shares.horizon')}</div>
                     <div className="disp-picks" role="group" aria-labelledby={`share-horizon-${d.id}`}>
@@ -377,7 +377,7 @@ export function SharesSection(
                         {tr(d.show_focus ? 'shares.on' : 'shares.off')}
                       </button>
                     </div>
-                    <Hint>{tr('shares.focusHint')}</Hint>
+                    <div className="hintline">{tr('shares.focusHint')}</div>
 
                     {nothing ? (
                       <div className="hintline warn" role="status">{tr('shares.nothingSelected')}</div>

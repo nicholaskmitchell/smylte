@@ -153,7 +153,8 @@ describe('<SettingsMenu> under Field notes', () => {
     expect(panel().querySelector('[title]')).toBeNull()
     expect(within(panel()).queryByText(/Fixed fits the whole month/)).not.toBeInTheDocument()
     expect(within(panel()).getByRole('button', { name: 'Fixed or dynamic calendar grid' })).toBeInTheDocument()
-    expect(within(panel()).queryByText(/Archived calendars are hidden/)).not.toBeInTheDocument()
+    // Where archived calendars still show is a consequence, so it stays.
+    expect(within(panel()).getByText(/Archived calendars are hidden/)).toBeInTheDocument()
 
     await userEvent.click(nav('Tasks'))
     const p = panel()
