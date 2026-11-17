@@ -2743,9 +2743,11 @@ export function TodayView({
 
         The split is by FREQUENCY, not by importance. Review and Start
         working are what you reach for on an ordinary day and they stay in
-        the header under the presets. Field notes keeps one control there:
-        Start working lives in the focus card and Review joins this menu. Shutting the day down happens once, in the evening, and
-        editing a habit RULE happens rarely — both are worth a tap.
+        the header under the presets. Shutting the day down happens once, in
+        the evening, and editing a habit RULE happens rarely — both are worth
+        a tap. Field notes goes further: Review joins this menu, and Start
+        working is the focus card's, so the header shows it only when there
+        is no card (nothing left to do).
 
         One `isToday` gate on the whole group rather than one per item,
         because both items carried the same one and an empty popover is
@@ -2780,8 +2782,8 @@ export function TodayView({
           // second dialog on this screen carrying the word "Habits" would
           // collide with the habits sheet, which is already one.
           <div className="today-menu" ref={menuRef}>
-            {/* Field notes keeps one control in the header, so Review and Plan
-                moves in here rather than sitting beside the title. */}
+            {/* Under Field notes, Review and Plan live here rather than
+                beside the title, to keep the header quiet. */}
             {fieldNotes && isToday && (
               <button type="button" className="today-menu-item today-review-item"
                 aria-pressed={mode === 'review'}
@@ -2898,9 +2900,10 @@ export function TodayView({
       {fieldNotes ? (
         <>
           {/* Field notes: the day's date and its drawing, the focus card, then
-              the list under a plain "Today" and its count. The same nav and
-              the same actions as the Sep 2026 header, less Start working,
-              which is the focus card's. */}
+              the list under a plain "Today" and its count. The same nav as
+              the Sep 2026 header; of its actions, Start working is the focus
+              card's (the header keeps it only when there is no card) and
+              Review and Plan are in the ⋯ menu. */}
           <div className="content-head today-head fn-head">
             <div className="fn-date">
               <span className="fn-weekday">{weekday}</span>

@@ -173,8 +173,9 @@
   --focus-offset: -2px;
 }
 /* Every view fits. Each takes its label's width and an equal share of what
-   is left, rather than an equal share of the whole — "Calendar" is twice
-   "Home", and quarters of a 390px bar cut it off. A label longer than the room
+   is left, rather than an equal share of the whole: labels differ in width
+   ("Calendar" is half again "Home"), and an equal split spends room where it is
+   not needed. A label longer than the room
    (a larger text scale) ends in an ellipsis rather than pushing the gear off.
    44px tall, which is the touch target itself — Classic's strip needed an
    invisible `::after` to reach it, and this does not. */
@@ -198,8 +199,10 @@
 .tabbar > .icon-btn { flex: none; width: 44px; height: 44px; border-color: transparent; }
 .tabbar > .icon-btn.active { color: var(--fg); background: var(--paper); border-color: transparent; }
 /* The narrowest phones still in use are 320px wide. There, at the default
-   text scale, four labels and the gear fit only a step smaller and tighter:
-   12px labels, no gap, and a 40px gear. Measured in English and German. */
+   text scale, the labels and the gear are set a step smaller and tighter: 12px
+   labels, no gap, and a 40px gear. Sized when the bar held five tabs, and
+   kept for four; sidebar-layout.browser.test.tsx checks that every label
+   fits untruncated at 320px in English and German. */
 @media (max-width: 359px) {
   .tabbar { gap: 0; padding-inline: 4px; }
   .tabbar .tab { padding: 0 3px; font-size: calc(12px * var(--fs-scale)); }
@@ -237,6 +240,9 @@
      header after it gives it back. The sibling selectors are one class more
      specific than the rules above, so they win whatever the source order. */
   .shell[data-layout="sidebar"] .content-switch { padding-top: 26px; }
+  .shell[data-layout="sidebar"] .content-switch.sched-switch {
+    padding-bottom: 12px; border-bottom-color: transparent;
+  }
   .shell[data-layout="sidebar"] .content-switch + .content-head,
   .shell[data-layout="sidebar"] .content-switch + .cal-head { padding-top: 10px; }
 }

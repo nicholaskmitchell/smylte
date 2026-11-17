@@ -165,12 +165,21 @@ export function SchedulingView({ rev, onExpire, viewTabs }: {
   return (
     <div className="work">
       <div className="content">
-        {viewTabs}
-        <div className="content-head">
-          {!viewTabs && <span className="content-title">{tr('sched.title')}</span>}
-          <span className="spacer" />
-          <button className="btn" onClick={() => setEditing('new')}>{tr('sched.newLink')}</button>
-        </div>
+        {viewTabs ? (
+          // Inside Calendar the switch names the view, so New link sits on the
+          // switch's row and the view starts one row higher.
+          <div className="content-switch sched-switch">
+            {viewTabs}
+            <span className="spacer" />
+            <button className="btn" onClick={() => setEditing('new')}>{tr('sched.newLink')}</button>
+          </div>
+        ) : (
+          <div className="content-head">
+            <span className="content-title">{tr('sched.title')}</span>
+            <span className="spacer" />
+            <button className="btn" onClick={() => setEditing('new')}>{tr('sched.newLink')}</button>
+          </div>
+        )}
         <div className="scroll">
           {!loaded ? (
             <div className="empty" style={{ padding: '18px 26px' }}>{tr('common.loading')}</div>

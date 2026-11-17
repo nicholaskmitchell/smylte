@@ -24,18 +24,18 @@ export function CalendarViewTabs({ view, onView, takeFocus }: {
   useEffect(() => {
     if (takeFocus?.()) activeRef.current?.focus()
   }, [takeFocus])
+  // The row it sits in (`.content-switch`) is the view's own, so a view can
+  // put its actions beside it (Scheduling's New link).
   return (
-    <div className="content-switch">
-      <div className="view-tabs" role="tablist" aria-label={tr('tab.calendar')}
-        ref={ref}
-        style={{ '--n': VIEWS.length, '--i': active } as CSSProperties}>
-        {VIEWS.map(([v, label]) => (
-          <button key={v} type="button" role="tab" aria-selected={view === v}
-            ref={view === v ? activeRef : undefined}
-            className={'view-tab ' + (view === v ? 'active' : '')}
-            onClick={() => onView(v)}>{tr(label)}</button>
-        ))}
-      </div>
+    <div className="view-tabs" role="tablist" aria-label={tr('tab.calendar')}
+      ref={ref}
+      style={{ '--n': VIEWS.length, '--i': active } as CSSProperties}>
+      {VIEWS.map(([v, label]) => (
+        <button key={v} type="button" role="tab" aria-selected={view === v}
+          ref={view === v ? activeRef : undefined}
+          className={'view-tab ' + (view === v ? 'active' : '')}
+          onClick={() => onView(v)}>{tr(label)}</button>
+      ))}
     </div>
   )
 }

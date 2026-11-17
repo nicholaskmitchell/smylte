@@ -665,7 +665,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
       </NavCollections>
 
       <div className="content">
-        {viewTabs}
+        {viewTabs && <div className="content-switch">{viewTabs}</div>}
         <div className="cal-head">
           <button className="icon-btn" title={tr('cal.prevMonth')} aria-label={tr('cal.prevMonth')}
             onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}>‹</button>

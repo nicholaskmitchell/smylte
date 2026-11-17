@@ -425,7 +425,10 @@ button.menu-toggle:active { scale: var(--press-scale); }
 /* The Calendar / Scheduling switch above a view's own header. The header under
    it has already had its full top margin spent on the switch, so it keeps only
    a short one. */
-.content-switch { display: flex; padding: 16px var(--gutter) 0; }
+.content-switch { display: flex; align-items: center; gap: 12px; padding: 16px var(--gutter) 0; }
+/* Scheduling's switch row is also its header (New link sits on it), so it
+   closes like one: the header's bottom room and rule. */
+.content-switch.sched-switch { padding-bottom: 10px; border-bottom: 1px solid var(--rule-faint); }
 .content-switch + .content-head, .content-switch + .cal-head { padding-top: 10px; }
 .content-title { font-family: var(--serif); font-size-adjust: none; font-size: calc(24px * var(--fs-scale)); font-weight: 500; letter-spacing: -0.01em; }
 .title-dot { width: 10px; height: 10px; flex: none; align-self: center; border-radius: var(--r-dot); }

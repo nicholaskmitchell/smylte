@@ -133,8 +133,8 @@
   align-self: flex-start; height: calc(15px * var(--fs-scale) * 1.5); border-radius: var(--r-pill);
 }
 
-/* The narrowest phones (320px): four labels, the gear and the add fit a step
-   smaller and tighter, as the Sep 2026 bar does. */
+/* The narrowest phones (320px): the labels, the gear and the add are set a
+   step smaller and tighter, as the Sep 2026 bar's are. */
 @media (max-width: 359px) {
   [data-surface="app"] .tabbar { gap: 0; padding-inline: 4px; }
   [data-surface="app"] .tabbar .tab { padding-inline: 1px; font-size: calc(12px * var(--fs-scale)); }
