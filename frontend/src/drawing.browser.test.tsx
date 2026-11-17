@@ -97,6 +97,39 @@ describe('ink', () => {
     expect(wash).not.toBe('')
     expect(stops.map((s) => s.stopOpacity)).toEqual(['1', '1', '0'])
   })
+
+  it('lifts the glow toward the ink at night, and only at night', () => {
+    // The dark wash is 1.5:1 on the dark paper, so a glow of it read as unlit;
+    // fieldnotes.css mixes it 30% toward the ink in the dark theme only. Each
+    // theme's stop is compared with the same expression resolved by the same
+    // engine, so the test does not depend on how a colour is serialised.
+    const glowing = { ...drawing, marks: drawing.marks.map((m, i) => (i === 0 ? { ...m, role: 'glow' as const } : m)) }
+    const root = document.documentElement
+    const before = root.dataset.theme
+    const probe = (value: string) => {
+      const span = document.createElement('span')
+      span.style.color = value
+      document.body.append(span)
+      const out = getComputedStyle(span).color
+      span.remove()
+      return out
+    }
+    const stopIn = (theme: 'light' | 'dark') => {
+      root.dataset.theme = theme
+      const el = host()
+      flushSync(() => createRoot(el).render(<DayDrawing drawing={glowing} state={state({})} />))
+      return getComputedStyle(el.querySelector('stop')!).stopColor
+    }
+    try {
+      expect(stopIn('light')).toBe(probe('var(--wash)'))
+      const dark = stopIn('dark')
+      expect(dark).toBe(probe('color-mix(in oklab, var(--wash) 70%, var(--fg))'))
+      expect(dark).not.toBe(probe('var(--wash)'))
+    } finally {
+      if (before === undefined) delete root.dataset.theme
+      else root.dataset.theme = before
+    }
+  })
 })
 
 describe('cost', () => {
