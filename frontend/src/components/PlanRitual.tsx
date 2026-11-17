@@ -29,7 +29,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { DayEntry, Task } from '../api'
-import { useEscape } from '../hooks'
+import { useEscape, useFieldNotes } from '../hooks'
 import { useLayer } from '../layers'
 import { taskKey } from '../order'
 import { textDir } from '../util'
@@ -213,6 +213,7 @@ function CapacityStep({ capacity, meetingMinutes, onCapacity }: {
 }) {
   const tr = useT()
   const tx = useTx()
+  const fieldNotes = useFieldNotes()
   const [draft, setDraft] = useState(() => capacityInput(capacity))
   const [refused, setRefused] = useState(false)
 
@@ -266,7 +267,7 @@ function CapacityStep({ capacity, meetingMinutes, onCapacity }: {
             b: <span className="mono">{tr('capacity.example.length')}</span>,
           })}
         </p>
-      ) : (
+      ) : fieldNotes ? null : (
         <p className="plan-hint">
           {tx('plan.capacityHint', {
             a: <span className="mono">{tr('capacity.example.until')}</span>,
@@ -351,6 +352,7 @@ function ShapeStep({ entries, renderRow }: {
   renderRow: (e: DayEntry) => ReactNode
 }) {
   const tr = useT()
+  const fieldNotes = useFieldNotes()
   if (!entries.length) {
     return (
       <div className="plan-body">
@@ -360,7 +362,7 @@ function ShapeStep({ entries, renderRow }: {
   }
   return (
     <div className="plan-body plan-scroll">
-      <p className="plan-hint">{tr('plan.shapeHint')}</p>
+      {!fieldNotes && <p className="plan-hint">{tr('plan.shapeHint')}</p>}
       {/* The day's OWN rows, through the day's own renderer — so the estimate
           cell, the checkbox and the drag behave here exactly as they do behind
           this dialog, and there is no second implementation to drift. */}

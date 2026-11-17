@@ -4316,6 +4316,7 @@ function HabitsSheet({ rev, guard, onClose }: {
   onClose: () => void
 }) {
   const tr = useT()
+  const fieldNotes = useFieldNotes()
   // Seeded from the disk mirror, like the day behind it. The sheet is opened
   // on demand rather than mounted with the tab, so its fetch starts on the
   // click — which made the one screen where the rules are edited paint an empty
@@ -4496,7 +4497,7 @@ function HabitsSheet({ rev, guard, onClose }: {
           <button className="icon-btn" onClick={onClose}
             aria-label={tr('common.close')}>✕</button>
         </div>
-        <p className="habit-blurb">{tr('habit.sheet.blurb')}</p>
+        {!fieldNotes && <p className="habit-blurb">{tr('habit.sheet.blurb')}</p>}
         {habits !== null && habits.length === 0 && (
           <p className="empty habit-empty">{tr('habit.none')}</p>
         )}

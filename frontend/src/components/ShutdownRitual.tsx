@@ -21,13 +21,14 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { DayEntry, Task } from '../api'
-import { useEscape } from '../hooks'
+import { useEscape, useFieldNotes } from '../hooks'
 import { useLayer } from '../layers'
 import { useTimeFormat } from '../timeformat'
 import { fmtClock, fmtDuration } from '../time'
 import { taskKey } from '../order'
 import { textDir } from '../util'
 import { DateTimeInput } from './DateTimeInput'
+import { CheckInk } from './Marks'
 import { useI18n } from '../i18n'
 import { useT } from '../i18n'
 
@@ -193,6 +194,7 @@ function DoneStep({ entries, offPlan, planned, done, doneMinutes, unestimated,
   colorOf: (listId: string | null) => string | null
 }) {
   const tr = useT()
+  const fieldNotes = useFieldNotes()
   const { locale } = useI18n()
   const tf = useTimeFormat()
   // A day whose every row was moved or dropped. `entries` holds none of them
@@ -246,7 +248,9 @@ function DoneStep({ entries, offPlan, planned, done, doneMinutes, unestimated,
             {offPlan.map((t) => (
               <li key={taskKey(t)} className="today-row">
                 <span className="today-check-gap today-mark mono" role="img"
-                  aria-label={tr('shut.doneMark')}>✓</span>
+                  aria-label={tr('shut.doneMark')}>
+                  {fieldNotes ? <CheckInk seed={taskKey(t)} /> : '✓'}
+                </span>
                 <span className="today-kind-mark" data-kind="task" role="img"
                   aria-label={tr('common.task')}>
                   <span className="today-kind-box" style={colorOf(t.list)
@@ -284,6 +288,7 @@ function FollowsStep({ day, unfinished, titleOf, decided, onRoll, onDrop }: {
   onDrop: (e: DayEntry) => void
 }) {
   const tr = useT()
+  const fieldNotes = useFieldNotes()
   const tomorrow = addDayKey(day, 1)
   // The floor for the date field, so the browser's own picker cannot offer a day
   // the server would refuse. The rule is enforced server-side regardless
@@ -310,7 +315,7 @@ function FollowsStep({ day, unfinished, titleOf, decided, onRoll, onDrop }: {
   }
   return (
     <div className="plan-body plan-scroll">
-      <p className="plan-hint">{tr('shut.followsHint')}</p>
+      {!fieldNotes && <p className="plan-hint">{tr('shut.followsHint')}</p>}
       {/* The whole-list version of the arm every row has, and worth its own
           control: "none of this happened today, all of it happens tomorrow" is
           the commonest true answer, and paying for it one row at a time is what
@@ -378,6 +383,7 @@ function ReflectStep({ reflection, onReflect }: {
   onReflect: (text: string) => void
 }) {
   const tr = useT()
+  const fieldNotes = useFieldNotes()
   const [draft, setDraft] = useState(reflection ?? '')
 
   // Committed on UNMOUNT as well as on blur, and the effect ADDS a path rather
@@ -415,7 +421,7 @@ function ReflectStep({ reflection, onReflect }: {
         // `saved` is updated by the render that follows, so the unmount effect
         // above does not send it a second time.
         onBlur={() => { if (draft !== (reflection ?? '')) onReflect(draft) }} />
-      <p className="plan-hint">{tr('shut.reflectHint')}</p>
+      {!fieldNotes && <p className="plan-hint">{tr('shut.reflectHint')}</p>}
     </div>
   )
 }

@@ -457,3 +457,13 @@
   font-family: var(--serif); font-size-adjust: none; font-weight: 500; letter-spacing: -0.01em;
   font-size: calc(var(--fs-app-section) * var(--fs-scale)); color: var(--fg);
 }
+
+/* ==== cp3 · Dialogs ==== */
+
+[data-surface="app"] .modal-title { font-size: calc(var(--fs-app-headline) * var(--fs-scale)); line-height: 1.15; letter-spacing: -0.012em; }
+[data-surface="app"] .plan-step {
+  font-family: var(--serif); font-size-adjust: none; font-style: italic; text-transform: none; letter-spacing: 0;
+  font-variant-numeric: tabular-nums; font-size: calc(var(--fs-app-note) * var(--fs-scale)); color: var(--fg-muted);
+}
+[data-surface="app"] .today-mark { position: relative; }
+[data-surface="app"] .today-mark .check-tick { stroke-dashoffset: 0; opacity: 1; }
