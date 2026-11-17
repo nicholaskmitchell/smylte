@@ -4,7 +4,7 @@ import {
 } from 'react'
 import { clientId, type List, type TaskGroup } from '../api'
 import { cssColor } from '../util'
-import { useEscape, useIsMobile } from '../hooks'
+import { useEscape, useFieldNotes, useIsMobile } from '../hooks'
 import { UnsentInput, useLayer, useUnsent, useUnsentCount } from '../layers'
 import { useT } from '../i18n'
 
@@ -145,6 +145,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
   extra?: ReactNode
 }) {
   const tr = useT()
+  const fieldNotes = useFieldNotes()
   const words = WORDS[kind]
   const isMobile = useIsMobile()
   const canSelect = !!onSelect
@@ -409,7 +410,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
         <span className="swatch" style={swatchStyle(l)} />
         <span className="name">{l.name}</span>
         <span className="count">{countOf(l)}</span>
-        <button className="side-edit" title={tr('side.edit')}
+        <button className="side-edit" title={fieldNotes ? undefined : tr('side.edit')}
           aria-label={tr('side.editItem', { name: l.name })}
           onClick={(e) => { e.stopPropagation(); setEditing(l) }}>⋯</button>
       </div>
@@ -457,9 +458,11 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
                   onDelete={() => removeGroup(g.id)} />
                 {!isCollapsed && members.map(renderRow)}
                 {!isCollapsed && members.length === 0 && (
-                  <div className="group-empty">
-                    {isMobile ? tr(words.groupEmpty) : tr(words.dropHere)}
-                  </div>
+                  fieldNotes ? <div className="group-empty" /> : (
+                    <div className="group-empty">
+                      {isMobile ? tr(words.groupEmpty) : tr(words.dropHere)}
+                    </div>
+                  )
                 )}
               </div>
             )
@@ -570,7 +573,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
           </button>
           {onToggleCompleted && (
             <button className={`side-mobile-completed ${completedActive ? 'active' : ''}`}
-              title={completedActive
+              title={fieldNotes ? undefined : completedActive
                 ? tr('side.backToTasksShort') : tr('side.viewCompletedShort')}
               aria-label={completedActive
                 ? tr('side.backToTasksShort') : tr('side.viewCompletedShort')}
@@ -578,7 +581,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
           )}
           {onToggleParked && (
             <button className={`side-mobile-completed ${parkedActive ? 'active' : ''}`}
-              title={parkedActive
+              title={fieldNotes ? undefined : parkedActive
                 ? tr('side.backToTasksShort') : tr('side.viewParkedShort')}
               aria-label={parkedActive
                 ? tr('side.backToTasksShort') : tr('side.viewParkedShort')}
@@ -586,7 +589,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
           )}
           {onToggleSuggested && (
             <button className={`side-mobile-completed ${suggestedActive ? 'active' : ''}`}
-              title={suggestedActive
+              title={fieldNotes ? undefined : suggestedActive
                 ? tr('side.backToTasksShort') : tr('side.viewSuggestedShort')}
               aria-label={suggestedActive
                 ? tr('side.backToTasksShort') : tr('side.viewSuggestedShort')}
@@ -595,7 +598,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
               {!!suggestedCount && <span className="side-badge">{suggestedCount}</span>}
             </button>
           )}
-          <button className="side-mobile-add" title={tr(words.new)}
+          <button className="side-mobile-add" title={fieldNotes ? undefined : tr(words.new)}
             aria-label={tr(words.new)}
             onClick={() => { setDrawerOpen(true); setAdding(true) }}>+</button>
         </div>
@@ -613,7 +616,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
                 <span className="label">{tr(words.heading)}</span>
                 <span className="side-head-actions">
                   {groupsOn && (
-                    <button className="icon-btn" title={tr('side.newGroup')}
+                    <button className="icon-btn" title={fieldNotes ? undefined : tr('side.newGroup')}
                       aria-label={tr('side.newGroup')}
                       onClick={() => setAddingGroup(true)}>
                       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
@@ -624,15 +627,15 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
                       </svg>
                     </button>
                   )}
-                  <button className="icon-btn" title={tr(words.new)}
+                  <button className="icon-btn" title={fieldNotes ? undefined : tr(words.new)}
                     aria-label={tr(words.new)}
                     onClick={() => setAdding(true)}>+</button>
-                  <button className="icon-btn" title={tr('side.drawerDone')}
+                  <button className="icon-btn" title={fieldNotes ? undefined : tr('side.drawerDone')}
                     aria-label={tr('common.close')}
                     onClick={closeDrawer}>✕</button>
                 </span>
               </div>
-              {canToggle && (
+              {canToggle && !fieldNotes && (
                 <p className="drawer-hint">
                   {tr(words.tapHint,
                     { archive: onArchive ? tr('side.archiveClause') : '' })}
@@ -659,13 +662,14 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
             unfold is the app's own (AppNav), and a second one here would be a
             button that does the same thing twice over, one row apart. */}
         {onToggle && (
-          <button className="icon-btn side-toggle" title={tr('side.expand')}
+          <button className="icon-btn side-toggle" title={fieldNotes ? undefined : tr('side.expand')}
             aria-label={tr('side.expand')} onClick={onToggle}>»</button>
         )}
         <div className="side-rail">
           {allLabel && items.length > 1 && (
             <button className={`rail-dot ${sel === ALL_ID ? 'active' : ''}`}
-              title={allLabel} onClick={() => onSelect?.(ALL_ID)}>
+              title={fieldNotes ? undefined : allLabel}
+              aria-label={fieldNotes ? allLabel : undefined} onClick={() => onSelect?.(ALL_ID)}>
               <span className="swatch swatch-all" style={ALL_SWATCH_STYLE} />
             </button>
           )}
@@ -675,7 +679,8 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
             return (
               <button key={l.id}
                 className={`rail-dot ${canSelect && l.id === sel ? 'active' : ''} ${isHidden ? 'cal-hidden' : ''}`}
-                title={l.name}
+                title={fieldNotes ? undefined : l.name}
+                aria-label={fieldNotes ? l.name : undefined}
                 aria-pressed={canToggle && !canSelect ? !isHidden : undefined}
                 onClick={primary}>
                 <span className="swatch" style={swatchStyle(l)} />
@@ -685,7 +690,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
         </div>
         {onToggleCompleted && (
           <button className={`icon-btn side-completed-rail ${completedActive ? 'active' : ''}`}
-            title={completedActive
+            title={fieldNotes ? undefined : completedActive
               ? tr('side.backToTasksShort') : tr('side.viewCompletedShort')}
             aria-label={completedActive
               ? tr('side.backToTasksShort') : tr('side.viewCompletedShort')}
@@ -693,7 +698,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
         )}
         {onToggleParked && (
           <button className={`icon-btn side-completed-rail ${parkedActive ? 'active' : ''}`}
-            title={parkedActive
+            title={fieldNotes ? undefined : parkedActive
               ? tr('side.backToTasksShort') : tr('side.viewParkedShort')}
             aria-label={parkedActive
               ? tr('side.backToTasksShort') : tr('side.viewParkedShort')}
@@ -708,7 +713,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
           <span className="label">{tr(words.heading)}</span>
           <span className="side-head-actions">
             {groupsOn && (
-              <button className="icon-btn" title={tr('side.newGroup')}
+              <button className="icon-btn" title={fieldNotes ? undefined : tr('side.newGroup')}
                 aria-label={tr('side.newGroup')} onClick={() => setAddingGroup(true)}>
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
                   strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -721,11 +726,11 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
             {/* aria-label as well as title, matching the drawer's copy of this
                 button. Its text content is "+", and `title` is only the
                 last-resort step of the accessible-name algorithm. */}
-            <button className="icon-btn" title={tr(words.new)}
+            <button className="icon-btn" title={fieldNotes ? undefined : tr(words.new)}
               aria-label={tr(words.new)}
               onClick={() => setAdding(true)}>+</button>
             {onToggle && (
-              <button className="icon-btn side-toggle" title={tr('side.collapse')}
+              <button className="icon-btn side-toggle" title={fieldNotes ? undefined : tr('side.collapse')}
                 aria-label={tr('side.collapse')} onClick={onToggle}>«</button>
             )}
           </span>
@@ -754,6 +759,7 @@ function GroupHeader({ group, count, collapsed, canToggle, anyVisible,
   onRename: (name: string) => void; onDelete: () => void
 }) {
   const tr = useT()
+  const fieldNotes = useFieldNotes()
   const [renaming, setRenaming] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [name, setName] = useState(group.name)
@@ -785,7 +791,7 @@ function GroupHeader({ group, count, collapsed, canToggle, anyVisible,
   return (
     <div className="group-head">
       <button className="group-caret"
-        title={collapsed ? tr('side.groupExpand') : tr('side.groupCollapse')}
+        title={fieldNotes ? undefined : collapsed ? tr('side.groupExpand') : tr('side.groupCollapse')}
         aria-label={collapsed ? tr('side.groupExpand') : tr('side.groupCollapse')}
         aria-expanded={!collapsed} onClick={onToggleCollapse}>
         <span className={`caret ${collapsed ? '' : 'open'}`}>▸</span>
@@ -794,7 +800,7 @@ function GroupHeader({ group, count, collapsed, canToggle, anyVisible,
       <span className="count">{count}</span>
       {canToggle && (
         <button className="group-eye"
-          title={anyVisible ? tr('side.hideAllInGroup') : tr('side.showAllInGroup')}
+          title={fieldNotes ? undefined : anyVisible ? tr('side.hideAllInGroup') : tr('side.showAllInGroup')}
           aria-label={anyVisible ? tr('side.hideAllInGroup') : tr('side.showAllInGroup')}
           aria-pressed={anyVisible} onClick={onToggleVisible}>
           {anyVisible ? '◉' : '◌'}
@@ -812,18 +818,18 @@ function GroupHeader({ group, count, collapsed, canToggle, anyVisible,
           {/* The visible word stays IN the accessible name — it is what the
               button says and what a sighted user reads back; the group is
               appended because ✎ / ✕ / delete? repeat once per group. */}
-          <button className="group-btn danger" title={tr('side.deleteGroupTitle')}
+          <button className="group-btn danger" title={fieldNotes ? undefined : tr('side.deleteGroupTitle')}
             aria-label={tr('side.deleteGroupConfirmAria', { name: group.name })}
             onClick={onDelete}>{tr('side.deleteGroupConfirm')}</button>
-          <button className="group-btn" title={tr('side.keepGroup')}
+          <button className="group-btn" title={fieldNotes ? undefined : tr('side.keepGroup')}
             aria-label={tr('common.cancel')} onClick={() => setConfirming(false)}>✕</button>
         </span>
       ) : (
         <span className="group-actions">
-          <button className="group-btn" title={tr('side.renameGroup')}
+          <button className="group-btn" title={fieldNotes ? undefined : tr('side.renameGroup')}
             aria-label={tr('side.renameGroupOf', { name: group.name })}
             onClick={() => { setName(group.name); setRenaming(true) }}>✎</button>
-          <button className="group-btn" title={tr('side.deleteGroup')}
+          <button className="group-btn" title={fieldNotes ? undefined : tr('side.deleteGroup')}
             aria-label={tr('side.deleteGroupOf', { name: group.name })}
             onClick={() => setConfirming(true)}>✕</button>
         </span>
@@ -840,6 +846,7 @@ function GroupHeader({ group, count, collapsed, canToggle, anyVisible,
  */
 function ColorRow({ color, onPick }: { color: string | null; onPick: (c: string | null) => void }) {
   const tr = useT()
+  const fieldNotes = useFieldNotes()
   // Compare on the RGB prefix: the wire value may carry an alpha byte (Apple
   // Calendar and DAVx5 both write one) and it has to keep matching its preset.
   const isSwatch = (c: string) => color?.slice(0, 7).toLowerCase() === c.toLowerCase()
@@ -864,12 +871,13 @@ function ColorRow({ color, onPick }: { color: string | null; onPick: (c: string 
           moving focus is the fix in every engine; Tab still reaches the
           buttons, and in EditModal keeping focus in the name field is harmless. */}
       <button className={`color-dot none ${color === null ? 'on' : ''}`}
-        title={tr('side.noColor')} aria-label={tr('side.noColor')}
+        title={fieldNotes ? undefined : tr('side.noColor')} aria-label={tr('side.noColor')}
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => onPick(null)}>✕</button>
       {SWATCHES.map((c) => (
         <button key={c} className={`color-dot ${isSwatch(c) ? 'on' : ''}`}
-          style={{ background: c }} title={c}
+          style={{ background: c }} title={fieldNotes ? undefined : c}
+          aria-label={fieldNotes ? c : undefined}
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => onPick(c)} />
       ))}
@@ -887,7 +895,7 @@ function ColorRow({ color, onPick }: { color: string | null; onPick: (c: string 
           cannot show alpha, so re-attaching the old one would keep a
           translucency the user never saw. */}
       <label className={`color-dot custom ${customColor ? 'on' : ''}`}
-        title={tr('side.customColor')}
+        title={fieldNotes ? undefined : tr('side.customColor')}
         style={customColor ? { background: customColor } : undefined}>
         <input type="color" aria-label={tr('side.customColor')}
           value={(cssColor(color)?.slice(0, 7) ?? '#808080').toLowerCase()}
@@ -949,6 +957,7 @@ function EditModal({ item, placeholder, wide, groups, groupId, onSetGroup, onClo
   onArchive?: (id: string) => void
 }) {
   const tr = useT()
+  const fieldNotes = useFieldNotes()
   const [name, setName] = useState(item.name)
   // Hold the wire value as written. It may carry an alpha byte (#RRGGBBAA —
   // Apple Calendar and DAVx5 both write one); truncating it for the swatch
@@ -1032,7 +1041,7 @@ function EditModal({ item, placeholder, wide, groups, groupId, onSetGroup, onClo
             {confirming ? tr('side.reallyDelete') : tr('common.delete')}
           </button>
           {onArchive && !confirming && (
-            <button className="btn ghost" title={tr('side.archiveTitle')}
+            <button className="btn ghost" title={fieldNotes ? undefined : tr('side.archiveTitle')}
               onClick={() => onArchive(item.id)}>{tr('side.archive')}</button>
           )}
           <span className="spacer" />

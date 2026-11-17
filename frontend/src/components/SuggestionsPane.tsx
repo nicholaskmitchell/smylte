@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from 'react'
 import { api, type List, type MailSuggestion, type ApproveSuggestionBody } from '../api'
+import { useFieldNotes } from '../hooks'
 import { useI18n } from '../i18n'
 import { fmtClock, fmtDue, fmtWhen, inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
@@ -31,6 +32,7 @@ export function SuggestionsPane({ onExpire, lists, items, loaded, error, onAppro
   onReject: (id: string) => Promise<boolean>
 }) {
   const { t: tr } = useI18n()
+  const fieldNotes = useFieldNotes()
   const guard = makeGuard(onExpire)
   const [calendars, setCalendars] = useState<List[] | null>(null)
 
@@ -55,16 +57,17 @@ export function SuggestionsPane({ onExpire, lists, items, loaded, error, onAppro
       )}
       {items.map((s) => (
         <Row key={s.id} s={s} lists={lists} calendars={calendars ?? []}
-          onApprove={onApprove} onReject={onReject} />
+          fieldNotes={fieldNotes} onApprove={onApprove} onReject={onReject} />
       ))}
     </div>
   )
 }
 
-function Row({ s, lists, calendars, onApprove, onReject }: {
+function Row({ s, lists, calendars, fieldNotes, onApprove, onReject }: {
   s: MailSuggestion
   lists: List[]
   calendars: List[]
+  fieldNotes: boolean
   onApprove: (id: string, body: ApproveSuggestionBody) => Promise<boolean>
   onReject: (id: string) => Promise<boolean>
 }) {
@@ -183,7 +186,7 @@ function Row({ s, lists, calendars, onApprove, onReject }: {
         {s.confidence != null && (
           <>
             {' '}
-            <span className="mono" title={tr('mail.sug.confidence')}>
+            <span className="mono" title={fieldNotes ? undefined : tr('mail.sug.confidence')}>
               {Math.round(s.confidence * 100)}%
             </span>
           </>

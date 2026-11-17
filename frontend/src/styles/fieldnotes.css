@@ -388,3 +388,9 @@
 }
 [data-surface="app"] .content[data-pane] > .composer-foot > .quickadd { box-shadow: var(--shadow-rest); }
 [data-surface="app"] .content[data-pane] > .composer-foot > .quickadd:focus-within { box-shadow: var(--shadow-rest), var(--ring); }
+
+/* ==== cp3 · Sidebar ==== */
+
+/* An empty group holds no words under Field notes, but it stays the drop zone
+   it was: the height its one line of text gave it. */
+[data-surface="app"] .group-empty:empty { min-height: calc(18px * var(--fs-scale)); }
