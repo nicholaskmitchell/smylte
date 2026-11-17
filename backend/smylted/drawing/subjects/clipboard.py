@@ -11,6 +11,7 @@ stars in the corner the lamp does not reach.
 from __future__ import annotations
 
 import math
+from functools import cache
 
 from ..pen import curve, ellipse, line, loop, poly
 from ..rng import Rng
@@ -167,17 +168,31 @@ def _paper_outline() -> list[Point]:
             (x0 + INSET, y1 - INSET)]
 
 
-def _clipboard(b: SketchBuilder) -> None:
+@cache
+def _surfaces():
+    """Clip the fixed outlines once. The pen still draws them for each seed."""
     board, tangents = _board_outline()
     clip, clip_corners = _clip_outline()
     pencil = _pencil_cover()
-    b.wash(k.wash_of(loop(*_turn(board), corners=tangents)), part='board')
-    for run, corners in _uncovered(board, tangents, [clip, pencil]):
-        b.line(curve(*_turn(run), corners=corners), part='board')
     paper = _paper_outline()
-    for run, corners in _uncovered(paper, [0, 1, 2, 3], [clip, pencil]):
-        b.line(curve(*_turn(run), corners=range(len(run))), part='paper')
-    b.line(loop(*_turn(clip), corners=clip_corners), part='clip')
+    return (
+        k.wash_of(loop(*_turn(board), corners=tangents)),
+        tuple(curve(*_turn(run), corners=corners)
+              for run, corners in _uncovered(board, tangents, [clip, pencil])),
+        tuple(curve(*_turn(run), corners=range(len(run)))
+              for run, _ in _uncovered(paper, [0, 1, 2, 3], [clip, pencil])),
+        loop(*_turn(clip), corners=clip_corners),
+    )
+
+
+def _clipboard(b: SketchBuilder) -> None:
+    wash, board, paper, clip = _surfaces()
+    b.wash(wash, part='board')
+    for stroke in board:
+        b.line(stroke, part='board')
+    for stroke in paper:
+        b.line(stroke, part='paper')
+    b.line(clip, part='clip')
     hx, hy, hr = HOLE
     b.line(loop(*_turn(k.ring(hx, hy, hr, 8).points)), part='clip')
     for cy, length in zip(ROWS, WRITING):
