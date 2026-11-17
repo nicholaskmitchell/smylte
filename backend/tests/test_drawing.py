@@ -505,6 +505,17 @@ def test_filled_inside_an_ambient_child_is_one_frame_each():
     assert [len(m.frames) for m in frame] == [1, 1]
 
 
+def test_a_still_drawing_never_boils_and_has_no_ambient():
+    # A view's drawing: every mark one frame, lines included.
+    b = SketchBuilder("v", "light", Rng("still"), still=True)
+    b.line(pen.line((10, 10), (120, 40)))
+    b.filled(pen.circle(40, 40, 12))
+    b.wash(pen.circle(80, 80, 20))
+    assert [len(m.frames) for m in b.build(DayState()).marks] == [1, 1, 1, 1]
+    with pytest.raises(ValueError):
+        b.ambient(1, (), lambda f, fb: fb.line(pen.line((0, 0), (5, 5))))
+
+
 def test_paper_must_be_a_known_one():
     with pytest.raises(ValueError):
         _builder().accent(pen.circle(5, 5, 3), paper="shiny")

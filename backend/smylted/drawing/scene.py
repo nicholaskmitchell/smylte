@@ -125,7 +125,7 @@ def _reward_of(when: tuple) -> int | None:
 
 class SketchBuilder:
     def __init__(self, subject: str, theme: Theme, rng: Rng,
-                 view_box=(0, 0, 160, 200)):
+                 view_box=(0, 0, 160, 200), *, still: bool = False):
         self.subject = subject
         self.theme = theme
         self.rng = rng
@@ -138,7 +138,9 @@ class SketchBuilder:
         # Set on the child builders `ambient` hands out: their marks are one
         # still frame each, named a{f}m{n}.
         self._prefix = ""
-        self._still = False
+        # `still=True` is a drawing that never boils (a view's): every mark
+        # is one frame, and it has no ambient.
+        self._still = still
 
     def _append(self, mark_id: str, role: Role, frames: tuple[str, ...], points: int,
                 when: tuple, reward: int | None, paper: str, part: str | None) -> None:
@@ -215,7 +217,7 @@ class SketchBuilder:
     def ambient(self, seconds: float, when,
                 draw: Callable[[int, SketchBuilder], None]) -> None:
         if self._still:
-            raise ValueError("an ambient frame cannot hold an ambient")
+            raise ValueError("a still drawing (or an ambient frame) cannot hold an ambient")
         if self._ambient is not None:
             raise ValueError("a sketch has at most one ambient")
         when = conditions.validate(when)
