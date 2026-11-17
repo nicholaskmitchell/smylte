@@ -22,7 +22,7 @@ and paper are the integers 255 and 0, never colours.
 """
 from __future__ import annotations
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 from .checks import polyline
 from .scene import Mark, Sketch
@@ -37,6 +37,7 @@ INK = 0
 _STEPS = 8
 # Hatch pitch, as a multiple of the pen: pen / pitch is the ink share.
 _PITCH = 2.5
+_SMALL_REWARD = 16.0
 
 
 def pen_px(px_per_unit: float) -> int:
@@ -56,7 +57,7 @@ def _marks(sketch: Sketch) -> list[Mark]:
     return [m for m in marks if m.role in ('accent', 'line')]
 
 
-def _hatch(canvas: Image.Image, poly: list[tuple[float, float]], pen: int) -> None:
+def _hatch(canvas: Image.Image, poly: list[tuple[float, float]], pen: int, *, fine: bool) -> None:
     """Fill the polygon with pen strokes at 45 degrees, lower-left to
     upper-right (direction (1, -1) in image coordinates). The highlighter
     elsewhere uses the opposite diagonal."""
@@ -80,11 +81,28 @@ def _hatch(canvas: Image.Image, poly: list[tuple[float, float]], pen: int) -> No
     step = pitch * 2 ** 0.5
     base = left + top
     n = int((base - pen * S) // step)
+    width = round(pen * S * 0.8) if fine else pen * S
     while n * step <= base + size[0] + size[1] + pen * S:
         c = n * step - base
-        draw.line([(c - size[1], size[1]), (c, 0)], fill=INK, width=pen * S)
+        draw.line([(c - size[1], size[1]), (c, 0)], fill=INK, width=width)
         n += 1
     canvas.paste(layer, (left, top), mask)
+
+
+def _glint(canvas, poly, gx: float, gy: float, radius: float) -> None:
+    """Leave a spot of paper inside the fill after the ink has been drawn."""
+    left, top = max(0, int(gx - radius)), max(0, int(gy - radius))
+    right = min(canvas.width, int(gx + radius) + 1)
+    bottom = min(canvas.height, int(gy + radius) + 1)
+    if left >= right or top >= bottom:
+        return
+    size = (right - left, bottom - top)
+    fill = Image.new('L', size)
+    ImageDraw.Draw(fill).polygon([(x - left, y - top) for x, y in poly], fill=PAPER)
+    spot = Image.new('L', size)
+    ImageDraw.Draw(spot).ellipse((gx - radius - left, gy - radius - top,
+                                  gx + radius - left, gy + radius - top), fill=PAPER)
+    canvas.paste(PAPER, (left, top, right, bottom), ImageChops.darker(fill, spot))
 
 
 def paper_image(sketch: Sketch, width_px: int) -> Image.Image | None:
@@ -104,40 +122,57 @@ def paper_image(sketch: Sketch, width_px: int) -> Image.Image | None:
     def to_px(p: tuple[float, float]) -> tuple[float, float]:
         return ((p[0] - x0) * k, (p[1] - y0) * k)
 
+    glints = []
+
+    def paint(marks: list[Mark]) -> None:
+        small_rewards = set()
+        for mark in marks:
+            if mark.role != 'accent':
+                continue
+            subpaths = polyline(mark.frames[0], steps=_STEPS)
+            if not subpaths or len(subpaths[0]) < 3:
+                continue
+            pts = subpaths[0]
+            xs, ys = zip(*pts)
+            bw, bh = max(xs) - min(xs), max(ys) - min(ys)
+            poly = [to_px(p) for p in pts]
+            fine = mark.reward is not None and max(bw, bh) < _SMALL_REWARD
+            if fine:
+                small_rewards.add((mark.reward, mark.part))
+            if mark.paper == 'glint' or max(bw, bh) < HATCH_FROM:
+                draw.polygon(poly, fill=INK)
+                if mark.paper == 'glint':
+                    cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+                    r = min(bw, bh) / 2
+                    gx, gy = to_px((cx - 0.38 * r, cy - 0.38 * r))
+                    glints.append((poly, gx, gy, max(1.0, 0.25 * r * k)))
+            else:
+                _hatch(canvas, poly, pen, fine=fine)
+
+        for mark in marks:
+            if mark.role != 'line':
+                continue
+            d = mark.frames[0]
+            for path in polyline(d, steps=_STEPS):
+                width = pen * S
+                if (mark.reward, mark.part) in small_rewards and not d.endswith(' Z'):
+                    xs, ys = zip(*path)
+                    if max(max(xs) - min(xs), max(ys) - min(ys)) < HATCH_FROM:
+                        # A short detail, such as a pine cone's scales, needs paper around it.
+                        width = round(width * 2 / 3)
+                pts = [to_px(p) for p in path]
+                if len(pts) > 1:
+                    draw.line(pts, fill=INK, width=width)
+                half = width / 2
+                # Pillow has neither round caps nor round joins.
+                for x, y in pts:
+                    draw.ellipse((x - half, y - half, x + half, y + half), fill=INK)
+
     marks = _marks(sketch)
-
-    for mark in marks:
-        if mark.role != 'accent':
-            continue
-        subpaths = polyline(mark.frames[0], steps=_STEPS)
-        if not subpaths or len(subpaths[0]) < 3:
-            continue
-        pts = subpaths[0]
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
-        bw, bh = max(xs) - min(xs), max(ys) - min(ys)
-        poly = [to_px(p) for p in pts]
-        if mark.paper == 'glint' or max(bw, bh) < HATCH_FROM:
-            draw.polygon(poly, fill=INK)
-            if mark.paper == 'glint':
-                cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
-                r = min(bw, bh) / 2
-                gx, gy = to_px((cx - 0.38 * r, cy - 0.38 * r))
-                gr = max(1.0, 0.25 * r * k)
-                draw.ellipse((gx - gr, gy - gr, gx + gr, gy + gr), fill=PAPER)
-        else:
-            _hatch(canvas, poly, pen)
-
-    half = pen * S / 2
-    for mark in marks:
-        if mark.role != 'line':
-            continue
-        for path in polyline(mark.frames[0], steps=_STEPS):
-            pts = [to_px(p) for p in path]
-            if len(pts) > 1:
-                draw.line(pts, fill=INK, width=pen * S)
-            # Pillow has neither round caps nor round joins: a disc at every vertex.
-            for x, y in pts:
-                draw.ellipse((x - half, y - half, x + half, y + half), fill=INK)
+    # An earned mark sits over the scene's ink, such as a bow tied to the kite tail.
+    paint([m for m in marks if m.reward is None])
+    paint([m for m in marks if m.reward is not None])
+    for location in glints:
+        _glint(canvas, *location)
 
     return canvas.reduce(S)
