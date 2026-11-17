@@ -467,3 +467,30 @@
 }
 [data-surface="app"] .today-mark { position: relative; }
 [data-surface="app"] .today-mark .check-tick { stroke-dashoffset: 0; opacity: 1; }
+
+/* ==== cp3 · Public ==== */
+
+/* The open row's mark was a --rule circle at 1.3:1; the drawn frame replaces it. */
+[data-surface="app"] .share-row__mark {
+  position: relative; width: 18px; height: 18px; border: 0; border-radius: 0; background: none;
+  align-self: start; margin-top: calc((var(--today-line) - 18px) / 2);
+}
+[data-surface="app"] .share-row.is-done .share-row__mark { border-color: transparent; background: none; }
+[data-surface="app"] .share-row__mark .check-ink { width: 24px; height: 24px; }
+[data-surface="app"] .share-row:not(.is-done) .check-tick { opacity: 0; }
+[data-surface="app"] .share-row.is-done .check-tick { stroke-dashoffset: 0; opacity: 1; }
+[data-surface="app"] .share-row.is-done .share-row__text { text-decoration: none; }
+[data-surface="app"] .share-row__name { position: relative; }
+[data-surface="app"] .share-row__text {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500;
+  font-size: calc(var(--fs-app-item) * var(--fs-scale)); line-height: var(--today-line);
+}
+[data-surface="app"] :is(.share-ev__title, .share-task__text) {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500;
+  font-size: calc(var(--fs-app-reading) * var(--fs-scale));
+}
+[data-surface="app"] .slot-btn {
+  font-family: var(--font-control); font-size-adjust: none; font-weight: var(--wght-control); font-variant-numeric: tabular-nums;
+  font-size: calc(var(--fs-app-ui) * var(--fs-scale)); min-height: var(--control-h);
+}
+[data-surface="app"] :is(.booking-day .dow, .busy-chip) { font-size: calc(var(--fs-app-small) * var(--fs-scale)); }

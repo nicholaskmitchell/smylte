@@ -92,6 +92,8 @@ can come back. Accessible names (`aria-label`) were kept everywhere.
 | Planning ritual | The line under the capacity field (the refusal stays) and the line above the day's rows (removed under Field notes only) | `plan.capacityHint`, `plan.shapeHint` | Enter {a} or {b}. Applies to today only. / Tap an estimate to set it. Drag to reorder. |
 | Shutdown ritual | The line above the unfinished rows and the line under the reflection field (removed under Field notes only) | `shut.followsHint`, `shut.reflectHint` | Anything you leave carries over by itself. / Shown when you look back at this day. |
 | Habits sheet | The paragraph under the title; the warning on deleting a habit stays (removed under Field notes only) | `habit.sheet.blurb` | Habits add a line to your day on the days you choose. They stay in Smylte and aren’t synced. An estimate set here applies every day. |
+| Booking page | The tooltip on a busy-time chip, the line under "not found" and under "unavailable" ("Try again" stays), and the placeholder in the notes field (removed under Field notes only) | `book.hostBusy`, `book.notFoundHint`, `book.unavailableHint`, `book.notesPlaceholder` | The host is busy during this time / Ask the person who sent it for a new link. / Try again in a moment. / Anything the host should know? |
+| Share page | The line under "gone" and under "unavailable" ("Check again" and "Try again" stay), and the read-only footer line (the keep-awake button stays) (removed under Field notes only) | `share.goneHint`, `share.unavailableHint`, `share.footer` | Reload later, or ask the person who shared it. / Try again in a moment. / Read-only. Updates on its own. |
 
 ## Notes
 

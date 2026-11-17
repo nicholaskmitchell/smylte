@@ -20,10 +20,11 @@
 // kept awake for as long as this is up; a browser releases the lock whenever
 // the page is hidden, so it is asked for again on coming back.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { AuthError, api, type DisplayFrame, type DisplayMode } from '../api'
 import { useT } from '../i18n'
 import { makeGuard } from '../util'
+import { useFieldNotes, useSegmentThumb } from '../hooks'
 import { daysBetween, shiftIso } from '../calendar'
 import { DISPLAY_MODES, canFullscreen, isFullscreen, toggleFullscreen } from '../displaymode'
 import { DisplayActionsProvider, DisplayFaces, type DisplayActions } from './DisplayView'
@@ -56,6 +57,7 @@ export function DisplayModeFrame({ mode, onMode, onExit, onExpire, rev = 0 }: {
   rev?: number
 }) {
   const tr = useT()
+  const fieldNotes = useFieldNotes()
   const guard = useMemo(() => makeGuard(onExpire), [onExpire])
   const [frame, setFrame] = useState<DisplayFrame | null>(null)
   const [fetchedAt, setFetchedAt] = useState<number | null>(null)
@@ -115,6 +117,10 @@ export function DisplayModeFrame({ mode, onMode, onExit, onExpire, rev = 0 }: {
       }
     })()
   }
+
+  // Under Field notes the three faces are a segmented control with a sliding thumb.
+  const modesRef = useRef<HTMLDivElement>(null)
+  useSegmentThumb(modesRef, Math.max(0, DISPLAY_MODES.indexOf(mode)), open && fieldNotes)
 
   const day = frame?.day
   const actions = useMemo<DisplayActions>(() => ({
@@ -201,7 +207,18 @@ export function DisplayModeFrame({ mode, onMode, onExit, onExpire, rev = 0 }: {
       {open ? (
         <div className="dmode-bar" role="toolbar" aria-label={tr('dmode.controls')}
           onPointerDown={poke}>
-          {DISPLAY_MODES.map((m) => (
+          {fieldNotes ? (
+            <div className="view-tabs" ref={modesRef}
+              style={{ '--n': DISPLAY_MODES.length, '--i': Math.max(0, DISPLAY_MODES.indexOf(mode)) } as CSSProperties}>
+              {DISPLAY_MODES.map((m) => (
+                <button key={m} className={`view-tab ${m === mode ? 'active' : ''}`}
+                  aria-pressed={m === mode}
+                  onClick={() => { onMode(m); poke() }}>
+                  {tr(MODE_LABELS[m])}
+                </button>
+              ))}
+            </div>
+          ) : DISPLAY_MODES.map((m) => (
             <button key={m} className={`btn ghost dmode-bar__tab ${m === mode ? 'active' : ''}`}
               aria-pressed={m === mode}
               onClick={() => { onMode(m); poke() }}>

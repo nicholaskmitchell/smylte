@@ -3,6 +3,8 @@ import { deviceLanguage } from '../lang'
 import { translate, type Vars } from '../i18n/index'
 import { api, AuthError, clientId, HttpError, type PublicBookingInfo, type PublicSlot } from '../api'
 import { ymd } from '../util'
+import { useFieldNotes } from '../hooks'
+import { Hint } from './Hint'
 
 // The public client-facing page at /book/<token>. Standalone by design: no
 // session, no SSE, no imports from the authed shell. Slot ISO strings carry the
@@ -55,6 +57,7 @@ export function BookingPage({ token }: { token: string }) {
   // shell: `I18nProvider` is App's, and this page is mounted beside App rather
   // than under it (see main.tsx). `translate` and `deviceLanguage` are
   // React-free leaves, which is the whole of what is borrowed here.
+  const fieldNotes = useFieldNotes()
   const lang = useMemo(() => deviceLanguage(), [])
   const tr = useMemo(
     () => (key: string, vars?: Vars) => translate(lang, key, vars), [lang])
@@ -212,7 +215,7 @@ export function BookingPage({ token }: { token: string }) {
         <div className="booking-card">
           <div className="login-brand">Smylte<span className="dot">.</span></div>
           <p className="booking-lead">{tr('book.notFound')}</p>
-          <p className="hintline">{tr('book.notFoundHint')}</p>
+          <Hint as="p">{tr('book.notFoundHint')}</Hint>
         </div>
       </div>
     )
@@ -224,7 +227,7 @@ export function BookingPage({ token }: { token: string }) {
         <div className="booking-card">
           <div className="login-brand">Smylte<span className="dot">.</span></div>
           <p className="booking-lead">{tr('book.unavailable')}</p>
-          <p className="hintline">{tr('book.unavailableHint')}</p>
+          <Hint as="p">{tr('book.unavailableHint')}</Hint>
           <button className="btn" onClick={() => { setPhase('loading'); load() }}>
             {tr('book.tryAgain')}
           </button>
@@ -297,7 +300,7 @@ export function BookingPage({ token }: { token: string }) {
               <div className="booking-busy">
                 {(busyByDay.get(selDay) ?? []).map((b, i) => (
                   <span key={i} className="busy-chip"
-                    title={tr('book.hostBusy')}>
+                    title={fieldNotes ? undefined : tr('book.hostBusy')}>
                     {tr('book.busyRange', { from: fmtTime(b.start), to: fmtTime(b.end) })}
                   </span>
                 ))}
@@ -353,7 +356,7 @@ export function BookingPage({ token }: { token: string }) {
               <label className="label" htmlFor="booking-notes">{tr('book.notes')}</label>
               <textarea className="input" id="booking-notes" name="notes" rows={3}
                 value={notes} maxLength={2000}
-                placeholder={tr('book.notesPlaceholder')}
+                placeholder={fieldNotes ? undefined : tr('book.notesPlaceholder')}
                 onChange={(e) => setNotes(e.target.value)} />
             </div>
             <div className="modal-actions">
