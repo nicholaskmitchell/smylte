@@ -75,11 +75,13 @@ def circle(cx: float, cy: float, r: float, n: int = 10) -> Stroke:
 
 
 def _num(v: float) -> str:
-    v = round(v, 1)
-    if v == 0:
-        return "0"
+    # One correctly rounded conversion, as `round(v, 1)` is: "-0.0" and "0.0"
+    # are both "0", and a whole number drops its ".0".
     s = f"{v:.1f}"
-    return s[:-2] if s.endswith(".0") else s
+    if s.endswith(".0"):
+        s = s[:-2]
+        return "0" if s == "-0" else s
+    return s
 
 
 def _pair(p: Point) -> str:

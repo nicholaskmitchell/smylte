@@ -74,6 +74,17 @@ def test_a_fork_does_not_depend_on_how_much_of_the_parent_was_read():
     assert [x.random() for _ in range(20)] == [y.random() for _ in range(20)]
 
 
+def test_a_fork_is_the_stream_its_whole_path_names():
+    # `fork` carries the parent's hash state on instead of hashing the whole
+    # path again; the stream must be exactly the one a fresh path gives,
+    # labels outside ASCII included, at any depth.
+    r = Rng.for_day(DAY, "salt", "subject|tree")
+    for label in ("scene", "day|f1", "é—ü", "", "a|b|c"):
+        r = r.fork(label)
+        fresh = Rng(r.path)
+        assert [fresh.random() for _ in range(8)] == [r.random() for _ in range(8)]
+
+
 def test_random_is_in_the_unit_interval():
     for path in ("a", "b", "", "2026-01-01|s|schedule"):
         r = Rng(path)
@@ -107,6 +118,17 @@ def test_cyrb128_regression_pin():
     assert cyrb128("") == (41608494, 3485963809, 1435736333, 1262568316)
     assert cyrb128("2026-11-16|salt|schedule") == (
         3992580582, 676454449, 1205717031, 2274435719)
+
+
+@pytest.mark.parametrize("v, d", [
+    (0.0, "0"), (-0.0, "0"), (0.04, "0"), (-0.04, "0"), (-0.05, "-0.1"), (0.05, "0.1"),
+    (0.15, "0.1"), (12.0, "12"), (-3.0, "-3"), (12.34, "12.3"), (-12.36, "-12.4"),
+    (159.95, "159.9"), (159.96, "160"), (2.25, "2.2"),
+])
+def test_coordinates_print_to_a_tenth(v, d):
+    # Rounded once, correctly, as `round(v, 1)` rounds; no "-0" and no ".0".
+    from smylted.drawing.pen import _num
+    assert _num(v) == d
 
 
 # -- conditions ---------------------------------------------------------------

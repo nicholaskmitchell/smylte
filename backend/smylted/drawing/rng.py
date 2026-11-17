@@ -21,17 +21,26 @@ def _imul(a: int, b: int) -> int:
     return (a * b) & MASK
 
 
-def cyrb128(text: str) -> tuple[int, int, int, int]:
-    """The cyrb128 hash over the UTF-8 bytes of `text`."""
-    h1, h2, h3, h4 = 1779033703, 3144134277, 1013904242, 2773480762
+_SEED = (1779033703, 3144134277, 1013904242, 2773480762)
+
+
+def _absorb(state: tuple[int, int, int, int], data: bytes) -> tuple[int, int, int, int]:
+    """cyrb128's loop over `data`, from `state`: the hash of a path is its
+    prefix's state carried on, which is what lets `fork` hash only its label."""
+    h1, h2, h3, h4 = state
     # `_imul` inlined: a drawing forks a few hundred streams, and the call per
     # byte was most of the cost of each. Same arithmetic, same numbers.
     m = MASK
-    for k in text.encode("utf-8"):
+    for k in data:
         h1 = h2 ^ (((h1 ^ k) * 597399067) & m)
         h2 = h3 ^ (((h2 ^ k) * 2869860233) & m)
         h3 = h4 ^ (((h3 ^ k) * 951274213) & m)
         h4 = h1 ^ (((h4 ^ k) * 2716044179) & m)
+    return h1, h2, h3, h4
+
+
+def _finish(state: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    h1, h2, h3, h4 = state
     h1 = _imul(h3 ^ (h1 >> 18), 597399067)
     h2 = _imul(h4 ^ (h2 >> 22), 2869860233)
     h3 = _imul(h1 ^ (h3 >> 17), 951274213)
@@ -43,12 +52,20 @@ def cyrb128(text: str) -> tuple[int, int, int, int]:
     return h1 & MASK, h2 & MASK, h3 & MASK, h4 & MASK
 
 
+def cyrb128(text: str) -> tuple[int, int, int, int]:
+    """The cyrb128 hash over the UTF-8 bytes of `text`."""
+    return _finish(_absorb(_SEED, text.encode("utf-8")))
+
+
 class Rng:
     """sfc32 seeded from `cyrb128(path)`."""
 
-    def __init__(self, path: str):
+    def __init__(self, path: str, _state: tuple[int, int, int, int] | None = None):
         self.path = path
-        a, b, c, d = cyrb128(path)
+        # The hash loop's state after `path`, kept so a fork carries it on.
+        # `_state` is only ever `fork`'s: the state that `path` itself gives.
+        self._h = _absorb(_SEED, path.encode("utf-8")) if _state is None else _state
+        a, b, c, d = _finish(self._h)
         # The twelve warm-up steps of `_next32`, inlined: a drawing makes a few
         # hundred streams, and the method call was a large part of each.
         m = MASK
@@ -107,7 +124,8 @@ class Rng:
     def fork(self, label: str) -> Rng:
         """A child stream named by this path and `label` alone, so it never
         depends on how much of this stream was consumed."""
-        return Rng(f"{self.path}|{label}")
+        tail = f"|{label}"
+        return Rng(self.path + tail, _absorb(self._h, tail.encode("utf-8")))
 
     @classmethod
     def for_day(cls, day: date, salt: str, purpose: str) -> Rng:
