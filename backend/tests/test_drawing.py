@@ -741,6 +741,38 @@ def test_the_tree_always_finds_room_for_its_rewards():
             assert len(s["fruit"]()) == 12 and len(s["flies"]()) == 12, f"day {d} salt {salt}"
 
 
+@pytest.mark.parametrize("theme, day, salt, state", [
+    # A crowded tree whose fruit fit only at the floor itself: the gap used to
+    # ease straight past it, and the whole day's drawing failed.
+    ("light", date(2030, 9, 21), "q7", DayState()),
+    # A firefly placed against the lantern's hanger.
+    ("dark", date(2030, 9, 2), "x3", DayState(rewards=12, progress=0.5)),
+    # The bird's tail over a fruit, and its beak in the midday sun's rays.
+    ("light", date(2027, 10, 12), "x1", DayState(rewards=12, all_done=True, progress=1, hour=13)),
+    ("light", date(2028, 2, 15), "x1", DayState(rewards=12, all_done=True, progress=1, hour=13)),
+])
+def test_trees_a_review_found_wrong(theme, day, salt, state):
+    from smylted.drawing.rng import Rng
+    from smylted.drawing.subjects.tree import PottedTree
+    t = PottedTree()
+    sketch = t.render(state, theme, Rng.for_day(day, salt, "subject|tree"))
+    assert crossings(sketch, joins_of(t)) == []
+
+
+def test_fireflies_keep_clear_of_the_lantern_hanger():
+    # The hanger starts above the crown's line, so the crown's own clearance
+    # does not keep a firefly off it.
+    from smylted.drawing.rng import Rng
+    from smylted.drawing.subjects import tree
+    for d in range(60):
+        for salt in ("a", "b", "c"):
+            s = tree._structure(Rng.for_day(date(2026, 1, 1) + timedelta(days=d), salt, "subject|tree").fork("scene"))
+            lx, rim, hook = s["lantern"]
+            for fx, fy in s["flies"]():
+                y = min(max(fy, hook), rim + 5.0)
+                assert math.dist((fx, fy), (lx, y)) >= tree.FLY_R + 5.0 - 1.0, f"day {d} salt {salt}"
+
+
 def test_crossings_are_fast_over_thousands_of_samples():
     marks = [_mark(f"m{i}", f"M 0 {i * 5} L 100 {i * 5}", part=f"row{i}") for i in range(20)]
     sk = _sketch(*marks)             # 20 lines x 200 samples

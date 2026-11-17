@@ -18,7 +18,7 @@ from __future__ import annotations
 import math
 from datetime import date
 
-from ..pen import curve, line, loop, poly
+from ..pen import PEN, WOBBLE, curve, line, loop, poly
 from ..rng import Rng
 from ..scene import Sketch, SketchBuilder
 from ..state import DayState, Theme
@@ -97,9 +97,14 @@ def _structure(r: Rng) -> dict:
             a = ra + 0.5 * f
             falls.append((rx_ + out * 2.6 * f + 5.5 * math.cos(a), ry_ + 3.2 * f - 2 + 5.5 * math.sin(a), 7.0))
 
-    # Clear of every line by two pens and a gap, and of the bird when it comes.
-    bird = (cx + rx * 0.5, cy - ry * 0.86 - 8)
-    avoid = (*((x, y, FRUIT_R + 4.5) for x, y in ink), (*bird, FRUIT_R + 12),
+    # Clear of every line by two pens and a gap, and of the bird when it comes:
+    # its own ink, not a circle round it, which left its legs and tail within
+    # a pen of the fruit below.
+    bird_at = (cx + rx * 0.5, cy - ry * 0.86 + 0.5)
+    bird_facing = -1 if lean > 0 else 1
+    bird_ink = [p for st in k.bird_strokes(*bird_at, facing=bird_facing) for p in k.samples(st, step=1.0)]
+    avoid = (*((x, y, FRUIT_R + 4.5) for x, y in ink),
+             *((x, y, FRUIT_R + PEN + 2 * WOBBLE) for x, y in bird_ink),
              *((x, y, r_ + FRUIT_R + 3.0) for x, y, r_ in falls))
     # The fruit and the fireflies are placed only by the composition that draws
     # them (fruit by day, fireflies at night), so a render pays for one. Each
@@ -126,6 +131,7 @@ def _structure(r: Rng) -> dict:
     fly_avoid = (*((x, y, FLY_R + 5.0) for x, y in ink),
                  *((x, y, r_ + FLY_R + 3.0) for x, y, r_ in falls),
                  (lx, lantern_y + 12, 19.0), (lx, lantern_y - 2, 13.0),
+                 *((lx, y, FLY_R + 5.0) for y in _span(hook_y, lantern_y + 5.0)),
                  (*moon_spot, MOON_R + FLY_R + 5.0))
     def flies() -> list:
         pts = k.scatter_all(r.fork('flies'), k.REWARDS, cx, cy - 2, rx * 1.16, ry * 1.04, 18.0,
@@ -138,8 +144,14 @@ def _structure(r: Rng) -> dict:
         'cx': cx, 'cy': cy, 'rx': rx, 'ry': ry, 'canopy': canopy, 'trunk': trunk, 'forks': forks,
         'echo': echo, 'fruit': fruit, 'flies': flies, 'rim': rim, 'lantern': (lx, lantern_y, hook_y),
         'can_side': r.choice([-1, 1]),
-        'moon_spot': moon_spot,
+        'moon_spot': moon_spot, 'bird_at': bird_at, 'bird_facing': bird_facing,
     }
+
+
+def _span(y0: float, y1: float, step: float = 1.0) -> list[float]:
+    """Heights from y0 to y1 about `step` apart, both ends included."""
+    n = max(1, math.ceil((y1 - y0) / step))
+    return [y0 + (y1 - y0) * i / n for i in range(n + 1)]
 
 
 def _pot(b: SketchBuilder, s: dict) -> None:
@@ -208,7 +220,9 @@ def _stir(s: dict):
 def _sky(b: SketchBuilder, s: dict, r: Rng) -> None:
     """The hour, day composition: the sun crosses, and late on an ink moon."""
     k.sun(b, r.fork('sun-m'), 17, 18, 5.0, when=(k.MORNING,))
-    k.sun(b, r.fork('sun-n'), 143, 17, 5.4, when=(k.MIDDAY,))
+    # Far enough right that the bird on the crown's shoulder, beak or tail
+    # toward it, never reaches its rays.
+    k.sun(b, r.fork('sun-n'), 148, 16, 5.4, when=(k.MIDDAY,))
     k.sun(b, r.fork('sun-a'), 145, 132, 5.0, when=(k.AFTERNOON,))
     k.sun(b, r.fork('sun-d'), 18, 140, 4.6, when=(k.DUSK,), rays=5)
     x, y = s['moon_spot']
@@ -230,8 +244,7 @@ def _day(b: SketchBuilder, s: dict, r: Rng) -> None:
     _tree(b, s)
     _fallen(b, s)
     _can(b, s, when=(('nothingPlanned',),))
-    k.bird(b, s['cx'] + s['rx'] * 0.5, s['cy'] - s['ry'] * 0.86 + 0.5, when=(('allDone',),),
-           facing=-1 if s['lean'] > 0 else 1)
+    k.bird(b, *s['bird_at'], when=(('allDone',),), facing=s['bird_facing'])
     for i, (x, y) in enumerate(s['fruit']()):
         k.fruit(b, x, y, FRUIT_R, when=(('reward', i),), part=f'fruit:{i}')
         b.anchor(i, x, y - FRUIT_R)

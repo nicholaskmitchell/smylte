@@ -184,36 +184,6 @@ class _Clearance:
         return True
 
 
-def scatter(rng: Rng, count: int, cx: float, cy: float, rx: float, ry: float,
-            gap: float, *, avoid: Sequence[Circle] = (), ok: Callable[[Point], bool] | None = None,
-            tries: int = 600, room: _Clearance | None = None) -> list[Point]:
-    """Up to `count` points inside an ellipse, at least `gap` apart, clear of
-    `avoid` (or a prepared `room`) and passing `ok`. May return fewer: see
-    `scatter_all`."""
-    out: list[Point] = []
-    room = room if room is not None else _Clearance(avoid)
-    # A tree's fruit can take a dozen attempts of 600 tries each, so a try is
-    # kept cheap: squared distances in a plain loop that stops at the first
-    # point too close. The same tests in the same order as ever, so the same
-    # points come out.
-    gap2 = gap * gap
-    clear, uniform, random = room.clear, rng.uniform, rng.random
-    for _ in range(tries):
-        if len(out) == count:
-            break
-        a = uniform(0, 2 * math.pi)
-        r = math.sqrt(random())
-        px, py = cx + rx * r * math.cos(a), cy + ry * r * math.sin(a)
-        for qx, qy in out:
-            if (px - qx) ** 2 + (py - qy) ** 2 < gap2:
-                break
-        else:
-            p = (px, py)
-            if clear(p) and (ok is None or ok(p)):
-                out.append(p)
-    return out
-
-
 def apart(r: float) -> float:
     """How far apart the centres of two round rewards of radius `r` must be so
     their ink never touches: both radii, a pen between them, and the wobble of
@@ -234,7 +204,7 @@ def scatter_all(rng: Rng, count: int, cx: float, cy: float, rx: float, ry: float
     addition), so it costs a few list passes however crowded the subject is:
     the tree's fruit used to take a dozen attempts of 600 dart throws each, and
     the render ran past its time budget. After ATTEMPTS failures the gap eases a
-    step at a time, never below `floor` (by default half the gap). For rewards
+    step at a time, down to `floor` (by default half the gap) and never below. For rewards
     the floor is where two of them would touch: twice their radius, a pen and
     the wobble of both. Deterministic for a given rng. ValueError when even
     that cannot place them all: the subject's constraints leave no room, and
@@ -250,7 +220,7 @@ def scatter_all(rng: Rng, count: int, cx: float, cy: float, rx: float, ry: float
         if room.clear(p) and (ok is None or ok(p)):
             candidates.append(p)
     g = gap
-    while g >= floor:
+    while True:
         g2 = g * g
         for attempt in range(ATTEMPTS):
             pick = rng.fork(f'order{attempt}|{g:.2f}')
@@ -262,7 +232,12 @@ def scatter_all(rng: Rng, count: int, cx: float, cy: float, rx: float, ry: float
                 left = [q for q in left if (q[0] - px) ** 2 + (q[1] - py) ** 2 >= g2]
             if len(out) == count:
                 return out
-        g *= 0.94
+        if g <= floor:
+            break
+        # The floor itself is the last gap tried: easing straight past it
+        # (19 to 17.9 against a floor of 18.75) left a crowded tree no second
+        # level at all, and that day's drawing failed.
+        g = max(g * 0.94, floor)
     raise ValueError(f"cannot place {count} points {floor:.1f} or more apart under these constraints")
 
 
@@ -499,20 +474,28 @@ def fruit(b: SketchBuilder, x: float, y: float, r: float, *, when: Iterable = ()
         b.line(line((x + 0.4, y - r), (x + 1.6, y - r - 2.6)), when=when, part=part)
 
 
+def bird_strokes(x: float, y: float, *, k_: float = 1.4, facing: int = 1) -> list[Stroke]:
+    """The strokes of a small bird perched with its feet at (x, y): what `bird`
+    draws, so a subject can keep other things clear of the bird's own ink."""
+    def p(dx: float, dy: float) -> Point:
+        return (x + facing * dx * k_, y + (dy - 6) * k_)
+
+    return [
+        loop(p(-6, 0), p(0, -3.4), p(5, -1), p(2, 2.6), p(-4, 2.4)),
+        loop(p(4, -3.6), p(7.2, -5.4), p(8.6, -2.6), p(6, -1.4)),
+        line(p(8.6, -4), p(11, -3.4)),                 # beak
+        line(p(-6, 0), p(-10.4, -2.6)),                # tail
+        line(p(-1, 2.6), p(-1.4, 6)),
+        line(p(1.6, 2.4), p(1.8, 6)),
+    ]
+
+
 def bird(b: SketchBuilder, x: float, y: float, *, when: Iterable = (), k_: float = 1.4,
          facing: int = 1, part: str = 'bird') -> None:
     """A small bird perched with its feet at (x, y)."""
     when = tuple(when)
-
-    def p(dx: float, dy: float) -> Point:
-        return (x + facing * dx * k_, y + (dy - 6) * k_)
-
-    b.line(loop(p(-6, 0), p(0, -3.4), p(5, -1), p(2, 2.6), p(-4, 2.4)), when=when, part=part)
-    b.line(loop(p(4, -3.6), p(7.2, -5.4), p(8.6, -2.6), p(6, -1.4)), when=when, part=part)
-    b.line(line(p(8.6, -4), p(11, -3.4)), when=when, part=part)                 # beak
-    b.line(line(p(-6, 0), p(-10.4, -2.6)), when=when, part=part)                # tail
-    b.line(line(p(-1, 2.6), p(-1.4, 6)), when=when, part=part)
-    b.line(line(p(1.6, 2.4), p(1.8, 6)), when=when, part=part)
+    for stroke in bird_strokes(x, y, k_=k_, facing=facing):
+        b.line(stroke, when=when, part=part)
 
 
 def hatch(b: SketchBuilder, x0: float, y0: float, lengths: Sequence[float], gap: float, *,
