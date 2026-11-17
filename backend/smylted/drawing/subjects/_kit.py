@@ -4,7 +4,11 @@ Everything here is geometry. Paint is a role chosen at the call site (line,
 wash, glow, accent); motion is the client's. The canvas is the builder's
 viewBox, 160 x 200, portrait, y growing downward.
 
-Rules for a subject, which the tests hold every subject to (tests/test_drawing.py):
+Rules for a subject. The tests hold every subject to four of them, over a week
+of days under two salts, both themes and every hour (tests/test_drawing.py): it
+stays in its frame, every reward is at least 10 units across, ink touches ink
+only where JOINS says, and the night is its own picture with a light always on.
+The rest are this kit's conventions, which the tests cannot see:
 
 * Fill the frame, as the mockup's tree does: the subject is the picture, not a
   vignette in a corner of sky. Nothing leaves the frame.
@@ -14,7 +18,8 @@ Rules for a subject, which the tests hold every subject to (tests/test_drawing.p
 * A reward is a coral fill inside its own ink outline, drawn by `b.filled` (the
   two register, and the outline holds still while the picture boils), at least
   10 units across. Fill the slots in `spread` order, so three or four rewards
-  already cover the picture, and `b.anchor` each reward where it grows from.
+  already cover the picture (or in reading order, where a full row reads as
+  done, like the desk's notes), and `b.anchor` each reward where it grows from.
 * Ink never crosses ink by accident. Name every mark's `part`; declare the
   parts that are meant to touch in the subject's JOINS; place scattered things
   with `avoid`.
@@ -85,7 +90,8 @@ def leaf(cx: float, cy: float, length: float, angle: float) -> Stroke:
 
 def wash_of(stroke: Stroke, *, inset: float = 0.93, dx: float = 4.0, dy: float = 4.0) -> Stroke:
     """The wash under an outline: the same shape, a little smaller, shifted down
-    and right like a print plate off register (the mockup's translate(3 3))."""
+    and right like a print plate off register. The mockup shifts its wash 3
+    units in a 96-unit drawing, about 5 in ours; 4 keeps it a touch tighter."""
     pts = stroke.points
     mx = sum(p[0] for p in pts) / len(pts)
     my = sum(p[1] for p in pts) / len(pts)
@@ -164,14 +170,17 @@ def scatter(rng: Rng, count: int, cx: float, cy: float, rx: float, ry: float,
 def scatter_all(rng: Rng, count: int, cx: float, cy: float, rx: float, ry: float,
                 gap: float, **kw) -> list[Point]:
     """Exactly `count` points: `scatter`, retried on fresh forks, then with the
-    gap eased a step at a time. Deterministic for a given rng."""
+    gap eased a step at a time, down to half of it. Deterministic for a given
+    rng. ValueError when even that cannot place them all: the subject's
+    constraints leave no room, and that is a subject to fix, not a day to hang."""
     g = gap
-    while True:
+    while g >= gap * 0.5:
         for attempt in range(24):
             pts = scatter(rng.fork(f'try{attempt}|{g:.2f}'), count, cx, cy, rx, ry, g, **kw)
             if len(pts) == count:
                 return pts
         g *= 0.94
+    raise ValueError(f"cannot place {count} points {gap * 0.5:.1f} or more apart under these constraints")
 
 
 def spread(points: Sequence[Point], start: Point) -> list[Point]:

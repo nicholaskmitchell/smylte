@@ -180,10 +180,11 @@ class SketchBuilder:
         self._add('accent', stroke, when, key, part=part, paper=paper)
 
     def filled(self, stroke: Stroke, *, when=(), key: str | None = None,
-               part: str | None = None, paper: str = 'auto', boil: bool = False) -> None:
+               part: str | None = None, paper: str = 'auto') -> None:
         """A coral fill and its ink outline, drawn from the same jittered
         points so the ink sits on the edge of the fill. The fill is drawn in
-        by half a unit so it never shows outside the line."""
+        by half a unit so it never shows outside the line. The outline holds
+        still, one frame, while the picture boils: a reward stays put."""
         when = conditions.validate(when)
         reward = _reward_of(when)
         accent_id = f"{self._prefix}m{len(self._marks)}"
@@ -193,21 +194,22 @@ class SketchBuilder:
         pts = self._pen.jittered(stroke, f"{k}|f0")
         closed, smooth, corners = stroke.closed, stroke.smooth, stroke.corners
         fill = to_d(_inset(pts, 0.5), closed, smooth, corners)
-        outline = [to_d(pts, closed, smooth, corners)]
-        if boil and not self._still:
-            for f in (1, 2):
-                outline.append(
-                    to_d(self._pen.jittered(stroke, f"{k}|f{f}"), closed, smooth, corners))
+        outline = (to_d(pts, closed, smooth, corners),)
         part = part or accent_id
         self._append(accent_id, 'accent', (fill,), len(stroke.points), when, reward,
                      paper, part)
-        self._append(line_id, 'line', tuple(outline), len(stroke.points), when, reward,
+        self._append(line_id, 'line', outline, len(stroke.points), when, reward,
                      'auto', part)
 
     def anchor(self, reward: int, x: float, y: float) -> None:
         """Where reward `reward`'s marks grow from, instead of their centroid."""
         if not _is_index(reward) or not 0 <= reward < MAX_REWARDS:
             raise ValueError(f"reward index must be an int in 0..{MAX_REWARDS - 1}")
+        x0, y0, w, h = self.view_box
+        if not (x0 <= x <= x0 + w and y0 <= y <= y0 + h):
+            # The client refuses a drawing with an origin off the picture, so
+            # one bad anchor would blank the whole day.
+            raise ValueError(f"reward {reward} anchored at ({x}, {y}), outside the picture")
         self._anchors[reward] = (float(x), float(y))
 
     def ambient(self, seconds: float, when,

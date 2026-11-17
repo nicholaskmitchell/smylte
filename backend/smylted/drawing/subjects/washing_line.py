@@ -128,9 +128,9 @@ def _pegs(b: SketchBuilder, x: float, y: float, *, when: tuple, part: str) -> No
 
 
 def _gusts(frame: int, child: SketchBuilder) -> None:
-    """Start: two gusts pass, one above the lines (curling down) and one
-    below the washing (curling up), clear of the weather and the basket."""
-    for j, (y, x0, span, up) in enumerate(((44.0, 28.0, 30.0, 1), (154.0, 58.0, 26.0, -1))):
+    """Start: two gusts pass, one above the lines and one below the washing,
+    both curling down: clear of the weather, the far hill and the basket."""
+    for j, (y, x0, span, up) in enumerate(((44.0, 28.0, 30.0, 1), (154.0, 58.0, 26.0, 1))):
         x = x0 + (frame * 5 + j * 15) % span
         child.line(curve((x, y), (x + 14, y + up * 1.2), (x + 26, y - up * 0.4), (x + 34, y + up * 1.6),
                          (x + 37.4, y + up * 5.0), (x + 34, y + up * 7.4), (x + 31, y + up * 5.2)),
@@ -204,7 +204,9 @@ def _night(b: SketchBuilder, s: dict, r: Rng) -> None:
         b.anchor(i, bx, by + 3)
 
     def moth(frame: int, child: SketchBuilder) -> None:
+        # A small loop in the clear air left of the house: under the bulbs,
+        # over the hill, clear of the walls.
         a = 2 * math.pi * frame / 6
-        mx, my = hx - 5 + 14 * math.cos(a), hy - 22 + 6 * math.sin(a)
+        mx, my = 84 + 9 * math.cos(a), 134 + 4.5 * math.sin(a)
         child.line(curve((mx - 3.4, my - 2), (mx, my + 0.6), (mx + 3.4, my - 2)), part='moth')
     b.ambient(1.0, (('focus',),), moth)

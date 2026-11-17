@@ -29,7 +29,10 @@ instead (`backend/smylted/drawing/paper.py`):
 - an accent fill in a drawing 8 units across or more is a pen hatch at about the
   coral's 40% tone, always inside its ink outline, on the opposite diagonal to
   the highlighter's;
-- a smaller fill is solid ink, and a round one keeps a paper glint;
+- a smaller fill is solid ink, and a round reward (a fruit) stays solid at any
+  size with a paper glint, as the owner's choice put it ("small ones like fruit
+  stay solid with a paper glint"): a disc with a glint reads as fruit, a hatched
+  disc as a button;
 - the wash and the glow are dropped.
 
 The sentence to amend in the design system's README, if the owner wants the

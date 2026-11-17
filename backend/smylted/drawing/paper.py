@@ -3,9 +3,14 @@
 Lines are the pen, in ink. The wash and the glow are dropped, because paper has
 no tones to give them. A coral fill (an `accent` mark) is not solid ink when it
 is large: a fill 8 units or more across becomes a pen hatch at about the
-coral's 40% tone, always inside its ink outline, so a big fill never turns
-into a black block. A smaller fill stays solid ink, and one marked
-paper='glint' gets a spot of paper left in it, so a round fruit reads as round.
+coral's 40% tone, always inside its ink outline, so a big fill (a note, a
+garment) never turns into a black block. A smaller fill stays solid ink.
+
+A round reward marked paper='glint' (a fruit) stays solid at any size, with a
+spot of paper left in it so it reads as round and shiny: the owner's choice
+was "small ones like fruit stay solid with a paper glint", and a disc with a
+glint reads as fruit where a hatched disc reads as a button. Only the light
+compositions are ever printed, so in practice that is the tree's fruit.
 
 There is no boil here: every mark is drawn from its first frame, and the focus
 loop from its first frame while it runs.

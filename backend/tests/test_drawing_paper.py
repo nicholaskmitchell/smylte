@@ -175,20 +175,35 @@ def test_the_roster_on_paper_stays_airy(subject, state, width):
 @pytest.mark.parametrize('subject', subjects.ROSTER, ids=lambda s: s.id)
 @pytest.mark.parametrize('width', (160, 240))
 def test_no_reward_is_a_solid_block(subject, width):
+    """A large coral fill is hatched, never solid; a round reward marked
+    'glint' (a fruit) is solid but keeps its spot of paper. Every reward at
+    twelve is one or the other, so the check always checks something."""
     s = roster_sketch(subject, FULL)
     img = one_bit(paper_image(s, width))
     ppu = width / s.view_box[2]
+    checked = 0
     for m in s.marks:
-        if m.role != 'accent' or m.reward is None or m.paper != 'auto' or not m.on:
+        if m.role != 'accent' or m.reward is None or not m.on:
             continue
         pts = polyline(m.frames[0], steps=8)[0]
         xs, ys = [p[0] for p in pts], [p[1] for p in pts]
-        if max(max(xs) - min(xs), max(ys) - min(ys)) < HATCH_FROM:
+        bw, bh = max(xs) - min(xs), max(ys) - min(ys)
+        if m.paper == 'glint':
+            r = min(bw, bh) / 2
+            cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+            gx, gy = cx - 0.38 * r, cy - 0.38 * r
+            px = (int((gx - s.view_box[0]) * ppu), int((gy - s.view_box[1]) * ppu))
+            assert img.getpixel(px) != 0, (m.id, m.part, 'no glint')
+            checked += 1
+            continue
+        if max(bw, bh) < HATCH_FROM:
             continue
         box = unit_box((min(xs), min(ys), max(xs), max(ys)), 2, ppu)
         if box[2] <= box[0] or box[3] <= box[1]:
             continue
         assert ink_in(img, box) < 0.75, (m.id, m.part)
+        checked += 1
+    assert checked >= 12, f"{subject.id}: only {checked} rewards checked"
 
 
 def test_a_full_drawing_rasterises_quickly():

@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 Point = tuple[float, float]
 
 MIN_REWARD_ACROSS = 10.0
-MIN_REWARD_AREA = 55.0
+MIN_REWARD_AREA = 60.0
 
 # Ink samples are at most this far apart when crossings are looked for.
 _SAMPLE = 0.5
@@ -146,44 +146,55 @@ def crossings(sketch: Sketch, joins=frozenset(), *, gap: float = 1.0
     `gap` of each other. Two marks may touch when they are the same part, or
     when the pair of their base names (the part before any ':') is in `joins`;
     a join of one name lets two different parts of that name touch. Each pair
-    of parts is reported once, with one example point. Only the first frame of
-    a mark is looked at, and only marks that are on."""
-    marks = [m for m in sketch.marks if m.role == 'line' and m.on]
-    if sketch.ambient is not None and sketch.ambient.frames:
-        marks += [m for m in sketch.ambient.frames[0] if m.role == 'line' and m.on]
+    of parts is reported once, with one example point. The first (boil) frame
+    of each mark that is on is looked at, against EVERY frame of the focus loop
+    while it runs, one frame at a time: a collision for a sixth of a second is
+    still one someone sees."""
+    still = [m for m in sketch.marks if m.role == 'line' and m.on]
+    loop = []
+    if sketch.ambient is not None:
+        loop = [[m for m in frame if m.role == 'line' and m.on] for frame in sketch.ambient.frames]
+        loop = [frame for frame in loop if frame]
 
-    cells: dict[tuple[int, int], list[tuple[int, Point]]] = {}
-    for idx, mark in enumerate(marks):
-        for path in polyline(mark.frames[0]):
-            for p in _resample(path):
-                cells.setdefault((math.floor(p[0] / gap), math.floor(p[1] / gap)),
-                                 []).append((idx, p))
-
-    allowed: dict[tuple[int, int], bool] = {}
-
-    def may_touch(i: int, j: int) -> bool:
-        key = (min(i, j), max(i, j))
-        if key not in allowed:
-            a, b = marks[i].part, marks[j].part
-            allowed[key] = a == b or frozenset((_base(a), _base(b))) in joins
-        return allowed[key]
+    def grid(marks: list) -> dict[tuple[int, int], list[tuple[int, Point]]]:
+        cells: dict[tuple[int, int], list[tuple[int, Point]]] = {}
+        for idx, mark in enumerate(marks):
+            for path in polyline(mark.frames[0]):
+                for p in _resample(path):
+                    cells.setdefault((math.floor(p[0] / gap), math.floor(p[1] / gap)),
+                                     []).append((idx, p))
+        return cells
 
     found: dict[tuple[str, str], Point] = {}
-    seen: set[tuple[int, int]] = set()
-    for (cx, cy), items in cells.items():
-        for idx, p in items:
-            for dx in (-1, 0, 1):
-                for dy in (-1, 0, 1):
-                    for jdx, q in cells.get((cx + dx, cy + dy), ()):
-                        if jdx <= idx:
-                            continue
-                        key = (idx, jdx)
-                        if key in seen or may_touch(idx, jdx):
-                            continue
-                        if math.dist(p, q) < gap:
-                            seen.add(key)
-                            names = tuple(sorted((marks[idx].part, marks[jdx].part)))
-                            found.setdefault(names, p)
+
+    def may_touch(a: str, b: str) -> bool:
+        return a == b or frozenset((_base(a), _base(b))) in joins
+
+    def compare(cells_a, marks_a, cells_b, marks_b, same: bool) -> None:
+        seen: set[tuple[int, int]] = set()
+        for (cx, cy), items in cells_a.items():
+            for idx, p in items:
+                for dx in (-1, 0, 1):
+                    for dy in (-1, 0, 1):
+                        for jdx, q in cells_b.get((cx + dx, cy + dy), ()):
+                            if same and jdx <= idx:
+                                continue
+                            key = (idx, jdx)
+                            if key in seen:
+                                continue
+                            a, b = marks_a[idx].part, marks_b[jdx].part
+                            if may_touch(a, b):
+                                continue
+                            if math.dist(p, q) < gap:
+                                seen.add(key)
+                                found.setdefault(tuple(sorted((a, b))), p)
+
+    still_cells = grid(still)
+    compare(still_cells, still, still_cells, still, True)
+    for frame in loop:
+        frame_cells = grid(frame)
+        compare(frame_cells, frame, still_cells, still, False)
+        compare(frame_cells, frame, frame_cells, frame, True)
     return [(a, b, p) for (a, b), p in sorted(found.items())]
 
 

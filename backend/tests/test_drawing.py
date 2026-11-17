@@ -455,7 +455,7 @@ def test_glow_is_one_frame_between_wash_and_accent():
 def test_filled_is_an_accent_then_its_outline(stroke):
     b = _builder()
     b.filled(stroke, when=(("reward", 2),), part="fruit")
-    b.filled(stroke, when=(("reward", 3),), boil=True)
+    b.filled(stroke, when=(("reward", 3),))
     sk = b.build(DayState(rewards=4))
     by_id = {m.id: m for m in sk.marks}
     accent, outline = by_id["m0"], by_id["m1"]
@@ -464,9 +464,9 @@ def test_filled_is_an_accent_then_its_outline(stroke):
     assert accent.reward == outline.reward == 2
     assert accent.part == outline.part == "fruit"
     assert len(accent.frames) == 1 and len(outline.frames) == 1
-    boiled = by_id["m3"]
-    assert len(boiled.frames) == 3 and len(by_id["m2"].frames) == 1
-    assert boiled.part == by_id["m2"].part == "m2"
+    # Unnamed, a fill and its outline are one part, named for the fill.
+    assert by_id["m3"].part == by_id["m2"].part == "m2"
+    assert len(by_id["m3"].frames) == 1
     near = list(zip(checks.endpoints(accent.frames[0]), checks.endpoints(outline.frames[0])))
     assert len(near) > 3
     for (ax, ay), (ox, oy) in near:
@@ -476,7 +476,7 @@ def test_filled_is_an_accent_then_its_outline(stroke):
 
 def test_filled_inside_an_ambient_child_is_one_frame_each():
     b = _builder()
-    b.ambient(1, (), lambda f, fb: fb.filled(pen.circle(40, 40, 12), boil=True))
+    b.ambient(1, (), lambda f, fb: fb.filled(pen.circle(40, 40, 12)))
     frame = b.build(DayState()).ambient.frames[0]
     assert [m.role for m in frame] == ["accent", "line"]
     assert [len(m.frames) for m in frame] == [1, 1]
@@ -488,6 +488,16 @@ def test_paper_must_be_a_known_one():
     with pytest.raises(ValueError):
         _builder().filled(pen.circle(5, 5, 3), paper="shiny")
     _builder().accent(pen.circle(5, 5, 3), paper="glint")
+
+
+def test_an_anchor_must_be_inside_the_picture():
+    # The client refuses a whole drawing for one origin off the picture.
+    b = _builder()
+    b.anchor(0, 0, 0)
+    b.anchor(1, 160, 200)
+    for x, y in ((-0.1, 50), (80, 200.1), (161, 10)):
+        with pytest.raises(ValueError):
+            b.anchor(2, x, y)
 
 
 def test_rewards_carry_an_origin_and_nothing_else_does():
@@ -577,7 +587,7 @@ def test_reward_sizes_of_a_square():
     other = _mark("m2", _BOX, role="line", reward=4)
     sizes = reward_sizes(_sketch(one, two, other))
     assert sizes == {3: (45.0, 425.0)}
-    assert MIN_REWARD_ACROSS == 10.0 and MIN_REWARD_AREA == 55.0
+    assert MIN_REWARD_ACROSS == 10.0 and MIN_REWARD_AREA == 60.0
 
 
 def _cross_marks(a_part="a", b_part="b", on=True):
