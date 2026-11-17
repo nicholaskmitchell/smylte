@@ -39,7 +39,9 @@ from smylted.drawing.checks import (
     bounds_errors,
     crossings,
     has_standing_light,
+    is_own_night,
     night_overlap,
+    night_own,
     reward_sizes,
 )
 from smylted.drawing.pen import WOBBLE, Pen, hand
@@ -823,6 +825,38 @@ def test_night_overlap_counts_marks_in_the_same_place():
     assert night_overlap(light, dark) == 0.5
     assert night_overlap(light, _sketch()) == 0.0
     assert night_overlap(light, light) == 1.0
+    assert night_own(light, dark) == 2
+
+
+def test_a_night_that_redraws_the_day_in_another_order_is_still_the_day():
+    # The defect this replaced: the boil's jitter is keyed to a mark's place in
+    # the drawing, so a night that drew its own marks first moved every reused
+    # mark by a unit or two, and boxes rounded to a 2-unit grid then counted
+    # most of them as new. The day's marks, each nudged by as much as both
+    # boils can move it and drawn in reverse under other ids, are the day.
+    strokes = [(10 + 13 * i, 20 + 11 * i, 30 + 13 * i, 25 + 11 * i) for i in range(10)]
+    light = _sketch(*(_mark(f"m{i}", f"M {a} {b} L {c} {d}")
+                      for i, (a, b, c, d) in enumerate(strokes)))
+    j = 2 * WOBBLE
+    dark = _sketch(*(_mark(f"n{i}", f"M {a + j} {b - j} L {c - j} {d + j}")
+                     for i, (a, b, c, d) in enumerate(reversed(strokes))))
+    assert night_overlap(light, dark) == 1.0
+    assert night_own(light, dark) == 0
+    assert not is_own_night(light, dark)
+
+
+def test_the_night_rule_wants_little_reuse_and_marks_of_its_own():
+    day = [_mark(f"m{i}", f"M {10 * i} 10 L {10 * i + 5} 15") for i in range(9)]
+    light = _sketch(*day)
+    lamp = [_mark(f"l{i}", f"M {10 * i} 150 L {10 * i + 5} 160") for i in range(4)]
+    # Nine reused and four of its own: 0.69 reused, four new. A real night.
+    assert is_own_night(light, _sketch(*day, *lamp))
+    # Nine reused and three of its own: too few of its own.
+    assert not is_own_night(light, _sketch(*day, *lamp[:3]))
+    # Forty reused and four of its own: 0.91 reused, the day with a lamp on top.
+    many = [_mark(f"m{i}", f"M {4 * (i % 20)} {40 + 30 * (i // 20)} L {4 * (i % 20) + 2} {42 + 30 * (i // 20)}")
+            for i in range(40)]
+    assert not is_own_night(_sketch(*many), _sketch(*many, *lamp))
 
 
 def test_a_standing_light_is_a_glow_big_enough_to_see_that_is_always_on():
@@ -1108,7 +1142,9 @@ def test_registered_subject_keeps_the_contract(subject):
         roles = {m.role for m in sketch.marks}
         assert 'line' in roles and 'accent' in roles, roles
     light, dark = renders['light'], renders['dark']
-    assert night_overlap(light, dark) <= 0.75, f"{subject.id}: dark is the light drawing"
+    assert is_own_night(light, dark), (
+        f"{subject.id}: dark is the light drawing ({night_overlap(light, dark):.2f} reused, "
+        f"{night_own(light, dark)} of its own)")
     assert has_standing_light(dark), f"{subject.id}: the night has no standing light"
 
 
@@ -1197,5 +1233,7 @@ def test_no_ink_crosses_by_accident(subject):
 def test_the_night_is_its_own_picture(subject):
     for (where, light), (_, dark) in zip(_renders(subject, _DayState(rewards=12), 'light'),
                                          _renders(subject, _DayState(rewards=12), 'dark')):
-        assert night_overlap(light, dark) <= 0.75, f"{subject.id} {where}"
+        assert is_own_night(light, dark), (
+            f"{subject.id} {where}: {night_overlap(light, dark):.2f} reused, "
+            f"{night_own(light, dark)} of its own")
         assert has_standing_light(dark), f"{subject.id} {where}"

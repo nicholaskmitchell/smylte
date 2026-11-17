@@ -9,8 +9,9 @@ of days under two salts, both themes and every hour (tests/test_drawing.py): it
 stays in its frame; every reward is at least 10 units across and 60 units^2 of
 coral; ink touches ink only where JOINS says, measured at the pen's own width
 (PEN) on every boil frame and every frame of the focus loop, and two rewards
-never touch at all; and the night is its own picture, with a glow of at least
-600 units^2 that is always on. The rest are this kit's conventions, which the
+never touch at all; and the night is its own picture: at most 90% of its marks
+where a day mark is, at least four of its own (checks.is_own_night), and a glow
+of at least 600 units^2 that is always on. The rest are this kit's conventions, which the
 tests cannot see:
 
 * Fill the frame, as the mockup's tree does: the subject is the picture, not a

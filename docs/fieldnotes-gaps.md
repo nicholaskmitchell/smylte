@@ -53,5 +53,6 @@ nothing leaves the frame; every reward is at least 10 units across and 60 units�
 of coral; ink touches ink only where the subject's `JOINS` says it may, measured
 at the pen's own width (2.25 units) on every boil frame and every frame of the
 focus loop, and two rewards never touch at all; and the night is its own
-picture with a light that is always on (a glow of 600 units² or more with no
-condition).
+picture, not the day recoloured (at most 90% of its marks where a day mark is,
+allowing for both boils' wobble, and at least four marks of its own), with a
+light that is always on (a glow of 600 units² or more with no condition).

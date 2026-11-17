@@ -21,6 +21,19 @@ MIN_REWARD_AREA = 60.0
 # The smallest light a night may stand on: a glow of this many square units
 # (a ring of radius about 14) that shows whatever the state.
 MIN_NIGHT_LIGHT = 600.0
+# A night is the same place after dark, not the day recoloured: at most this
+# share of its marks may sit where a day mark does, and at least this many must
+# be its own (the light, the moon, what only comes out at night). A recolour
+# scores 1.0 with none of its own. The approved desk, the same room with its
+# lamp on, is about 0.85.
+MAX_NIGHT_OVERLAP = 0.90
+MIN_NIGHT_OWN = 4
+# Two marks are in the same place when every side of one's box is within this
+# of the other's: both boils' wobble and a unit to spare. A mark the night
+# reuses then matches however its hand was jittered and in whatever order it
+# was drawn: an exact match on rounded boxes counted a reused mark as new
+# whenever its jitter crossed a rounding line, which drawing it later did.
+NIGHT_MATCH = 2 * WOBBLE + 1.0
 
 # Ink samples are at most this far apart when crossings are looked for.
 _SAMPLE = 0.5
@@ -219,24 +232,65 @@ def crossings(sketch: Sketch, joins=frozenset(), *, gap: float = PEN
     return [(a, b, p) for (a, b), p in sorted(found.items())]
 
 
-def _rounded_box(mark) -> tuple[int, int, int, int] | None:
+def _box(mark) -> tuple[float, float, float, float] | None:
     pts = endpoints(mark.frames[0])
     if not pts:
         return None
     xs = [p[0] for p in pts]
     ys = [p[1] for p in pts]
-    return tuple(round(v / 2) * 2 for v in (min(xs), min(ys), max(xs), max(ys)))
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _night_matches(light: Sketch, dark: Sketch) -> list[bool]:
+    """For each dark mark, whether a light mark sits in the same place (every
+    side of their first frames' boxes within NIGHT_MATCH). A mark with no
+    points matches nothing."""
+    cell = NIGHT_MATCH
+    grid: dict[tuple[int, int], list[tuple[float, float, float, float]]] = {}
+    for m in light.marks:
+        b = _box(m)
+        if b is not None:
+            grid.setdefault((int(b[0] // cell), int(b[1] // cell)), []).append(b)
+    out = []
+    for m in dark.marks:
+        b = _box(m)
+        hit = False
+        if b is not None:
+            gx, gy = int(b[0] // cell), int(b[1] // cell)
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for l in grid.get((gx + dx, gy + dy), ()):
+                        if all(abs(u - v) <= NIGHT_MATCH for u, v in zip(b, l)):
+                            hit = True
+                            break
+                    if hit:
+                        break
+                if hit:
+                    break
+        out.append(hit)
+    return out
 
 
 def night_overlap(light: Sketch, dark: Sketch) -> float:
-    """The share of the dark marks that sit exactly where a light mark does
-    (their first frames' bounding boxes agree to within two units). A night
-    that reuses the day's marks scores near 1."""
-    lit = {_rounded_box(m) for m in light.marks} - {None}
-    boxes = [_rounded_box(m) for m in dark.marks]
-    if not boxes:
-        return 0.0
-    return sum(1 for b in boxes if b is not None and b in lit) / len(boxes)
+    """The share of the dark marks that sit where a light mark does. A night
+    that reuses every one of the day's marks scores 1, in any order."""
+    hits = _night_matches(light, dark)
+    return sum(hits) / len(hits) if hits else 0.0
+
+
+def night_own(light: Sketch, dark: Sketch) -> int:
+    """How many dark marks sit where no light mark does: the night's own."""
+    return sum(1 for hit in _night_matches(light, dark) if not hit)
+
+
+def is_own_night(light: Sketch, dark: Sketch) -> bool:
+    """The night rule: at most MAX_NIGHT_OVERLAP of the night reused from the
+    day, and at least MIN_NIGHT_OWN marks of its own."""
+    hits = _night_matches(light, dark)
+    if not hits:
+        return False
+    return (sum(hits) / len(hits) <= MAX_NIGHT_OVERLAP
+            and len(hits) - sum(hits) >= MIN_NIGHT_OWN)
 
 
 def has_standing_light(dark: Sketch) -> bool:
