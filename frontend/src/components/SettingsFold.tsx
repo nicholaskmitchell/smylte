@@ -10,6 +10,7 @@
 // half-typed inside one is not lost by folding it.
 
 import { useState, type ReactNode } from 'react'
+import { useFieldNotes } from '../hooks'
 
 export function Fold({ summary, defaultOpen = false, open, onOpenChange, className, children }: {
   /** What is in force, in one line. */
@@ -39,6 +40,8 @@ export function Fold({ summary, defaultOpen = false, open, onOpenChange, classNa
 }
 
 export function HowFold({ title, children }: { title: string, children: ReactNode }) {
+  // Field notes does not explain: the fold is an explanation and nothing else.
+  if (useFieldNotes()) return null
   return (
     <details className="menu-fold menu-more">
       <summary>{title}</summary>

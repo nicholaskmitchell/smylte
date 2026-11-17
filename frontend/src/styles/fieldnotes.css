@@ -435,3 +435,25 @@
 [data-surface="app"] .focus:not([data-float]) .focus-now__eyebrow { font-weight: 500; font-size: calc(var(--fs-app-small) * var(--fs-scale)); }
 [data-surface="app"] .focus:not([data-float]) :is(.focus-now__meta, .focus-next__more) { font-size: calc(var(--fs-app-meta) * var(--fs-scale)); }
 [data-surface="app"] .focus:not([data-float]) .focus-next__text { font-family: var(--serif); font-size-adjust: none; font-weight: 500; }
+
+/* ==== cp3 · Settings ==== */
+
+/* The section list: the open one carries the drawn underline, not the coral bar. */
+[data-surface="app"] .set-nav-item { position: relative; }
+[data-surface="app"] .set-nav-item.active { border-left-color: transparent; }
+[data-surface="app"] .set-nav-item .tab-ink { position: absolute; left: 10px; bottom: 1px; }
+[data-surface="app"] .set-nav-item.active .tab-ink path { stroke-dashoffset: 0; opacity: 1; transition-duration: var(--dur-stroke); }
+[data-surface="app"] .set-nav-item:not(.active) .tab-ink path {
+  opacity: 0; transition: stroke-dashoffset var(--dur-ink) var(--ease-ink), opacity var(--dur-ink) step-end;
+}
+@media (max-width: 720px) { [data-surface="app"] .set-sheet .set-nav-item .tab-ink { display: none; } }
+/* A panel's headings are set the way a notebook's are, not as small capitals. */
+[data-surface="app"] .set-panel > .menu-head,
+[data-surface="app"] .appear-group > .menu-head {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500; text-transform: none; letter-spacing: 0;
+  font-size: calc(var(--fs-app-reading) * var(--fs-scale)); color: var(--fg);
+}
+[data-surface="app"] .set-head .set-title {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500; letter-spacing: -0.01em;
+  font-size: calc(var(--fs-app-section) * var(--fs-scale)); color: var(--fg);
+}

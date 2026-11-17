@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useT } from '../i18n'
+import { useFieldNotes } from '../hooks'
 import { readState, setIcon, setTitleBar, platformOf, type DesktopState, type IconChoice } from '../desktop'
 
 // The desktop-only half of Appearance.
@@ -46,6 +47,7 @@ const CHOICES: { id: IconChoice; key: string }[] = [
 
 export function DesktopSection() {
   const tr = useT()
+  const fieldNotes = useFieldNotes()
   const [state, setState] = useState<DesktopState | null>(null)
 
   useEffect(() => { void readState().then(setState) }, [])
@@ -101,22 +103,24 @@ export function DesktopSection() {
         </div>
       )}
 
-      <div className="hintline">
-        {tr(k('settings.icon.hint'))}
-        {state.choice === 'Auto' && ' ' + tr(k(
-          state.systemUsesLightTheme ? 'settings.icon.autoLight' : 'settings.icon.autoDark'))}
-        {state.systemTitleBar !== undefined && ' ' + tr(k('settings.titlebar.hint'))}
-        {/* Windows 10 only: it can be told light or dark and nothing else. The
-            Linux client draws the strip itself, so it always reports true and
-            this never renders there — no platform test needed. Silenced once
-            the caption has been handed back: what the OS could have been told
-            is not worth a sentence when it is not being told anything. */}
-        {!state.captionColour && !state.systemTitleBar && ' ' + tr('settings.icon.win10')}
-        {/* Said here rather than on the floating window, which has no room for
-            a sentence: the pin control is simply absent under Wayland, and a
-            control that vanished with no explanation reads as a bug. */}
-        {state.canPin === false && ' ' + tr('settings.float.noPin')}
-      </div>
+      {!fieldNotes && (
+        <div className="hintline">
+          {tr(k('settings.icon.hint'))}
+          {state.choice === 'Auto' && ' ' + tr(k(
+            state.systemUsesLightTheme ? 'settings.icon.autoLight' : 'settings.icon.autoDark'))}
+          {state.systemTitleBar !== undefined && ' ' + tr(k('settings.titlebar.hint'))}
+          {/* Windows 10 only: it can be told light or dark and nothing else. The
+              Linux client draws the strip itself, so it always reports true and
+              this never renders there — no platform test needed. Silenced once
+              the caption has been handed back: what the OS could have been told
+              is not worth a sentence when it is not being told anything. */}
+          {!state.captionColour && !state.systemTitleBar && ' ' + tr('settings.icon.win10')}
+          {/* Said here rather than on the floating window, which has no room for
+              a sentence: the pin control is simply absent under Wayland, and a
+              control that vanished with no explanation reads as a bug. */}
+          {state.canPin === false && ' ' + tr('settings.float.noPin')}
+        </div>
+      )}
     </>
   )
 }

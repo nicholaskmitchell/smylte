@@ -117,6 +117,10 @@ describe('the sidebar layout', () => {
   })
 
   it('says where the tab order shows', async () => {
+    // Under the presets. Field notes removes this hint, as it removes every
+    // explanatory line (docs/copy-todo.md); SettingsMenu.fieldnotes.test.tsx
+    // checks it is gone there.
+    m.getSettings.mockResolvedValue({ appearance: { active: 'preset:refined', themes: [] } })
     render(<App />)
     await userEvent.click(await screen.findByRole('button', { name: 'Settings' }))
     await userEvent.click(screen.getByRole('tab', { name: 'Appearance' }))
