@@ -405,3 +405,21 @@
 [data-surface="app"] .dash-task-title { font-family: var(--serif); font-size-adjust: none; font-weight: 500; font-size: calc(var(--fs-app-ui) * var(--fs-scale)); }
 [data-surface="app"] .dash-task-due { font-size: calc(var(--fs-app-small) * var(--fs-scale)); font-variant-numeric: tabular-nums; }
 [data-surface="app"] .mini-dot { width: 4px; height: 4px; border-radius: var(--r-dot); }
+
+/* ==== cp3 · Calendar ==== */
+
+[data-surface="app"] :is(.cal-task, .agenda-task) .tick { position: relative; display: inline-block; width: 12px; height: 12px; vertical-align: -1px; }
+[data-surface="app"] :is(.cal-task, .agenda-task) .tick .check-ink { width: 16px; height: 16px; }
+[data-surface="app"] :is(.cal-task, .agenda-task):not(.done) .check-tick { opacity: 0; }
+[data-surface="app"] :is(.cal-task, .agenda-task).done .check-tick { opacity: 1; }
+[data-surface="app"] :is(.cal-task, .agenda-task).done { text-decoration: none; }
+[data-surface="app"] .cal-task > bdi,
+[data-surface="app"] .agenda-ev > .t + span { position: relative; }
+[data-surface="app"] .sched-switch ~ .scroll > .empty { padding: 18px var(--gutter); }
+[data-surface="app"] .sched-switch ~ .scroll > .section-label {
+  padding: 22px var(--gutter) 4px; font-family: var(--serif); font-size-adjust: none; font-weight: 500;
+  text-transform: none; letter-spacing: 0; font-size: calc(var(--fs-app-section) * var(--fs-scale)); color: var(--fg);
+}
+[data-surface="app"] .sched-switch ~ .scroll > .section-label + .empty { padding: 8px var(--gutter); }
+[data-surface="app"] :is(.sched-toggle, .sched-check, .sched-day-name) input[type="checkbox"] { accent-color: var(--accent); }
+[data-surface="app"] .agenda-task .tick { margin-inline-end: 6px; }   /* the space the glyph's text carried */
