@@ -162,6 +162,12 @@
 [data-surface="app"] .day-drawing .dm-glow { fill: var(--dm-glow); }
 [data-surface="app"] .day-drawing .dm-glow-stop { stop-color: var(--wash); }
 [data-surface="app"] .day-drawing .dm-glow-edge { stop-opacity: 0; }
+/* At night the sage is too near the dark paper to read as light (1.5:1), and
+   over the sage wash it vanishes: lift it 30% toward the ink (3:1 on the
+   ground, 2:1 over the wash). Still the sage, and still a token. */
+[data-surface="app"][data-theme="dark"] .day-drawing .dm-glow-stop {
+  stop-color: color-mix(in oklab, var(--wash) 70%, var(--fg));
+}
 [data-surface="app"] .day-drawing .dm-accent { fill: var(--accent-fill); }
 
 /* A reward grows in with the reward easing when its task is ticked, and goes

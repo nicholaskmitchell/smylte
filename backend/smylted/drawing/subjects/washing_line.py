@@ -2,17 +2,17 @@
 
 Day: two posts and two lines across the middle of the picture, against a sage
 hedge, a basket at the foot. Each finished task pegs out a coral garment, the
-first few spread along both lines; Start sends gusts past the lines; with
+first few spread along both lines; Start sends a gust over the lines; with
 everything done the basket stands empty and a bird sits on a post; a day with
-nothing planned shows the bare lines with their pegs; overdue work brings a
+nothing planned shows the bare lines over an empty basket; overdue work brings a
 cloud, a bigger one at more. The sun crosses the sky with the hour, sets on a
 far hill, and late at night is an ink moon.
 
-Night: the same posts and lines strung with bulbs, beside a house on the far
-hill with a lit window. Each finished task lights a bulb; everything done
-lights the house's second window, coral; Start sends a moth round the lit
-window; overdue work draws a cloud across the moon. The garments are in for
-the night.
+Night: the same posts and lines, beside a house on the far hill with a lit
+window, the laundry back in its basket. Each finished task strings a lit bulb
+on the line; everything done empties the basket and lights the house's second
+window, coral; Start sends a moth fluttering by the house; overdue work brings
+a small cloud near the moon.
 """
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ class WashingLine:
         ('post', 'line'), ('post', 'cap'), ('post', 'ground'), ('basket', 'ground'),
         ('tuft', 'ground'), ('garment', 'line'), ('bird', 'cap'), ('heap', 'basket'),
         ('bulb', 'line'), ('house', 'hill'), ('sun', 'hill'), ('moon', 'cloud'), ('peg', 'line'),
-        ('garment',), ('bird', 'post'),
+        ('bird', 'post'),
     ))
 
     def render(self, state: DayState, theme: Theme, rng: Rng) -> Sketch:
@@ -72,7 +72,7 @@ def _structure(r: Rng) -> dict:
             slots.append((x, _sag(x, TOPS[row])))
     slots = k.spread(slots, (LEFT + 15, TOPS[0]))
     basket = (24.0, 52.0)
-    tufts = k.place_along(r.fork('tufts'), 4, 60, 134, avoid=((100, 132),), gap=12)
+    tufts = k.place_along(r.fork('tufts'), 4, 60, 128, avoid=((100, 132),), gap=12)
     return {
         'slots': slots,
         'kinds': [r.choice(['shirt', 'socks', 'towel', 'dress']) for _ in range(k.REWARDS)],
@@ -106,16 +106,17 @@ def _basket(b: SketchBuilder, s: dict) -> None:
 def _garment(kind: str, x: float, y: float):
     """One garment hanging from (x, y): its top follows the line's slope, its
     sides hang straight down."""
+    # At most 12 wide, so neighbours on a line keep paper between them.
     if kind == 'shirt':
-        pts = ((x - 5.6, y), (x - 1.8, y), (x, y + 2), (x + 1.8, y), (x + 5.6, y), (x + 8.2, y + 5.4),
-               (x + 5.4, y + 7.4), (x + 5, y + 18), (x - 5, y + 18), (x - 5.4, y + 7.4), (x - 8.2, y + 5.4))
+        pts = ((x - 4.2, y), (x - 1.6, y), (x, y + 2), (x + 1.6, y), (x + 4.2, y), (x + 6, y + 5),
+               (x + 4.2, y + 7), (x + 4, y + 18), (x - 4, y + 18), (x - 4.2, y + 7), (x - 6, y + 5))
     elif kind == 'socks':
         pts = ((x - 5.4, y), (x - 0.6, y), (x - 0.6, y + 10), (x + 4.4, y + 13), (x + 3, y + 17.5),
                (x - 5.4, y + 12.5))
     elif kind == 'towel':
-        pts = ((x - 7, y), (x + 7, y), (x + 7.4, y + 19), (x - 6.6, y + 19))
+        pts = ((x - 5.5, y), (x + 5.5, y), (x + 5.8, y + 19), (x - 5.2, y + 19))
     else:
-        pts = ((x - 3.6, y), (x + 3.6, y), (x + 4.4, y + 6), (x + 8.2, y + 20), (x - 8.2, y + 20), (x - 4.4, y + 6))
+        pts = ((x - 3, y), (x + 3, y), (x + 3.6, y + 6), (x + 6, y + 20), (x - 6, y + 20), (x - 3.6, y + 6))
     t = math.tan(_slope(x))
     return poly(*[(px, py + t * (px - x)) for px, py in pts])
 
@@ -128,9 +129,8 @@ def _pegs(b: SketchBuilder, x: float, y: float, *, when: tuple, part: str) -> No
 
 
 def _gusts(frame: int, child: SketchBuilder) -> None:
-    """Start: two gusts pass, one above the lines and one below the washing,
-    both curling down: clear of the weather, the far hill and the basket."""
-    for j, (y, x0, span, up) in enumerate(((44.0, 28.0, 30.0, 1), (154.0, 58.0, 26.0, 1))):
+    """Start: a gust passes over the lines, curling down, clear of the weather."""
+    for j, (y, x0, span, up) in enumerate(((44.0, 28.0, 30.0, 1),)):
         x = x0 + (frame * 5 + j * 15) % span
         child.line(curve((x, y), (x + 14, y + up * 1.2), (x + 26, y - up * 0.4), (x + 34, y + up * 1.6),
                          (x + 37.4, y + up * 5.0), (x + 34, y + up * 7.4), (x + 31, y + up * 5.2)),
@@ -143,8 +143,8 @@ def _sky_day(b: SketchBuilder, s: dict, r: Rng) -> None:
     k.sun(b, r.fork('sun-n'), 84, 16, 6.0, when=(k.MIDDAY,))
     k.sun(b, r.fork('sun-a'), 138, 18, 5.6, when=(k.AFTERNOON,))
     # Dusk: the sun sets on a far hill between the posts.
-    b.line(curve((92, 146), (112, 140.5), (134, 143.5)), when=(k.DUSK,), part='hill')
-    k.low_sun(b, r.fork('sun-d'), 113, 141.4, 6.0, when=(k.DUSK,))
+    b.line(curve((92, 150), (112, 144.5), (134, 147.5)), when=(k.DUSK,), part='hill')
+    k.low_sun(b, r.fork('sun-d'), 113, 145.4, 6.0, when=(k.DUSK,))
     x, y = s['moon_spot']
     k.moon(b, x, y, 6.0, glow=False, veiled=False, when=(k.LATE,))
     clouds = ((50, 34, 28), (110, 40, 24), (60, 14, 18))
@@ -166,8 +166,6 @@ def _day(b: SketchBuilder, s: dict, r: Rng) -> None:
     g = GROUND - 0.4
     b.line(curve((x0 + 4, g - 15), (x0 + 9, g - 21), (x0 + 15, g - 18), (x1 - 8, g - 22), (x1 - 4, g - 15)),
            when=(('planned',), ('notAllDone',)), part='heap')
-    for x, y in sorted(s['slots'], key=lambda p: (p[1] > 80, p[0]))[:6]:
-        _pegs(b, x, y, when=(('nothingPlanned',),), part='peg')
     for i, ((x, y), kind) in enumerate(zip(s['slots'], s['kinds'])):
         when = (('reward', i),)
         b.filled(_garment(kind, x, y + 0.8), when=when, part=f'garment:{i}')
@@ -180,33 +178,42 @@ def _day(b: SketchBuilder, s: dict, r: Rng) -> None:
 def _night(b: SketchBuilder, s: dict, r: Rng) -> None:
     # The far hill and the house on it: its lit window is the light the line hangs by.
     b.wash(k.blob(96, 168, 56, 13, r.fork('ground'), n=12, wobble=0.05), part='ground')
-    b.line(curve((70, 154), (98, 148.4), (122, 149), (138, 152)), part='hill')
-    hx, hy = 112.0, 149.0
-    b.line(line((hx - 11, hy), (hx - 11, hy - 15), (hx, hy - 25), (hx + 11, hy - 15), (hx + 11, hy)), part='house')
-    win1 = poly((hx - 8, hy - 11), (hx - 2.6, hy - 11), (hx - 2.6, hy - 5.6), (hx - 8, hy - 5.6))
-    win2 = poly((hx + 2.6, hy - 11), (hx + 8, hy - 11), (hx + 8, hy - 5.6), (hx + 2.6, hy - 5.6))
-    b.glow(k.ring(hx - 5.3, hy - 8.3, 9, 10), part='house')
+    b.line(curve((70, 154), (98, 148.4), (122, 149), (134, 151)), part='hill')
+    hx, hy = 120.0, 149.0
+    b.line(line((hx - 11, hy), (hx - 11, hy - 13), (hx, hy - 21), (hx + 11, hy - 13), (hx + 11, hy)), part='house')
+    win1 = poly((hx - 8.6, hy - 11), (hx - 2.4, hy - 11), (hx - 2.4, hy - 4.8), (hx - 8.6, hy - 4.8))
+    win2 = poly((hx + 2.4, hy - 11), (hx + 8.6, hy - 11), (hx + 8.6, hy - 4.8), (hx + 2.4, hy - 4.8))
+    b.glow(k.ring(hx - 5.5, hy - 7.9, 11, 10), part='house')
     b.line(win1, part='house')
-    b.glow(k.ring(hx + 5.3, hy - 8.3, 9, 10), when=(('allDone',),), part='house')
+    b.glow(k.ring(hx + 5.5, hy - 7.9, 11, 10), when=(('allDone',),), part='house')
     b.accent(win2, when=(('allDone',),), part='house', paper='glint')
     b.line(win2, part='house')
     x, y = s['moon_spot']
     k.moon(b, x, y, 6.5)
-    k.stars(b, r.fork('stars'), 4, (8, 6, 152, 40), avoid=((x, y + 6, 24),), part='star')
+    toward = 1 if x < 80 else -1
+    k.stars(b, r.fork('stars'), 4, (8, 6, 152, 40), avoid=((x, y + 6, 24), (x + toward * 16, y + 2, 14)),
+            part='star')
     _frame(b, s)
     _basket(b, s)
-    planned = ('planned',)
+    # The day's laundry is in the basket until it is all done.
+    x0, x1 = s['basket']
+    g = GROUND - 0.4
+    b.line(curve((x0 + 4, g - 15), (x0 + 9, g - 21), (x0 + 15, g - 18), (x1 - 8, g - 22), (x1 - 4, g - 15)),
+           when=(('planned',), ('notAllDone',)), part='heap')
+    # A bulb is strung only when it is lit: the line shows what is done, not
+    # what is missing.
     for i, (bx, by) in enumerate(s['slots']):
         cy = by + 3 + BULB_R
-        b.line(line((bx, by), (bx, by + 3)), when=(planned,), part=f'bulb:{i}')
-        b.line(k.ring(bx, cy, BULB_R, 9), when=(planned, ('unlit', i)), part=f'bulb:{i}')
-        k.glow_dot(b, bx, cy, BULB_R, halo=11, when=(('reward', i),), part=f'bulb:{i}')
+        lit = (('reward', i),)
+        b.line(line((bx, by), (bx, by + 3)), when=lit, part=f'bulb:{i}')
+        k.glow_dot(b, bx, cy, BULB_R, halo=11, when=lit, part=f'bulb:{i}')
         b.anchor(i, bx, by + 3)
 
     def moth(frame: int, child: SketchBuilder) -> None:
         # A small loop in the clear air left of the house: under the bulbs,
-        # over the hill, clear of the walls.
+        # over the hill, clear of the walls. Two wings, so it is a moth.
         a = 2 * math.pi * frame / 6
-        mx, my = 84 + 9 * math.cos(a), 134 + 4.5 * math.sin(a)
-        child.line(curve((mx - 3.4, my - 2), (mx, my + 0.6), (mx + 3.4, my - 2)), part='moth')
+        mx, my = 78 + 9 * math.cos(a), 136 + 4 * math.sin(a)
+        child.line(loop((mx, my), (mx - 5.5, my - 4), (mx - 6, my + 1.5), corners=(0,)), part='moth')
+        child.line(loop((mx, my), (mx + 5.5, my - 4), (mx + 6, my + 1.5), corners=(0,)), part='moth')
     b.ambient(1.0, (('focus',),), moth)

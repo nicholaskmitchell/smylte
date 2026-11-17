@@ -15,6 +15,7 @@ states elsewhere (`tokens.json`), and the gap is listed here.
 | The day's drawing: its pen | The Today drawing | The pen scales with the drawing, as the mockup's does: `calc(var(--stroke-pen) * 1.25)` in drawing units, so exactly `--stroke-pen` (1.8px) at the phone's 128px and 2.7px at the desktop's 192px (owner's call, 17 Nov) | `--stroke-pen` is written for 24px icons; a fixed pixel pen made the larger desktop drawing look spindlier than the phone's |
 | The day's drawing: its wobble | The Today drawing's boil | 1.25 drawing units: 1px on the phone (the design system's `--wobble`), 1.5px on the desktop, in proportion to the larger drawing | `--wobble` is a pixel limit for 24px icons; at 0.8 units the boil was half the mockup's |
 | Light at night | The dark drawings: the moon, a lamp, lit windows, fireflies, bulbs | A `glow` role: `--wash` in a radial gradient fading to nothing, drawn by the client (`DayDrawing.tsx`) | The design system has a wash but no soft light; flat sage blobs read as stains, not light |
+| Light at night, in the dark theme | The glow's colour on dark paper | `color-mix(in oklab, var(--wash) 70%, var(--fg))`: the sage lifted 30% toward the ink, 3:1 on the ground and 2:1 over the wash (`fieldnotes.css`). **Needs the owner's sign-off**: it changes a colour role's value in dark | The dark `--wash` (#3D4233) is 1.5:1 on `--bg`, and over the sage wash a glow of it vanishes: a lit window read as unlit |
 
 ## The desk unit's e-paper: a deviation the owner chose
 
@@ -48,6 +49,9 @@ written down where a subject is written (the docstring of
 `backend/smylted/drawing/subjects/_kit.py`) and held by the tests over the whole
 roster, on a week of days under two salts, both themes and every hour
 (`backend/tests/test_drawing.py`, *the geometry rules, over the roster*):
-nothing leaves the frame; every reward is at least 10 units across; ink touches
-ink only where the subject's `JOINS` says it may; and the night is its own
-picture with a light that is always on.
+nothing leaves the frame; every reward is at least 10 units across and 60 units²
+of coral; ink touches ink only where the subject's `JOINS` says it may, measured
+at the pen's own width (2.25 units) on every boil frame and every frame of the
+focus loop, and two rewards never touch at all; and the night is its own
+picture with a light that is always on (a glow of 600 units² or more with no
+condition).

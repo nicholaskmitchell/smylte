@@ -7,10 +7,11 @@ everything done brings a bird to its shoulder; a day with nothing planned has
 a watering can by the pot; overdue work drops a leaf or two by the pot. The
 sun crosses the sky with the hour; late at night it is an ink moon.
 
-Night: the same tree under the moon, its crown still sage in the moonlight.
-The rewards are fireflies about the crown, each a coral spark in a soft glow;
-Start sets one drifting; everything done hangs a lit lantern under the crown;
-overdue work draws a cloud across the moon.
+Night: the same tree under the moon, its crown still sage, lit from the moon's
+side. A lantern hangs under the crown, a pale light. The rewards are fireflies
+about the crown, each a coral spark in a soft glow; Start shakes leaves loose
+as by day; everything done fills the lantern's glass coral; overdue work brings
+a small cloud near the moon.
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ from ..state import DayState, Theme
 from . import _kit as k
 
 SILL = 190.0
+MOON_R = 6.0
 FRUIT_R = 7.0
 FLY_R = 6.0
 
@@ -80,32 +82,57 @@ def _structure(r: Rng) -> dict:
 
     ink = [*k.samples(trunk), *(p for f in forks for p in k.samples(f)), *k.samples(echo),
            *k.samples(canopy)]
-    avoid = tuple((x, y, FRUIT_R + 3.8) for x, y in ink)          # two pens and a gap
-    fruit = k.scatter_all(r.fork('fruit'), k.REWARDS, cx, cy - 4, rx * 0.8, ry * 0.74, 17.0, avoid=avoid)
-    fruit = k.spread(fruit, (cx, cy - ry))
-
-    # Where the lantern hangs when everything is done: under the crown, away
-    # from the trunk; the fireflies keep clear of it.
-    lx = cx - rx * 0.52 * (1 if lean >= 0 else -1)
-    lantern_y = cy + ry * math.sqrt(max(0.0, 1 - ((lx - cx) / rx) ** 2)) * 0.97
-    fly_avoid = (*((x, y, FLY_R + 3.8) for x, y in ink),
-                 (lx, lantern_y + 12, 19.0), (lx, lantern_y - 2, 13.0))
-    flies = k.scatter_all(r.fork('flies'), k.REWARDS, cx, cy - 2, rx * 1.16, ry * 1.04, 18.0,
-                          avoid=fly_avoid, ok=lambda p: 15 < p[0] < 145 and 15 < p[1] < top - 12)
-    flies = k.spread(flies, (cx, cy - ry))
-
     rim = []                                      # leaves that come loose when Start runs
     # On the crown's sides only, so they fall outside it, clear of the fruit.
     for a in (r.uniform(172, 192), r.uniform(146, 160), r.uniform(-14, 6)):
         rad = math.radians(a)
         rim.append((cx + rx * 0.96 * math.cos(rad), cy + ry * 0.96 * math.sin(rad), rad))
+
+    # Everything keeps clear of the leaves that fall from the crown's sides
+    # while Start runs: every place each leaf passes, as far as its tip reaches.
+    falls = []
+    for rx_, ry_, ra in rim:
+        out = 1 if math.cos(ra) >= 0 else -1
+        for f in range(6):
+            a = ra + 0.5 * f
+            falls.append((rx_ + out * 2.6 * f + 5.5 * math.cos(a), ry_ + 3.2 * f - 2 + 5.5 * math.sin(a), 7.0))
+
+    # Clear of every line by two pens and a gap, and of the bird when it comes.
+    bird = (cx + rx * 0.5, cy - ry * 0.86 - 8)
+    avoid = (*((x, y, FRUIT_R + 4.5) for x, y in ink), (*bird, FRUIT_R + 12),
+             *((x, y, r_ + FRUIT_R + 3.0) for x, y, r_ in falls))
+    fruit = k.scatter_all(r.fork('fruit'), k.REWARDS, cx, cy - 4, rx * 0.8, ry * 0.74, 19.0, avoid=avoid)
+    fruit = k.spread(fruit, (cx, cy - ry))
+
+    # Where the lantern hangs under the crown, away from the trunk; the
+    # fireflies keep clear of it.
+    lx = cx - rx * 0.52 * (1 if lean >= 0 else -1)
+    lantern_y = cy + ry * math.sqrt(max(0.0, 1 - ((lx - cx) / rx) ** 2)) * 0.97
+    # ... and of the moon's overdue clouds, below it and beside it.
+    moon_spot = r.choice([(16.0, 16.0), (144.0, 16.0)])
+    fly_avoid = (*((x, y, FLY_R + 5.0) for x, y in ink),
+                 *((x, y, r_ + FLY_R + 3.0) for x, y, r_ in falls),
+                 (lx, lantern_y + 12, 19.0), (lx, lantern_y - 2, 13.0),
+                 *((x, y, r_ + FLY_R + 3.0) for x, y, r_ in _veil(moon_spot)))
+    flies = k.scatter_all(r.fork('flies'), k.REWARDS, cx, cy - 2, rx * 1.16, ry * 1.04, 18.0,
+                          avoid=fly_avoid, ok=lambda p: 15 < p[0] < 145 and 15 < p[1] < top - 12)
+    flies = k.spread(flies, (cx, cy - ry))
+
     return {
         'lean': lean, 'pot': r.choice(['belly', 'taper', 'band']), 'pot_w': pot_w, 'top': top,
         'cx': cx, 'cy': cy, 'rx': rx, 'ry': ry, 'canopy': canopy, 'trunk': trunk, 'forks': forks,
         'echo': echo, 'fruit': fruit, 'flies': flies, 'rim': rim, 'lantern': (lx, lantern_y),
         'can_side': r.choice([-1, 1]),
-        'moon_spot': r.choice([(16.0, 16.0), (144.0, 16.0)]),
+        'moon_spot': moon_spot,
     }
+
+
+def _veil(spot) -> tuple:
+    """Where the night moon's overdue clouds go (see _night): circles round
+    each, the size of the cloud."""
+    x, y = spot
+    toward = 1 if x < 80 else -1
+    return ((x + toward * 2.6 * MOON_R, y - 0.5 * MOON_R, 9.0), (x - toward * 0.5 * MOON_R, y + 2.0 * MOON_R, 7.0))
 
 
 def _pot(b: SketchBuilder, s: dict) -> None:
@@ -149,12 +176,16 @@ def _can(b: SketchBuilder, s: dict, *, when: tuple) -> None:
 
 
 def _fallen(b: SketchBuilder, s: dict) -> None:
-    """Overdue work, gently: a leaf down by the pot per level."""
+    """Overdue work, gently: a leaf down by the pot per level, resting on the
+    sill (never cut by it), strewn rather than in a row."""
     side = -s['can_side']
-    base = 80 + side * (s['pot_w'] / 2 + 10)
-    for level, (dx, a) in enumerate(((0, -10), (side * 14, 8), (side * 28, -4)), start=1):
-        b.line(k.leaf(base + dx - 5, SILL - 2.2, 10, math.radians(a)), when=(('overdue', level),),
-               part=f'fallen:{level}')
+    base = 80 + side * (s['pot_w'] / 2 + 9)
+    for level, (dx, deg) in enumerate(((0, -8), (side * 15, 172), (side * 30, -3)), start=1):
+        a = math.radians(deg)
+        length = 10.5
+        cx = base + dx - 0.5 * length * math.cos(a)          # placed by its middle
+        k.draw_leaf(b, cx, SILL - 1.4 - k.leaf_low(length, a), length, a,
+                    when=(('overdue', level),), part=f'fallen:{level}')
 
 
 def _stir(s: dict):
@@ -163,7 +194,7 @@ def _stir(s: dict):
         for i, (x, y, a) in enumerate(s['rim']):
             out = 1 if math.cos(a) >= 0 else -1
             f = (frame + i * 2) % 6
-            child.line(k.leaf(x + out * 2.6 * f, y + 3.2 * f - 2, 9, a + 0.5 * f), part='stir')
+            k.draw_leaf(child, x + out * 2.6 * f, y + 3.2 * f - 2, 11, a + 0.5 * f, part='stir')
     return draw
 
 
@@ -201,36 +232,37 @@ def _day(b: SketchBuilder, s: dict, r: Rng) -> None:
 
 
 def _night(b: SketchBuilder, s: dict, r: Rng) -> None:
-    cx, cy, rx, ry = s['cx'], s['cy'], s['rx'], s['ry']
-    b.wash(k.wash_of(s['canopy']), part='canopy')            # the crown in moonlight
     x, y = s['moon_spot']
-    k.moon(b, x, y, 6.0)
-    k.stars(b, r.fork('stars'), 4, (6, 4, 154, 34), avoid=((x, y + 7, 26),),
+    side = -1 if x < 80 else 1
+    # The crown in moonlight: its sage falls toward the moon, not away from it
+    # as the day's does.
+    b.wash(k.wash_of(s['canopy'], dx=4.0 * side, dy=-4.0), part='canopy')
+    # The overdue clouds keep to the corner and the top edge, clear of the crown.
+    toward = 1 if x < 80 else -1
+    k.moon(b, x, y, MOON_R, first=(toward * 2.6, -0.5), second=(-toward * 0.5, 2.0))
+    flies = tuple((fx, fy, FLY_R + 6) for fx, fy in s['flies'])
+    k.stars(b, r.fork('stars'), 4, (6, 4, 154, 34),
+            avoid=((x, y + 7, 26), *((vx, vy, vr + 4) for vx, vy, vr in _veil(s['moon_spot'])), *flies),
             ok=lambda p: not _in_crown(s, p, 1.14), part='star')
     _sill(b, s)
     _pot(b, s)
     _tree(b, s)
     _fallen(b, s)
     _can(b, s, when=(('nothingPlanned',),))
-    # Everything done: a lantern hung under the crown, away from the trunk.
+    # A lantern hangs under the crown every night, a pale light; everything
+    # done fills its glass coral.
     lx, rim = s['lantern']
     done = (('allDone',),)
-    b.glow(k.ring(lx, rim + 13, 15, 12), when=done, part='lantern')
-    b.line(line((lx, rim - 4), (lx, rim + 5)), when=done, part='lantern')
-    b.line(line((lx - 4.6, rim + 6), (lx + 4.6, rim + 6.2)), when=done, part='lantern')
+    b.glow(k.ring(lx, rim + 13, 15, 12), part='lantern')
+    b.glow(k.ring(lx, rim + 13, 5, 9), part='lantern')
+    b.line(line((lx, rim - 4), (lx, rim + 5)), part='lantern')
+    b.line(line((lx - 4.6, rim + 6), (lx + 4.6, rim + 6.2)), part='lantern')
     body = loop((lx - 3.6, rim + 7), (lx + 3.6, rim + 7), (lx + 4.6, rim + 13), (lx + 3.4, rim + 19),
                 (lx - 3.4, rim + 19), (lx - 4.6, rim + 13), corners=(0, 1, 3, 4))
+    b.line(body, when=(('notAllDone',),), part='lantern')
     b.filled(body, when=done, part='lantern', paper='glint')
-    b.line(line((lx - 3.6, rim + 20.4), (lx + 3.6, rim + 20.4)), when=done, part='lantern')
+    b.line(line((lx - 3.6, rim + 20.4), (lx + 3.6, rim + 20.4)), part='lantern')
     for i, (fx, fy) in enumerate(s['flies']):
         k.glow_dot(b, fx, fy, FLY_R, halo=14, when=(('reward', i),), part=f'fly:{i}', glass=False)
         b.anchor(i, fx, fy)
-
-    path = [(cx + rx * 0.62 * math.cos(t), cy - ry * 0.15 + ry * 0.32 * math.sin(2 * t))
-            for t in (2 * math.pi * f / 6 for f in range(6))]
-
-    def drift(frame: int, child: SketchBuilder) -> None:
-        fx, fy = path[frame]
-        child.glow(k.ring(fx, fy, 8, 10), part='drift')
-        child.accent(k.ring(fx, fy, 2.6, 8), part='drift')
-    b.ambient(1.0, (('focus',),), drift)
+    b.ambient(1.0, (('focus',),), _stir(s))

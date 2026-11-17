@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
-from .pen import WOBBLE
+from .pen import PEN, WOBBLE
 
 if TYPE_CHECKING:
     from .scene import Sketch
@@ -18,6 +18,9 @@ Point = tuple[float, float]
 
 MIN_REWARD_ACROSS = 10.0
 MIN_REWARD_AREA = 60.0
+# The smallest light a night may stand on: a glow of this many square units
+# (a ring of radius about 14) that shows whatever the state.
+MIN_NIGHT_LIGHT = 600.0
 
 # Ink samples are at most this far apart when crossings are looked for.
 _SAMPLE = 0.5
@@ -140,34 +143,50 @@ def _base(part: str) -> str:
     return part.split(':')[0]
 
 
-def crossings(sketch: Sketch, joins=frozenset(), *, gap: float = 1.0
+def crossings(sketch: Sketch, joins=frozenset(), *, gap: float = PEN
               ) -> list[tuple[str, str, Point]]:
-    """Ink that touches by accident: pairs of parts whose lines come within
-    `gap` of each other. Two marks may touch when they are the same part, or
+    """Ink that touches by accident: pairs of parts whose ink comes within `gap`
+    of each other, centre to centre (by default one pen width, where the edges
+    of two lines meet). Two marks may touch when they are the same part, or
     when the pair of their base names (the part before any ':') is in `joins`;
-    a join of one name lets two different parts of that name touch. Each pair
-    of parts is reported once, with one example point. The first (boil) frame
-    of each mark that is on is looked at, against EVERY frame of the focus loop
-    while it runs, one frame at a time: a collision for a sixth of a second is
-    still one someone sees."""
-    still = [m for m in sketch.marks if m.role == 'line' and m.on]
+    a join of one name lets two different parts of that name touch. Two
+    different REWARDS never may, joined or not: each reward is its own mark.
+
+    Ink is every line that is on, and every coral fill that is on with no line
+    of its own part (a bare spark is still a mark). Each boil frame is checked
+    with its own frame of every other line (they are shown together), and every
+    frame of the focus loop, while it runs, against every boil frame: a
+    collision for a sixth of a second is still one someone sees. Each pair of
+    parts is reported once, with one example point."""
+    lines = [m for m in sketch.marks if m.role == 'line' and m.on]
+    inked = {m.part for m in lines}
+    bare = [m for m in sketch.marks if m.role == 'accent' and m.on and m.part not in inked]
+    still = lines + bare
     loop = []
     if sketch.ambient is not None:
-        loop = [[m for m in frame if m.role == 'line' and m.on] for frame in sketch.ambient.frames]
-        loop = [frame for frame in loop if frame]
+        for frame in sketch.ambient.frames:
+            marks = [m for m in frame if m.role in ('line', 'accent') and m.on]
+            if marks:
+                loop.append(marks)
 
-    def grid(marks: list) -> dict[tuple[int, int], list[tuple[int, Point]]]:
+    def path(mark, k: int) -> str:
+        return mark.frames[k] if len(mark.frames) == 3 else mark.frames[0]
+
+    def grid(marks: list, k: int) -> dict[tuple[int, int], list[tuple[int, Point]]]:
         cells: dict[tuple[int, int], list[tuple[int, Point]]] = {}
         for idx, mark in enumerate(marks):
-            for path in polyline(mark.frames[0]):
-                for p in _resample(path):
+            for sub in polyline(path(mark, k)):
+                for p in _resample(sub):
                     cells.setdefault((math.floor(p[0] / gap), math.floor(p[1] / gap)),
                                      []).append((idx, p))
         return cells
 
     found: dict[tuple[str, str], Point] = {}
 
-    def may_touch(a: str, b: str) -> bool:
+    def may_touch(ma, mb) -> bool:
+        if ma.reward is not None and mb.reward is not None and ma.reward != mb.reward:
+            return False
+        a, b = ma.part, mb.part
         return a == b or frozenset((_base(a), _base(b))) in joins
 
     def compare(cells_a, marks_a, cells_b, marks_b, same: bool) -> None:
@@ -182,19 +201,21 @@ def crossings(sketch: Sketch, joins=frozenset(), *, gap: float = 1.0
                             key = (idx, jdx)
                             if key in seen:
                                 continue
-                            a, b = marks_a[idx].part, marks_b[jdx].part
-                            if may_touch(a, b):
+                            if may_touch(marks_a[idx], marks_b[jdx]):
+                                seen.add(key)
                                 continue
                             if math.dist(p, q) < gap:
                                 seen.add(key)
-                                found.setdefault(tuple(sorted((a, b))), p)
+                                found.setdefault(tuple(sorted((marks_a[idx].part, marks_b[jdx].part))), p)
 
-    still_cells = grid(still)
-    compare(still_cells, still, still_cells, still, True)
+    still_grids = [grid(still, k) for k in range(3)]
+    for k in range(3):
+        compare(still_grids[k], still, still_grids[k], still, True)
     for frame in loop:
-        frame_cells = grid(frame)
-        compare(frame_cells, frame, still_cells, still, False)
+        frame_cells = grid(frame, 0)
         compare(frame_cells, frame, frame_cells, frame, True)
+        for k in range(3):
+            compare(frame_cells, frame, still_grids[k], still, False)
     return [(a, b, p) for (a, b), p in sorted(found.items())]
 
 
@@ -219,5 +240,8 @@ def night_overlap(light: Sketch, dark: Sketch) -> float:
 
 
 def has_standing_light(dark: Sketch) -> bool:
-    """True when the night has a wash or glow that shows whatever the state."""
-    return any(m.role in ('wash', 'glow') and not m.when for m in dark.marks)
+    """True when the night has a light that shows whatever the state: a glow
+    (not a wash, which is paint, not light) of at least MIN_NIGHT_LIGHT square
+    units."""
+    return any(m.role == 'glow' and not m.when and _area(endpoints(m.frames[0])) >= MIN_NIGHT_LIGHT
+               for m in dark.marks)

@@ -38,7 +38,7 @@ import math
 from typing import Callable, Iterable, Sequence
 
 from ..checks import polyline
-from ..pen import Stroke, curve, line, loop, to_d
+from ..pen import PEN, WOBBLE, Stroke, curve, line, loop, to_d
 from ..rng import Rng
 from ..scene import SketchBuilder
 
@@ -78,14 +78,32 @@ def ring(cx: float, cy: float, r: float, n: int = 9) -> Stroke:
 
 
 def leaf(cx: float, cy: float, length: float, angle: float) -> Stroke:
-    """An almond leaf from (cx, cy) pointing along `angle` (radians)."""
+    """A leaf's outline, from its stalk end (cx, cy) along `angle` (radians):
+    fuller on one side than the other, as a leaf is, with a point at the tip.
+    `draw_leaf` adds the stalk."""
     ca, sa = math.cos(angle), math.sin(angle)
-    w = length * 0.32
 
     def at(u: float, v: float) -> Point:
         return (cx + u * ca - v * sa, cy + u * sa + v * ca)
 
-    return loop(at(0, 0), at(length * 0.5, w), at(length, 0), at(length * 0.5, -w), corners=(0, 2))
+    L = length
+    return loop(at(0.14 * L, 0), at(0.42 * L, 0.30 * L), at(L, 0), at(0.55 * L, -0.20 * L), corners=(0, 2))
+
+
+def draw_leaf(b: SketchBuilder, cx: float, cy: float, length: float, angle: float, *,
+              when: Iterable = (), part: str = 'leaf') -> None:
+    """A leaf and its stalk, one part."""
+    when = tuple(when)
+    b.line(leaf(cx, cy, length, angle), when=when, part=part)
+    tip = (cx + 0.14 * length * math.cos(angle), cy + 0.14 * length * math.sin(angle))
+    b.line(line((cx, cy), tip), when=when, part=part)
+
+
+def leaf_low(length: float, angle: float) -> float:
+    """How far below its stalk end a leaf at `angle` reaches: set a leaf on a
+    line by raising it this much, so it rests on the line instead of crossing it."""
+    pts = leaf(0, 0, length, angle).points
+    return max(0.0, *(y for _, y in pts))
 
 
 def wash_of(stroke: Stroke, *, inset: float = 0.93, dx: float = 4.0, dy: float = 4.0) -> Stroke:
@@ -130,32 +148,33 @@ def clear_of(p: Point, avoid: Sequence[Circle]) -> bool:
 
 
 class _Clearance:
-    """`avoid` circles bucketed on a grid, so a placement asks only its
-    neighbourhood: the ink of a whole tree is hundreds of circles."""
+    """`avoid` circles bucketed on a grid, each in every cell it overlaps, so
+    a placement asks only its own cell: the ink of a whole tree is hundreds
+    of circles."""
+
+    CELL = 6.0
 
     def __init__(self, avoid: Sequence[Circle]):
-        self.cell = max((r for _, _, r in avoid), default=1.0)
         self.grid: dict[tuple[int, int], list[Circle]] = {}
-        for c in avoid:
-            self.grid.setdefault((int(c[0] // self.cell), int(c[1] // self.cell)), []).append(c)
+        c = self.CELL
+        for x, y, r in avoid:
+            for gx in range(math.floor((x - r) / c), math.floor((x + r) / c) + 1):
+                for gy in range(math.floor((y - r) / c), math.floor((y + r) / c) + 1):
+                    self.grid.setdefault((gx, gy), []).append((x, y, r))
 
     def clear(self, p: Point) -> bool:
-        gx, gy = int(p[0] // self.cell), int(p[1] // self.cell)
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                for x, y, r in self.grid.get((gx + dx, gy + dy), ()):
-                    if (p[0] - x) ** 2 + (p[1] - y) ** 2 < r * r:
-                        return False
-        return True
+        cell = (math.floor(p[0] / self.CELL), math.floor(p[1] / self.CELL))
+        return all((p[0] - x) ** 2 + (p[1] - y) ** 2 >= r * r for x, y, r in self.grid.get(cell, ()))
 
 
 def scatter(rng: Rng, count: int, cx: float, cy: float, rx: float, ry: float,
             gap: float, *, avoid: Sequence[Circle] = (), ok: Callable[[Point], bool] | None = None,
-            tries: int = 600) -> list[Point]:
+            tries: int = 600, room: _Clearance | None = None) -> list[Point]:
     """Up to `count` points inside an ellipse, at least `gap` apart, clear of
-    `avoid` and passing `ok`. May return fewer: see `scatter_all`."""
+    `avoid` (or a prepared `room`) and passing `ok`. May return fewer: see
+    `scatter_all`."""
     out: list[Point] = []
-    room = _Clearance(avoid)
+    room = room if room is not None else _Clearance(avoid)
     for _ in range(tries):
         if len(out) == count:
             break
@@ -173,10 +192,11 @@ def scatter_all(rng: Rng, count: int, cx: float, cy: float, rx: float, ry: float
     gap eased a step at a time, down to half of it. Deterministic for a given
     rng. ValueError when even that cannot place them all: the subject's
     constraints leave no room, and that is a subject to fix, not a day to hang."""
+    room = _Clearance(kw.pop('avoid', ()))
     g = gap
     while g >= gap * 0.5:
         for attempt in range(24):
-            pts = scatter(rng.fork(f'try{attempt}|{g:.2f}'), count, cx, cy, rx, ry, g, **kw)
+            pts = scatter(rng.fork(f'try{attempt}|{g:.2f}'), count, cx, cy, rx, ry, g, room=room, **kw)
             if len(pts) == count:
                 return pts
         g *= 0.94
@@ -227,7 +247,7 @@ def sun(b: SketchBuilder, rng: Rng, cx: float, cy: float, r: float, *, when: Ite
     base = rng.uniform(0, 2 * math.pi)
     for i in range(rays):
         a = base + 2 * math.pi * i / rays + rng.uniform(-0.14, 0.14)
-        ln = ray_len * (1.0 if i % 2 == 0 else 0.62)
+        ln = ray_len * (1.0 if i % 2 == 0 else 0.75)
         r0 = r + ray_gap
         b.line(line((cx + r0 * math.cos(a), cy + r0 * math.sin(a)),
                     (cx + (r0 + ln) * math.cos(a), cy + (r0 + ln) * math.sin(a))), when=when, part=part)
@@ -248,80 +268,118 @@ def low_sun(b: SketchBuilder, rng: Rng, cx: float, cy: float, r: float, *, when:
                     (cx + (r + 5.6) * math.cos(a), cy + (r + 5.6) * math.sin(a))), when=when, part=part)
 
 
-def _crescent(cx: float, cy: float, r: float, *, trimmed: bool = False) -> Stroke:
-    """A crescent opening to the right. Trimmed, its lower horn is left out
-    (a cloud passes in front of it there): an open stroke instead of a loop."""
+def _crescent(cx: float, cy: float, r: float) -> Stroke:
+    """A crescent opening to the right, its two horns sharp."""
     ox, rr = cx + 0.45 * r, 0.946 * r
-    if not trimmed:
-        outer = [(cx + r * math.cos(math.radians(a)), cy + r * math.sin(math.radians(a)))
-                 for a in range(70, 291, 20)]
-        inner = [(ox + rr * math.cos(math.radians(a)), cy + rr * math.sin(math.radians(a)))
-                 for a in (263.4, 225, 180, 135, 96.6)]
-        return loop(*outer, *inner[1:-1], corners=(0, len(outer) - 1))
     outer = [(cx + r * math.cos(math.radians(a)), cy + r * math.sin(math.radians(a)))
-             for a in (165, 190, 215, 240, 265, 290)]
+             for a in range(70, 291, 20)]
     inner = [(ox + rr * math.cos(math.radians(a)), cy + rr * math.sin(math.radians(a)))
-             for a in (250, 222, 196)]
-    return curve(*outer, *inner, corners=(len(outer) - 1,))
+             for a in (263.4, 225, 180, 135, 96.6)]
+    return loop(*outer, *inner[1:-1], corners=(0, len(outer) - 1))
+
+
+# A cloud's bumps by how wide it is, so no bump is narrower than the pen:
+# (centre u, radius u, height), in widths of the cloud.
+_CLOUD_BUMPS = {
+    4: ((-0.33, 0.13, 0.55), (-0.1, 0.17, 1.0), (0.14, 0.15, 0.8), (0.34, 0.11, 0.45)),
+    3: ((-0.27, 0.18, 0.8), (0.0, 0.22, 1.0), (0.27, 0.16, 0.6)),
+    2: ((-0.2, 0.26, 1.0), (0.2, 0.22, 0.8)),
+}
+
+
+def _upper_meet(c1, c2):
+    """Where two circles cross, the upper of the two points (or None)."""
+    (x1, y1, r1), (x2, y2, r2) = c1, c2
+    d = math.dist((x1, y1), (x2, y2))
+    if d == 0 or d > r1 + r2 or d < abs(r1 - r2):
+        return None
+    a = (r1 * r1 - r2 * r2 + d * d) / (2 * d)
+    h = math.sqrt(max(0.0, r1 * r1 - a * a))
+    mx, my = x1 + a * (x2 - x1) / d, y1 + a * (y2 - y1) / d
+    p = (mx + h * (y2 - y1) / d, my - h * (x2 - x1) / d)
+    q = (mx - h * (y2 - y1) / d, my + h * (x2 - x1) / d)
+    return p if p[1] < q[1] else q
 
 
 def cloud(b: SketchBuilder, cx: float, cy: float, w: float, *, when: Iterable = (),
           part: str = 'cloud') -> None:
-    """A cumulus in one pen stroke: up from the lower left, over four low
-    bumps (the second the tallest), down the right, and back along a flat
-    base that stops short of where it began. Weather, never a warning."""
+    """A cumulus in one pen stroke: up from the lower left, over its bumps
+    (meeting at sharp cusps, never doubling back), down the right, and back
+    along a flat base that stops short of where it began. Two bumps under 22
+    units wide, three under 34, four above, so no bump is narrower than the
+    pen. Weather, never a warning."""
     when = tuple(when)
     h = w * 0.36
     base = cy + h * 0.45
-    bumps = ((-0.33, 0.13, 0.55), (-0.1, 0.17, 1.0), (0.14, 0.15, 0.8), (0.34, 0.11, 0.45))
-    pts: list[Point] = [(cx - w * 0.47, base)]
-    corners = []
-    for i, (u, ru, hk) in enumerate(bumps):
-        bx, by = cx + u * w, base - h * 0.62 * hk
-        if i:
+    table = _CLOUD_BUMPS[4 if w >= 34 else 3 if w >= 22 else 2]
+    circles = [(cx + u * w, base - h * 0.62 * hk, ru * w) for u, ru, hk in table]
+    if min(r for _, _, r in circles) < PEN:
+        raise ValueError(f"a cloud {w:.1f} wide has bumps narrower than the pen")
+    meets = [_upper_meet(circles[i], circles[i + 1]) for i in range(len(circles) - 1)]
+    x0, y0, r0 = circles[0]
+    pts: list[Point] = [(x0 - r0 * 0.9, base)]
+    corners = [0]
+    for i, (bx, by, r) in enumerate(circles):
+        lo = math.pi + 0.35 if i == 0 else math.atan2(meets[i - 1][1] - by, meets[i - 1][0] - bx)
+        hi = 2 * math.pi - 0.35 if i == len(circles) - 1 else math.atan2(meets[i][1] - by, meets[i][0] - bx)
+        if lo < 0:
+            lo += 2 * math.pi
+        if hi < 0:
+            hi += 2 * math.pi
+        for k_ in (1, 2):
+            a = lo + (hi - lo) * k_ / 3
+            pts.append((bx + r * math.cos(a), by + r * math.sin(a)))
+        if i < len(circles) - 1:
             corners.append(len(pts))
-        for a in (195, 240, 290, 335):
-            ang = math.radians(a)
-            pts.append((bx + ru * w * math.cos(ang), by + ru * w * 0.95 * math.sin(ang)))
+            pts.append(meets[i])
+    xn, yn, rn = circles[-1]
     corners.append(len(pts))
-    pts.append((cx + w * 0.47, base))
-    pts.append((cx - w * 0.3, base + 0.4))
+    pts.append((xn + rn * 0.9, base))
+    pts.append((cx - w * 0.28, base + 0.4))
     b.line(curve(*pts, corners=tuple(corners)), when=when, part=part)
 
 
 def moon(b: SketchBuilder, cx: float, cy: float, r: float, *, when: Iterable = (),
-         glow: bool = True, veiled: bool = True, part: str = 'moon', drift: int | None = None) -> None:
-    """A crescent opening to the right. With `glow`, a soft light round it.
-    With `veiled`, overdue work draws a cloud across its lower horn (the
-    crescent is trimmed where the cloud passes, so ink never tangles), and a
-    second, smaller cloud below it at two or more, drifting toward the nearer
-    edge of the picture (`drift` -1 left, 1 right), away from the subject."""
+         glow: bool = True, veiled: bool = True, part: str = 'moon',
+         first: tuple[float, float] = (0.15, 2.3),
+         second: tuple[float, float] | None = None) -> None:
+    """A crescent opening to the right, always whole. With `glow`, a soft
+    light round it. With `veiled`, overdue work draws a small cloud near it (by
+    default just under it), and a second at two or more (by default beside it,
+    toward the picture); `first` and `second` place them in moon radii from its
+    centre. Weather near the moon, never ink across it."""
     when = tuple(when)
-    if drift is None:
-        drift = -1 if cx < 80 else 1
     if glow:
         b.glow(ring(cx - r * 0.2, cy, r * 2.4, 12), when=when, part=part)
+    b.line(_crescent(cx, cy, r), when=when, part=part)
     if not veiled:
-        b.line(_crescent(cx, cy, r), when=when, part=part)
         return
-    b.line(_crescent(cx, cy, r), when=(*when, ('calm',)), part=part)
-    b.line(_crescent(cx, cy, r, trimmed=True), when=(*when, ('overdue', 1)), part=part)
-    cloud(b, cx + 0.15 * r, cy + 0.62 * r, 2.7 * r, when=(*when, ('overdue', 1)), part='cloud')
-    cloud(b, cx + drift * 1.15 * r, cy + 2.3 * r, 2.0 * r, when=(*when, ('overdue', 2)), part='cloud')
+    cloud(b, cx + first[0] * r, cy + first[1] * r, max(2.7 * r, 13.0), when=(*when, ('overdue', 1)), part='cloud')
+    if second is None:
+        toward = 1 if cx < 80 else -1
+        second = (toward * 2.5, 0.3)
+    cloud(b, cx + second[0] * r, cy + second[1] * r, max(2.0 * r, 11.0),
+          when=(*when, ('overdue', 2)), part='cloud')
 
 
 def stars(b: SketchBuilder, rng: Rng, count: int, box: tuple[float, float, float, float], *,
           avoid: Sequence[Circle] = (), ok: Callable[[Point], bool] | None = None, gap: float = 14.0,
           when: Iterable = (), part: str = 'star') -> list[Point]:
     """Small four-stroke stars in `box` (x0, y0, x1, y1), apart from each other
-    and clear of `avoid`. Returns where they went."""
+    and clear of `avoid` and `ok` by their whole reach (arms, ink and wobble),
+    not just their centres. Returns where they went."""
     when = tuple(when)
+    reach = 3.0 + PEN / 2 + WOBBLE
+    ring8 = [(reach * math.cos(math.pi * i / 4), reach * math.sin(math.pi * i / 4)) for i in range(8)]
     out: list[Point] = []
     for _ in range(400):
         if len(out) == count:
             break
         p = (rng.uniform(box[0], box[2]), rng.uniform(box[1], box[3]))
-        if any(math.dist(p, q) < gap for q in out) or not clear_of(p, avoid) or (ok and not ok(p)):
+        if any(math.dist(p, q) < gap for q in out):
+            continue
+        around = [p] + [(p[0] + dx, p[1] + dy) for dx, dy in ring8]
+        if not all(clear_of(q, avoid) and (ok is None or ok(q)) for q in around):
             continue
         out.append(p)
     for i, (x, y) in enumerate(out):

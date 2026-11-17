@@ -18,6 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import smylted.drawing
+from smylted.drawing.pen import PEN
 from smylted import drawing
 from smylted.app import create_app
 from smylted.drawing import (
@@ -542,8 +543,8 @@ def test_anchor_rejects_a_bad_reward(reward):
 _BOX = "M 10 10 L 30 10 L 30 30 L 10 30 Z"
 
 
-def _mark(mid, d, *, role="line", part="", on=True, reward=None, when=()):
-    return Mark(mid, role, (d,), when, reward, on, None, "auto", part or mid)
+def _mark(mid, d, *, role="line", part="", on=True, reward=None, when=(), frames=None):
+    return Mark(mid, role, frames or (d,), when, reward, on, None, "auto", part or mid)
 
 
 def _sketch(*marks, ambient=None):
@@ -599,7 +600,43 @@ def test_crossings_report_parts_that_cross():
     found = crossings(_cross_marks())
     assert len(found) == 1
     a, b, (x, y) = found[0]
-    assert (a, b) == ("a", "b") and (x, y) == pytest.approx((50, 50), abs=1)
+    assert (a, b) == ("a", "b") and (x, y) == pytest.approx((50, 50), abs=PEN + 0.5)
+
+
+def test_crossings_measure_against_the_pen():
+    # Two parallel lines: touching when their centres are closer than the
+    # pen is wide, clear when they are farther.
+    def pair(gap):
+        return _sketch(_mark("m0", "M 0 50 L 100 50", part="a"), _mark("m1", f"M 0 {50 + gap} L 100 {50 + gap}", part="b"))
+    assert len(crossings(pair(PEN - 0.2))) == 1
+    assert crossings(pair(PEN + 0.2)) == []
+
+
+def test_crossings_check_each_boil_frame_with_its_own():
+    # They touch only in the second boil frame, the one shown with the other's second.
+    still = "M 0 50 L 100 50"
+    a = _mark("m0", still, part="a", frames=(still, still, still))
+    b = _mark("m1", "", part="b", frames=("M 0 60 L 100 60", "M 0 51 L 100 51", "M 0 60 L 100 60"))
+    assert [p[:2] for p in crossings(_sketch(a, b))] == [("a", "b")]
+
+
+def test_two_rewards_never_touch_even_when_joined():
+    a = _mark("m0", "M 0 50 L 100 50", part="note:1", reward=1)
+    b = _mark("m1", "M 50 0 L 50 100", part="note:2", reward=2)
+    assert len(crossings(_sketch(a, b), frozenset({frozenset({"note"})}))) == 1
+    # The same reward's own marks may.
+    c = _mark("m1", "M 50 0 L 50 100", part="note:1", reward=1)
+    assert crossings(_sketch(a, c)) == []
+
+
+def test_a_bare_spark_is_ink():
+    # A coral fill with no line of its own (a firefly) still counts; one with
+    # its own outline is counted by the outline.
+    spark = _mark("m0", "M 40 40 L 60 40 L 60 60 L 40 60 Z", role="accent", part="fly")
+    line_ = _mark("m1", "M 0 50 L 100 50", part="branch")
+    assert len(crossings(_sketch(spark, line_))) == 1
+    ringed = _mark("m2", "M 40 40 L 60 40 L 60 60 L 40 60 Z", part="fly")
+    assert len(crossings(_sketch(spark, ringed, _mark("m3", "M 0 90 L 100 90", part="far")))) == 0
 
 
 def test_crossings_ignore_joined_parts_and_marks_that_are_off():
@@ -641,12 +678,15 @@ def test_night_overlap_counts_marks_in_the_same_place():
     assert night_overlap(light, light) == 1.0
 
 
-def test_a_standing_light_is_a_wash_or_glow_that_is_always_on():
-    assert has_standing_light(_sketch(_mark("m0", _BOX, role="wash")))
-    assert has_standing_light(_sketch(_mark("m0", _BOX, role="glow")))
-    assert not has_standing_light(
-        _sketch(_mark("m0", _BOX, role="wash", when=(("hour", 20, 6),))))
-    assert not has_standing_light(_sketch(_mark("m0", _BOX, role="line")))
+def test_a_standing_light_is_a_glow_big_enough_to_see_that_is_always_on():
+    big = "M 10 10 L 40 10 L 40 40 L 10 40 Z"            # 900 square units
+    assert has_standing_light(_sketch(_mark("m0", big, role="glow")))
+    # A wash is paint, not light; a small glow is a speck; a glow that comes
+    # and goes is not standing.
+    assert not has_standing_light(_sketch(_mark("m0", big, role="wash")))
+    assert not has_standing_light(_sketch(_mark("m0", _BOX, role="glow")))
+    assert not has_standing_light(_sketch(_mark("m0", big, role="glow", when=(("hour", 20, 6),))))
+    assert not has_standing_light(_sketch(_mark("m0", big, role="line")))
 
 
 # -- schedule -----------------------------------------------------------------

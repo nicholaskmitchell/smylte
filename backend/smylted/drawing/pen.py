@@ -19,6 +19,10 @@ Point = tuple[float, float]
 # desktop draws it at 1.2px per unit: the same proportion of a larger drawing.
 WOBBLE = 1.25
 
+# The ink's width in viewBox units: the client draws --stroke-pen (1.8px) at
+# 1.25 units to the pixel. Two lines closer than this, centre to centre, touch.
+PEN = 2.25
+
 # The hand: segments shorter than this stay ruled; longer ones get a point
 # about every HAND_STEP units, bowed by at most HAND_BOW.
 HAND_MIN_SEGMENT = 28.0
