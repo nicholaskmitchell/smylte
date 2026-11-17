@@ -64,5 +64,9 @@ can come back. Accessible names (`aria-label`) were kept everywhere.
 | Scheduling, link editor | The hover tooltip on ✕ beside a time range; its accessible name stays (removed under Field notes only) | `sched.removeRange` | Remove range |
 | Scheduling, link editor | The hover tooltip on the add-a-range button; it is the button's accessible name instead (removed under Field notes only) | `sched.addRange` | Add another range |
 | Scheduling, link editor | The line under Show busy times (removed under Field notes only) | `sched.showBusyHint` | Shown as unlabeled “Busy” blocks. Timed events always block slots. All-day events don’t. |
+| Focus, not planned | The line under "Today isn't planned yet." (removed under Field notes only) | `focus.notPlannedHint` | Open Today first. |
+| Focus, interval over | The line under the clock when the interval ended while you were away (removed under Field notes only) | `focus.awayHint` | The clock stopped when the interval ended. |
+| Focus, next row | The hover tooltip on the next row, which is a button that starts that row; the row's own text names it (removed under Field notes only) | `focus.pickRow` | Work this one instead |
+| Focus, floating window | The hover tooltip on the pin; its accessible name stays (removed under Field notes only) | `focus.pin`, `focus.unpin` | Keep on top / Let it fall behind |
 
 ## Notes

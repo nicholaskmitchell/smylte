@@ -423,3 +423,15 @@
 [data-surface="app"] .sched-switch ~ .scroll > .section-label + .empty { padding: 8px var(--gutter); }
 [data-surface="app"] :is(.sched-toggle, .sched-check, .sched-day-name) input[type="checkbox"] { accent-color: var(--accent); }
 [data-surface="app"] .agenda-task .tick { margin-inline-end: 6px; }   /* the space the glyph's text carried */
+
+/* ==== cp3 · Focus ==== */
+
+/* The floating window is left alone: its face is fitted exactly. */
+[data-surface="app"] .focus:not([data-float]) :is(.focus-head, .focus-foot) { border-color: transparent; }
+[data-surface="app"] .focus:not([data-float]) :is(.focus-head__interval, .focus-head__tally, .focus-phase) {
+  font-family: var(--serif); font-size-adjust: none; font-style: italic; text-transform: none; letter-spacing: 0;
+  font-size: calc(var(--fs-app-note) * var(--fs-scale));
+}
+[data-surface="app"] .focus:not([data-float]) .focus-now__eyebrow { font-weight: 500; font-size: calc(var(--fs-app-small) * var(--fs-scale)); }
+[data-surface="app"] .focus:not([data-float]) :is(.focus-now__meta, .focus-next__more) { font-size: calc(var(--fs-app-meta) * var(--fs-scale)); }
+[data-surface="app"] .focus:not([data-float]) .focus-next__text { font-family: var(--serif); font-size-adjust: none; font-weight: 500; }
