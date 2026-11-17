@@ -87,9 +87,14 @@ describe('sanitizeDrawing', () => {
     expect(withOrigin(still, [80, 40])).toBeNull()
   })
 
-  it('refuses a line without its three boil frames', () => {
-    const i = (fixture.marks as { role: string }[]).findIndex((m) => m.role === 'line')
-    expect(broken((p) => { (p.marks as { frames: string[] }[])[i].frames.pop() })).toBeNull()
+  it('takes a line in three boil frames or one still frame, and refuses two', () => {
+    const marks = fixture.marks as { role: string; frames: string[] }[]
+    const boiling = marks.findIndex((m) => m.role === 'line' && m.frames.length === 3)
+    const still = marks.findIndex((m) => m.role === 'line' && m.frames.length === 1)
+    expect(boiling, 'the fixture has a boiling line').toBeGreaterThanOrEqual(0)
+    expect(still, 'the fixture has a still line (a reward outline)').toBeGreaterThanOrEqual(0)
+    expect(broken((p) => { (p.marks as { frames: string[] }[])[boiling].frames.pop() })).toBeNull()
+    expect(broken((p) => { (p.marks as { frames: string[] }[])[still].frames.push('M 0 0') })).toBeNull()
   })
 })
 
@@ -117,11 +122,14 @@ describe('<DayDrawing>', () => {
     expect(slots().length).toBe(rewards.length)
   })
 
-  it('draws a line as three boil frames', () => {
+  it('draws a line as three boil frames, and a still line as one path', () => {
     const { container } = render(<DayDrawing drawing={drawing} state={day({})} />)
-    const line = container.querySelector('.dm-line')!
+    const line = container.querySelector('g.dm-line')!
     expect([...line.querySelectorAll('path')].map((p) => p.getAttribute('class')))
       .toEqual(['boil f1', 'boil f2', 'boil f3'])
+    const still = container.querySelector('path.dm-line.dm-reward')!
+    expect(still, 'a reward outline holds still').not.toBeNull()
+    expect(still.querySelector('path')).toBeNull()
   })
 
   it('gives a glow a soft edge of its own, and draws no gradient when there is no glow', () => {

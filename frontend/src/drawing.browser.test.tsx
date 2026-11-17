@@ -34,7 +34,7 @@ describe('motion', () => {
   it('boils: three frames of each line, shown one at a time', async () => {
     const el = host()
     flushSync(() => createRoot(el).render(<DayDrawing drawing={drawing} state={state({})} />))
-    const line = el.querySelector('.dm-line')!
+    const line = el.querySelector('g.dm-line')!
     const visible = [...line.querySelectorAll('path')].filter((p) => getComputedStyle(p).visibility === 'visible')
     expect(visible.length, 'one frame of three at a time').toBe(1)
     expect(document.getAnimations().length).toBeGreaterThan(0)
@@ -46,7 +46,7 @@ describe('motion', () => {
     flushSync(() => createRoot(el).render(<DayDrawing drawing={drawing} state={state({ rewards: 3, focusActive: true })} />))
     await new Promise(requestAnimationFrame)
     expect(document.getAnimations(), 'something still animates').toEqual([])
-    const line = el.querySelector('.dm-line')!
+    const line = el.querySelector('g.dm-line')!
     const [f1, f2, f3] = [...line.querySelectorAll('path')].map((p) => getComputedStyle(p).visibility)
     expect([f1, f2, f3]).toEqual(['visible', 'hidden', 'hidden'])
     // A reward shows finished, at full size, with no grow.

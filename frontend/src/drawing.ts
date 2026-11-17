@@ -44,7 +44,8 @@ export type Role = 'line' | 'wash' | 'glow' | 'accent'
 export type DrawMark = {
   id: string
   role: Role
-  /** Three boil frames for a line, one path for a wash or an accent. */
+  /** Three boil frames for a line (one for a line that holds still), one
+   *  path for a wash, a glow or an accent. */
   frames: string[]
   when: Atom[]
   reward: number | null
@@ -121,8 +122,10 @@ function mark(raw: unknown, frames: number | null): DrawMark | null {
   const m = raw as Record<string, unknown>
   if (typeof m.id !== 'string' || !/^[\w-]{1,24}$/.test(m.id)) return null
   if (typeof m.role !== 'string' || !ROLES.has(m.role as Role)) return null
-  const want = frames ?? (m.role === 'line' ? 3 : 1)
-  if (!Array.isArray(m.frames) || m.frames.length !== want) return null
+  // A line boils in three frames, or holds still in one (a reward's outline,
+  // which stays put while the picture boils); a fill is one path.
+  const ok = frames !== null ? [frames] : m.role === 'line' ? [1, 3] : [1]
+  if (!Array.isArray(m.frames) || !ok.includes(m.frames.length)) return null
   if (!m.frames.every((d) => typeof d === 'string' && d.length <= MAX_PATH && PATH.test(d))) return null
   const when = atoms(m.when ?? [])
   if (!when) return null
