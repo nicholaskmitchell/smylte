@@ -394,3 +394,14 @@
 /* An empty group holds no words under Field notes, but it stays the drop zone
    it was: the height its one line of text gave it. */
 [data-surface="app"] .group-empty:empty { min-height: calc(18px * var(--fs-scale)); }
+
+/* ==== cp3 · Home ==== */
+
+[data-surface="app"] .dash-mod-head { border-bottom-color: transparent; }
+[data-surface="app"] .dash-mod-head > .label {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500; text-transform: none; letter-spacing: 0;
+  font-size: calc(var(--fs-app-note) * var(--fs-scale)); color: var(--fg);
+}
+[data-surface="app"] .dash-task-title { font-family: var(--serif); font-size-adjust: none; font-weight: 500; font-size: calc(var(--fs-app-ui) * var(--fs-scale)); }
+[data-surface="app"] .dash-task-due { font-size: calc(var(--fs-app-small) * var(--fs-scale)); font-variant-numeric: tabular-nums; }
+[data-surface="app"] .mini-dot { width: 4px; height: 4px; border-radius: var(--r-dot); }

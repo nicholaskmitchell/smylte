@@ -6,7 +6,7 @@ import {
   type Booking, type BookingLink, type CalEvent, type DayEntry, type DayPlan,
   type List, type MailSuggestion, type Share, type Task,
 } from '../api'
-import { useIsMobile, useToday } from '../hooks'
+import { useFieldNotes, useIsMobile, useToday } from '../hooks'
 import { useLayer } from '../layers'
 import { useCalendarData, useTaskData, type TaskData } from '../data'
 import {
@@ -73,6 +73,7 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   onOpenSettings?: (section: SettingsSection) => void
 }) {
   const tr = useT()
+  const fieldNotes = useFieldNotes()
   const isMobile = useIsMobile()
   const [arranging, setArranging] = useState(false)
   const [picking, setPicking] = useState(false)
@@ -374,7 +375,7 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
       <div className="content-head">
         <span className="content-title">{tr('home.title')}</span>
         <span className="content-sub">
-          {arranging
+          {arranging && !fieldNotes
             ? tr('home.arrangeHint')
             : tr('home.moduleCount', { count: mods.length })}
         </span>
@@ -402,7 +403,7 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
           {available.map((k) => (
             <button key={k} className="dash-pick" onClick={() => add(k)}>
               <span className="dash-pick-name">{tr(MODULE_SPECS[k].label)}</span>
-              <span className="dash-pick-blurb">{tr(MODULE_SPECS[k].blurb)}</span>
+              {!fieldNotes && <span className="dash-pick-blurb">{tr(MODULE_SPECS[k].blurb)}</span>}
             </button>
           ))}
         </div>
@@ -427,7 +428,7 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
                 onPointerDown={(e) => onPointerDown(e, m, 'move')}>
                 <span className="label">{tr(MODULE_SPECS[m.kind].label)}</span>
                 {arranging && (
-                  <button className="dash-remove" title={tr('common.remove')}
+                  <button className="dash-remove" title={fieldNotes ? undefined : tr('common.remove')}
                     aria-label={tr('home.removeModule',
                       { module: tr(MODULE_SPECS[m.kind].label) })}
                     onPointerDown={(e) => e.stopPropagation()}
@@ -848,6 +849,7 @@ function SharesModule({ sharesRev, onExpire, onOpenSettings }: {
 }) {
   const tr = useT()
   const { locale } = useI18n()
+  const fieldNotes = useFieldNotes()
   const tf = useTimeFormat()
   const guard = makeGuard(onExpire)
   const [rows, setRows] = useState<Share[] | null>(null)
@@ -956,7 +958,9 @@ function SharesModule({ sharesRev, onExpire, onOpenSettings }: {
         {rows.map((d) => (
           <li key={d.id} className={`dash-task dash-share-row ${isOn(d) ? '' : 'done'}`}>
             <span className="dash-share-info">
-              <span className="dash-task-title" dir={textDir(d.name)}>{d.name}</span>
+              <span className="dash-task-title" dir={textDir(d.name)}>{d.name}
+                {fieldNotes && <StrikeInk on={!isOn(d)} seed={d.id} />}
+              </span>
               <span className="dash-share-meta mono">{seenText(d, now, tr, tf, locale)}</span>
               {d.switched_off_by_password && (
                 <span className="dash-share-note">{tr('home.shareOffBySignIn')}</span>
@@ -990,6 +994,7 @@ function TaskList({ items, colorOf, empty, overdue, done, loaded, partial, note 
 }) {
   const tr = useT()
   const { locale } = useI18n()
+  const fieldNotes = useFieldNotes()
   // Read before the early returns below — a hook can't sit behind a branch.
   const tf = useTimeFormat()
   // Stay blank until the first fetch lands: "Nothing due today." flashing up and
@@ -1012,7 +1017,9 @@ function TaskList({ items, colorOf, empty, overdue, done, loaded, partial, note 
         return (
           <li key={taskKey(t)} className={`dash-task ${done ? 'done' : ''}`}>
             <span className="list-dot" style={c ? { background: c } : undefined} />
-            <span className="dash-task-title">{t.summary || tr('common.untitled')}</span>
+            <span className="dash-task-title">{t.summary || tr('common.untitled')}
+              {fieldNotes && <StrikeInk on={!!done} seed={taskKey(t)} />}
+            </span>
             {/* `overdue` is the MODULE's, set once for the whole list by the
                 Overdue card, so the suppression has to be per-task: a
                 rescheduled row inside that list hands its warn to the chip
@@ -1317,6 +1324,7 @@ function MiniCalendar({ days, byDay, eventColor, failed = [] }: {
 
 function LinkList({ links, failed }: { links: BookingLink[]; failed: boolean }) {
   const tr = useT()
+  const fieldNotes = useFieldNotes()
   // Never the empty copy over a failed fetch — see `schedFailed`.
   if (failed) return <p className="dash-empty" role="status">{tr('home.linksFailed')}</p>
   if (!links.length) return <p className="dash-empty">{tr('home.noLinks')}</p>
@@ -1324,7 +1332,9 @@ function LinkList({ links, failed }: { links: BookingLink[]; failed: boolean }) 
     <ul className="dash-tasks">
       {links.map((l) => (
         <li key={l.token} className={`dash-task ${l.enabled ? '' : 'done'}`}>
-          <span className="dash-task-title">{l.title}</span>
+          <span className="dash-task-title">{l.title}
+            {fieldNotes && <StrikeInk on={!l.enabled} seed={l.token} />}
+          </span>
           <span className="dash-task-due mono">
             {tr('home.linkDuration', { n: l.duration_minutes })}
           </span>
