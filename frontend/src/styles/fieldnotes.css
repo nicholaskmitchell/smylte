@@ -338,3 +338,24 @@
   font-size: calc(var(--fs-app-small) * var(--fs-scale));
   min-height: 44px; display: inline-flex; align-items: center;
 }
+
+/* ==== cp3 · shared ==== */
+
+/* Control edges at 3:1: --rule is a 1.3:1 hairline (contrast-table.test.ts names --rule-strong, via --edge-control, as the control edge). */
+[data-surface="app"] .menu-toggle,
+[data-surface="app"] .content-head > .view-tab,
+[data-surface="app"] .col-add,
+[data-surface="app"] .sched-add-range,
+[data-surface="app"] .bulk-add-row,
+[data-surface="app"] .booking-day:not(.active),
+[data-surface="app"] .slot-btn,
+[data-surface="app"] .habit-day:not(.on) { border-color: var(--edge-control); }
+/* A view header's count is a margin note, as Today's is. */
+[data-surface="app"] .content-head > .content-sub {
+  font-family: var(--serif); font-size-adjust: none; font-style: italic; text-transform: none; letter-spacing: 0;
+  font-variant-numeric: tabular-nums; font-size: calc(var(--fs-app-note) * var(--fs-scale)); color: var(--fg-muted);
+}
+/* ‹ › beside a view's Today: square, not a sliver. Desktop only: .cal-title has min-width 220px, and 44px buttons overflow a 320px phone. */
+@media (min-width: 721px) {
+  [data-surface="app"] :is(.cal-head, .range-nav) > .icon-btn { min-width: var(--control-h); }
+}
