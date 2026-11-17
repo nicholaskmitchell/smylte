@@ -13,8 +13,17 @@ class DayDrawing(Protocol):
     id: str
     since: date
     until: date | None
+    # The base part names that are meant to touch, e.g.
+    # frozenset({frozenset({'trunk', 'canopy'})}); the geometry checks leave
+    # those alone. A subject without any need not define it.
+    JOINS: frozenset[frozenset[str]]
 
     def render(self, state: DayState, theme: Theme, rng: Rng) -> Sketch: ...
+
+
+def joins_of(subject) -> frozenset:
+    """The base part names the subject says may touch; none if it says nothing."""
+    return getattr(subject, 'JOINS', frozenset())
 
 
 _FULL = DayState(progress=1, rewards=12, focus_active=True, all_done=True,

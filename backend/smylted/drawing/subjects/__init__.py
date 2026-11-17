@@ -1,9 +1,10 @@
 """The subjects the daily drawing rotates through, one import line each."""
 from __future__ import annotations
 
-from .base import DayDrawing, assert_declarative
+from .base import DayDrawing, assert_declarative, joins_of
 
-__all__ = ["ROSTER", "VIEW_DRAWINGS", "DayDrawing", "assert_declarative"]
+__all__ = ["ROSTER", "VIEW_DRAWINGS", "DayDrawing", "assert_declarative",
+           "joins_of"]
 
 from .desk import DeskWithKettle
 from .tree import PottedTree

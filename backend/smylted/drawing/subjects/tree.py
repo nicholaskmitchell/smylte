@@ -1,14 +1,16 @@
-"""A potted tree on a sill.
+"""A potted tree.
 
-Day: the tree in sun, its canopy on a sage wash. Each finished task hangs a
-coral fruit in it; Start stirs two leaves; everything done brings a bird to the
-crown; a day with nothing planned has a watering can beside the pot; overdue
-work curls a leaf or two and, at most, drops one on the sill.
+Day: the tree fills the picture, as the mockup's does: a full canopy on a sage
+wash, one trunk with a fork or two, a pot on a short sill. Each finished task
+hangs a coral fruit in it; Start shakes a few leaves loose from the crown;
+everything done brings a bird to its shoulder; a day with nothing planned has
+a watering can by the pot; overdue work drops a leaf or two by the pot. The
+sun crosses the sky with the hour; late at night it is an ink moon.
 
-Night: the same tree, pot and branches, under a crescent moon. Light is the
-subject: the moon's glow is the only wash, the rewards are fireflies in the
-branches, Start sets one drifting, everything done lights a lantern on a
-branch, and overdue work edges a cloud onto the moon. More paper, fewer fills.
+Night: the same tree under the moon, its crown still sage in the moonlight.
+The rewards are fireflies about the crown, each a coral spark in a soft glow;
+Start sets one drifting; everything done hangs a lit lantern under the crown;
+overdue work draws a cloud across the moon.
 """
 from __future__ import annotations
 
@@ -21,13 +23,21 @@ from ..scene import Sketch, SketchBuilder
 from ..state import DayState, Theme
 from . import _kit as k
 
-SILL = 186.0
+SILL = 190.0
+FRUIT_R = 7.0
+FLY_R = 6.0
 
 
 class PottedTree:
     id = 'tree'
     since = date(2026, 1, 1)
     until = None
+    JOINS = frozenset(frozenset(p) for p in (
+        ('trunk', 'canopy'), ('trunk', 'branch'), ('branch', 'canopy'), ('trunk', 'soil'),
+        ('pot', 'soil'), ('pot', 'rim'), ('pot', 'sill'), ('can', 'sill'), ('fallen', 'sill'),
+        ('bird', 'canopy'), ('stir', 'canopy'), ('echo', 'canopy'), ('moon', 'cloud'),
+        ('lantern', 'canopy'), ('rim', 'trunk'), ('rim', 'soil'), ('branch',),
+    ))
 
     def render(self, state: DayState, theme: Theme, rng: Rng) -> Sketch:
         b = SketchBuilder(self.id, theme, rng)
@@ -40,169 +50,187 @@ class PottedTree:
 
 
 def _structure(r: Rng) -> dict:
-    """What both compositions share, so dark reads as the same tree after dark."""
-    lean = r.uniform(-6, 6)
-    pot_w, pot_h = r.uniform(46, 56), r.uniform(34, 41)
-    cx, cy = 80 + lean, r.uniform(74, 80)
-    rx, ry = r.uniform(45, 51), r.uniform(38, 44)
+    """What both compositions share, so the night is the same tree after dark."""
+    lean = r.uniform(-4, 4)
+    pot_w, pot_h = r.uniform(50, 56), r.uniform(32, 36)
     top = SILL - pot_h
-    branches = []
-    for i in range(r.randint(2, 3)):
-        side = -1 if i % 2 == 0 else 1
-        t = r.uniform(0.35, 0.7)
-        sx = 80 + lean * t * 0.8
-        sy = top - (top - (cy + ry * 0.4)) * t
-        ex = sx + side * r.uniform(14, 24)
-        ey = sy - r.uniform(14, 24)
-        branches.append(((sx, sy), ((sx + ex) / 2 + side * 2, (sy + ey) / 2 + 3), (ex, ey)))
-    edge = []
-    for _ in range(r.randint(2, 4)):
-        a = r.uniform(-0.2, math.pi + 0.2) + math.pi       # the upper rim
-        edge.append((cx + rx * 0.98 * math.cos(a), cy + ry * 0.98 * math.sin(a), a))
+    cx, cy = 80 + lean * 0.6, r.uniform(68, 72)
+    rx, ry = r.uniform(62, 65), r.uniform(54, 57)
+    canopy = k.blob(cx, cy, rx, ry, r.fork('canopy'), n=11, wobble=0.07)
+
+    # One trunk, an S from the soil into the crown, and a fork or two off it.
+    crown = (80 + lean * 0.6, cy + ry * 0.5)
+    trunk_pts = [(80.0, top + 3), (80 + lean * 0.3 + 1.4, top - (top - crown[1]) * 0.35),
+                 (80 + lean * 0.6 - 1.4, top - (top - crown[1]) * 0.7), crown]
+    trunk = curve(*trunk_pts)
+    forks = []
+    sides = [-1, 1] if r.random() < 0.5 else [1, -1]
+    for i in range(r.randint(1, 2)):
+        side = sides[i]
+        t = r.uniform(0.62, 0.8)
+        sx = trunk_pts[0][0] + (crown[0] - trunk_pts[0][0]) * t + side * 0.6
+        sy = trunk_pts[0][1] + (crown[1] - trunk_pts[0][1]) * t
+        ex, ey = sx + side * r.uniform(15, 20), sy - r.uniform(16, 22)
+        forks.append(curve((sx, sy), ((sx + ex) / 2 + side * 1.5, (sy + ey) / 2 + 2.5), (ex, ey)))
+
+    # One contour echo inside the crown's lower side, as the mockup draws.
+    mirror = -1 if r.random() < 0.5 else 1
+    echo = curve(*[(cx + mirror * u * rx, cy + v * ry)
+                   for u, v in ((-0.18, 0.16), (-0.5, 0.3), (-0.78, 0.12), (-0.8, -0.2))])
+
+    ink = [*k.samples(trunk), *(p for f in forks for p in k.samples(f)), *k.samples(echo),
+           *k.samples(canopy)]
+    avoid = tuple((x, y, FRUIT_R + 3.8) for x, y in ink)          # two pens and a gap
+    fruit = k.scatter_all(r.fork('fruit'), k.REWARDS, cx, cy - 4, rx * 0.8, ry * 0.74, 17.0, avoid=avoid)
+    fruit = k.spread(fruit, (cx, cy - ry))
+
+    # Where the lantern hangs when everything is done: under the crown, away
+    # from the trunk; the fireflies keep clear of it.
+    lx = cx - rx * 0.52 * (1 if lean >= 0 else -1)
+    lantern_y = cy + ry * math.sqrt(max(0.0, 1 - ((lx - cx) / rx) ** 2)) * 0.97
+    fly_avoid = (*((x, y, FLY_R + 3.8) for x, y in ink),
+                 (lx, lantern_y + 12, 19.0), (lx, lantern_y - 2, 13.0))
+    flies = k.scatter_all(r.fork('flies'), k.REWARDS, cx, cy - 2, rx * 1.16, ry * 1.04, 18.0,
+                          avoid=fly_avoid, ok=lambda p: 15 < p[0] < 145 and 15 < p[1] < top - 12)
+    flies = k.spread(flies, (cx, cy - ry))
+
+    rim = []                                      # leaves that come loose when Start runs
+    # On the crown's sides only, so they fall outside it, clear of the fruit.
+    for a in (r.uniform(172, 192), r.uniform(146, 160), r.uniform(-14, 6)):
+        rad = math.radians(a)
+        rim.append((cx + rx * 0.96 * math.cos(rad), cy + ry * 0.96 * math.sin(rad), rad))
     return {
-        'lean': lean, 'pot': r.choice(['taper', 'belly', 'band']),
-        'pot_w': pot_w, 'top': top, 'cx': cx, 'cy': cy, 'rx': rx, 'ry': ry,
-        'canopy': k.blob(cx, cy, rx, ry, r.fork('canopy'), n=11, wobble=0.09),
-        'branches': branches,
-        'inner': [_inner(r.fork(f'inner{i}'), cx, cy, rx, ry) for i in range(3)],
-        'spots': k.scatter(r.fork('fruit'), k.REWARDS, cx, cy - 2, rx * 0.72, ry * 0.64, gap=10.5),
-        'edge_leaves': edge,
+        'lean': lean, 'pot': r.choice(['belly', 'taper', 'band']), 'pot_w': pot_w, 'top': top,
+        'cx': cx, 'cy': cy, 'rx': rx, 'ry': ry, 'canopy': canopy, 'trunk': trunk, 'forks': forks,
+        'echo': echo, 'fruit': fruit, 'flies': flies, 'rim': rim, 'lantern': (lx, lantern_y),
         'can_side': r.choice([-1, 1]),
-        'droops': [(cx - rx * 0.45, cy + ry * 0.86), (cx + rx * 0.4, cy + ry * 0.9),
-                   (cx + rx * 0.05, cy + ry * 0.98)],
+        'moon_spot': r.choice([(16.0, 16.0), (144.0, 16.0)]),
     }
-
-
-def _inner(r: Rng, cx: float, cy: float, rx: float, ry: float):
-    """A short hatch inside the canopy: the shadow side of the leaves."""
-    x0 = cx + r.uniform(-0.55, 0.1) * rx
-    y0 = cy + r.uniform(-0.1, 0.45) * ry
-    return curve((x0, y0), (x0 + rx * 0.22, y0 + r.uniform(1, 4)),
-                 (x0 + rx * 0.4, y0 - r.uniform(2, 6)))
 
 
 def _pot(b: SketchBuilder, s: dict) -> None:
     w, top = s['pot_w'], s['top']
     x0, x1 = 80 - w / 2, 80 + w / 2
-    if s['pot'] == 'taper':
-        b.line(poly((x0 - 3, top - 6), (x1 + 3, top - 6), (x1 + 3, top), (x0 - 3, top)))
-        b.line(poly((x0, top), (x1, top), (x1 - 6, SILL), (x0 + 6, SILL)))
-    elif s['pot'] == 'belly':
-        b.line(line((x0 - 1, top), (x1 + 1, top)))
-        b.line(curve((x0, top), (x0 - 4, top + (SILL - top) * 0.5), (x0 + 7, SILL),
-                     (x1 - 7, SILL), (x1 + 4, top + (SILL - top) * 0.5), (x1, top)))
+    # The rim runs a little past the pot each side, as the mockup's does.
+    b.line(line((x0 - 3, top), (x1 + 3, top + 0.4)), part='rim')
+    if s['pot'] == 'belly':
+        b.line(curve((x0, top), (x0 - 3, top + (SILL - top) * 0.45), (x0 + 7, SILL), (x1 - 7, SILL),
+                     (x1 + 3, top + (SILL - top) * 0.45), (x1, top), corners=(2, 3)), part='pot')
+    elif s['pot'] == 'taper':
+        b.line(line((x0, top), (x0 + 6, SILL), (x1 - 6, SILL), (x1, top)), part='pot')
     else:
-        b.line(poly((x0, top), (x1, top), (x1, SILL), (x0, SILL)))
-        band = top + (SILL - top) * 0.32
-        b.line(line((x0, band), (x1, band)))
-    b.line(curve((x0 + 5, top + 2), (80, top + 4), (x1 - 5, top + 2)))         # the soil
+        b.line(line((x0 + 1, top), (x0 + 3, SILL), (x1 - 3, SILL), (x1 - 1, top)), part='pot')
+        band = top + (SILL - top) * 0.3
+        b.line(line((x0 + 1.6, band), (x1 - 1.6, band)), part='pot')
+    b.line(curve((x0 + 6, top + 2.2), (80, top + 4.4), (x1 - 6, top + 2.2)), part='soil')
 
 
-def _trunk(b: SketchBuilder, s: dict) -> None:
-    top, lean = s['top'], s['lean']
-    crown = (80 + lean * 0.8, s['cy'] + s['ry'] * 0.42)
-    mid = (80 + lean * 0.35, (top + crown[1]) / 2)
-    for dx, tip in ((-2.4, -1.2), (2.4, 1.2)):
-        b.line(curve((80 + dx, top + 1), (mid[0] + dx * 0.8, mid[1]), (crown[0] + tip, crown[1])))
-    for p0, p1, p2 in s['branches']:
-        b.line(curve(p0, p1, p2))
+def _tree(b: SketchBuilder, s: dict) -> None:
+    b.line(s['trunk'], part='trunk')
+    for i, f in enumerate(s['forks']):
+        b.line(f, part=f'branch:{i}')
+    b.line(s['canopy'], part='canopy')
+    b.line(s['echo'], part='echo')
 
 
-def _sill(b: SketchBuilder) -> None:
-    b.line(line((6, SILL), (154, SILL + 0.6)))
-    b.line(line((10, SILL + 7), (150, SILL + 7.4)))
+def _sill(b: SketchBuilder, s: dict) -> None:
+    half = s['pot_w'] / 2 + 46
+    b.line(line((80 - half, SILL), (80 + half, SILL + 0.5)), part='sill')
 
 
 def _can(b: SketchBuilder, s: dict, *, when: tuple) -> None:
-    """A watering can beside the pot, resting: nothing to do yet, and that is fine."""
+    """A watering can by the pot, resting: nothing to do yet, and that is fine."""
     side = s['can_side']
-    x = 80 + side * (s['pot_w'] / 2 + 26)
-    b.line(poly((x - 11, SILL), (x + 11, SILL), (x + 9, SILL - 18), (x - 9, SILL - 18)), when=when)
-    b.line(line((x + side * 9, SILL - 12), (x + side * 22, SILL - 24)), when=when)
-    b.line(curve((x - side * 8, SILL - 18), (x - side * 4, SILL - 28), (x + side * 4, SILL - 18)), when=when)
+    x = 80 + side * (s['pot_w'] / 2 + 22)
+    b.line(poly((x - 9, SILL), (x + 9, SILL), (x + 8, SILL - 16), (x - 8, SILL - 16)), when=when, part='can')
+    b.line(line((x + side * 8, SILL - 10), (x + side * 18, SILL - 21)), when=when, part='can')
+    b.line(curve((x - side * 7, SILL - 16), (x - side * 3, SILL - 25), (x + side * 4, SILL - 16)),
+           when=when, part='can')
 
 
-def _bird(b: SketchBuilder, x: float, y: float, *, when: tuple, k_: float = 1.5) -> None:
-    def p(dx: float, dy: float):
-        return (x + dx * k_, y + dy * k_)
-    b.line(loop(p(-6, 0), p(0, -3.4), p(5, -1), p(2, 2.6), p(-4, 2.4)), when=when)
-    b.line(loop(p(4, -3.6), p(7.2, -5.4), p(8.6, -2.6), p(6, -1.4)), when=when)
-    b.line(line(p(8.6, -4), p(11, -3.4)), when=when)                 # beak
-    b.line(line(p(-6, 0), p(-10.4, -2.6)), when=when)                # tail
-    b.line(line(p(-1, 2.6), p(-1.6, 6)), when=when)
-    b.line(line(p(1.6, 2.4), p(1.8, 6)), when=when)
-
-
-def _droops(b: SketchBuilder, s: dict) -> None:
-    """Overdue work, gently: a curled leaf per level, and at most one on the sill."""
-    for level, (x, y) in enumerate(s['droops'][:2], start=1):
-        b.line(k.leaf(x, y, 9, math.radians(100 + level * 14)), when=(('overdue', level),))
-    x = 80 + s['can_side'] * -(s['pot_w'] / 2 + 14)
-    b.line(k.leaf(x, SILL - 2.4, 9, math.radians(-8)), when=(('overdue', 3),))
+def _fallen(b: SketchBuilder, s: dict) -> None:
+    """Overdue work, gently: a leaf down by the pot per level."""
+    side = -s['can_side']
+    base = 80 + side * (s['pot_w'] / 2 + 10)
+    for level, (dx, a) in enumerate(((0, -10), (side * 14, 8), (side * 28, -4)), start=1):
+        b.line(k.leaf(base + dx - 5, SILL - 2.2, 10, math.radians(a)), when=(('overdue', level),),
+               part=f'fallen:{level}')
 
 
 def _stir(s: dict):
-    """Start: two edge leaves sway, a small loop at 6fps."""
-    leaves = s['edge_leaves'][:2]
-
+    """Start: three leaves come loose from the crown and drift down and out."""
     def draw(frame: int, child: SketchBuilder) -> None:
-        swing = math.sin(2 * math.pi * frame / 6) * 0.28
-        for x, y, a in leaves:
-            child.line(k.leaf(x, y, 8, a + swing))
+        for i, (x, y, a) in enumerate(s['rim']):
+            out = 1 if math.cos(a) >= 0 else -1
+            f = (frame + i * 2) % 6
+            child.line(k.leaf(x + out * 2.6 * f, y + 3.2 * f - 2, 9, a + 0.5 * f), part='stir')
     return draw
 
 
+def _sky(b: SketchBuilder, s: dict, r: Rng) -> None:
+    """The hour, day composition: the sun crosses, and late on an ink moon."""
+    k.sun(b, r.fork('sun-m'), 17, 18, 5.0, when=(k.MORNING,))
+    k.sun(b, r.fork('sun-n'), 143, 17, 5.4, when=(k.MIDDAY,))
+    k.sun(b, r.fork('sun-a'), 145, 132, 5.0, when=(k.AFTERNOON,))
+    k.sun(b, r.fork('sun-d'), 18, 140, 4.6, when=(k.DUSK,), rays=5)
+    x, y = s['moon_spot']
+    k.moon(b, x, y, 6.0, glow=False, veiled=False, when=(k.LATE,))
+    bird = (s['cx'] + s['rx'] * 0.5, s['cy'] - s['ry'] * 0.86 - 6)
+    k.stars(b, r.fork('late-stars'), 3, (6, 6, 154, 40), avoid=((x, y, 18), (*bird, 18)),
+            ok=lambda p: not _in_crown(s, p, 1.12), when=(k.LATE,), part='late-star')
+
+
+def _in_crown(s: dict, p, grow: float) -> bool:
+    return ((p[0] - s['cx']) / (s['rx'] * grow)) ** 2 + ((p[1] - s['cy']) / (s['ry'] * grow)) ** 2 <= 1
+
+
 def _day(b: SketchBuilder, s: dict, r: Rng) -> None:
-    cx, cy, rx, ry = s['cx'], s['cy'], s['rx'], s['ry']
-    b.wash(k.blob(cx + 3, cy + 3, rx, ry, r.fork('wash'), n=11, wobble=0.06))
-    k.sun(b, 20, 30, 7, when=(k.MORNING,))
-    k.sun(b, 140, 20, 8, when=(k.MIDDAY,))
-    k.sun(b, 144, 40, 7, when=(k.AFTERNOON,))
-    k.low_sun(b, 146, SILL - 0.5, 9, when=(k.EVENING,))
-    _sill(b)
+    b.wash(k.wash_of(s['canopy']), part='canopy')
+    _sky(b, s, r)
+    _sill(b, s)
     _pot(b, s)
-    _trunk(b, s)
-    b.line(s['canopy'])
-    for stroke in s['inner']:
-        b.line(stroke)
-    for x, y, a in s['edge_leaves'][2:]:
-        b.line(k.leaf(x, y, 8, a))
-    _droops(b, s)
+    _tree(b, s)
+    _fallen(b, s)
     _can(b, s, when=(('nothingPlanned',),))
-    _bird(b, cx + rx * 0.12, cy - ry * 0.98 - 8, when=(('allDone',),))
-    for i, (x, y) in enumerate(s['spots']):
-        k.fruit(b, x, y, 4.6, when=(('reward', i),))
+    k.bird(b, s['cx'] + s['rx'] * 0.5, s['cy'] - s['ry'] * 0.86 + 0.5, when=(('allDone',),),
+           facing=-1 if s['lean'] > 0 else 1)
+    for i, (x, y) in enumerate(s['fruit']):
+        k.fruit(b, x, y, FRUIT_R, when=(('reward', i),), part=f'fruit:{i}')
+        b.anchor(i, x, y - FRUIT_R)
     b.ambient(1.0, (('focus',),), _stir(s))
 
 
 def _night(b: SketchBuilder, s: dict, r: Rng) -> None:
     cx, cy, rx, ry = s['cx'], s['cy'], s['rx'], s['ry']
-    moons = ((22, 24, k.MORNING), (138, 18, k.MIDDAY), (142, 30, k.AFTERNOON), (24, 22, k.EVENING))
-    for x, y, hour in moons:
-        k.moon(b, x, y, 7.5, when=(hour,))
-    k.stars(b, r.fork('stars'), 5, (6, 6, 154, 26))
-    for i, (x, y, hour) in enumerate(moons):
-        k.cloud(b, x + 6, y + 5, 24, when=(hour, ('overdue', 1)))
-        k.cloud(b, x - 10, y + 12, 18, when=(hour, ('overdue', 2)))
-    _sill(b)
+    b.wash(k.wash_of(s['canopy']), part='canopy')            # the crown in moonlight
+    x, y = s['moon_spot']
+    k.moon(b, x, y, 6.0)
+    k.stars(b, r.fork('stars'), 4, (6, 4, 154, 34), avoid=((x, y + 7, 26),),
+            ok=lambda p: not _in_crown(s, p, 1.14), part='star')
+    _sill(b, s)
     _pot(b, s)
-    _trunk(b, s)
-    b.line(s['canopy'])
-    b.line(s['inner'][0])
+    _tree(b, s)
+    _fallen(b, s)
     _can(b, s, when=(('nothingPlanned',),))
-    x, y = s['branches'][0][2]
-    b.line(line((x, y), (x, y + 6)), when=(('allDone',),))                       # the lantern's cord
-    k.glow_dot(b, x, y + 10, 3.4, halo=11, when=(('allDone',),))
-    b.line(poly((x - 3.6, y + 6), (x + 3.6, y + 6), (x + 3.6, y + 14), (x - 3.6, y + 14)), when=(('allDone',),))
-    x = 80 + s['can_side'] * -(s['pot_w'] / 2 + 14)
-    b.line(k.leaf(x, SILL - 2.4, 9, math.radians(-8)), when=(('overdue', 3),))
-    for i, (x, y) in enumerate(s['spots']):
-        k.glow_dot(b, x, y, 2.2, halo=5.6, when=(('reward', i),))
+    # Everything done: a lantern hung under the crown, away from the trunk.
+    lx, rim = s['lantern']
+    done = (('allDone',),)
+    b.glow(k.ring(lx, rim + 13, 15, 12), when=done, part='lantern')
+    b.line(line((lx, rim - 4), (lx, rim + 5)), when=done, part='lantern')
+    b.line(line((lx - 4.6, rim + 6), (lx + 4.6, rim + 6.2)), when=done, part='lantern')
+    body = loop((lx - 3.6, rim + 7), (lx + 3.6, rim + 7), (lx + 4.6, rim + 13), (lx + 3.4, rim + 19),
+                (lx - 3.4, rim + 19), (lx - 4.6, rim + 13), corners=(0, 1, 3, 4))
+    b.filled(body, when=done, part='lantern', paper='glint')
+    b.line(line((lx - 3.6, rim + 20.4), (lx + 3.6, rim + 20.4)), when=done, part='lantern')
+    for i, (fx, fy) in enumerate(s['flies']):
+        k.glow_dot(b, fx, fy, FLY_R, halo=14, when=(('reward', i),), part=f'fly:{i}', glass=False)
+        b.anchor(i, fx, fy)
 
-    path = [(cx + rx * 0.55 * math.cos(t), cy - ry * 0.2 + ry * 0.3 * math.sin(2 * t))
+    path = [(cx + rx * 0.62 * math.cos(t), cy - ry * 0.15 + ry * 0.32 * math.sin(2 * t))
             for t in (2 * math.pi * f / 6 for f in range(6))]
 
     def drift(frame: int, child: SketchBuilder) -> None:
-        x, y = path[frame]
-        child.accent(k.ring(x, y, 2.0, 7))
+        fx, fy = path[frame]
+        child.glow(k.ring(fx, fy, 8, 10), part='drift')
+        child.accent(k.ring(fx, fy, 2.6, 8), part='drift')
     b.ambient(1.0, (('focus',),), drift)

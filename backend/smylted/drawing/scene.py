@@ -3,24 +3,29 @@
 Roles name paint, never a colour; the client applies them:
   * `line`   stroke in --fg at --stroke-pen (1.8px), round caps and joins, no fill
   * `wash`   fill in --wash, no stroke
+  * `glow`   fill in --wash with a soft radial falloff: light at night (the
+             client draws the gradient)
   * `accent` fill in --accent-fill, no stroke
 
-A `line` mark carries three frames, the boil; `wash` and `accent` carry one. An
-ambient is a loop at 6fps whose marks carry one frame each.
+A `line` mark carries three frames, the boil; `wash`, `glow` and `accent` carry
+one. An ambient is a loop at 6fps whose marks carry one frame each.
 """
 from __future__ import annotations
 
 import dataclasses
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
 from . import conditions
-from .pen import Pen, Stroke
+from .checks import endpoints
+from .pen import Pen, Stroke, hand, to_d
 from .rng import Rng
-from .state import DayState, Theme
+from .state import MAX_REWARDS, DayState, Theme
 
-Role = Literal['line', 'wash', 'accent']
+Role = Literal['line', 'wash', 'glow', 'accent']
+PAPERS = ('auto', 'glint')
 
 FPS = 6
 LINE_FRAMES = 3
@@ -36,9 +41,17 @@ class Mark:
     when: tuple
     reward: int | None
     on: bool
+    # Where the client grows a reward's marks from; set by `build` for marks
+    # that carry a reward.
+    origin: tuple[float, float] | None = None
+    # How the client treats the mark against the paper, and which piece of the
+    # subject it belongs to. Both are for the server's own checks and never
+    # travel.
+    paper: str = 'auto'
+    part: str = ''
 
     def to_json(self) -> dict:
-        return {
+        out = {
             "id": self.id,
             "role": self.role,
             "frames": list(self.frames),
@@ -46,6 +59,9 @@ class Mark:
             "reward": self.reward,
             "on": self.on,
         }
+        if self.origin is not None:
+            out["origin"] = [round(self.origin[0], 1), round(self.origin[1], 1)]
+        return out
 
 
 @dataclass
@@ -80,6 +96,26 @@ class Sketch:
         }
 
 
+def _is_index(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _inset(points: list, amount: float) -> list:
+    """Every point moved `amount` toward the centroid, or onto it if nearer."""
+    if not points:
+        return []
+    cx = sum(p[0] for p in points) / len(points)
+    cy = sum(p[1] for p in points) / len(points)
+    out = []
+    for x, y in points:
+        d = math.hypot(cx - x, cy - y)
+        if d <= amount:
+            out.append((cx, cy))
+        else:
+            out.append((x + (cx - x) * amount / d, y + (cy - y) * amount / d))
+    return out
+
+
 def _reward_of(when: tuple) -> int | None:
     rewards = [atom[1] for atom in when if atom[0] == 'reward']
     if len(rewards) > 1:
@@ -98,31 +134,81 @@ class SketchBuilder:
         self._marks: list[Mark] = []
         self._points = 0
         self._ambient: Ambient | None = None
+        self._anchors: dict[int, tuple[float, float]] = {}
         # Set on the child builders `ambient` hands out: their marks are one
         # still frame each, named a{f}m{n}.
         self._prefix = ""
         self._still = False
 
-    def _add(self, role: Role, stroke: Stroke, when, key: str | None) -> None:
+    def _append(self, mark_id: str, role: Role, frames: tuple[str, ...], points: int,
+                when: tuple, reward: int | None, paper: str, part: str | None) -> None:
+        if paper not in PAPERS:
+            raise ValueError(f"paper must be one of {PAPERS}, not {paper!r}")
+        self._points += points * len(frames)
+        self._marks.append(
+            Mark(mark_id, role, frames, when, reward, False, None, paper, part or mark_id))
+
+    def _add(self, role: Role, stroke: Stroke, when, key: str | None, *,
+             part: str | None = None, paper: str = 'auto', still: bool = False) -> None:
         when = conditions.validate(when)
         reward = _reward_of(when)
         mark_id = f"{self._prefix}m{len(self._marks)}"
         key = mark_id if key is None else key
-        if role == 'line' and not self._still:
+        if role == 'line':
+            # One bow for every boil frame: the hand is chosen before the frames.
+            stroke = hand(stroke, self._pen.rng.fork(f"{key}|hand"))
+        if role == 'line' and not self._still and not still:
             frames = self._pen.frames(stroke, key, LINE_FRAMES)
         else:
             frames = (self._pen.still(stroke, key),)
-        self._points += len(stroke.points) * len(frames)
-        self._marks.append(Mark(mark_id, role, frames, when, reward, False))
+        self._append(mark_id, role, frames, len(stroke.points), when, reward, paper, part)
 
-    def line(self, stroke: Stroke, *, when=(), key: str | None = None) -> None:
-        self._add('line', stroke, when, key)
+    def line(self, stroke: Stroke, *, when=(), key: str | None = None,
+             part: str | None = None) -> None:
+        self._add('line', stroke, when, key, part=part)
 
-    def wash(self, stroke: Stroke, *, when=(), key: str | None = None) -> None:
-        self._add('wash', stroke, when, key)
+    def wash(self, stroke: Stroke, *, when=(), key: str | None = None,
+             part: str | None = None) -> None:
+        self._add('wash', stroke, when, key, part=part)
 
-    def accent(self, stroke: Stroke, *, when=(), key: str | None = None) -> None:
-        self._add('accent', stroke, when, key)
+    def glow(self, stroke: Stroke, *, when=(), key: str | None = None,
+             part: str | None = None) -> None:
+        self._add('glow', stroke, when, key, part=part)
+
+    def accent(self, stroke: Stroke, *, when=(), key: str | None = None,
+               part: str | None = None, paper: str = 'auto') -> None:
+        self._add('accent', stroke, when, key, part=part, paper=paper)
+
+    def filled(self, stroke: Stroke, *, when=(), key: str | None = None,
+               part: str | None = None, paper: str = 'auto', boil: bool = False) -> None:
+        """A coral fill and its ink outline, drawn from the same jittered
+        points so the ink sits on the edge of the fill. The fill is drawn in
+        by half a unit so it never shows outside the line."""
+        when = conditions.validate(when)
+        reward = _reward_of(when)
+        accent_id = f"{self._prefix}m{len(self._marks)}"
+        line_id = f"{self._prefix}m{len(self._marks) + 1}"
+        k = key if key is not None else accent_id
+        stroke = hand(stroke, self._pen.rng.fork(f"{k}|hand"))
+        pts = self._pen.jittered(stroke, f"{k}|f0")
+        closed, smooth, corners = stroke.closed, stroke.smooth, stroke.corners
+        fill = to_d(_inset(pts, 0.5), closed, smooth, corners)
+        outline = [to_d(pts, closed, smooth, corners)]
+        if boil and not self._still:
+            for f in (1, 2):
+                outline.append(
+                    to_d(self._pen.jittered(stroke, f"{k}|f{f}"), closed, smooth, corners))
+        part = part or accent_id
+        self._append(accent_id, 'accent', (fill,), len(stroke.points), when, reward,
+                     paper, part)
+        self._append(line_id, 'line', tuple(outline), len(stroke.points), when, reward,
+                     'auto', part)
+
+    def anchor(self, reward: int, x: float, y: float) -> None:
+        """Where reward `reward`'s marks grow from, instead of their centroid."""
+        if not _is_index(reward) or not 0 <= reward < MAX_REWARDS:
+            raise ValueError(f"reward index must be an int in 0..{MAX_REWARDS - 1}")
+        self._anchors[reward] = (float(x), float(y))
 
     def ambient(self, seconds: float, when,
                 draw: Callable[[int, SketchBuilder], None]) -> None:
@@ -142,21 +228,42 @@ class SketchBuilder:
             frames.append(tuple(child._marks))
         self._ambient = Ambient(seconds, when, tuple(frames))
 
+    def _origins(self) -> dict[int, tuple[float, float]]:
+        """Where each reward grows from: its anchor if the subject set one,
+        else the centroid of the on-curve points of its marks."""
+        pooled: dict[int, list[tuple[float, float]]] = {}
+        for m in self._marks:
+            if m.reward is not None and m.reward not in self._anchors:
+                pooled.setdefault(m.reward, []).extend(endpoints(m.frames[0]))
+        out = {r: (sum(x for x, _ in pts) / len(pts), sum(y for _, y in pts) / len(pts))
+               for r, pts in pooled.items() if pts}
+        out.update(self._anchors)
+        return out
+
     def build(self, state: DayState) -> Sketch:
         def settle(m: Mark) -> Mark:
             when = conditions.validate(m.when)
             return dataclasses.replace(m, when=when, on=conditions.evaluate(when, state))
 
         # Paint order is by role, whatever order the subject drew in: washes
-        # under everything, coral fills over them, ink on top. A fill never
-        # covers a line, which is what keeps ink on paper reading as ink.
-        order = {'wash': 0, 'accent': 1, 'line': 2}
-        marks = tuple(settle(m) for m in sorted(self._marks, key=lambda m: order[m.role]))
+        # under everything, glows over them, coral fills over those, ink on
+        # top. A fill never covers a line, which is what keeps ink on paper
+        # reading as ink.
+        order = {'wash': 0, 'glow': 1, 'accent': 2, 'line': 3}
+        origins = self._origins()
+        marks = tuple(
+            settle(dataclasses.replace(m, origin=origins.get(m.reward)))
+            if m.reward is not None else settle(m)
+            for m in sorted(self._marks, key=lambda m: order[m.role]))
         ambient = None
         total = len(marks)
         if self._ambient is not None:
             a = self._ambient
-            frames = tuple(tuple(settle(m) for m in frame) for frame in a.frames)
+            # A loop's marks are on only while the loop is: its own condition
+            # and theirs.
+            looping = conditions.evaluate(a.when, state)
+            frames = tuple(tuple(dataclasses.replace(settle(m), on=looping and settle(m).on)
+                                 for m in frame) for frame in a.frames)
             total += sum(len(frame) for frame in frames)
             ambient = Ambient(a.seconds, conditions.validate(a.when), frames)
         if total > MAX_MARKS:

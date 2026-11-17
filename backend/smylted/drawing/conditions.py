@@ -11,7 +11,9 @@ from .state import MAX_REWARDS, OVERDUE_LEVELS, DayState
 # The number of arguments each atom takes.
 _ARITY = {
     'reward': 1,
+    'unlit': 1,
     'focus': 0,
+    'idle': 0,
     'allDone': 0,
     'notAllDone': 0,
     'nothingPlanned': 0,
@@ -40,7 +42,7 @@ def _check_atom(atom) -> tuple:
     if len(args) != _ARITY[name]:
         raise ValueError(
             f"condition {name!r} takes {_ARITY[name]} argument(s), not {len(args)}")
-    if name == 'reward':
+    if name in ('reward', 'unlit'):
         (i,) = args
         if not _is_int(i) or not 0 <= i < MAX_REWARDS:
             raise ValueError(f"reward index must be an int in 0..{MAX_REWARDS - 1}")
@@ -70,8 +72,12 @@ def _atom_on(atom: tuple, state: DayState) -> bool:
     name = atom[0]
     if name == 'reward':
         return state.rewards > atom[1]
+    if name == 'unlit':
+        return state.rewards <= atom[1]
     if name == 'focus':
         return state.focus_active
+    if name == 'idle':
+        return not state.focus_active
     if name == 'allDone':
         return state.all_done
     if name == 'notAllDone':

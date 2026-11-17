@@ -31,10 +31,21 @@ from smylted.drawing import (
     subjects,
     subject_for,
 )
-from smylted.drawing.pen import WOBBLE, Pen
+from smylted.drawing import checks
+from smylted.drawing.checks import (
+    MIN_REWARD_ACROSS,
+    MIN_REWARD_AREA,
+    bounds_errors,
+    crossings,
+    has_standing_light,
+    night_overlap,
+    reward_sizes,
+)
+from smylted.drawing.pen import WOBBLE, Pen, hand
+from smylted.drawing.scene import Mark, Sketch
 from smylted.drawing.rng import cyrb128
 from smylted.drawing.schedule import ANCHOR
-from smylted.drawing.subjects import assert_declarative
+from smylted.drawing.subjects import assert_declarative, joins_of
 from tests.conftest import api_settings
 
 DAY = date(2026, 11, 16)
@@ -134,6 +145,12 @@ def test_cyrb128_regression_pin():
     ((("hour", 20, 6),), DayState(hour=12), False),
     ((("hour", 20, 6),), DayState(hour=6), False),
     ((("hour", 20, 6),), DayState(hour=20), True),
+    ((("unlit", 0),), DayState(rewards=0), True),
+    ((("unlit", 0),), DayState(rewards=1), False),
+    ((("unlit", 5),), DayState(rewards=3), True),
+    ((("unlit", 5),), DayState(rewards=6), False),
+    ((("idle",),), DayState(), True),
+    ((("idle",),), DayState(focus_active=True), False),
     ((("focus",), ("reward", 2)), DayState(focus_active=True, rewards=3), True),
     ((("focus",), ("reward", 2)), DayState(focus_active=True, rewards=2), False),
     ((("focus",), ("reward", 2)), DayState(rewards=3), False),
@@ -160,6 +177,11 @@ def test_validate_normalises_lists_to_tuples():
     [("hour", 1)],
     [("reward", 1, 2)],
     [("reward", 12)],                      # out of range
+    [("unlit", 12)],
+    [("unlit", -1)],
+    [("unlit", 1.0)],
+    [("unlit",)],
+    [("idle", 1)],
     [("reward", -1)],
     [("reward", 1.0)],
     [("reward", True)],
@@ -243,6 +265,75 @@ def test_constructors_are_pure_geometry():
     assert not pen.curve((0, 0), (1, 1)).closed
 
 
+def _cubics(d: str) -> list[list[float]]:
+    """The numbers of each C segment of a path: x1 y1 x2 y2 x y."""
+    return [[float(t) for t in seg.split()] for seg in d.replace(" Z", "").split(" C ")[1:]]
+
+
+def test_to_d_corners_turn_instead_of_passing_through():
+    pts = [(0, 0), (10, -10), (20, 0), (20, 10), (0, 10)]
+    cornered = _cubics(pen.to_d(pts, True, True, corners=(3, 4)))
+    # The segment from (20, 10) to (0, 10) leaves and arrives along the edge.
+    assert cornered[3][1] == 10 and cornered[3][3] == 10
+    plain = _cubics(pen.to_d(pts, True, True))
+    assert max(plain[3][1], plain[3][3]) > 10
+    # No corners given is the same as before.
+    assert pen.to_d(pts, True, True, corners=()) == pen.to_d(pts, True, True)
+
+
+def test_curve_and_loop_carry_corners():
+    assert pen.curve((0, 0), (1, 1), (2, 0), corners=[1]).corners == (1,)
+    assert pen.loop((0, 0), (1, 1), (2, 0), corners=(0, 2)).corners == (0, 2)
+    assert pen.line((0, 0), (1, 1)).corners == ()
+    assert pen.circle(0, 0, 1).corners == ()
+
+
+def test_hand_bows_a_long_line_to_one_side():
+    stroke = pen.line((0, 100), (160, 100))
+    out = hand(stroke, Rng("hand"))
+    assert out.smooth and not out.closed
+    assert out.corners == (0, len(out.points) - 1)
+    assert out.points[0] == (0, 100) and out.points[-1] == (160, 100)
+    offsets = [y - 100 for _, y in out.points[1:-1]]
+    assert offsets
+    assert all(o > 0 for o in offsets) or all(o < 0 for o in offsets)
+    assert all(0 < abs(o) <= 2.3 for o in offsets)
+    assert hand(stroke, Rng("hand")) == out
+
+
+def test_hand_leaves_short_and_smooth_strokes_alone():
+    short = pen.line((0, 0), (20, 0))
+    assert hand(short, Rng("hand")) is short
+    curved = pen.curve((0, 0), (80, 20), (160, 0))
+    assert hand(curved, Rng("hand")) is curved
+
+
+def test_hand_keeps_the_corners_of_a_polygon():
+    square = pen.poly((0, 0), (40, 0), (40, 40), (0, 40))
+    out = hand(square, Rng("hand"))
+    assert out.closed and out.smooth
+    assert len(out.points) == 8
+    assert out.corners == (0, 2, 4, 6)
+    assert [out.points[i] for i in out.corners] == list(square.points)
+
+
+def test_small_shapes_move_as_one_and_keep_their_shape():
+    stroke = pen.circle(0, 0, 2.2, n=7)
+    p = Pen(Rng("small"))
+    for k in range(20):
+        moved = p.jittered(stroke, f"k{k}")
+        for i in range(7):
+            for j in range(i + 1, 7):
+                was = (stroke.points[j][0] - stroke.points[i][0],
+                       stroke.points[j][1] - stroke.points[i][1])
+                now = (moved[j][0] - moved[i][0], moved[j][1] - moved[i][1])
+                assert math.hypot(now[0] - was[0], now[1] - was[1]) <= 2 * 0.2 * WOBBLE + 1e-9
+
+
+def test_a_stroke_with_no_points_jitters_to_nothing():
+    assert Pen(Rng("none")).jittered(pen.Stroke(()), "k") == []
+
+
 # -- scene --------------------------------------------------------------------
 
 def _builder(path: str = "scene") -> SketchBuilder:
@@ -254,12 +345,18 @@ def test_build_sets_on_per_state():
     b.line(pen.line((0, 0), (10, 10)), when=(("focus",),))
     b.wash(pen.circle(5, 5, 3))
     off, on = b.build(DayState()), b.build(DayState(focus_active=True))
-    # Marks come back in paint order (wash, accent, line), ids as drawn.
+    # Marks come back in paint order (wash, glow, accent, line), ids as drawn.
     assert [m.id for m in on.marks] == ["m1", "m0"]
     assert {m.id: m.on for m in off.marks} == {"m0": False, "m1": True}
     assert {m.id: m.on for m in on.marks} == {"m0": True, "m1": True}
     by_id = {m.id: m for m in on.marks}
     assert len(by_id["m0"].frames) == 3 and len(by_id["m1"].frames) == 1
+
+
+def test_unlit_is_not_a_reward_atom():
+    b = _builder()
+    b.accent(pen.circle(5, 5, 3), when=[["unlit", 4]])
+    assert b.build(DayState()).marks[0].reward is None
 
 
 def test_a_reward_atom_sets_reward():
@@ -323,6 +420,223 @@ def test_to_json_round_trips():
     assert data["viewBox"] == [0, 0, 160, 200]
     assert next(m for m in data["marks"] if m["id"] == "m0")["when"] == [["hour", 20, 6]]
     assert set(data["ambient"]) == {"seconds", "when", "frames"}
+
+
+def _middle_y(d: str) -> float:
+    pts = checks.endpoints(d)
+    return pts[len(pts) // 2][1]
+
+
+def test_a_ruled_line_is_bowed_the_same_way_in_every_frame():
+    b = _builder()
+    b.line(pen.line((0, 50), (160, 50)))
+    mark = b.build(DayState()).marks[0]
+    assert len(mark.frames) == 3
+    offsets = [_middle_y(d) - 50 for d in mark.frames]
+    assert all(o > 0 for o in offsets) or all(o < 0 for o in offsets)
+
+
+def test_glow_is_one_frame_between_wash_and_accent():
+    b = _builder()
+    b.line(pen.line((0, 0), (10, 10)))
+    b.accent(pen.circle(5, 5, 3))
+    b.glow(pen.circle(5, 5, 9), when=(("hour", 20, 6),))
+    b.wash(pen.circle(5, 5, 12))
+    sk = b.build(DayState())
+    assert [m.role for m in sk.marks] == ['wash', 'glow', 'accent', 'line']
+    glow = sk.marks[1]
+    assert len(glow.frames) == 1 and glow.when == (("hour", 20, 6),)
+
+
+@pytest.mark.parametrize("stroke", [
+    pen.circle(40, 40, 12, n=12),
+    pen.poly((10, 10), (60, 12), (58, 70), (12, 66)),
+])
+def test_filled_is_an_accent_then_its_outline(stroke):
+    b = _builder()
+    b.filled(stroke, when=(("reward", 2),), part="fruit")
+    b.filled(stroke, when=(("reward", 3),), boil=True)
+    sk = b.build(DayState(rewards=4))
+    by_id = {m.id: m for m in sk.marks}
+    accent, outline = by_id["m0"], by_id["m1"]
+    assert (accent.role, outline.role) == ("accent", "line")
+    assert accent.when == outline.when == (("reward", 2),)
+    assert accent.reward == outline.reward == 2
+    assert accent.part == outline.part == "fruit"
+    assert len(accent.frames) == 1 and len(outline.frames) == 1
+    boiled = by_id["m3"]
+    assert len(boiled.frames) == 3 and len(by_id["m2"].frames) == 1
+    assert boiled.part == by_id["m2"].part == "m2"
+    near = list(zip(checks.endpoints(accent.frames[0]), checks.endpoints(outline.frames[0])))
+    assert len(near) > 3
+    for (ax, ay), (ox, oy) in near:
+        # The inset is 0.5; each coordinate is then rounded to a tenth.
+        assert math.hypot(ax - ox, ay - oy) <= 0.65
+
+
+def test_filled_inside_an_ambient_child_is_one_frame_each():
+    b = _builder()
+    b.ambient(1, (), lambda f, fb: fb.filled(pen.circle(40, 40, 12), boil=True))
+    frame = b.build(DayState()).ambient.frames[0]
+    assert [m.role for m in frame] == ["accent", "line"]
+    assert [len(m.frames) for m in frame] == [1, 1]
+
+
+def test_paper_must_be_a_known_one():
+    with pytest.raises(ValueError):
+        _builder().accent(pen.circle(5, 5, 3), paper="shiny")
+    with pytest.raises(ValueError):
+        _builder().filled(pen.circle(5, 5, 3), paper="shiny")
+    _builder().accent(pen.circle(5, 5, 3), paper="glint")
+
+
+def test_rewards_carry_an_origin_and_nothing_else_does():
+    b = _builder()
+    b.line(pen.line((0, 0), (10, 10)))
+    b.accent(pen.circle(30, 40, 5), when=(("reward", 0),), paper="glint", part="bud")
+    b.accent(pen.circle(80, 90, 5), when=(("reward", 1),))
+    b.anchor(0, 12.5, 40.0)
+    sk = b.build(DayState(rewards=2))
+    by_reward = {m.reward: m for m in sk.marks}
+    data = sk.to_json()["marks"]
+    anchored = next(m for m in data if m["reward"] == 0)
+    assert anchored["origin"] == [12.5, 40.0]
+    centred = by_reward[1]
+    ends = checks.endpoints(centred.frames[0])
+    cx = sum(x for x, _ in ends) / len(ends)
+    cy = sum(y for _, y in ends) / len(ends)
+    assert centred.origin == pytest.approx((cx, cy))
+    assert next(m for m in data if m["reward"] == 1)["origin"] == [round(cx, 1), round(cy, 1)]
+    plain = next(m for m in data if m["reward"] is None)
+    assert "origin" not in plain
+    assert by_reward[0].paper == "glint" and by_reward[0].part == "bud"
+    for m in data:
+        assert not {"paper", "part"} & set(m)
+
+
+def test_an_ambient_mark_gets_no_origin():
+    b = _builder()
+    b.ambient(1, (), lambda f, fb: fb.accent(pen.circle(5, 5, 3), when=(("reward", 0),)))
+    sk = b.build(DayState())
+    assert all(m.origin is None for frame in sk.ambient.frames for m in frame)
+
+
+@pytest.mark.parametrize("reward", [12, -1, True, 1.5])
+def test_anchor_rejects_a_bad_reward(reward):
+    with pytest.raises(ValueError):
+        _builder().anchor(reward, 1, 2)
+
+
+# -- the geometry checks ------------------------------------------------------
+
+_BOX = "M 10 10 L 30 10 L 30 30 L 10 30 Z"
+
+
+def _mark(mid, d, *, role="line", part="", on=True, reward=None, when=()):
+    return Mark(mid, role, (d,), when, reward, on, None, "auto", part or mid)
+
+
+def _sketch(*marks, ambient=None):
+    return Sketch("t", "light", (0, 0, 160, 200), tuple(marks), ambient)
+
+
+def test_endpoints_skip_control_points():
+    d = "M 0 0 L 10 0 C 10 5 15 10 20 10 Z"
+    assert checks.endpoints(d) == [(0, 0), (10, 0), (20, 10)]
+    assert checks.endpoints("") == []
+
+
+def test_polyline_flattens_curves_and_closes():
+    d = "M 0 0 L 10 0 C 10 5 15 10 20 10 Z"
+    (path,) = checks.polyline(d, steps=2)
+    assert path == [(0, 0), (10, 0), pytest.approx((13.125, 6.875)), (20, 10), (0, 0)]
+    assert len(checks.polyline(d)[0]) == 1 + 1 + 12 + 1
+    assert len(checks.polyline("M 0 0 L 1 1 M 5 5 L 6 6")) == 2
+
+
+def test_bounds_errors_allow_a_margin_and_name_the_mark():
+    inside = _mark("m0", "M -1 50 L 20 50", part="trunk")
+    outside = _mark("m1", "M -3 50 L 20 50", part="roots")
+    assert bounds_errors(_sketch(inside)) == []
+    assert bounds_errors(_sketch(inside, outside)) == [
+        "m1 (roots) leaves the frame at (-3.0, 50.0)"]
+    assert bounds_errors(_sketch(outside), margin=4) == []
+
+
+def test_bounds_errors_look_at_the_ambient_too():
+    frame = (_mark("a0m0", "M 0 0 L 170 0"),)
+    from smylted.drawing.scene import Ambient
+    sk = _sketch(ambient=Ambient(1.0, (), (frame,)))
+    assert len(bounds_errors(sk)) == 1
+
+
+def test_reward_sizes_of_a_square():
+    one = _mark("m0", _BOX, role="accent", reward=3)
+    assert reward_sizes(_sketch(one)) == {3: (20.0, 400.0)}
+    two = _mark("m1", "M 50 50 L 55 50 L 55 55 L 50 55 Z", role="accent", reward=3)
+    other = _mark("m2", _BOX, role="line", reward=4)
+    sizes = reward_sizes(_sketch(one, two, other))
+    assert sizes == {3: (45.0, 425.0)}
+    assert MIN_REWARD_ACROSS == 10.0 and MIN_REWARD_AREA == 55.0
+
+
+def _cross_marks(a_part="a", b_part="b", on=True):
+    return _sketch(_mark("m0", "M 0 50 L 100 50", part=a_part),
+                   _mark("m1", "M 50 0 L 50 100", part=b_part, on=on))
+
+
+def test_crossings_report_parts_that_cross():
+    found = crossings(_cross_marks())
+    assert len(found) == 1
+    a, b, (x, y) = found[0]
+    assert (a, b) == ("a", "b") and (x, y) == pytest.approx((50, 50), abs=1)
+
+
+def test_crossings_ignore_joined_parts_and_marks_that_are_off():
+    assert crossings(_cross_marks(), frozenset({frozenset({"a", "b"})})) == []
+    assert crossings(_cross_marks(on=False)) == []
+    assert crossings(_cross_marks("a", "a")) == []
+    # The same base with different parts needs a join of one name.
+    sk = _cross_marks("fruit:1", "fruit:2")
+    assert len(crossings(sk)) == 1
+    assert crossings(sk, frozenset({frozenset({"fruit"})})) == []
+    # Only line marks count.
+    assert crossings(_sketch(_mark("m0", "M 0 50 L 100 50", role="wash"),
+                             _mark("m1", "M 50 0 L 50 100", role="wash"))) == []
+
+
+def test_crossings_see_the_ambient():
+    from smylted.drawing.scene import Ambient
+    frame = (_mark("a0m0", "M 50 0 L 50 100"),)
+    sk = _sketch(_mark("m0", "M 0 50 L 100 50"), ambient=Ambient(1.0, (), (frame,)))
+    assert len(crossings(sk)) == 1
+
+
+def test_crossings_are_fast_over_thousands_of_samples():
+    marks = [_mark(f"m{i}", f"M 0 {i * 5} L 100 {i * 5}", part=f"row{i}") for i in range(20)]
+    sk = _sketch(*marks)             # 20 lines x 200 samples
+    t = time.perf_counter()
+    assert crossings(sk) == []
+    assert time.perf_counter() - t < 1.0
+
+
+def test_night_overlap_counts_marks_in_the_same_place():
+    light = _sketch(_mark("m0", "M 10 10 L 30 30"), _mark("m1", "M 50 50 L 70 90"))
+    dark = _sketch(_mark("m0", "M 10.4 10.4 L 29.6 30.4"),
+                   _mark("m1", "M 0 0 L 5 5"),
+                   _mark("m2", "M 100 100 L 120 120"),
+                   _mark("m3", "M 50 50 L 70 90"))
+    assert night_overlap(light, dark) == 0.5
+    assert night_overlap(light, _sketch()) == 0.0
+    assert night_overlap(light, light) == 1.0
+
+
+def test_a_standing_light_is_a_wash_or_glow_that_is_always_on():
+    assert has_standing_light(_sketch(_mark("m0", _BOX, role="wash")))
+    assert has_standing_light(_sketch(_mark("m0", _BOX, role="glow")))
+    assert not has_standing_light(
+        _sketch(_mark("m0", _BOX, role="wash", when=(("hour", 20, 6),))))
+    assert not has_standing_light(_sketch(_mark("m0", _BOX, role="line")))
 
 
 # -- schedule -----------------------------------------------------------------
@@ -467,7 +781,8 @@ def test_drawing_payload_shape_and_no_salt():
     assert payload["subject"] == "test-sprig" and payload["theme"] == "dark"
     assert len(payload["marks"]) == 30 + 2 + 12
     for m in payload["marks"]:
-        assert set(m) == {"id", "role", "frames", "when", "reward", "on"}
+        keys = {"id", "role", "frames", "when", "reward", "on"}
+        assert set(m) == keys | ({"origin"} if m["reward"] is not None else set())
         assert len(m["frames"]) == (3 if m["role"] == "line" else 1)
     rewards = [m for m in payload["marks"] if m["reward"] is not None]
     assert [m["reward"] for m in rewards] == list(range(12))
@@ -565,6 +880,7 @@ def test_route_takes_only_the_one_day_spelling(api):
 
 import time as _time
 
+
 from smylted.drawing import subjects as _subjects
 from smylted.drawing.rng import Rng as _Rng
 from smylted.drawing.state import DayState as _DayState
@@ -594,14 +910,86 @@ def test_registered_subject_keeps_the_contract(subject):
         assert best[1] < 0.05, f"{subject.id} {theme}: {best[1] * 1000:.1f}ms to draw"
         roles = {m.role for m in sketch.marks}
         assert 'line' in roles and 'accent' in roles, roles
-    light = [m.frames for m in renders['light'].marks]
-    dark = [m.frames for m in renders['dark'].marks]
-    assert light != dark, f"{subject.id}: dark is the light drawing"
+    light, dark = renders['light'], renders['dark']
+    assert night_overlap(light, dark) <= 0.75, f"{subject.id}: dark is the light drawing"
+    assert has_standing_light(dark), f"{subject.id}: the night has no standing light"
 
 
-def test_paint_order_is_wash_then_accent_then_line():
+def test_paint_order_is_wash_glow_accent_line():
     for subject in _subjects.ROSTER:
         for theme in ('light', 'dark'):
             sketch = subject.render(_DayState(), theme, _Rng('order'))
-            order = [{'wash': 0, 'accent': 1, 'line': 2}[m.role] for m in sketch.marks]
+            order = [{'wash': 0, 'glow': 1, 'accent': 2, 'line': 3}[m.role]
+                     for m in sketch.marks]
             assert order == sorted(order), f"{subject.id} {theme}"
+
+
+# ── the geometry rules, over the roster ─────────────────────────────────────
+
+# Every day draws a different picture of a subject, so the rules are checked on
+# a week of days under two salts, not one: a placement that collides one day in
+# twenty is still a collision someone sees.
+_SAMPLES = [(date(2026, 11, 16) + timedelta(days=d), salt)
+            for d in range(7) for salt in ('contract-salt', 'second-salt')]
+
+
+def _roster_params():
+    return [pytest.param(s, id=s.id) for s in _subjects.ROSTER]
+
+
+def _renders(subject, state, theme):
+    for day, salt in _SAMPLES:
+        rng = _Rng.for_day(day, salt, f'subject|{subject.id}')
+        yield f"{day} {salt}", subject.render(state, theme, rng)
+
+
+_FULL_STATES = [
+    _DayState(progress=1, rewards=12, focus_active=True, all_done=True, overdue=3, hour=h)
+    for h in (9, 13, 16, 20, 23)
+]
+_PLANNED_NOTHING = _DayState(nothing_planned=True, hour=10)
+
+
+@pytest.mark.parametrize("subject", _roster_params())
+def test_subject_stays_in_its_frame(subject):
+    for theme in ('light', 'dark'):
+        for state in _FULL_STATES + [_PLANNED_NOTHING]:
+            for where, sketch in _renders(subject, state, theme):
+                errors = bounds_errors(sketch)
+                assert not errors, f"{subject.id} {theme} {where} hour {state.hour}: {errors[:5]}"
+
+
+@pytest.mark.parametrize("subject", _roster_params())
+def test_every_reward_can_be_seen(subject):
+    for theme in ('light', 'dark'):
+        for where, sketch in _renders(subject, _DayState(rewards=12), theme):
+            sizes = reward_sizes(sketch)
+            for i in range(12):
+                across, area = sizes.get(i, (0.0, 0.0))
+                assert across >= MIN_REWARD_ACROSS and area >= MIN_REWARD_AREA, (
+                    f"{subject.id} {theme} {where}: reward {i} is {across:.1f} across, "
+                    f"{area:.1f} square units")
+
+
+@pytest.mark.parametrize("subject", _roster_params())
+def test_no_ink_crosses_by_accident(subject):
+    states = _FULL_STATES + [
+        _DayState(rewards=0, hour=9),
+        _DayState(rewards=4, all_done=True, progress=1, hour=16),
+        _PLANNED_NOTHING,
+    ]
+    for theme in ('light', 'dark'):
+        for state in states:
+            for where, sketch in _renders(subject, state, theme):
+                found = crossings(sketch, joins_of(subject))
+                assert not found, (
+                    f"{subject.id} {theme} {where} {state}: ink crosses at "
+                    + ", ".join(f"{a} x {b}" for a, b, _ in found[:10]))
+
+
+@pytest.mark.parametrize("subject", _roster_params())
+def test_the_night_is_its_own_picture(subject):
+    for (where, light), (_, dark) in zip(_renders(subject, _DayState(rewards=12), 'light'),
+                                         _renders(subject, _DayState(rewards=12), 'dark')):
+        assert night_overlap(light, dark) <= 0.75, f"{subject.id} {where}"
+        assert has_standing_light(dark), f"{subject.id} {where}"
