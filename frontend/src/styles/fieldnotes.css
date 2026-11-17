@@ -133,7 +133,7 @@
   align-self: flex-start; height: calc(15px * var(--fs-scale) * 1.5); border-radius: var(--r-pill);
 }
 
-/* The narrowest phones (320px): five labels, the gear and the add fit a step
+/* The narrowest phones (320px): four labels, the gear and the add fit a step
    smaller and tighter, as the Sep 2026 bar does. */
 @media (max-width: 359px) {
   [data-surface="app"] .tabbar { gap: 0; padding-inline: 4px; }
@@ -301,3 +301,40 @@
 [data-surface="app"] .fn-date .today-nav { align-self: flex-start; }
 [data-surface="app"] .fn-list-head { flex-wrap: wrap; row-gap: 8px; }
 [data-surface="app"] .fn-list-head .today-count { border: 0; padding: 0; margin: 0; white-space: nowrap; }
+
+/* Calm rows: a row's unset estimate and its remove button stay out of sight
+   until the row is in use, so the list reads as titles. Hidden with opacity and
+   pointer-events, not visibility: they stay in the accessibility tree and
+   focusable, so tabbing into the row reveals them (:focus-within), and an
+   invisible ✕ can never be tapped by accident. A row's [data-tools] is set by
+   tapping its title, which is how a phone, with no hover, reaches them. A set
+   estimate and the due date are information rather than tools and stay as they
+   are. Only the page's own list (.today-pane > .scroll): the planning ritual's
+   estimate step and the shutdown review list the same rows in a dialog in order
+   to edit them, and there the tools are the point. */
+[data-surface="app"] .today-pane > .scroll .today-row .today-est.unset,
+[data-surface="app"] .today-pane > .scroll .today-row .today-drop {
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+[data-surface="app"] .today-pane > .scroll .today-row:focus-within .today-est.unset,
+[data-surface="app"] .today-pane > .scroll .today-row:focus-within .today-drop,
+[data-surface="app"] .today-pane > .scroll .today-row[data-tools] .today-est.unset,
+[data-surface="app"] .today-pane > .scroll .today-row[data-tools] .today-drop {
+  opacity: 1; pointer-events: auto;
+}
+@media (hover: hover) {
+  [data-surface="app"] .today-pane > .scroll .today-row:hover .today-est.unset,
+  [data-surface="app"] .today-pane > .scroll .today-row:hover .today-drop {
+    opacity: 1; pointer-events: auto;
+  }
+}
+
+/* Plan my day as a link (the band keeps no sentence and no ✕ under Field
+   notes). The band's line is set at a caption size for its figures, and a link
+   at that size is a 13px-tall target; the control the day is planned from takes
+   the app's small text and a full 44px tap box instead. */
+[data-surface="app"] .today-load .today-load-plan.today-linkish {
+  font-size: calc(var(--fs-app-small) * var(--fs-scale));
+  min-height: 44px; display: inline-flex; align-items: center;
+}

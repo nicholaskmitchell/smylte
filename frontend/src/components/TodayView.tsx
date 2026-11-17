@@ -2310,6 +2310,20 @@ export function TodayView({
    *
    *  Not persisted and not keyed by day: a menu is a gesture, not a setting. */
   const [menu, setMenu] = useState(false)
+  // The row whose tools are showing under Field notes, or none. On a phone
+  // there is no hover to reveal them, so tapping a row's title sets this.
+  const [toolsRow, setToolsRow] = useState<string | null>(null)
+  // A press anywhere outside the open row puts its tools away again, so they
+  // do not stay showing on a row nobody is looking at.
+  useEffect(() => {
+    if (toolsRow === null) return
+    const onDown = (e: PointerEvent) => {
+      if ((e.target as Element | null)?.closest?.('.today-row[data-tools]')) return
+      setToolsRow(null)
+    }
+    document.addEventListener('pointerdown', onDown)
+    return () => document.removeEventListener('pointerdown', onDown)
+  }, [toolsRow])
   /** The two halves of the outside-click test, exactly as App.tsx holds them
    *  for the settings menu: a click inside EITHER the popover or the control
    *  that opened it must not close it, and a `mousedown` anywhere else must. */
@@ -2471,7 +2485,13 @@ export function TodayView({
         if (dragId) void moveRow(dragId, target)
         setDragId(null); setOverId(null)
       }}
-      onDragEndRow={() => { setDragId(null); setOverId(null) }} />
+      onDragEndRow={() => { setDragId(null); setOverId(null) }}
+      // Field notes only: a preset's rows keep their controls as they are and
+      // are handed neither prop.
+      tools={fieldNotes ? toolsRow === e.entry_id : undefined}
+      onTools={fieldNotes
+        ? () => setToolsRow((r) => (r === e.entry_id ? null : e.entry_id))
+        : undefined} />
   )
   const renderRow = (e: DayEntry) => rowFor(e)
   // The look-back's rows carry the one column a live list does not: what a
@@ -2693,7 +2713,7 @@ export function TodayView({
         Absent on a finished day rather than disabled, like every other
         control here: a past day IS the record, so a button offering to show
         one would be offering what is already on the screen. */}
-    {isToday && (
+    {!fieldNotes && isToday && (
       <button type="button" className="btn ghost today-review"
         aria-pressed={mode === 'review'}
         onClick={() => setMode((m) => (m === 'plan' ? 'review' : 'plan'))}>
@@ -2723,7 +2743,8 @@ export function TodayView({
 
         The split is by FREQUENCY, not by importance. Review and Start
         working are what you reach for on an ordinary day and they stay in
-        the header. Shutting the day down happens once, in the evening, and
+        the header under the presets. Field notes keeps one control there:
+        Start working lives in the focus card and Review joins this menu. Shutting the day down happens once, in the evening, and
         editing a habit RULE happens rarely — both are worth a tap.
 
         One `isToday` gate on the whole group rather than one per item,
@@ -2759,6 +2780,16 @@ export function TodayView({
           // second dialog on this screen carrying the word "Habits" would
           // collide with the habits sheet, which is already one.
           <div className="today-menu" ref={menuRef}>
+            {/* Field notes keeps one control in the header, so Review and Plan
+                moves in here rather than sitting beside the title. */}
+            {fieldNotes && isToday && (
+              <button type="button" className="today-menu-item today-review-item"
+                aria-pressed={mode === 'review'}
+                onClick={() => { setMenu(false); setMode((m) => (m === 'plan' ? 'review' : 'plan')) }}>
+                <span className="today-menu-glyph" aria-hidden="true" />
+                {mode === 'review' ? tr('today.modePlan') : tr('today.modeReview')}
+              </button>
+            )}
             {/* THE WAY IN TO THE SHUTDOWN, and deliberately not a band. The
                 planning nudge is a band because the morning is when a plan
                 is worth prompting for; a band offering to close the day
@@ -3124,7 +3155,12 @@ export function TodayView({
               // NO CAPACITY, so no figure and no bar — a sentence instead, in
               // the band's own voice and size. This is the one thing the strip
               // can honestly say about a day nobody has sized.
-              <span className="today-load-say">{tr('today.bandNoCapacity')}</span>
+              //
+              // Field notes leaves the sentence out: the Plan my day control
+              // beside it already says the day is unplanned.
+              !fieldNotes && (
+                <span className="today-load-say">{tr('today.bandNoCapacity')}</span>
+              )
             )}
             {nudging && (
               // The band's `today.bandCapacity` string is gone from both
@@ -3133,12 +3169,17 @@ export function TodayView({
               // the same fact twice on one line. When there IS no figure,
               // `today.bandNoCapacity` above carries it instead.
               <>
-                <button type="button" className="btn ghost today-load-plan"
+                <button type="button"
+                  className={fieldNotes ? 'today-linkish today-load-plan' : 'btn ghost today-load-plan'}
                   onClick={() => setRitual(true)}>
                   {tr('today.planMyDay')}
                 </button>
-                <button type="button" className="icon-btn today-load-x"
-                  aria-label={tr('today.notNow')} onClick={() => setBandOff(day)}>✕</button>
+                {/* Field notes has no dismiss: Plan my day stays, as a quiet link,
+                    until the day is planned. */}
+                {!fieldNotes && (
+                  <button type="button" className="icon-btn today-load-x"
+                    aria-label={tr('today.notNow')} onClick={() => setBandOff(day)}>✕</button>
+                )}
               </>
             )}
           </div>
@@ -3243,8 +3284,9 @@ export function TodayView({
                     else about the two lists is identical: same row, same
                     checkbox, same left edge, by design.
 
-                    Named unconditionally rather than only when habits sit above
-                    it. Two reasons. The sequence on this tab is now Habits →
+                    Under the presets it is named unconditionally rather than
+                    only when habits sit above it (Field notes' rule is below).
+                    Two reasons. The sequence on this tab is now Habits →
                     The day → On the calendar, three blocks each saying what it
                     is, and the middle one appearing only sometimes would make
                     the tab's shape depend on whether a habit happened to be due
@@ -3257,7 +3299,13 @@ export function TodayView({
                     habits group and the hint below it): those guard an EMPTY
                     group, which advertises a feature as a permanent blank. This
                     one is gated on the rows it names. */}
-                <div className="label section-label">{tr('today.theDay')}</div>
+                {/* Field notes names the day's rows only when the Habits section
+                    sits above them: with nothing above, a label over the one
+                    list on the screen says nothing, and the list keeps its
+                    name for assistive tech below. */}
+                {(!fieldNotes || habitRows.length > 0) && (
+                  <div className="label section-label">{tr('today.theDay')}</div>
+                )}
                 {/* Named for assistive tech for the same reason the habits list
                     is: the heading above is a sibling `div`, and nothing tells
                     a screen reader it belongs to this list. */}
@@ -3279,7 +3327,9 @@ export function TodayView({
                 state on every account that does not want one. A sentence that
                 explains what the feature IS costs a line and teaches something;
                 a blank section costs a line and teaches nothing. */}
-            {habitRows.length === 0 && entries !== null && entries.length > 0 && (
+            {/* Not under Field notes, which keeps the screen to the day: Habits
+                stays reachable from the ⋯ menu. */}
+            {!fieldNotes && habitRows.length === 0 && entries !== null && entries.length > 0 && (
               <p className="today-quiet today-habits-hint">
                 {tr('today.habitsHint')}
                 <button type="button" className="today-linkish"
@@ -3830,7 +3880,7 @@ function TodayRow({
   entry, task, tasksLoaded, color, count, readOnly, onToggleTask, onToggleEntry, onDrop,
   onEstimate, worked = false,
   draggable = false, dragging = false, dragOver = false, dragBelow = false,
-  onDragRow, onDragOverRow, onDropRow, onDragEndRow,
+  onDragRow, onDragOverRow, onDropRow, onDragEndRow, tools, onTools,
 }: {
   entry: DayEntry
   /** The task a task entry points at, once it is in hand. */
@@ -3872,6 +3922,11 @@ function TodayRow({
   onDragOverRow?: (entryId: string) => void
   onDropRow?: (entryId: string) => void
   onDragEndRow?: () => void
+  /** This row's tools are showing. Only ever set under Field notes, which keeps
+   *  them out of sight until asked for. */
+  tools?: boolean
+  /** Show or put away this row's tools. Absent under a preset. */
+  onTools?: () => void
 }) {
   const { locale, t: tr } = useI18n()
   const tf = useTimeFormat()
@@ -3963,7 +4018,7 @@ function TodayRow({
       )
 
   return (
-    <li className={cls}
+    <li className={cls} data-tools={tools ? '' : undefined}
       // Native HTML5 drag and drop, the same shape the sidebar, the tasks pane,
       // the dashboard and the calendar all use. Deliberately not a library and
       // not a bespoke pointer handler: this repo has no animation or gesture
@@ -4082,7 +4137,11 @@ function TodayRow({
             style={isTask && color ? { background: color } : undefined} />
         ) : null}
       </span>
-      <span className="today-title" dir={textDir(title)}>{title}<StrikeInk on={done} seed={entry.entry_id} /></span>
+      {/* Tapping the title shows that row's tools: on a phone there is no hover
+          to reveal them. Keyboard users reach them by tabbing, which reveals
+          them through :focus-within. */}
+      <span className="today-title" dir={textDir(title)}
+        onClick={!readOnly && onTools ? onTools : undefined}>{title}<StrikeInk on={done} seed={entry.entry_id} /></span>
       {/* Omitted ENTIRELY below two occurrences — see MIN_WEEK_COUNT. Rendered
           in --fg-faint whatever the ratio says, and never in --warn: "1 of 5
           this week" is a record, and colouring it as a failure turns the one
