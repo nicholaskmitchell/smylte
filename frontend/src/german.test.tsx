@@ -79,9 +79,12 @@ describe('the app in German', () => {
     // for by role rather than by text.
     await waitFor(() => expect(screen.getByRole('button', { name: 'Aufgaben' }))
       .toBeInTheDocument())
-    for (const name of ['Heute', 'Start', 'Aufgaben', 'Kalender', 'Buchungen']) {
+    for (const name of ['Heute', 'Start', 'Aufgaben', 'Kalender']) {
       expect(screen.getAllByRole('button', { name }).length).toBeGreaterThan(0)
     }
+    // Bookings are a segment inside Calendar now, not a tab of their own.
+    await userEvent.click(screen.getAllByRole('button', { name: 'Kalender' })[0])
+    expect(await screen.findByRole('tab', { name: 'Buchungen' })).toBeInTheDocument()
   })
 
   it('prints no catalogue key anywhere on the shell', async () => {
@@ -118,7 +121,13 @@ describe('the app in German', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Aufgaben' }))
       .toBeInTheDocument())
     for (const tab of ['Start', 'Aufgaben', 'Kalender', 'Buchungen', 'Heute']) {
-      await userEvent.click(screen.getAllByRole('button', { name: tab })[0])
+      // Bookings are a segment inside Calendar, so they are reached through it.
+      if (tab === 'Buchungen') {
+        await userEvent.click(screen.getAllByRole('button', { name: 'Kalender' })[0])
+        await userEvent.click(await screen.findByRole('tab', { name: 'Buchungen' }))
+      } else {
+        await userEvent.click(screen.getAllByRole('button', { name: tab })[0])
+      }
       const keys = visibleStrings(container).filter((s) => KEYISH.test(s))
       expect(keys, `unresolved keys on ${tab}: ${keys.join(', ')}`).toEqual([])
     }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type KeyboardEvent, useRef } from 'react'
+import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode, useRef } from 'react'
 import { api, type Availability, type Booking, type BookingLink, type BookingLinkInput,
   type List } from '../api'
 import { makeGuard } from '../util'
@@ -36,7 +36,12 @@ function clamp(raw: string, lo: number, hi: number, fallback: number): number {
   return Math.max(lo, Math.min(hi, n))
 }
 
-export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () => void }) {
+export function SchedulingView({ rev, onExpire, viewTabs }: {
+  rev: number; onExpire: () => void
+  // The Calendar / Scheduling switch. When it is there it already names the
+  // view, so the title is left out rather than said twice.
+  viewTabs?: ReactNode
+}) {
   const guard = makeGuard(onExpire)
   const tf = useTimeFormat()
   const { locale, t: tr } = useI18n()
@@ -160,8 +165,9 @@ export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () =>
   return (
     <div className="work">
       <div className="content">
+        {viewTabs}
         <div className="content-head">
-          <span className="content-title">{tr('sched.title')}</span>
+          {!viewTabs && <span className="content-title">{tr('sched.title')}</span>}
           <span className="spacer" />
           <button className="btn" onClick={() => setEditing('new')}>{tr('sched.newLink')}</button>
         </div>

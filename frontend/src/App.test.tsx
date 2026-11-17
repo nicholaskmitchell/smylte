@@ -1,8 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { App } from './App'
-import { api, AuthError, HttpError, subscribe } from './api'
+import { api, AuthError, HttpError, subscribe, type List } from './api'
 import { DEFAULT_TAB_ORDER, TAB_LABELS, TAB_KEY } from './tabs'
 import { translate } from './i18n/index'
 
@@ -91,7 +91,8 @@ describe('<App> auth gate', () => {
     expect(await screen.findByRole('button', { name: 'Tasks' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Today' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Calendar' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Scheduling' })).toBeInTheDocument()
+    // Scheduling is a view inside Calendar, not a tab of its own.
+    expect(screen.queryByRole('button', { name: 'Scheduling' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /sign in/i })).not.toBeInTheDocument()
     // The strip paints while /api/me is still in flight now, so the data layer
@@ -282,22 +283,26 @@ describe('<App> tab preferences', () => {
 
   it('renders the account’s saved order', async () => {
     m.getSettings.mockResolvedValue({
-      tab_order: ['calendar', 'scheduling', 'home', 'tasks', 'today'],
+      tab_order: ['calendar', 'scheduling', 'home', 'tasks', 'today'] as never,
     })
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
+    // The retired token drops out of a stored order; the four tabs remain.
     await waitFor(() =>
-      expect(strip()).toEqual(['Calendar', 'Scheduling', 'Home', 'Tasks', 'Today']))
+      expect(strip()).toEqual(['Calendar', 'Home', 'Tasks', 'Today']))
   })
 
   it('repairs a stored order that lost a tab', async () => {
-    m.getSettings.mockResolvedValue({ tab_order: ['scheduling'] as never })
+    // The retired 'scheduling' token beside a real one: the result differs from
+    // the default strip painted before settings arrive, so this can only pass
+    // once the stored order was read and repaired.
+    m.getSettings.mockResolvedValue({ tab_order: ['scheduling', 'calendar'] as never })
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
     // A missing tab would leave its view unreachable, so it is appended — in
     // shipped order, behind whatever the stored blob did name.
     await waitFor(() =>
-      expect(strip()).toEqual(['Scheduling', 'Today', 'Home', 'Tasks', 'Calendar']))
+      expect(strip()).toEqual(['Calendar', 'Today', 'Home', 'Tasks']))
   })
 
   it('opens on the chosen tab', async () => {
@@ -308,10 +313,12 @@ describe('<App> tab preferences', () => {
   })
 
   it('reopens where the user left off', async () => {
-    m.getSettings.mockResolvedValue({ start_tab: 'last', last_tab: 'scheduling' })
+    m.getSettings.mockResolvedValue({ start_tab: 'last', last_tab: 'scheduling' as never })
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    await waitFor(() => expect(active()).toBe('Scheduling'))
+    // A stored Scheduling tab opens Calendar on its Scheduling view.
+    await waitFor(() => expect(active()).toBe('Calendar'))
+    expect(await screen.findByRole('tab', { name: 'Scheduling', selected: true })).toBeInTheDocument()
   })
 
   it('falls back to the first tab when there is nothing to remember', async () => {
@@ -344,18 +351,18 @@ describe('<App> tab preferences', () => {
     await openSettings('Appearance')
     await userEvent.click(screen.getByRole('button', { name: 'Move Calendar left' }))
     expect(m.putSettings).toHaveBeenCalledWith({
-      tab_order: ['today', 'home', 'calendar', 'tasks', 'scheduling'],
+      tab_order: ['today', 'home', 'calendar', 'tasks'],
     })
     await waitFor(() =>
-      expect(strip()).toEqual(['Today', 'Home', 'Calendar', 'Tasks', 'Scheduling']))
+      expect(strip()).toEqual(['Today', 'Home', 'Calendar', 'Tasks']))
   })
 
   it('saves the tab to open on', async () => {
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
     await openSettings('Appearance')
-    await userEvent.selectOptions(screen.getByLabelText('Opens on'), 'scheduling')
-    expect(m.putSettings).toHaveBeenCalledWith({ start_tab: 'scheduling' })
+    await userEvent.selectOptions(screen.getByLabelText('Opens on'), 'calendar')
+    expect(m.putSettings).toHaveBeenCalledWith({ start_tab: 'calendar' })
   })
 
   it('paints the remembered tab before the settings fetch lands', async () => {
@@ -366,9 +373,82 @@ describe('<App> tab preferences', () => {
     m.getSettings.mockReturnValue(new Promise((r) => { settle = r }) as never)
     render(<App />)
     await screen.findByRole('button', { name: 'Tasks' })
-    expect(active()).toBe('Scheduling')
-    settle({ start_tab: 'calendar' })
+    expect(active()).toBe('Calendar')
+    expect(await screen.findByRole('tab', { name: 'Scheduling', selected: true })).toBeInTheDocument()
+    settle({ start_tab: 'tasks' })
+    await waitFor(() => expect(active()).toBe('Tasks'))
+  })
+
+  it('switches Calendar between the month and Scheduling', async () => {
+    // The month grid is only drawn once there is a calendar to draw it for.
+    const personal: List = {
+      id: 'cal', href: '/cal/', name: 'Personal', is_task_list: false, is_calendar: true,
+      open_count: 0, task_count: 0, event_count: 0, total: 0, color: null,
+    }
+    m.calendars.mockResolvedValue([personal])
+    render(<App />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Calendar' }))
+    const switcher = await screen.findByRole('tablist', { name: 'Calendar' })
+    expect(within(switcher).getByRole('tab', { name: 'Calendar', selected: true })).toBeInTheDocument()
+    await userEvent.click(within(switcher).getByRole('tab', { name: 'Scheduling' }))
+    expect(await screen.findByRole('button', { name: 'New link' })).toBeInTheDocument()
+    expect(localStorage.getItem('smylte-cal-view')).toBe('scheduling')
+    await userEvent.click(screen.getByRole('tab', { name: 'Calendar' }))
+    expect(await screen.findByRole('grid')).toBeInTheDocument()
+    expect(localStorage.getItem('smylte-cal-view')).toBe('month')
+  })
+
+  it('keeps focus on the switch after a pick', async () => {
+    // Each view mounts its own switch, so the pressed segment is replaced: the
+    // new switch has to take focus back or a keyboard user lands on the page.
+    render(<App />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Calendar' }))
+    await userEvent.click(await screen.findByRole('tab', { name: 'Scheduling' }))
+    const picked = await screen.findByRole('tab', { name: 'Scheduling', selected: true })
+    await waitFor(() => expect(document.activeElement).toBe(picked))
+  })
+
+  it('does not move focus into the switch when Calendar is opened from the tab bar', async () => {
+    // Pressing the segment that is already on changes nothing and mounts no new
+    // switch, so it must not leave a request for focus behind for the next
+    // time Calendar is opened.
+    render(<App />)
+    const calendar = await screen.findByRole('button', { name: 'Calendar' })
+    await userEvent.click(calendar)
+    await userEvent.click(await screen.findByRole('tab', { name: 'Calendar', selected: true }))
+    await userEvent.click(screen.getByRole('button', { name: 'Tasks' }))
+    await userEvent.click(calendar)
+    await screen.findByRole('tablist', { name: 'Calendar' })
+    expect(document.activeElement).toBe(calendar)
+  })
+
+  it('maps a stored Scheduling tab once, not over a view picked since', async () => {
+    // The server keeps the retired token until the opening tab is saved again;
+    // a month picked on this device since then must survive every reload.
+    localStorage.setItem('smylte-cal-view', 'month')
+    m.getSettings.mockResolvedValue({ start_tab: 'scheduling' as never })
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
     await waitFor(() => expect(active()).toBe('Calendar'))
+    expect(await screen.findByRole('tab', { name: 'Calendar', selected: true })).toBeInTheDocument()
+    expect(localStorage.getItem('smylte-cal-view')).toBe('month')
+  })
+
+  it('remembers a cached Scheduling tab as the Calendar view', async () => {
+    // An old boot cache is read once and written back as this device's view, so
+    // it survives the server's fixed start tab overwriting the tab cache.
+    localStorage.setItem('smylte-tab', 'scheduling')
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    expect(localStorage.getItem('smylte-cal-view')).toBe('scheduling')
+  })
+
+  it('opens Calendar on the Scheduling view it was left on', async () => {
+    localStorage.setItem('smylte-cal-view', 'scheduling')
+    render(<App />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Calendar' }))
+    expect(await screen.findByRole('button', { name: 'New link' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Scheduling', selected: true })).toBeInTheDocument()
   })
 
   it('does not yank the view away from a tab clicked while loading', async () => {

@@ -3,14 +3,13 @@
 // the part that has to survive a hand-edited or out-of-date settings blob — can
 // be reasoned about and tested on its own.
 
-// `today` and the backend's SettingsPatch ship TOGETHER. The server validates
-// `tab_order`, `start_tab` and `last_tab` against Literal unions of its own
-// (app.py), so a client that PUTs a token the server has not learned yet gets a
-// 422 and the whole settings write is rejected — not just the tab. The backend
-// therefore accepts "today" first and this token follows; deploying this half
-// against an older server would break every settings write from this tab strip,
-// not merely the Today tab.
-export type Tab = 'today' | 'home' | 'tasks' | 'calendar' | 'scheduling'
+// The server still accepts "scheduling" for `tab_order`, `start_tab` and
+// `last_tab` (app.py validates them against Literal unions of its own), so an
+// older client, or a settings blob stored before Scheduling moved into
+// Calendar, can still hold that token. This client never writes it; it maps it
+// to Calendar with `fromStoredTab` on the way in. Dropping the token from the
+// server would make a 422 of every settings write from such a client.
+export type Tab = 'today' | 'home' | 'tasks' | 'calendar'
 
 /** Which tab the app opens on: a fixed one, or wherever the user left off. */
 export type TabStart = Tab | 'last'
@@ -23,14 +22,13 @@ export const TAB_LABELS: Record<Tab, string> = {
   home: 'tab.home',
   tasks: 'tab.tasks',
   calendar: 'tab.calendar',
-  scheduling: 'tab.scheduling',
 }
 
 export const TABS = Object.keys(TAB_LABELS) as Tab[]
 
 /** The shipped strip. Today leads: it is the surface the day is worked from,
  *  and the one place in the app that holds state of its own. */
-export const DEFAULT_TAB_ORDER: Tab[] = ['today', 'home', 'tasks', 'calendar', 'scheduling']
+export const DEFAULT_TAB_ORDER: Tab[] = ['today', 'home', 'tasks', 'calendar']
 
 /** …but a fresh account still OPENS on Home, which is what it has always opened
  *  on. Leading the strip and being the landing page are separate choices, and
@@ -57,8 +55,17 @@ export function sanitizeTabOrder(v: unknown): Tab[] {
   return out
 }
 
+/** A tab from whatever was stored, including the token older clients wrote.
+ *
+ *  Scheduling became a view inside Calendar (Nov 2026), so a stored
+ *  "scheduling" opens Calendar. */
+export function fromStoredTab(v: unknown): Tab | null {
+  if (v === 'scheduling') return 'calendar'
+  return isTab(v) ? v : null
+}
+
 export function sanitizeTabStart(v: unknown): TabStart {
-  return v === 'last' || isTab(v) ? v : DEFAULT_TAB_START
+  return v === 'last' ? 'last' : (fromStoredTab(v) ?? DEFAULT_TAB_START)
 }
 
 /** Move a tab one place along the strip. A no-op at either end. */
@@ -93,6 +100,31 @@ export function cacheTab(t: Tab): void {
 export function readCachedTab(): Tab | null {
   try {
     const raw = localStorage.getItem(TAB_KEY)
-    return isTab(raw) ? raw : null
+    return fromStoredTab(raw)
   } catch { return null }
+}
+
+// ── the Calendar tab's view switch ─────────────────────────────────────────
+// Calendar holds two views: the month grid and Scheduling. Like the tab, the
+// choice is mirrored locally so the right view paints on first render.
+
+export type CalView = 'month' | 'scheduling'
+
+export const CAL_VIEW_KEY = 'smylte-cal-view'
+
+export function readCachedCalView(): CalView | null {
+  try {
+    const raw = localStorage.getItem(CAL_VIEW_KEY)
+    return raw === 'month' || raw === 'scheduling' ? raw : null
+  } catch { return null }
+}
+
+export function cacheCalView(v: CalView): void {
+  try { localStorage.setItem(CAL_VIEW_KEY, v) } catch { /* private mode / quota */ }
+}
+
+/** Whether the tab cache still holds the retired "scheduling" tab, which means
+ *  the user last left the app on what is now Calendar's Scheduling view. */
+export function readLegacyCachedScheduling(): boolean {
+  try { return localStorage.getItem(TAB_KEY) === 'scheduling' } catch { return false }
 }

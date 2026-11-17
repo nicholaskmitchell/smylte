@@ -293,8 +293,8 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
   // Whether the last batch FAILED. `makeGuard` swallows a 502, a 429 or a
   // timeout into a toast and resolves undefined, so neither setter above ran
   // and the two modules printed "No booking links yet." / "No upcoming
-  // bookings." over an account with live links — the confident lie the
-  // Scheduling tab's `failed` flag exists to stop, and the mini calendar next
+  // bookings." over an account with live links — the confident lie
+  // SchedulingView's `failed` flag exists to stop, and the mini calendar next
   // to them reports through `home.calPartial`. Same rule, same shape.
   const [schedFailed, setSchedFailed] = useState(false)
   useEffect(() => {

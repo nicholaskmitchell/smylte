@@ -36,13 +36,15 @@ import { TimeFormatProvider } from './timeformat'
 import { haptic, hostAccent, hostClock, markReady, onHostEnv } from './android'
 import { applySystemAccent, readDeviceAccent, writeDeviceAccent } from './system-accent'
 import {
-  DEFAULT_TAB_ORDER, DEFAULT_TAB_START, TAB_LABELS, cacheTab, isTab, readCachedTab,
-  resolveStartTab, sanitizeTabOrder, sanitizeTabStart, type Tab, type TabStart,
+  DEFAULT_TAB_ORDER, DEFAULT_TAB_START, TAB_LABELS, cacheCalView, cacheTab, fromStoredTab,
+  isTab, readCachedCalView, readCachedTab, readLegacyCachedScheduling, resolveStartTab,
+  sanitizeTabOrder, sanitizeTabStart, type CalView, type Tab, type TabStart,
 } from './tabs'
 import { Login } from './components/Login'
 import { TasksView } from './components/TasksView'
 import { CalendarView } from './components/CalendarView'
 import { SchedulingView } from './components/SchedulingView'
+import { CalendarViewTabs } from './components/CalendarViewTabs'
 import { HomeView } from './components/HomeView'
 import { TodayView, STALE_OVERDUE_DAYS, PLAN_ON_DUE_TODAY } from './components/TodayView'
 import { FocusView } from './components/FocusView'
@@ -93,6 +95,37 @@ export function App() {
   const adds = useAddRegistry()
   const [tab, setTab] = useState<Tab>(
     () => readCachedTab() ?? (isTab(DEFAULT_TAB_START) ? DEFAULT_TAB_START : DEFAULT_TAB_ORDER[0]))
+  // Calendar's two views. A cache from before Scheduling folded into Calendar
+  // left the retired tab behind, and that still means "open on Scheduling".
+  // It is read once and written back as this device's view, so from then on it
+  // is a choice like any other and the month can be picked over it.
+  const [calView, setCalView] = useState<CalView>(() => {
+    const cached = readCachedCalView()
+    if (cached) return cached
+    if (readLegacyCachedScheduling()) {
+      cacheCalView('scheduling')
+      return 'scheduling'
+    }
+    return 'month'
+  })
+  const changeCalView = useCallback((v: CalView) => {
+    setCalView(v)
+    cacheCalView(v)
+  }, [])
+  // Each view mounts its own switch, so picking a segment unmounts the button
+  // that had focus. The flag tells the new switch to take focus back, for a
+  // pick from the switch only: arriving on Calendar from the tab bar must not
+  // move focus into it.
+  const calViewFocus = useRef(false)
+  const pickCalView = useCallback((v: CalView) => {
+    if (v !== calView) calViewFocus.current = true
+    changeCalView(v)
+  }, [calView, changeCalView])
+  const takeCalViewFocus = useCallback(() => {
+    const f = calViewFocus.current
+    calViewFocus.current = false
+    return f
+  }, [])
   const [tabOrder, setTabOrder] = useState<Tab[]>(DEFAULT_TAB_ORDER)
   const [startTab, setStartTab] = useState<TabStart>(DEFAULT_TAB_START)
   // A tab picked while settings were still loading wins over the stored choice —
@@ -535,6 +568,12 @@ export function App() {
         if (keep('theme') && (s.theme === 'dark' || s.theme === 'light')) applyTheme(s.theme)
         const order = sanitizeTabOrder(s.tab_order)
         const start = sanitizeTabStart(s.start_tab)
+        // Typed `unknown`: the Settings type no longer has the retired token,
+        // but a stored blob (or an older client's write) still can.
+        const storedStart: unknown = s.start_tab
+        const storedLast: unknown = s.last_tab
+        const legacyScheduling = storedStart === 'scheduling'
+          || (storedStart === 'last' && storedLast === 'scheduling')
         if (keep('tab_order')) setTabOrder(order)
         if (keep('start_tab')) setStartTab(start)
         // Restoring the opening tab is a FIRST-LOAD action, not something to
@@ -545,9 +584,18 @@ export function App() {
         // account last recorded and `cacheTab` persisted the yank.
         if (!tabTouched.current && !tabRestored.current && keep('last_tab')) {
           tabRestored.current = true
-          const opening = resolveStartTab(start, isTab(s.last_tab) ? s.last_tab : undefined, order)
+          const opening = resolveStartTab(start, fromStoredTab(s.last_tab) ?? undefined, order)
           setTab(opening)
           cacheTab(opening)
+          // Scheduling used to be a tab of its own, so a stored "scheduling"
+          // (as the opening tab, or as the last one) now means Calendar's
+          // Scheduling view; without this it would open on the month grid.
+          // Only while this device has no Calendar view of its own: the
+          // server keeps the old token until the opening tab is next saved,
+          // and re-applying it on every load would undo picking the month.
+          if (legacyScheduling && opening === 'calendar' && readCachedCalView() === null) {
+            changeCalView('scheduling')
+          }
         }
         if (keep('tasks_view')
           && (s.tasks_view === 'list' || s.tasks_view === 'day3' || s.tasks_view === 'week')) {
@@ -1493,16 +1541,22 @@ export function App() {
         showCompleted={showCompleted} mailRev={mailRev}
         ask={tasksAsk} onAskHandled={() => setTasksAsk(null)} />
     )}
-    {!booting && tab === 'calendar' && (
+    {!booting && tab === 'calendar' && calView === 'month' && (
       <CalendarView onExpire={onExpire} cursor={cursor} onCursorChange={setCursor}
         sideCollapsed={sideCollapsed} onToggleSide={toggleSide}
         hiddenCalendars={hiddenCals} onHiddenCalendarsChange={changeHiddenCals}
         archivedCalendars={archivedCals} onArchivedCalendarsChange={changeArchivedCals}
         calTaskLists={calTaskLists} onCalTaskListsChange={changeCalTaskLists}
         calShowDone={calShowDone} onCalShowDoneChange={toggleCalShowDone}
-        fit={calFit} />
+        fit={calFit}
+        viewTabs={<CalendarViewTabs view={calView} onView={pickCalView}
+          takeFocus={takeCalViewFocus} />} />
     )}
-    {!booting && tab === 'scheduling' && <SchedulingView rev={rev} onExpire={onExpire} />}
+    {!booting && tab === 'calendar' && calView === 'scheduling' && (
+      <SchedulingView rev={rev} onExpire={onExpire}
+        viewTabs={<CalendarViewTabs view={calView} onView={pickCalView}
+          takeFocus={takeCalViewFocus} />} />
+    )}
     {!booting && tab === 'today' && (
       // The same two calendar-visibility sets the Home dashboard is handed,
       // and read-only here for the same reason: the Calendar tab owns editing
@@ -1613,10 +1667,10 @@ export function App() {
       <div className="topbar">
         <span className="brand">Smylte<span className="dot">.</span></span>
         {/* The strip SCROLLS on a phone (see app.css), which means the tab you
-            are actually on can start out beyond the right edge — five tabs come
-            to more than a 390px bar holds. Nothing else brings it back, so the
+            are actually on can start out beyond the right edge — four tabs can
+            come to more than a narrow bar holds. Nothing else brings it back, so the
             active one is scrolled into view whenever it changes and on the
-            first paint, which is the reload case: land on Scheduling, reload,
+            first paint, which is the reload case: land on Calendar, reload,
             and without this the bar opens showing Today with no indication of
             where you are.
 
@@ -1627,7 +1681,7 @@ export function App() {
           {/* `aria-current="page"`, not `role="tab"`: the strip IS the app's
               page-level navigation — each tab is a whole view, and Focus is a
               real address beside them — and the class alone told assistive
-              tech nothing, so a screen reader heard five identical buttons
+              tech nothing, so a screen reader heard four identical buttons
               with no way to tell which view was open. (SettingsMenu's nav is
               the tablist; keeping the strip as buttons is also what keeps
               its *Tasks* apart from that nav's *Tasks* by role.) */}

@@ -35,7 +35,6 @@ const ADD_LABEL: Record<Tab, string> = {
   home: 'home.quickAddAria',
   tasks: 'home.quickAddAria',
   calendar: 'cal.newEvent',
-  scheduling: 'sched.newLink',
 }
 
 /** The gear. A functional glyph, the one Classic's top bar draws. */
@@ -74,8 +73,8 @@ function ViewButtons({ tabOrder, tab, onTab }: Pick<NavProps, 'tabOrder' | 'tab'
  * Calendar — see shell.tsx), and Settings at the foot.
  *
  * Folded, it is a rail: the unfold, the collections' own rail of dots, and the
- * gear. The views are not on the rail. There is no icon to stand for Home or
- * Scheduling in a system that draws only functional glyphs, and a letter each
+ * gear. The views are not on the rail. There is no icon to stand for Home
+ * in a system that draws only functional glyphs, and a letter each
  * would be two T's for Today and Tasks — so the rail is for the view you are
  * working in, and one press brings the rest back.
  */

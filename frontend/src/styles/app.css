@@ -422,6 +422,11 @@ button.menu-toggle:active { scale: var(--press-scale); }
   padding: 16px var(--gutter) 10px; display: flex; align-items: baseline; gap: 12px;
   border-bottom: 1px solid var(--rule-faint);
 }
+/* The Calendar / Scheduling switch above a view's own header. The header under
+   it has already had its full top margin spent on the switch, so it keeps only
+   a short one. */
+.content-switch { display: flex; padding: 16px var(--gutter) 0; }
+.content-switch + .content-head, .content-switch + .cal-head { padding-top: 10px; }
 .content-title { font-family: var(--serif); font-size-adjust: none; font-size: calc(24px * var(--fs-scale)); font-weight: 500; letter-spacing: -0.01em; }
 .title-dot { width: 10px; height: 10px; flex: none; align-self: center; border-radius: var(--r-dot); }
 .content-sub { font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-meta) * var(--fs-scale)); color: var(--tx-quiet);
@@ -1061,7 +1066,8 @@ button.menu-toggle:active { scale: var(--press-scale); }
   /* THE TAB STRIP SCROLLS rather than running off the edge of the bar.
      Five tabs plus the brand and the settings button come to 497px against a
      390px phone, and nothing here scrolled sideways — so the last tab was
-     simply clipped and Scheduling could not be reached on a phone at all.
+     simply clipped and Scheduling (a tab until Nov 2026) could not be reached
+     on a phone at all.
 
      `min-width: 0` is the load-bearing half: a flex child will not shrink below
      its content without it, so the strip refused to narrow and pushed the

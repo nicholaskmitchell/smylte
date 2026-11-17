@@ -65,7 +65,7 @@ describe('the sidebar layout', () => {
     expect(nav).toHaveClass('appnav')
     // The strip's own buttons, with the strip's semantics: page navigation
     // with `aria-current`, not a tablist (Settings' nav is the tablist).
-    for (const name of ['Today', 'Home', 'Tasks', 'Calendar', 'Scheduling']) {
+    for (const name of ['Today', 'Home', 'Tasks', 'Calendar']) {
       expect(within(nav).getByRole('button', { name })).toBeInTheDocument()
     }
     expect(within(nav).getByRole('button', { name: 'Home' })).toHaveAttribute('aria-current', 'page')
@@ -130,7 +130,7 @@ describe('the sidebar layout', () => {
     const bar = views()!
     expect(bar).toHaveClass('tabbar')
     expect(document.querySelector('.appnav')).toBeNull()
-    for (const name of ['Today', 'Home', 'Tasks', 'Calendar', 'Scheduling', 'Settings']) {
+    for (const name of ['Today', 'Home', 'Tasks', 'Calendar', 'Settings']) {
       expect(within(bar).getByRole('button', { name })).toBeInTheDocument()
     }
     // The bar comes after the view, so it is drawn under it.
@@ -233,7 +233,7 @@ describe('Classic', () => {
     await waitFor(() => expect(document.querySelector('.topbar')).not.toBeNull())
     expect(shell().getAttribute('data-layout')).toBe('classic')
     expect(views()).toBeNull()
-    expect(document.querySelectorAll('.topbar .tabs .tab')).toHaveLength(5)
+    expect(document.querySelectorAll('.topbar .tabs .tab')).toHaveLength(4)
     expect(localStorage.getItem(LAYOUT_KEY)).toBe('classic')
   })
 

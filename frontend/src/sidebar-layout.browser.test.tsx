@@ -14,8 +14,8 @@ import { box, mount, viewport } from './test/browser-measure'
 
 beforeEach(() => { document.body.innerHTML = '' })
 
-const VIEWS_EN = ['Today', 'Home', 'Tasks', 'Calendar', 'Scheduling']
-const VIEWS_DE = ['Heute', 'Start', 'Aufgaben', 'Kalender', 'Buchungen']
+const VIEWS_EN = ['Today', 'Home', 'Tasks', 'Calendar']
+const VIEWS_DE = ['Heute', 'Start', 'Aufgaben', 'Kalender']
 
 const tabs = (labels: string[], active: number) =>
   labels.map((v, i) => `<button class="tab ${i === active ? 'active' : ''}">${v}</button>`).join('')

@@ -1,5 +1,6 @@
 import {
   useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties,
+  type ReactNode,
 } from 'react'
 import {
   api, clientId, uidFor, type CalEvent, type EventScope, type List, type Task,
@@ -173,7 +174,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   hiddenCalendars, onHiddenCalendarsChange,
   archivedCalendars, onArchivedCalendarsChange,
   calTaskLists, onCalTaskListsChange,
-  calShowDone, onCalShowDoneChange, fit }: {
+  calShowDone, onCalShowDoneChange, fit, viewTabs }: {
   onExpire: () => void
   // The month lives above the tab strip too, so coming back to Calendar returns
   // to where you were rather than snapping to today.
@@ -189,6 +190,9 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   // choice is made in the settings menu, like the clock and the completed-task
   // toggle, so there is nothing to hand back from here.
   fit: CalendarFit
+  // The Calendar / Scheduling switch, which App owns because it decides which of
+  // the two views is mounted. Drawn first so it sits above the month header.
+  viewTabs?: ReactNode
 }) {
   const guard = makeGuard(onExpire)
   const isMobile = useIsMobile()
@@ -661,6 +665,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
       </NavCollections>
 
       <div className="content">
+        {viewTabs}
         <div className="cal-head">
           <button className="icon-btn" title={tr('cal.prevMonth')} aria-label={tr('cal.prevMonth')}
             onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}>‹</button>
