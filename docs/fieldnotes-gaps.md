@@ -12,3 +12,39 @@ states elsewhere (`tokens.json`), and the gap is listed here.
 | `--r-xs` 3px and `--r-lg` 22px | Every Field notes corner at those steps | `calc(var(--radius) * 0.375)` and `calc(var(--radius) * 2.75)`, equal to the design system's values at the default 8px (tested) | `themes.css` writes them as literals, which would stop the Appearance editor's radius slider moving them |
 | `--row-y` 8px | Task and list rows | The Field notes lever block, from `tokens.json` ("Field notes rows run 8px with a 60px minimum height") | Not in `themes.css` |
 | A wallpaper accent's floor | The Android client's accent from the wallpaper | 4.5:1 under Field notes (it is text there), 3:1 under the presets as before | The design system sets no rule for a device accent |
+| The day's drawing: its pen | The Today drawing | The pen scales with the drawing, as the mockup's does: `calc(var(--stroke-pen) * 1.25)` in drawing units, so exactly `--stroke-pen` (1.8px) at the phone's 128px and 2.7px at the desktop's 192px (owner's call, 17 Nov) | `--stroke-pen` is written for 24px icons; a fixed pixel pen made the larger desktop drawing look spindlier than the phone's |
+| The day's drawing: its wobble | The Today drawing's boil | 1.25 drawing units: 1px on the phone (the design system's `--wobble`), 1.5px on the desktop, in proportion to the larger drawing | `--wobble` is a pixel limit for 24px icons; at 0.8 units the boil was half the mockup's |
+| Light at night | The dark drawings: the moon, a lamp, lit windows, fireflies, bulbs | A `glow` role: `--wash` in a radial gradient fading to nothing, drawn by the client (`DayDrawing.tsx`) | The design system has a wash but no soft light; flat sage blobs read as stains, not light |
+
+## The desk unit's e-paper: a deviation the owner chose
+
+The design system says (README, *Every app surface*): "Colour roles become ink
+weights: accent is solid ink, the highlighter is a 25% hatch, the wash is
+dropped." Solid ink turned a full day's rewards into the heaviest marks on the
+panel: twelve notes became a grid of black squares, and the washing became
+black silhouettes that hid their own pegs. On 17 Nov the owner chose a pen hatch
+instead (`backend/smylted/drawing/paper.py`):
+
+- accent marks in the interface (ticks, strikes) stay solid ink;
+- an accent fill in a drawing 8 units across or more is a pen hatch at about the
+  coral's 40% tone, always inside its ink outline, on the opposite diagonal to
+  the highlighter's;
+- a smaller fill is solid ink, and a round one keeps a paper glint;
+- the wash and the glow are dropped.
+
+The sentence to amend in the design system's README, if the owner wants the
+system to say so: "Colour roles become ink weights: accent marks are solid ink
+and accent fills in an illustration a 40% pen hatch inside their ink outline
+(solid below 8 units), the highlighter is a 25% hatch, the wash and glows are
+dropped."
+
+## Drawing a new subject
+
+Subjects 4 to 14 inherit the rules the first three were redrawn to. They are
+written down where a subject is written (the docstring of
+`backend/smylted/drawing/subjects/_kit.py`) and held by the tests over the whole
+roster, on a week of days under two salts, both themes and every hour
+(`backend/tests/test_drawing.py`, *the geometry rules, over the roster*):
+nothing leaves the frame; every reward is at least 10 units across; ink touches
+ink only where the subject's `JOINS` says it may; and the night is its own
+picture with a light that is always on.
