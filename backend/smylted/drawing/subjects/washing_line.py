@@ -12,7 +12,7 @@ Night: the same posts and lines, beside a house on the far hill with a lit
 window, the laundry back in its basket. Each finished task strings a lit bulb
 on the line; everything done empties the basket and lights the house's second
 window, coral; Start sends a moth fluttering by the house; overdue work brings
-a small cloud near the moon.
+a cloud beside the moon, a second a step beyond it at more.
 """
 from __future__ import annotations
 
@@ -146,7 +146,7 @@ def _sky_day(b: SketchBuilder, s: dict, r: Rng) -> None:
     b.line(curve((92, 150), (112, 144.5), (134, 147.5)), when=(k.DUSK,), part='hill')
     k.low_sun(b, r.fork('sun-d'), 113, 145.4, 6.0, when=(k.DUSK,))
     x, y = s['moon_spot']
-    k.moon(b, x, y, 6.0, glow=False, veiled=False, when=(k.LATE,))
+    k.moon(b, x, y, 6.0, glow=False, clouds=0, when=(k.LATE,))
     clouds = ((50, 34, 28), (110, 40, 24), (60, 14, 18))
     k.stars(b, r.fork('late-stars'), 3, (8, 8, 152, 36),
             avoid=((x, y, 18), (RIGHT - 8, CAP - 12, 16), *((cx, cy, w * 0.75 + 4) for cx, cy, w in clouds)),
@@ -191,8 +191,8 @@ def _night(b: SketchBuilder, s: dict, r: Rng) -> None:
     x, y = s['moon_spot']
     k.moon(b, x, y, 6.5)
     toward = 1 if x < 80 else -1
-    k.stars(b, r.fork('stars'), 4, (8, 6, 152, 40), avoid=((x, y + 6, 24), (x + toward * 16, y + 2, 14)),
-            part='star')
+    clouds = ((x + toward * 3.3 * 6.5, y + 0.5 * 6.5, 15), (x + toward * 5.2 * 6.5, y + 2.7 * 6.5, 15))
+    k.stars(b, r.fork('stars'), 4, (8, 6, 152, 40), avoid=((x, y + 6, 24), *clouds), part='star')
     _frame(b, s)
     _basket(b, s)
     # The day's laundry is in the basket until it is all done.

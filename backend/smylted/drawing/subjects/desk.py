@@ -38,7 +38,7 @@ class DeskWithKettle:
     JOINS = frozenset(frozenset(p) for p in (
         ('kettle', 'desk'), ('mug', 'desk'), ('notebook', 'desk'), ('pencil', 'notebook'),
         ('desk', 'leg'), ('leg', 'floor'), ('window', 'ledge'),
-        ('sun', 'window'), ('lamp', 'desk'), ('steam', 'kettle'), ('moon', 'cloud'),
+        ('sun', 'window'), ('lamp', 'desk'), ('steam', 'kettle'),
         ('drawer', 'desk'), ('notebook', 'writing'),
     ))
 
@@ -182,7 +182,7 @@ def _day(b: SketchBuilder, s: dict, r: Rng) -> None:
     k.sun(b, r.fork('sun-a'), 60, 59, 3.8, when=(k.AFTERNOON,), **sun)
     k.low_sun(b, r.fork('sun-d'), 28, y1 - 1.4, 5.4, when=(k.DUSK,))
     mx, my = s['moon_pane']
-    k.moon(b, mx, my, 5.0, glow=False, veiled=False, when=(k.LATE,))
+    k.moon(b, mx, my, 5.0, glow=False, clouds=0, when=(k.LATE,))
     _notes(b, s)
     tx, ty = spout_tip(s)
     k.steam(b, tx, ty, 0, 6, height=16, when=(('allDone',),))                  # the kettle has boiled
@@ -192,14 +192,14 @@ def _day(b: SketchBuilder, s: dict, r: Rng) -> None:
 def _night(b: SketchBuilder, s: dict, r: Rng) -> None:
     x0, y0, x1, y1 = WIN
     mx, my = s['moon_pane']
-    # The moon in its pane; overdue clouds stay in the window, the second in
-    # the pane below.
-    k.moon(b, mx, my, 5.0, glow=False, second=(0.3, 5.8))
+    # The moon in its pane, with no clouds: a pane has no room for a cloud
+    # that reads, and the sheets pinned by the window already show overdue work.
+    k.moon(b, mx, my, 5.0, glow=False, clouds=0)
     # Everything done: stars come out in the panes.
     xm, ym = (x0 + x1) / 2, (y0 + y1) / 2
     k.stars(b, r.fork('pane-stars'), 3, (x0 + 10, y0 + 10, x1 - 10, y1 - 10),
             ok=lambda p: abs(p[0] - xm) > 10 and abs(p[1] - ym) > 10,
-            avoid=((mx, my, 12), (mx + 1, my + 12, 10), (mx + 1.5, my + 29, 10)),
+            avoid=((mx, my, 12),),
             gap=14, when=(('allDone',),), part='star')
     # The lamp: base behind the mug, its shade aimed down at the notebook, its
     # light falling there in a cone and pooling on the desk.

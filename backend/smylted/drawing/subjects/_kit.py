@@ -280,6 +280,9 @@ def _crescent(cx: float, cy: float, r: float) -> Stroke:
 
 # A cloud's bumps by how wide it is, so no bump is narrower than the pen:
 # (centre u, radius u, height), in widths of the cloud.
+# The smallest cloud by a night moon: three bumps.
+MOON_CLOUD = 22.0
+
 _CLOUD_BUMPS = {
     4: ((-0.33, 0.13, 0.55), (-0.1, 0.17, 1.0), (0.14, 0.15, 0.8), (0.34, 0.11, 0.45)),
     3: ((-0.27, 0.18, 0.8), (0.0, 0.22, 1.0), (0.27, 0.16, 0.6)),
@@ -340,26 +343,33 @@ def cloud(b: SketchBuilder, cx: float, cy: float, w: float, *, when: Iterable = 
 
 
 def moon(b: SketchBuilder, cx: float, cy: float, r: float, *, when: Iterable = (),
-         glow: bool = True, veiled: bool = True, part: str = 'moon',
-         first: tuple[float, float] = (0.15, 2.3),
+         glow: bool = True, clouds: int = 2, part: str = 'moon',
+         first: tuple[float, float] | None = None,
          second: tuple[float, float] | None = None) -> None:
     """A crescent opening to the right, always whole. With `glow`, a soft
-    light round it. With `veiled`, overdue work draws a small cloud near it (by
-    default just under it), and a second at two or more (by default beside it,
-    toward the picture); `first` and `second` place them in moon radii from its
-    centre. Weather near the moon, never ink across it."""
+    light round it. With `clouds` 1 or 2, overdue work draws a cloud beside it,
+    toward the picture, and with 2, at two or more a second a step below and
+    beyond the first; `first` and `second` place them in moon radii from its
+    centre. Weather near the moon, never ink across it, and never straight
+    under it, where a small cloud and the crescent read as a little figure. Each cloud is at least
+    MOON_CLOUD units wide, three bumps: a smaller one reads as a speck at
+    phone size. Where there is no room for that (a window pane), pass
+    `clouds=0` and show overdue work some other way."""
     when = tuple(when)
     if glow:
         b.glow(ring(cx - r * 0.2, cy, r * 2.4, 12), when=when, part=part)
     b.line(_crescent(cx, cy, r), when=when, part=part)
-    if not veiled:
+    if clouds not in (0, 1, 2):
+        raise ValueError(f"a moon has 0, 1 or 2 clouds, not {clouds!r}")
+    if not clouds:
         return
-    cloud(b, cx + first[0] * r, cy + first[1] * r, max(2.7 * r, 13.0), when=(*when, ('overdue', 1)), part='cloud')
-    if second is None:
-        toward = 1 if cx < 80 else -1
-        second = (toward * 2.5, 0.3)
-    cloud(b, cx + second[0] * r, cy + second[1] * r, max(2.0 * r, 11.0),
-          when=(*when, ('overdue', 2)), part='cloud')
+    toward = 1 if cx < 80 else -1
+    first = (toward * 3.3, 0.5) if first is None else first
+    second = (toward * 5.2, 2.7) if second is None else second
+    w = max(3.4 * r, MOON_CLOUD)
+    cloud(b, cx + first[0] * r, cy + first[1] * r, w, when=(*when, ('overdue', 1)), part='cloud')
+    if clouds == 2:
+        cloud(b, cx + second[0] * r, cy + second[1] * r, w, when=(*when, ('overdue', 2)), part='cloud')
 
 
 def stars(b: SketchBuilder, rng: Rng, count: int, box: tuple[float, float, float, float], *,

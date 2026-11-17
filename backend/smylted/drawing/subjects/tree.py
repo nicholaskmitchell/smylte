@@ -10,8 +10,8 @@ sun crosses the sky with the hour; late at night it is an ink moon.
 Night: the same tree under the moon, its crown still sage, lit from the moon's
 side. A lantern hangs under the crown, a pale light. The rewards are fireflies
 about the crown, each a coral spark in a soft glow; Start shakes leaves loose
-as by day; everything done fills the lantern's glass coral; overdue work brings
-a small cloud near the moon.
+as by day; everything done fills the lantern's glass coral; overdue work drops
+a leaf or two by the pot, as by day.
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ class PottedTree:
     JOINS = frozenset(frozenset(p) for p in (
         ('trunk', 'canopy'), ('trunk', 'branch'), ('branch', 'canopy'), ('trunk', 'soil'),
         ('pot', 'soil'), ('pot', 'rim'), ('pot', 'sill'), ('can', 'sill'), ('fallen', 'sill'),
-        ('bird', 'canopy'), ('stir', 'canopy'), ('echo', 'canopy'), ('moon', 'cloud'),
+        ('bird', 'canopy'), ('stir', 'canopy'), ('echo', 'canopy'),
         ('lantern', 'canopy'), ('rim', 'trunk'), ('rim', 'soil'), ('branch',),
     ))
 
@@ -108,12 +108,10 @@ def _structure(r: Rng) -> dict:
     # fireflies keep clear of it.
     lx = cx - rx * 0.52 * (1 if lean >= 0 else -1)
     lantern_y = cy + ry * math.sqrt(max(0.0, 1 - ((lx - cx) / rx) ** 2)) * 0.97
-    # ... and of the moon's overdue clouds, below it and beside it.
     moon_spot = r.choice([(16.0, 16.0), (144.0, 16.0)])
     fly_avoid = (*((x, y, FLY_R + 5.0) for x, y in ink),
                  *((x, y, r_ + FLY_R + 3.0) for x, y, r_ in falls),
-                 (lx, lantern_y + 12, 19.0), (lx, lantern_y - 2, 13.0),
-                 *((x, y, r_ + FLY_R + 3.0) for x, y, r_ in _veil(moon_spot)))
+                 (lx, lantern_y + 12, 19.0), (lx, lantern_y - 2, 13.0))
     flies = k.scatter_all(r.fork('flies'), k.REWARDS, cx, cy - 2, rx * 1.16, ry * 1.04, 18.0,
                           avoid=fly_avoid, ok=lambda p: 15 < p[0] < 145 and 15 < p[1] < top - 12)
     flies = k.spread(flies, (cx, cy - ry))
@@ -125,14 +123,6 @@ def _structure(r: Rng) -> dict:
         'can_side': r.choice([-1, 1]),
         'moon_spot': moon_spot,
     }
-
-
-def _veil(spot) -> tuple:
-    """Where the night moon's overdue clouds go (see _night): circles round
-    each, the size of the cloud."""
-    x, y = spot
-    toward = 1 if x < 80 else -1
-    return ((x + toward * 2.6 * MOON_R, y - 0.5 * MOON_R, 9.0), (x - toward * 0.5 * MOON_R, y + 2.0 * MOON_R, 7.0))
 
 
 def _pot(b: SketchBuilder, s: dict) -> None:
@@ -205,7 +195,7 @@ def _sky(b: SketchBuilder, s: dict, r: Rng) -> None:
     k.sun(b, r.fork('sun-a'), 145, 132, 5.0, when=(k.AFTERNOON,))
     k.sun(b, r.fork('sun-d'), 18, 140, 4.6, when=(k.DUSK,), rays=5)
     x, y = s['moon_spot']
-    k.moon(b, x, y, 6.0, glow=False, veiled=False, when=(k.LATE,))
+    k.moon(b, x, y, 6.0, glow=False, clouds=0, when=(k.LATE,))
     bird = (s['cx'] + s['rx'] * 0.5, s['cy'] - s['ry'] * 0.86 - 6)
     k.stars(b, r.fork('late-stars'), 3, (6, 6, 154, 40), avoid=((x, y, 18), (*bird, 18)),
             ok=lambda p: not _in_crown(s, p, 1.12), when=(k.LATE,), part='late-star')
@@ -237,12 +227,12 @@ def _night(b: SketchBuilder, s: dict, r: Rng) -> None:
     # The crown in moonlight: its sage falls toward the moon, not away from it
     # as the day's does.
     b.wash(k.wash_of(s['canopy'], dx=4.0 * side, dy=-4.0), part='canopy')
-    # The overdue clouds keep to the corner and the top edge, clear of the crown.
-    toward = 1 if x < 80 else -1
-    k.moon(b, x, y, MOON_R, first=(toward * 2.6, -0.5), second=(-toward * 0.5, 2.0))
+    # No overdue cloud: the crown fills the top of the picture and leaves no
+    # room for one that reads. Overdue work drops leaves by the pot, as by day.
+    k.moon(b, x, y, MOON_R, clouds=0)
     flies = tuple((fx, fy, FLY_R + 6) for fx, fy in s['flies'])
     k.stars(b, r.fork('stars'), 4, (6, 4, 154, 34),
-            avoid=((x, y + 7, 26), *((vx, vy, vr + 4) for vx, vy, vr in _veil(s['moon_spot'])), *flies),
+            avoid=((x, y + 7, 26), *flies),
             ok=lambda p: not _in_crown(s, p, 1.14), part='star')
     _sill(b, s)
     _pot(b, s)
