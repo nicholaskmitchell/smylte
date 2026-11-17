@@ -455,11 +455,6 @@ describe("a Today row's cells sit on the title's first line", () => {
     // A comparison rather than a pinned number. Both tabs now place the mark
     // on the first line by arithmetic rather than one of them riding the
     // sans's x-height, so they agree to the same half pixel as the cells above.
-    //
-    // Field notes sets the Today title in Newsreader at the item size and the
-    // Tasks tab takes the same at checkpoint 3 of the redesign; until then the
-    // comparison holds for the Sep 2026 design, where both are the sans.
-    if (document.documentElement.dataset.surface === 'app') return
     const tasksTitle = host.querySelector('.task-title')!
     expect(getComputedStyle(today).fontSize).toBe(getComputedStyle(tasksTitle).fontSize)
     expect(Math.abs(off(host, '.today-kind-box', '.today-title')

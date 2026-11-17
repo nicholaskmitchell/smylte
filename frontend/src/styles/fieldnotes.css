@@ -359,3 +359,32 @@
 @media (min-width: 721px) {
   [data-surface="app"] :is(.cal-head, .range-nav) > .icon-btn { min-width: var(--control-h); }
 }
+
+/* ==== cp3 · Tasks ==== */
+
+/* A Tasks row's title is set as Today's is: Newsreader at the item size, on the
+   item line, with the tick and the list's square centred on its first line. */
+[data-surface="app"] .task-title,
+[data-surface="app"] .task-row > .task-main {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500; letter-spacing: 0;
+  font-size: calc(var(--fs-app-item) * var(--fs-scale)); line-height: var(--today-line);
+}
+[data-surface="app"] .task > .check { margin-top: calc(var(--today-line) / 2 - var(--check-size) / 2); }
+[data-surface="app"] .task-title .list-dot { top: calc(var(--today-line) / 2 - 7px / 2); }
+[data-surface="app"] .task-row > .list-dot { margin-top: calc((var(--today-line) - 7px) / 2); }
+[data-surface="app"] .day-card-title { font-family: var(--serif); font-size-adjust: none; font-weight: 500; font-size: calc(var(--fs-app-ui) * var(--fs-scale)); }
+[data-surface="app"] .task-meta .due { font-size: calc(var(--fs-app-meta) * var(--fs-scale)); font-variant-numeric: tabular-nums; }
+[data-surface="app"] .child-progress { font-size: calc(var(--fs-app-small) * var(--fs-scale)); font-variant-numeric: tabular-nums; }
+/* Calm rows: the page's own panes only (.content[data-pane] > .scroll), never a dialog. */
+[data-surface="app"] .content[data-pane] > .scroll .task > .task-actions {
+  opacity: 0; pointer-events: none; transition: opacity var(--dur-fast) var(--ease);
+}
+[data-surface="app"] .content[data-pane] > .scroll .task:focus-within > .task-actions { opacity: 1; pointer-events: auto; }
+@media (hover: hover) {
+  [data-surface="app"] .content[data-pane] > .scroll .task:hover > .task-actions { opacity: 1; pointer-events: auto; }
+}
+@media (hover: none) {   /* D1: on a touchscreen the editor carries Add subtask and Delete */
+  [data-surface="app"] .content[data-pane] > .scroll .task > .task-actions { display: none; }
+}
+[data-surface="app"] .content[data-pane] > .composer-foot > .quickadd { box-shadow: var(--shadow-rest); }
+[data-surface="app"] .content[data-pane] > .composer-foot > .quickadd:focus-within { box-shadow: var(--shadow-rest), var(--ring); }

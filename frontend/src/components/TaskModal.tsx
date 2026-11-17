@@ -8,7 +8,7 @@
 // drag, which reschedules through the same rule.
 
 import { useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
-import { useEscape, useSegmentThumb } from '../hooks'
+import { useEscape, useFieldNotes, useSegmentThumb } from '../hooks'
 import { useLayer } from '../layers'
 import type { CreateTaskBody, List, Task } from '../api'
 import {
@@ -45,7 +45,7 @@ export const dateOut = (date: string, time: string, original: string | null | un
  * the footer offers the route to the bulk composer instead of Delete. Editing,
  * the same picker moves the task (`onSave`'s `moveTo`).
  */
-export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, onSave, onDelete, onMultiple, onReminderChange, onPark, onForgetOriginalDue, onDeadlineMoved }: {
+export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onCreate, onSave, onDelete, onMultiple, onReminderChange, onPark, onForgetOriginalDue, onDeadlineMoved, onAddSub }: {
   task: Task | null
   lists: List[]
   defaultList: string
@@ -94,8 +94,13 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
   onDeadlineMoved?: (moved: boolean) => void
   onDelete: () => void
   onMultiple: (listId: string, summary: string) => void
+  /** Close the editor and open the inline subtask field under this task's row.
+   *  Optional: Tasks passes it under Field notes, where a touchscreen row shows
+   *  no "+ sub" of its own. Closes without asking, as Park and Delete do. */
+  onAddSub?: () => void
 }) {
   const creating = task === null
+  const fieldNotes = useFieldNotes()
   const { lang: uiLang, locale } = useI18n()
   const tf = useTimeFormat()
   const lang = inputLang(tf, uiLang)
@@ -279,7 +284,7 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
         {/* One block, not a paragraph each: a `<p>` keeps its default margins
             inside the dialog's flex column, which spaced two sentences about
             one move 36px apart. */}
-        {moveTo && !creating && (task.children.length > 0 || task.parent) && (
+        {!fieldNotes && moveTo && !creating && (task.children.length > 0 || task.parent) && (
           <div className="hintline">
             {[task.children.length > 0 && tr('taskModal.moveTakesSubtasks'),
               task.parent && tr('taskModal.moveLeavesParent')].filter(Boolean).join(' ')}
@@ -363,9 +368,11 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
               </button>
             )}
             <span className="spacer" />
-            <span className="hintline">
-              {tr(task.parked ? 'tasks.parkedHint' : 'tasks.parkHint')}
-            </span>
+            {!fieldNotes && (
+              <span className="hintline">
+                {tr(task.parked ? 'tasks.parkedHint' : 'tasks.parkHint')}
+              </span>
+            )}
           </div>
         )}
         <div className="modal-actions">
@@ -375,6 +382,9 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
             </button>
           ) : (
             <button className="btn ghost" onClick={onDelete}>{tr('common.delete')}</button>
+          )}
+          {!creating && onAddSub && (
+            <button className="btn ghost" onClick={onAddSub}>{tr('tasks.addSubtask')}</button>
           )}
           <span className="spacer" />
           <button className="btn" onClick={submit} disabled={creating && !summary.trim()}>
