@@ -18,7 +18,11 @@
 // CSS animation by itself.
 //
 // `aria-hidden`: everything the drawing shows is also said in text beside it.
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+//
+// A glow (light at night: the moon, a lamp, a lit window) is the sage wash with
+// a soft edge. Each drawing carries one radial gradient of it, named for the
+// instance, and hands it to CSS as --dm-glow; the colour stays a token.
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
   evaluate, fetchDrawing, readCachedDrawing, type DayState, type DrawMark, type DrawingPayload,
 } from '../drawing'
@@ -32,19 +36,24 @@ function Mark({ m, cond }: { m: DrawMark; cond?: number }) {
     'dm', `dm-${m.role}`,
     conditional ? (m.reward !== null ? 'dm-reward' : 'dm-cond') : 'on',
   ].filter(Boolean).join(' ')
+  // A reward grows from its own anchor (the stalk, the line), in the
+  // drawing's units, not from the middle of its box.
+  const style: CSSProperties | undefined = m.origin
+    ? { transformBox: 'view-box', transformOrigin: `${m.origin[0]}px ${m.origin[1]}px` }
+    : undefined
   if (m.role === 'line' && m.frames.length === 3) {
     return (
-      <g className={cls} data-c={cond}>
+      <g className={cls} data-c={cond} style={style}>
         <path className="boil f1" d={m.frames[0]} />
         <path className="boil f2" d={m.frames[1]} />
         <path className="boil f3" d={m.frames[2]} />
       </g>
     )
   }
-  return <path className={cls} d={m.frames[0]} data-c={cond} />
+  return <path className={cls} d={m.frames[0]} data-c={cond} style={style} />
 }
 
-const ROLES = ['wash', 'accent', 'line'] as const
+const ROLES = ['wash', 'glow', 'accent', 'line'] as const
 
 /** The whole picture for a drawing: every mark, in paint order (by role, as
  *  the server sends them), and the focus loop's frames. Memoised on the
@@ -123,10 +132,23 @@ export const DayDrawing = memo(function DayDrawing({ drawing, state, className =
     }
   }, [drawing, cond, state])
 
+  const glow = `dm-glow-${useId().replace(/[^\w-]/g, '')}`
+  const hasGlow = useMemo(() => drawing.marks.some((m) => m.role === 'glow')
+    || !!drawing.ambient?.frames.some((f) => f.some((m) => m.role === 'glow')), [drawing])
   const [x, y, w, h] = drawing.viewBox
   return (
     <svg ref={ref} className={`day-drawing ${className}`.trim()} viewBox={`${x} ${y} ${w} ${h}`}
-      aria-hidden="true" focusable="false" data-subject={drawing.subject}>
+      aria-hidden="true" focusable="false" data-subject={drawing.subject}
+      style={hasGlow ? { ['--dm-glow' as string]: `url(#${glow})` } : undefined}>
+      {hasGlow && (
+        <defs>
+          <radialGradient id={glow}>
+            <stop className="dm-glow-stop" offset="0" />
+            <stop className="dm-glow-stop" offset="0.45" />
+            <stop className="dm-glow-stop dm-glow-edge" offset="1" />
+          </radialGradient>
+        </defs>
+      )}
       <Picture drawing={drawing} cond={cond} />
     </svg>
   )

@@ -142,14 +142,26 @@
 
 /* ---- the day's drawing ---------------------------------------------------------
    Inline SVG from the server (DayDrawing.tsx). Roles, not colours: a line is the
-   pen in ink, a wash is the sage (by day) or the glow round a light (by night),
-   an accent is the coral reward. Strokes stay --stroke-pen at any size. */
-[data-surface="app"] .day-drawing { display: block; overflow: visible; }
-[data-surface="app"] .day-drawing .dm-line path {
-  fill: none; stroke: var(--fg); stroke-width: var(--stroke-pen);
-  stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke;
+   pen in ink, a wash is the sage, a glow is the sage with a soft edge (light at
+   night), an accent is the coral reward.
+
+   The pen scales with the drawing, as the mockup's does, so the phone and the
+   desktop show the same drawing at two sizes. The drawing is 160 units wide and
+   the phone shows it at 128px, so 1.25 units of pen are one pixel there: the pen
+   is exactly --stroke-pen on the phone, and in proportion on the desktop.
+
+   A line is a group of three boil frames, or (in the focus loop, and a reward's
+   outline, which holds still) a single path: both are inked. */
+[data-surface="app"] .day-drawing { display: block; overflow: visible; --dm-glow: var(--wash); }
+[data-surface="app"] .day-drawing .dm-line path,
+[data-surface="app"] .day-drawing path.dm-line {
+  fill: none; stroke: var(--fg); stroke-width: calc(var(--stroke-pen) * 1.25);
+  stroke-linecap: round; stroke-linejoin: round;
 }
 [data-surface="app"] .day-drawing .dm-wash { fill: var(--wash); }
+[data-surface="app"] .day-drawing .dm-glow { fill: var(--dm-glow); }
+[data-surface="app"] .day-drawing .dm-glow-stop { stop-color: var(--wash); }
+[data-surface="app"] .day-drawing .dm-glow-edge { stop-opacity: 0; }
 [data-surface="app"] .day-drawing .dm-accent { fill: var(--accent-fill); }
 
 /* A reward grows in with the reward easing when its task is ticked, and goes

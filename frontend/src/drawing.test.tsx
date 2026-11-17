@@ -29,6 +29,12 @@ describe('conditions, as the server writes them (conditions.py)', () => {
     [[['hour', 20, 6]], { hour: 12 }, false],
     [[['hour', 11, 15]], { hour: 15 }, false],
     [[['planned'], ['notAllDone']], { allDone: false }, true],
+    [[['unlit', 0]], { rewards: 0 }, true],
+    [[['unlit', 0]], { rewards: 1 }, false],
+    [[['unlit', 5]], { rewards: 3 }, true],
+    [[['unlit', 11]], { rewards: 40 }, false],
+    [[['idle']], { focusActive: false }, true],
+    [[['idle']], { focusActive: true }, false],
   ]
   it.each(cases)('%j with %j is %s', (when, state, want) => {
     expect(evaluate(when, day(state))).toBe(want)
@@ -58,6 +64,27 @@ describe('sanitizeDrawing', () => {
     expect(broken((p) => { (p.marks as { when: unknown[] }[])[0].when = [['script']] })).toBeNull()
     expect(broken((p) => { (p.marks as { id: string }[])[0].id = 'x"y' })).toBeNull()
     expect(broken((p) => { (p.marks as { reward: number }[])[0].reward = 12 })).toBeNull()
+  })
+
+  it('takes a glow, and an origin on a reward inside the picture', () => {
+    const d = broken((p) => {
+      const marks = p.marks as { role: string; reward: number | null; origin?: unknown }[]
+      marks.find((m) => m.role === 'wash')!.role = 'glow'
+      marks.find((m) => m.reward !== null)!.origin = [80, 40]
+    })
+    expect(d).not.toBeNull()
+    expect(d!.marks.some((m) => m.role === 'glow')).toBe(true)
+    expect(d!.marks.find((m) => m.reward !== null)!.origin).toEqual([80, 40])
+  })
+
+  it('refuses an origin off the picture, on a mark that is not a reward, or not two numbers', () => {
+    const reward = (fixture.marks as { reward: number | null }[]).findIndex((m) => m.reward !== null)
+    const still = (fixture.marks as { reward: number | null }[]).findIndex((m) => m.reward === null)
+    const withOrigin = (i: number, o: unknown) => broken((p) => { (p.marks as { origin?: unknown }[])[i].origin = o })
+    expect(withOrigin(reward, [500, 40])).toBeNull()
+    expect(withOrigin(reward, [80])).toBeNull()
+    expect(withOrigin(reward, ['80', 40])).toBeNull()
+    expect(withOrigin(still, [80, 40])).toBeNull()
   })
 
   it('refuses a line without its three boil frames', () => {
@@ -95,6 +122,31 @@ describe('<DayDrawing>', () => {
     const line = container.querySelector('.dm-line')!
     expect([...line.querySelectorAll('path')].map((p) => p.getAttribute('class')))
       .toEqual(['boil f1', 'boil f2', 'boil f3'])
+  })
+
+  it('gives a glow a soft edge of its own, and draws no gradient when there is no glow', () => {
+    const { container } = render(<DayDrawing drawing={drawing} state={day({})} />)
+    expect(container.querySelector('radialGradient')).toBeNull()
+    const glowing = { ...drawing, marks: drawing.marks.map((m, i) => (i === 0 && m.role === 'wash' ? { ...m, role: 'glow' as const } : m)) }
+    expect(glowing.marks[0].role, 'the fixture opens with a wash').toBe('glow')
+    const { container: c2 } = render(<DayDrawing drawing={glowing} state={day({})} />)
+    const grad = c2.querySelector('radialGradient')!
+    expect(grad).not.toBeNull()
+    const svg = c2.querySelector('svg')!
+    expect(svg.style.getPropertyValue('--dm-glow')).toBe(`url(#${grad.id})`)
+    expect(c2.querySelector('.dm-glow')).not.toBeNull()
+  })
+
+  it('grows a reward from its origin', () => {
+    const first = rewards[0]
+    const anchored = { ...drawing, marks: drawing.marks.map((m) => (m.reward === first.reward ? { ...m, origin: [70, 30] as [number, number] } : m)) }
+    const { container } = render(<DayDrawing drawing={anchored} state={day({})} />)
+    const el = container.querySelector<SVGElement>(`.dm-reward[data-c]`)!
+    const styled = [...container.querySelectorAll<SVGElement>('.dm-reward')].filter((e) => e.style.transformOrigin)
+    expect(el).not.toBeNull()
+    expect(styled.length).toBe(anchored.marks.filter((m) => m.origin).length)
+    expect(styled[0].style.transformOrigin).toBe('70px 30px')
+    expect(styled[0].style.transformBox).toBe('view-box')
   })
 
   it('runs its focus loop only while a session runs', () => {

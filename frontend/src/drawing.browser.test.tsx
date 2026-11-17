@@ -55,6 +55,50 @@ describe('motion', () => {
   })
 })
 
+describe('ink', () => {
+  // A one-frame line (the focus loop, a reward's still outline) is a path that
+  // is itself .dm-line, not a path inside one. It must be inked, not filled:
+  // filled, the loop's leaves and steam came out as solid black shapes.
+  it('inks every line, the focus loop\'s included, and fills none', () => {
+    const el = host()
+    flushSync(() => createRoot(el).render(<DayDrawing drawing={drawing} state={state({ focusActive: true })} />))
+    const lines = [...el.querySelectorAll<SVGPathElement>('.dm-line path, path.dm-line')]
+    expect(lines.some((p) => p.closest('.dm-ambient')), 'the fixture\'s focus loop has a line').toBe(true)
+    for (const p of lines) {
+      const cs = getComputedStyle(p)
+      expect(cs.fill, p.outerHTML.slice(0, 60)).toBe('none')
+      expect(cs.stroke).not.toBe('none')
+    }
+  })
+
+  it('scales the pen with the drawing: --stroke-pen at the phone\'s 128px, in proportion wider', () => {
+    const el = host()
+    el.style.width = '128px'
+    el.style.height = '160px'
+    flushSync(() => createRoot(el).render(<DayDrawing drawing={drawing} state={state({})} />))
+    const svg = el.querySelector('svg')!
+    svg.style.width = '128px'
+    svg.style.height = '160px'
+    const p = el.querySelector<SVGPathElement>('.dm-line path')!
+    const units = parseFloat(getComputedStyle(p).strokeWidth)
+    const pen = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--stroke-pen'))
+    const pxPerUnit = svg.getBoundingClientRect().width / drawing.viewBox[2]
+    expect(units * pxPerUnit).toBeCloseTo(pen, 2)
+  })
+
+  it('paints a glow with the wash, fading out', () => {
+    const glowing = { ...drawing, marks: drawing.marks.map((m, i) => (i === 0 ? { ...m, role: 'glow' as const } : m)) }
+    const el = host()
+    flushSync(() => createRoot(el).render(<DayDrawing drawing={glowing} state={state({})} />))
+    const g = el.querySelector<SVGPathElement>('.dm-glow')!
+    expect(getComputedStyle(g).fill).toMatch(/^url\(/)
+    const stops = [...el.querySelectorAll('stop')].map((s) => getComputedStyle(s))
+    const wash = getComputedStyle(el.querySelector('.dm-glow')!).getPropertyValue('--wash').trim()
+    expect(wash).not.toBe('')
+    expect(stops.map((s) => s.stopOpacity)).toEqual(['1', '1', '0'])
+  })
+})
+
 describe('cost', () => {
   // The budget is a mid phone: Chromium at a quarter of this machine's speed.
   // The common case is a state change on a drawing already up (a tick); the

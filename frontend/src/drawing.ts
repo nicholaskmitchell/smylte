@@ -35,8 +35,11 @@ const OVERDUE_LEVELS = 3
 export type Atom =
   | ['reward', number] | ['focus'] | ['allDone'] | ['notAllDone'] | ['nothingPlanned'] | ['planned']
   | ['overdue', number] | ['calm'] | ['progress', number] | ['hour', number, number]
+  | ['unlit', number] | ['idle']
 
-export type Role = 'line' | 'wash' | 'accent'
+/** Paint, never a colour: ink, the sage wash, a soft glow of the wash (light at
+ *  night), and the coral reward. Painted in that order. */
+export type Role = 'line' | 'wash' | 'glow' | 'accent'
 
 export type DrawMark = {
   id: string
@@ -45,6 +48,9 @@ export type DrawMark = {
   frames: string[]
   when: Atom[]
   reward: number | null
+  /** Where a reward grows from, in viewBox units: a fruit from its stalk, a
+   *  garment from the line. Only rewards carry one. */
+  origin: [number, number] | null
 }
 
 export type DrawingPayload = {
@@ -61,6 +67,8 @@ export type DrawingPayload = {
 function holds(a: Atom, s: DayState): boolean {
   switch (a[0]) {
     case 'reward': return Math.min(s.rewards, MAX_REWARDS) > a[1]
+    case 'unlit': return Math.min(s.rewards, MAX_REWARDS) <= a[1]
+    case 'idle': return !s.focusActive
     case 'focus': return s.focusActive
     case 'allDone': return s.allDone
     case 'notAllDone': return !s.allDone
@@ -86,12 +94,12 @@ export function evaluate(when: Atom[], s: DayState): boolean {
 // localStorage, which anything with script on this origin can write. So the
 // payload is checked to the letter before it is used: path data in the
 // server's own alphabet (move, line, cubic and close, numbers and spaces), the
-// three roles, and only atoms this file knows. Anything else is no drawing.
+// four roles, and only atoms this file knows. Anything else is no drawing.
 
 const PATH = /^[MLCZ0-9 .-]+$/
-const ROLES = new Set<Role>(['line', 'wash', 'accent'])
+const ROLES = new Set<Role>(['line', 'wash', 'glow', 'accent'])
 const ARITY: Record<string, number> = {
-  reward: 1, focus: 0, allDone: 0, notAllDone: 0, nothingPlanned: 0, planned: 0,
+  reward: 1, unlit: 1, focus: 0, idle: 0, allDone: 0, notAllDone: 0, nothingPlanned: 0, planned: 0,
   overdue: 1, calm: 0, progress: 1, hour: 2,
 }
 const MAX_MARKS = 400
@@ -121,7 +129,20 @@ function mark(raw: unknown, frames: number | null): DrawMark | null {
   const reward = m.reward === null || m.reward === undefined ? null
     : Number.isInteger(m.reward) && (m.reward as number) >= 0 && (m.reward as number) < MAX_REWARDS ? m.reward as number : -1
   if (reward === -1) return null
-  return { id: m.id, role: m.role as Role, frames: m.frames as string[], when, reward }
+  let origin: DrawMark['origin'] = null
+  if (m.origin !== undefined && m.origin !== null) {
+    const o = m.origin
+    if (reward === null || !Array.isArray(o) || o.length !== 2
+      || !o.every((n) => typeof n === 'number' && Number.isFinite(n))) return null
+    origin = [o[0], o[1]]
+  }
+  return { id: m.id, role: m.role as Role, frames: m.frames as string[], when, reward, origin }
+}
+
+/** An origin outside the picture is no origin: it would fling the reward in
+ *  from off the page. */
+function inside(o: [number, number], [x, y, w, h]: number[]): boolean {
+  return o[0] >= x && o[0] <= x + w && o[1] >= y && o[1] <= y + h
 }
 
 /** The payload, checked, or null. */
@@ -138,7 +159,7 @@ export function sanitizeDrawing(raw: unknown): DrawingPayload | null {
   const marks: DrawMark[] = []
   for (const m of p.marks) {
     const ok = mark(m, null)
-    if (!ok) return null
+    if (!ok || (ok.origin && !inside(ok.origin, vb))) return null
     marks.push(ok)
   }
   let ambient: DrawingPayload['ambient'] = null
