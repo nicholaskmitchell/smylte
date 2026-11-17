@@ -161,4 +161,57 @@ describe('<TasksView> under Field notes', () => {
     // What parking does outside Smylte is a consequence, so it stays.
     expect(within(dialog).getByText(/Other apps still show it/)).toBeInTheDocument()
   })
+
+  it('keeps a decorative drawing above the "nothing to do" text, once loaded', async () => {
+    m.tasks.mockResolvedValue([])
+    const { container } = setup()
+    const empty = await waitFor(() => {
+      const e = container.querySelector('.scroll > .empty')
+      expect(e).toHaveTextContent('Nothing to do here.')
+      return e as HTMLElement
+    })
+    const wrap = empty.querySelector('.view-drawing')!
+    expect(wrap).toHaveAttribute('aria-hidden', 'true')
+    expect(empty.firstElementChild).toBe(wrap)
+  })
+
+  it('keeps the drawing in the no-lists empty state, once loaded', async () => {
+    m.lists.mockResolvedValue([])
+    const { container } = setup()
+    const empty = await waitFor(() => {
+      const e = container.querySelector('.content > .empty')
+      expect(e).toHaveTextContent('Create a list to get started.')
+      return e as HTMLElement
+    })
+    expect(empty.querySelector('.view-drawing')).toHaveAttribute('aria-hidden', 'true')
+  })
+
+  it('draws nothing while it is still loading', () => {
+    m.lists.mockReturnValue(new Promise(() => {}))
+    const { container } = setup()
+    expect(container.querySelector('.empty')).not.toBeNull()
+    expect(container.querySelector('.view-drawing')).toBeNull()
+  })
+
+  it('draws nothing in the list pane while its tasks are still loading', async () => {
+    m.tasks.mockReturnValue(new Promise(() => {}))
+    const { container } = setup()
+    const empty = await waitFor(() => {
+      const e = container.querySelector('.scroll > .empty')
+      expect(e).not.toBeNull()
+      return e as HTMLElement
+    })
+    expect(empty).toHaveTextContent('Loading')
+    expect(empty).toHaveAttribute('aria-busy', 'true')
+    expect(empty.querySelector('.view-drawing')).toBeNull()
+    expect(container.querySelector('.view-drawing')).toBeNull()
+  })
+
+  it('leaves the presets without it', async () => {
+    document.documentElement.removeAttribute('data-surface')
+    m.tasks.mockResolvedValue([])
+    const { container } = setup()
+    await screen.findByText('Nothing to do here.')
+    expect(container.querySelector('.view-drawing')).toBeNull()
+  })
 })

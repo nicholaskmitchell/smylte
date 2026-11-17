@@ -500,3 +500,16 @@
    the 44px tap height the presets' buttons have (app.css .dmode-bar .btn),
    which a .view-tab does not get on its own. */
 [data-surface="app"] .dmode-bar .view-tabs > .view-tab { min-height: 44px; }
+
+/* ==== view drawings ==== */
+/* Tasks, Calendar and Settings each keep one static drawing in a quiet spot: an
+   empty state, and the foot of Settings' section column. Decoration only. */
+[data-surface="app"] .view-drawing { display: flex; justify-content: center; }
+[data-surface="app"] .view-drawing .day-drawing { width: 112px; height: 140px; flex: none; }
+[data-surface="app"] .empty .view-drawing,
+[data-surface="app"] .agenda-empty .view-drawing { margin: 4px auto 14px; }
+/* Desktop: the foot of the section column, where it has room; hidden when it would not fit. */
+[data-surface="app"] .set-nav-drawing { margin-top: auto; padding-top: 16px; }
+@media (max-height: 759px) { [data-surface="app"] .settings-menu:not(.set-sheet) .set-nav-drawing { display: none; } }
+/* Phone sheet: after the last row, centred. */
+@media (max-width: 720px) { [data-surface="app"] .set-sheet .set-nav-drawing { margin: 24px auto 8px; padding-top: 0; } }

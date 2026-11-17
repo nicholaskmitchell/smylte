@@ -66,8 +66,16 @@ rebuild_failed() {   # $1: pip or npm
 }
 
 # A pending root migration stops deploys taking effect, which is exactly the
-# kind of thing that goes unnoticed in a log nobody is reading. Telegram is
-# already configured for this deployment, so reuse it.
+# kind of thing that goes unnoticed in a log nobody is reading. If signal-bot
+# is set up for this deployment, say so on Signal: the bot runs on this machine
+# and listens on loopback only, so this needs no egress.
+#
+# The token is read from the env file ONLY. This script runs from cron as the
+# app user, outside the service, and cannot read the secret store, so a token
+# pasted in Settings never reaches it: the deploy alert is sent only when
+# SMYLTE_SIGNAL_TOKEN is set in the env file. (Set there, it manages the app's
+# token too.) SMYLTE_AUTOPULL_ENVFILES replaces the list of env files, for the
+# tests only.
 #
 # ONCE, not once a minute. The check above runs on every tick by design, so an
 # unguarded send here would be a message every sixty seconds until the migration
@@ -76,30 +84,66 @@ NOTIFIED="$HOME/.smylte-migration-notified"
 
 notify_pending_migration() {
   [ -f "$NOTIFIED" ] && return 0
-  local envfile token chat
-  for envfile in /etc/smylte/smylte.env /etc/tasks/tasks.env; do
+  local envfile token= url= name v
+  # Unquoted on purpose: a space-separated list.
+  for envfile in ${SMYLTE_AUTOPULL_ENVFILES:-/etc/smylte/smylte.env /etc/tasks/tasks.env}; do
     [ -r "$envfile" ] || continue
-    # Both spellings: this can fire either side of the env-file rewrite.
-    token=$(sed -n 's/^[[:space:]]*\(SMYLTE\|TASKS\)_TELEGRAM_BOT_TOKEN=//p' "$envfile" | tail -1)
-    chat=$(sed -n 's/^[[:space:]]*\(SMYLTE\|TASKS\)_TELEGRAM_CHAT_ID=//p' "$envfile" | tail -1)
+    # SMYLTE_ only: these variables never had a TASKS_ spelling.
+    token=$(sed -n 's/^[[:space:]]*SMYLTE_SIGNAL_TOKEN=//p' "$envfile" | tail -1)
+    url=$(sed -n 's/^[[:space:]]*SMYLTE_SIGNAL_URL=//p' "$envfile" | tail -1)
     break
   done
-  [ -n "${token:-}" ] && [ -n "${chat:-}" ] || return 0
-  # -o /dev/null, and nothing from this call reaches $LOG: the bot token is in
-  # the URL (Telegram gives no other option) and a log is the wrong place for it.
-  # The URL carries the bot token, and Telegram offers no alternative — so it
-  # goes in on STDIN as a curl config file rather than on the command line,
-  # where /proc/<pid>/cmdline would expose it to every local user for the life
-  # of the request. Nothing here reaches $LOG either, for the same reason.
+  # Read the values as an env file means them: a trailing CR (a file saved on
+  # Windows), surrounding whitespace and one pair of matching quotes are not
+  # part of the value.
+  for name in token url; do
+    v=${!name}
+    v=${v%$'\r'}
+    v=${v#"${v%%[![:space:]]*}"}
+    v=${v%"${v##*[![:space:]]}"}
+    if [ "${#v}" -ge 2 ] && { [[ $v == \"*\" ]] || [[ $v == \'*\' ]]; }; then
+      v=${v:1:${#v}-2}
+    fi
+    printf -v "$name" '%s' "$v"
+  done
+  # Nothing configured: nothing to say, and nothing to log.
+  [ -n "$token" ] || return 0
+  url=${url:-http://127.0.0.1:8801}
+  url=${url,,}
+  # Send nothing unless the token can go in a header as it is (printable, no
+  # spaces, nothing that would break the quoted curl config line below) and the
+  # URL is signal-bot on loopback: the request carries the bearer token, and it
+  # must not go anywhere else. A refusal is logged, never the value.
+  if ! [[ $token =~ ^[!-~]+$ ]] || [[ $token == *'"'* || $token == *'\'* ]] \
+     || ! [[ $url =~ ^https?://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?/?$ ]]; then
+    echo "$(ts) signal alert skipped: SMYLTE_SIGNAL_URL or SMYLTE_SIGNAL_TOKEN is not usable" >>"$LOG"
+    return 0
+  fi
+  # No "Smylte: " prefix: the bot labels every message with its source's name.
+  local msg="A deploy is waiting on a migration that needs root. Deploys will not restart the service until it is applied. Run: sudo ${REPO_DIR}/deploy/migrate.sh"
+  # JSON-escaped: the backslash first, then the quote and the three control
+  # characters a path could plausibly carry.
+  msg=${msg//\\/\\\\}
+  msg=${msg//\"/\\\"}
+  msg=${msg//$'\n'/\\n}
+  msg=${msg//$'\r'/\\r}
+  msg=${msg//$'\t'/\\t}
+  local json="{\"text\": \"$msg\"}"
+  # The token goes in on STDIN as a curl config line rather than on the command
+  # line, where /proc/<pid>/cmdline would expose it to every local user for the
+  # life of the request. Nothing from this call reaches $LOG: -o /dev/null and
+  # 2>/dev/null, because an error line is the wrong place for a request that
+  # carries a credential. --noproxy '*' keeps the bearer token off any proxy
+  # the environment names; the bot is on this machine.
   #
   # --fail so a 4xx/5xx is a non-zero exit, and the marker is set ONLY on a send
   # that actually landed. Marking a failed send as delivered would permanently
   # suppress the one notice this exists to deliver — the failure mode this whole
   # function was written to prevent, reintroduced one line lower.
-  local msg="Smylte: a deploy is waiting on a migration that needs root. Deploys will not restart the service until it is applied. Run: sudo ${REPO_DIR}/deploy/migrate.sh"
-  if printf 'url = "https://api.telegram.org/bot%s/sendMessage"\ndata-urlencode = "chat_id=%s"\ndata-urlencode = "text=%s"\n' \
-       "$token" "$chat" "$msg" \
-     | curl -sS --fail -o /dev/null --max-time 10 --config - 2>/dev/null; then
+  if printf 'header = "Authorization: Bearer %s"\n' "$token" \
+     | curl -sS --fail -o /dev/null --max-time 10 --noproxy '*' --config - \
+         -H 'Content-Type: application/json' --data-binary "$json" \
+         "${url%/}/v1/send" 2>/dev/null; then
     touch "$NOTIFIED"
   fi
 }

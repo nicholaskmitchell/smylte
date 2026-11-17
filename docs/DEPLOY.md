@@ -225,8 +225,11 @@ Back up first (see [Backups](#backups)). Re-running is a no-op, and an
 interrupted run resumes. Progress is kept in `~/.smylte-migration-level`.
 Autopull runs `migrate.sh --auto`, which applies migrations that don't need
 root. For one that does, it logs the command, leaves the old service running
-instead of restarting, and sends one Telegram message if notifications are set
-up. New migrations go in `deploy/migrations/` as `NNNN-slug.sh`, defining
+instead of restarting, and sends one Signal message if `SMYLTE_SIGNAL_TOKEN`
+is set in the env file. The script can't read the secret store, so a token
+pasted in Settings doesn't reach it: set it in the env file instead to get the
+alert (it then manages the app's token too). New migrations go in
+`deploy/migrations/` as `NNNN-slug.sh`, defining
 `NEEDS_ROOT`, `describe()`, `applies()` and `apply()`.
 
 **Installs from before the rename** (`tasks.service`, `/etc/tasks`,
@@ -288,29 +291,39 @@ curl -sI -X POST $S/mcp -H 'Content-Type: application/json' -d '{}' | grep -i ww
 If `resource` doesn't exactly match the URL given to Claude, the connection
 fails even though the server is reachable.
 
-### Telegram notifications
+### Signal notifications
 
-1. Create a bot with [@BotFather](https://t.me/BotFather) and send it a message
-   (a bot can't start a conversation).
-2. In **Settings → Notifications**, enter the token and your chat id, turn it on
-   and press **Send a test message**. Alternatively set
-   `SMYLTE_TELEGRAM_BOT_TOKEN` and `SMYLTE_TELEGRAM_CHAT_ID` in the env file;
-   values set in the app take precedence. `SMYLTE_NOTIFY_ENABLED=false` disables
-   notifications entirely.
-3. **Allow egress.** The unit is loopback-only (`IPAddressDeny=any`). Add
-   Telegram's ranges as `IPAddressAllow=` lines above the deny, as shown in the
-   comments in `deploy/smylte.service`. Don't remove the deny: the service parses
-   untrusted iCalendar, and open egress would turn a parser bug into an
-   exfiltration channel.
-4. `sudo systemctl daemon-reload && sudo systemctl restart smylte`. The scheduler
+Notifications go through signal-bot, running on the same machine and listening
+on loopback (`127.0.0.1:8801`). Nothing needs opening in the firewall:
+`IPAddressAllow=localhost` in `deploy/smylte.service` already covers it.
+
+1. Add Smylte as a source on the bot: `signal-bot source add Smylte`. It prints
+   the source's token once.
+2. Pasting the token in Settings needs the secret store set up first, the
+   same one the email suggestions use: the key file and the `LoadCredential=`
+   line, then `sudo systemctl daemon-reload` and a restart (see
+   [Email suggestions](#email-suggestions), **Secrets**).
+   `SMYLTE_SIGNAL_TOKEN` in the env file works without any store.
+3. In **Settings → Notifications**, paste the token, turn notifications on and
+   press **Send a test message**. The token is kept in the encrypted secret
+   store, not the database, and is never returned over HTTP. Alternatively set
+   `SMYLTE_SIGNAL_TOKEN` in the env file; it overrides the one in Settings,
+   which then can't change it. The deploy alert (see
+   [Upgrades and migrations](#8-upgrades-and-migrations)) is sent only when
+   `SMYLTE_SIGNAL_TOKEN` is set in the env file; set it there instead of in
+   Settings to get it (it then manages the app's token too).
+   `SMYLTE_SIGNAL_URL` changes where the bot is reached (loopback only).
+   `SMYLTE_NOTIFY_ENABLED=false` disables notifications entirely.
+4. `sudo systemctl restart smylte` if you changed the env file. The scheduler
    runs once at startup.
 
 Rules, the digest time and lead times are account settings, edited in the app.
-`GET /api/notifications/recent` lists what was sent. The bot token is stored in
-the database in plain text (it has to be reused to send), so it is in every
-backup. It is never returned over HTTP. Put it in the env file to keep it out of
-the database. To rotate it, use `/revoke` in BotFather and enter the new token.
-Telegram isn't end-to-end encrypted, so messages carry no error details.
+`GET /api/notifications/recent` lists what was sent. The bot labels every
+message "Smylte: " and limits each source to 30 messages an hour.
+
+If you used Telegram before: this version deletes the bot token from the
+database at start. Revoke the old bot token with @BotFather's /revoke whatever
+your backups hold.
 
 ### Email suggestions
 
@@ -362,7 +375,8 @@ that's not acceptable, leave the TypeSafe key empty. A blocked Jev call just
 leaves the decision to Claude. Measurements are in
 `backend/dev/mail_eval/README.md`.
 
-**Secrets.** The Anthropic key, Bridge password and TypeSafe key are write-only.
+**Secrets.** The Anthropic key, Bridge password, TypeSafe key and signal-bot
+token (`signal_token`) are write-only.
 They're never returned, never logged (`smylted/mail/redact.py`), and never written
 to `smylte.db` or any config file in the repository. They're stored in one of:
 
@@ -376,7 +390,8 @@ to `smylte.db` or any config file in the repository. They're stored in one of:
 
 The choice is made once and recorded (`meta.secrets_backend`).
 `SMYLTE_SECRETS_BACKEND=keyring|file` forces it. `SMYLTE_ANTHROPIC_API_KEY`,
-`SMYLTE_MAIL_IMAP_PASSWORD` and `SMYLTE_TYPESAFE_API_KEY` override stored values.
+`SMYLTE_MAIL_IMAP_PASSWORD`, `SMYLTE_TYPESAFE_API_KEY` and `SMYLTE_SIGNAL_TOKEN`
+override stored values.
 
 Under the hardened unit the home directory is read-only, so pass the key as a
 credential and leave `SMYLTE_SECRETS_KEY_FILE` unset:
@@ -401,7 +416,8 @@ and changing any of them clears it. While `SMYLTE_MAIL_IMAP_PASSWORD` is set,
 the server settings can't be changed in the app. Unset it and restart, change
 them, then set it again.
 
-**Moving to another machine.** Either re-enter the secrets in Settings, or run
+**Moving to another machine.** Either re-enter the secrets (the signal-bot
+token among them) in Settings, or run
 `secrets migrate --to file`, copy `secrets.enc` and the key file separately
 (keep them 0600), and point `SMYLTE_SECRETS_FILE` and `SMYLTE_SECRETS_KEY_FILE`
 (or `LoadCredential=`) at them. Copy the mail tables too (see
@@ -642,5 +658,5 @@ Back up both:
 | `shares` | Share links, their tokens and what each shows. Restoring an older copy brings back links rotated or deleted since — check Settings → Shares after a restore |
 | `mail_ledger`, `mail_cursors`, `mail_suggestions`, `mail_threads`, `mail_rejections` | What mail was read, scan positions, pending suggestions, thread links and dismissals. Without them the next scan re-proposes the last week of mail |
 
-Email secrets aren't in the database; carry them separately (see
-[Email suggestions](#email-suggestions)).
+Email secrets and the signal-bot token (`signal_token`) aren't in the database;
+carry them separately (see [Email suggestions](#email-suggestions)).

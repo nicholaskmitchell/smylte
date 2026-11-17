@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CalendarView } from './CalendarView'
 import { DayPopover } from './DayPopover'
@@ -10,6 +10,7 @@ import { setCacheUser } from '../cache'
 import { api, type CalEvent, type List, type Task } from '../api'
 import type { DayEv } from '../calendar'
 import { withPrompt } from '../test/back'
+import { setBreakpoint } from '../test/setup'
 
 // The Calendar, its day popup and Scheduling under Field notes, the design that
 // names things and does not explain them. The preset behaviour is
@@ -143,6 +144,51 @@ describe('<CalendarView> under Field notes', () => {
     await user.click((await screen.findAllByRole('button', { name: /Standup/ }))[0])
     await screen.findByRole('dialog')
     expect(screen.queryByText(/shifts every occurrence/i)).toBeNull()
+  })
+
+  it('keeps a decorative drawing above "Nothing this day" on a phone', async () => {
+    act(() => setBreakpoint(true))
+    const { container } = render(withPrompt(<Harness />))
+    const empty = await waitFor(() => {
+      const e = container.querySelector('.agenda-empty')
+      expect(e).not.toBeNull()
+      return e as HTMLElement
+    })
+    expect(empty).toHaveTextContent('Nothing this day.')
+    const wrap = empty.querySelector('.view-drawing')!
+    expect(wrap).toHaveAttribute('aria-hidden', 'true')
+    expect(empty.firstElementChild).toBe(wrap)
+  })
+
+  it('keeps the drawing in the no-calendars empty state, once loaded', async () => {
+    m.calendars.mockResolvedValue([])
+    const { container } = render(withPrompt(<Harness />))
+    const empty = await waitFor(() => {
+      const e = container.querySelector('.content > .empty')
+      expect(e).toHaveTextContent('Create a calendar to get started.')
+      return e as HTMLElement
+    })
+    expect(empty.querySelector('.view-drawing')).toHaveAttribute('aria-hidden', 'true')
+  })
+
+  it('draws nothing while the calendars are still loading', async () => {
+    m.calendars.mockReturnValue(new Promise(() => {}))
+    const { container } = render(withPrompt(<Harness />))
+    const empty = await waitFor(() => {
+      const e = container.querySelector('.content > .empty')
+      expect(e).not.toBeNull()
+      return e as HTMLElement
+    })
+    expect(empty).toHaveAttribute('aria-busy', 'true')
+    expect(container.querySelector('.view-drawing')).toBeNull()
+  })
+
+  it('leaves the presets without it', async () => {
+    document.documentElement.removeAttribute('data-surface')
+    act(() => setBreakpoint(true))
+    const { container } = render(withPrompt(<Harness />))
+    await waitFor(() => expect(container.querySelector('.agenda-empty')).not.toBeNull())
+    expect(container.querySelector('.view-drawing')).toBeNull()
   })
 })
 

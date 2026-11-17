@@ -40,8 +40,7 @@ describe('Notifications under Field notes', () => {
   const show = (over: Partial<Parameters<typeof NotificationsSection>[0]> = {}) => render(
     <NotificationsSection
       enabled onEnabledChange={vi.fn()}
-      chatId="8517516151" onChatIdChange={vi.fn()}
-      tokenSet={false} botId="" onTokenChange={vi.fn()}
+      tokenSet={false} tokenEnv={false} onTokenChange={vi.fn()}
       onExpire={vi.fn()}
       triggers={{}} onTriggersChange={vi.fn()}
       digestTime="07:30" onDigestTimeChange={vi.fn()}
@@ -55,7 +54,7 @@ describe('Notifications under Field notes', () => {
     show({ triggers: { habits_outstanding: true } })
     // The folds stay mounted while closed, so their rows are in the page.
     for (const gone of [
-      /Needs a bot token and a chat id/, /Your user id, or a negative number/,
+      /Needs a bot token/,
       /Today’s events, what’s due and the overdue count/,
       /In the evening, the habits still open today/, /Sent at the evening time below/,
       /For the two evening rules above/, /For “Before every task is due”/,
@@ -67,10 +66,16 @@ describe('Notifications under Field notes', () => {
   })
 
   it('keeps the token note, which says it is not shown again, and the missing-zone warning', () => {
-    show({ homeTz: '', tokenSet: true, botId: '123' })
+    show({ homeTz: '', tokenSet: true })
     expect(screen.getByText(/It isn’t shown again after saving/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Remove it' })).toBeInTheDocument()
     expect(document.querySelector('.hintline.warn')).toHaveTextContent(/Set a home timezone/)
+  })
+
+  it('drops the line that says the server sets the token, like the other explanations', () => {
+    show({ tokenSet: true, tokenEnv: true })
+    expect(screen.queryByText(/Set on the server by SMYLTE_SIGNAL_TOKEN/)).toBeNull()
+    expect(document.getElementById('notif-token')).toBeDisabled()
   })
 })
 

@@ -39,7 +39,7 @@ What is known about Jev shapes how it is asked:
   above make tolerable.
 
 Plain synchronous `httpx`, the house pattern for outbound HTTP (see
-`smylted/notify/telegram.py`), not the `typesafe-sdk` package: the API is one
+`smylted/notify/signal.py`), not the `typesafe-sdk` package: the API is one
 POST, and another SDK is supply-chain surface for no gain. 429, 529 and other
 5xx answers and network errors are retried with a short backoff here, because
 the pipeline runs unattended; a failure after that is a `JevError` the pipeline

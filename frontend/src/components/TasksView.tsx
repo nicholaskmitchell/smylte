@@ -17,6 +17,8 @@ import { dateOut, TaskModal } from './TaskModal'
 import { Sidebar } from './Sidebar'
 import { SuggestionsPane } from './SuggestionsPane'
 import { CheckInk, StrikeInk } from './Marks'
+import { ViewDrawing } from './DayDrawing'
+import { EMPTY_DAY } from '../drawing'
 import { useMailSuggestions } from '../mail'
 import { useI18n } from '../i18n'
 import { useT } from '../i18n'
@@ -755,6 +757,11 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           // "create a list to get started" was the loudest thing on screen
           // during every cold load and every tab switch.
           <div className="empty" aria-busy={!listsLoaded || undefined}>
+            {fieldNotes && listsLoaded && (
+              <div className="view-drawing" aria-hidden="true">
+                <ViewDrawing view="tasks" day={todayKey} state={EMPTY_DAY} />
+              </div>
+            )}
             {!listsLoaded
               ? tr('common.loading')
               : lists.length === 0
@@ -789,6 +796,11 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
               ))}
               {active.length === 0 && taskListErrors.length === 0 && (
                 <div className="empty" aria-busy={!loaded || undefined}>
+                  {fieldNotes && loaded && (
+                    <div className="view-drawing" aria-hidden="true">
+                      <ViewDrawing view="tasks" day={todayKey} state={EMPTY_DAY} />
+                    </div>
+                  )}
                   {loaded ? tr('tasks.nothingToDo') : tr('common.loading')}
                 </div>
               )}

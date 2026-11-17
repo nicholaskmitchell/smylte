@@ -31,7 +31,7 @@ NOTIFIED="$HOME/.smylte-migration-notified"
 notify_pending_migration() {
   [ -f "$NOTIFIED" ] && return 0
   local envfile token chat
-  for envfile in /etc/smylte/smylte.env /etc/tasks/tasks.env; do
+  for envfile in ${SMYLTE_AUTOPULL_ENVFILES:-/etc/smylte/smylte.env /etc/tasks/tasks.env}; do
     [ -r "$envfile" ] || continue
     # Both spellings: this can fire either side of the env-file rewrite.
     token=$(sed -n 's/^[[:space:]]*\(SMYLTE\|TASKS\)_TELEGRAM_BOT_TOKEN=//p' "$envfile" | tail -1)

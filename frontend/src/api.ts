@@ -1158,21 +1158,18 @@ export interface Settings {
    *  off: it is what stands between a deploy that merely has a bot token in its
    *  environment and one whose owner asked to be messaged. */
   notifications_enabled?: boolean
-  /** Where messages go. Not a secret (an integer naming a chat), so it reads
-   *  back like any other preference. */
-  notify_telegram_chat_id?: string
   /** WRITE-ONLY. Accepted by PUT, never returned by GET — the settings document
    *  is fetched on every page load, so echoing the token would put a working
-   *  bot in the DOM, in the network tab, and in any screenshot of either. The
-   *  two fields below are what comes back instead. Send '' to clear it and fall
-   *  back to the environment. */
-  notify_telegram_bot_token?: string
+   *  signal-bot source in the DOM, in the network tab, and in any screenshot of
+   *  either. The two fields below are what comes back instead. Send '' to
+   *  clear it. */
+  notify_signal_token?: string
   /** Read-only, server-derived: whether a token is stored at all. */
-  notify_telegram_bot_token_set?: boolean
-  /** Read-only, server-derived: the PUBLIC half of the token — the bot's own
-   *  user id — which names which bot is configured while revealing nothing that
-   *  could send as it. '' when no token is stored. */
-  notify_telegram_bot_id?: string
+  notify_signal_token_set?: boolean
+  /** Read-only, server-derived: whether the server's environment sets the token
+   *  (SMYLTE_SIGNAL_TOKEN), which overrides one saved here — so it cannot be
+   *  changed from Settings. */
+  notify_signal_token_env?: boolean
 }
 
 // ── email ingestion ────────────────────────────────────────────────────────

@@ -15,7 +15,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { DEFAULT_CALENDAR_FIT, calendarFitKey, type CalendarFit } from '../calendar'
-import { useIsMobile, useEscape, useFieldNotes } from '../hooks'
+import { useIsMobile, useEscape, useFieldNotes, useToday } from '../hooks'
 import { PendingWrite, UnsentInput, useLayer, usePendingCount, useUnsentCount } from '../layers'
 import { SESSION_DEFAULT, sessionKey } from '../session'
 import { DEFAULT_TIME_FORMAT, timeFormatKey, type TimeFormat } from '../time'
@@ -37,6 +37,8 @@ import { CapacitySection } from './CapacitySection'
 import { FocusSection } from './FocusSection'
 import { Hint } from './Hint'
 import { TabInk } from './Marks'
+import { ViewDrawing } from './DayDrawing'
+import { EMPTY_DAY } from '../drawing'
 import type { FocusSettings } from '../focus'
 import { NotificationsSection } from './NotificationsSection'
 import { MailSection } from './MailSection'
@@ -99,8 +101,7 @@ export function SettingsMenu({
   planOnDueToday, onTogglePlanOnDueToday,
   focus, onFocusChange,
   notifyEnabled, onNotifyEnabledChange,
-  notifyChatId, onNotifyChatIdChange,
-  notifyTokenSet, notifyBotId, onNotifyTokenChange,
+  notifyTokenSet, notifyTokenEnv, onNotifyTokenChange,
   notifyTriggers, onNotifyTriggersChange,
   notifyDigestTime, onNotifyDigestTimeChange,
   notifyEveningTime, onNotifyEveningTimeChange,
@@ -157,12 +158,11 @@ export function SettingsMenu({
   onFocusChange: (patch: Partial<FocusSettings>) => void
   notifyEnabled: boolean
   onNotifyEnabledChange: (next: boolean) => void
-  notifyChatId: string
-  onNotifyChatIdChange: (next: string) => void
-  /** Whether a bot token is stored, and which bot. The token itself never comes
-   *  back from the server, so this is all the UI has — and all it needs. */
+  /** Whether a signal-bot token is stored, and whether the server's environment
+   *  sets it. The token itself never comes back from the server, so these are
+   *  all the UI has — and all it needs. */
   notifyTokenSet: boolean
-  notifyBotId: string
+  notifyTokenEnv: boolean
   onNotifyTokenChange: (next: string) => void
   /** Sparse overrides: an absent rule means that rule's own default. */
   notifyTriggers: Partial<Record<Trigger, boolean>>
@@ -193,6 +193,7 @@ export function SettingsMenu({
 }) {
   const isMobile = useIsMobile()
   const fieldNotes = useFieldNotes()
+  const today = useToday()
   const [section, setSection] = useState<Section>(initialSection ?? 'general')
   // Only meaningful on a phone. On a desktop the nav is a permanent column, so
   // there is nothing to be "in" and nothing to go back to.
@@ -324,6 +325,11 @@ export function SettingsMenu({
           {fieldNotes && <TabInk />}
         </button>
       ))}
+      {fieldNotes && (
+        <div className="view-drawing set-nav-drawing" aria-hidden="true">
+          <ViewDrawing view="settings" day={today} state={EMPTY_DAY} />
+        </div>
+      )}
     </div>
   )
 
@@ -575,8 +581,7 @@ export function SettingsMenu({
           <>
             <NotificationsSection
               enabled={notifyEnabled} onEnabledChange={onNotifyEnabledChange}
-              chatId={notifyChatId} onChatIdChange={onNotifyChatIdChange}
-              tokenSet={notifyTokenSet} botId={notifyBotId}
+              tokenSet={notifyTokenSet} tokenEnv={notifyTokenEnv}
               onTokenChange={onNotifyTokenChange}
               onExpire={onExpire}
               triggers={notifyTriggers}

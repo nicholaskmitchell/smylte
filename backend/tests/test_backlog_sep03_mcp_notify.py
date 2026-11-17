@@ -42,7 +42,7 @@ from smylted.mcp.oauth import SCOPE_READ, SCOPE_WRITE
 from smylted.mcp.server import McpServer
 from smylted.mcp.tools import ToolError, build_tools
 from smylted.notify import rules as R
-from smylted.notify import telegram as tg
+from smylted.notify import signal as sg
 from smylted.notify.scheduler import MAX_LOUD_PER_DAY, Notifier
 from smylted.service import SmylteService
 
@@ -310,31 +310,34 @@ def test_every_tool_outside_the_read_allowlist_needs_write_access():
 # ── the transport never raises, whatever is in the token ─────────────────────
 
 def test_a_token_with_a_control_character_is_a_recorded_failure_not_a_crash(db):
-    """httpx 0.28's `InvalidURL` is not an `HTTPError`, and it is raised for any
-    non-printable ASCII in the URL — so a token pasted with an interior tab
-    escaped `send()`'s "Never raises" contract. In `_dispatch` that happens
-    AFTER every pending row is claimed, so each sweep claimed the day's digest
-    and then died, the rows stayed unsettled (read as SENT), and nothing was
-    ever delivered until the token was retyped."""
-    bad = "123456789:AAH\tpasted-with-a-tab-from-a-chat-window"
-    sender = tg.TelegramSender(
-        bad, transport=httpx.MockTransport(lambda req: httpx.Response(200, json={"ok": True})),
-        sleep=lambda _s: None,
-    )
+    """A token pasted with an interior tab cannot go in a header, and httpx
+    raises for one — which, unguarded, escaped `send()`'s "Never raises"
+    contract. In `_dispatch` that happens AFTER every pending row is claimed,
+    so each sweep claimed the day's digest and then died, the rows stayed
+    unsettled (read as SENT), and nothing was ever delivered until the token
+    was retyped. The sender refuses such a token before any request."""
+    bad = "sig-src-AAH\tpasted-with-a-tab-from-a-chat-window"
+    requests: list = []
 
-    result = sender.send(555, "hello")            # must not raise
-    assert result.ok is False and result.permanent is True
-    assert result.error and "\t" not in result.error and "AAH" not in result.error
+    def handler(req):
+        requests.append(req)
+        return httpx.Response(200, json={"ok": True, "result": {"timestamp": 1}})
 
-    # And the sweep that adopts that token settles what it claimed.
-    svc = StubSvc(db, settings={"notifications_enabled": True, "notify_digest_time": "07:30",
-                                "notify_telegram_bot_token": bad,
-                                "notify_telegram_chat_id": "555"})
-    out = Notifier(svc, sender, "555", log=NullLog(), token="env-token").sweep(MORNING)
+    sender = sg.SignalSender(transport=httpx.MockTransport(handler), sleep=lambda _s: None)
+
+    # The sweep that adopts that token through the provider settles what it
+    # claimed, as a permanent failure, and the ledger never holds the token.
+    svc = StubSvc(db, settings={"notifications_enabled": True, "notify_digest_time": "07:30"})
+    out = Notifier(svc, sender, log=NullLog(), token=lambda: bad).sweep(MORNING)
     assert out.failed == 1 and out.sent == 0
+    assert requests == []
     row = store.recent_notifications(db)[0]
     assert row["trigger"] == "daily_digest" and row["settled_at"] and row["ok"] == 0
-    assert row["error"] and "AAH" not in row["error"]
+    assert row["error"] and "\t" not in row["error"] and "AAH" not in row["error"]
+    assert bad not in row["error"]
+
+    result = sender.send(sg.OWNER, "hello")       # must not raise
+    assert result.ok is False and result.permanent is True
 
 
 # ── the loud ceiling counts buzzes, not rows ─────────────────────────────────
@@ -381,7 +384,7 @@ def test_one_batched_buzz_spends_one_slot_of_the_daily_ceiling(db):
     sweep and the marker came off. The other half of the same accounting
     (failed sends spending slots) is pinned below."""
     sender = StubSender()
-    n = Notifier(_morning_tier(db), sender, "555", log=NullLog(), token="env-token")
+    n = Notifier(_morning_tier(db), sender, log=NullLog(), token=lambda: "store-token")
     assert n.sweep(MORNING).sent == 4 and len(sender.sent) == 1, "one buzz, four rows"
 
     midnight = Notifier._local_midnight(MORNING, NY)
@@ -397,15 +400,15 @@ def test_one_batched_buzz_spends_one_slot_of_the_daily_ceiling(db):
         store.settle_notification(db, "filler", f"f{i}", ok=True, silent=False)
     late = StubSender()
     at_13 = datetime(2026, 8, 31, 17, 0, tzinfo=timezone.utc)
-    out = Notifier(_meeting_svc(db, "m1", "2026-08-31T13:08:00"), late, "555",
-                   log=NullLog(), token="env-token").sweep(at_13)
+    out = Notifier(_meeting_svc(db, "m1", "2026-08-31T13:08:00"), late,
+                   log=NullLog(), token=lambda: "store-token").sweep(at_13)
     assert out.sent == 1 and out.downgraded == 0
     assert late.sent[0]["silent"] is False, "the eighth buzz of the day is still a buzz"
 
     # CONTROL: the ninth is not.
     later = StubSender()
-    out = Notifier(_meeting_svc(db, "m2", "2026-08-31T14:08:00"), later, "555",
-                   log=NullLog(), token="env-token").sweep(at_13 + timedelta(hours=1))
+    out = Notifier(_meeting_svc(db, "m2", "2026-08-31T14:08:00"), later,
+                   log=NullLog(), token=lambda: "store-token").sweep(at_13 + timedelta(hours=1))
     assert out.downgraded == 1 and later.sent[0]["silent"] is True
 
 
@@ -415,13 +418,13 @@ def test_a_loud_send_telegram_refused_spends_no_slot(db):
     `silent=0` row and was charged on every later sweep."""
     for i in range(MAX_LOUD_PER_DAY):
         refused = StubSender(ok=False)
-        Notifier(_meeting_svc(db, f"r{i}", "2026-08-31T07:38:00"), refused, "555",
-                 log=NullLog(), token="env-token").sweep(MORNING)
+        Notifier(_meeting_svc(db, f"r{i}", "2026-08-31T07:38:00"), refused,
+                 log=NullLog(), token=lambda: "store-token").sweep(MORNING)
         assert refused.sent and store.recent_notifications(db)[0]["ok"] == 0
 
     sender = StubSender()
-    out = Notifier(_meeting_svc(db, "real", "2026-08-31T07:38:00"), sender, "555",
-                   log=NullLog(), token="env-token").sweep(MORNING)
+    out = Notifier(_meeting_svc(db, "real", "2026-08-31T07:38:00"), sender,
+                   log=NullLog(), token=lambda: "store-token").sweep(MORNING)
     assert out.sent == 1 and out.downgraded == 0
     assert sender.sent[0]["silent"] is False, \
         "eight refusals are not eight interruptions"

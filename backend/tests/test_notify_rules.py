@@ -96,7 +96,7 @@ class StubSender:
 
     def send(self, chat_id, text, *, silent=False, **kw):
         self.sent.append({"text": text, "silent": silent, "chat_id": chat_id})
-        from smylted.notify.telegram import SendResult
+        from smylted.notify.transport import SendResult
         # A fresh id per message, as Telegram hands out: the ledger now records
         # which delivery each occasion rode in, and the daily loud ceiling
         # counts distinct ids — a stub that answered `1` for every send would

@@ -64,8 +64,7 @@ function show(over: Partial<Parameters<typeof SettingsMenu>[0]> = {}) {
     planOnDueToday={false} onTogglePlanOnDueToday={vi.fn()}
     focus={DEFAULT_FOCUS} onFocusChange={vi.fn()}
     notifyEnabled={false} onNotifyEnabledChange={vi.fn()}
-    notifyChatId="" onNotifyChatIdChange={vi.fn()}
-    notifyTokenSet={false} notifyBotId="" onNotifyTokenChange={vi.fn()}
+    notifyTokenSet={false} notifyTokenEnv={false} onNotifyTokenChange={vi.fn()}
     notifyTriggers={{}} onNotifyTriggersChange={vi.fn()}
     notifyDigestTime="07:30" onNotifyDigestTimeChange={vi.fn()}
     notifyEventLead={10} onNotifyEventLeadChange={vi.fn()}
@@ -212,5 +211,19 @@ describe('<SettingsMenu> under Field notes', () => {
     await userEvent.click(nav('Displays'))
     expect(within(panel()).queryByText(/Read-only screens for your calendar or day/)).not.toBeInTheDocument()
     expect(within(panel()).queryByText(/Shows the same faces as a desk display/)).not.toBeInTheDocument()
+  })
+
+  it('ends the section column with a decorative drawing that is not a tab', () => {
+    show()
+    const drawing = document.querySelector('.set-nav > .view-drawing.set-nav-drawing')!
+    expect(drawing).toHaveAttribute('aria-hidden', 'true')
+    expect(drawing).toBe(document.querySelector('.set-nav')!.lastElementChild)
+    expect(screen.getAllByRole('tab').every((t) => !drawing.contains(t))).toBe(true)
+  })
+
+  it('leaves the presets without it', () => {
+    document.documentElement.removeAttribute('data-surface')
+    show()
+    expect(document.querySelector('.view-drawing')).toBeNull()
   })
 })

@@ -279,8 +279,9 @@ def test_statuses_never_contain_a_value(tmp_path):
     text = json.dumps(store.statuses(), ensure_ascii=False)
     assert API_KEY not in text and PASSWORD not in text
     assert set(store.statuses()) == set(sec.SECRET_NAMES) == {
-        "anthropic_api_key", "imap_password", "typesafe_api_key"}
+        "anthropic_api_key", "imap_password", "typesafe_api_key", "signal_token"}
     assert sec.ENV_VARS["typesafe_api_key"] == "SMYLTE_TYPESAFE_API_KEY"
+    assert sec.ENV_VARS["signal_token"] == "SMYLTE_SIGNAL_TOKEN"
 
 
 def test_auto_prefers_a_usable_keyring_and_pins_it(tmp_path):
@@ -422,7 +423,7 @@ def test_build_secret_store_reads_settings(tmp_path):
         db_path=str(tmp_path / "a.db"), secrets_file="", secrets_key_file=str(tmp_path / "k.key"),
         secrets_namespace="default", secrets_backend="file",
         anthropic_api_key="", mail_imap_password="  env-password-4321 ",
-        typesafe_api_key=" ts-env-key-98765 ")
+        typesafe_api_key=" ts-env-key-98765 ", signal_token="")
     store = sec.build_secret_store(settings, lambda: None, lambda v: None)
     assert store.file_backend.path == str(tmp_path / "secrets.enc")
     assert store.keyring_backend._service == "smylte/default"
@@ -439,7 +440,7 @@ def test_build_secret_store_without_key_creation(tmp_path):
     settings = SimpleNamespace(
         db_path=str(tmp_path / "a.db"), secrets_file="", secrets_key_file=str(tmp_path / "k.key"),
         secrets_namespace="default", secrets_backend="file",
-        anthropic_api_key="", mail_imap_password="", typesafe_api_key="")
+        anthropic_api_key="", mail_imap_password="", typesafe_api_key="", signal_token="")
     store = sec.build_secret_store(settings, lambda: None, lambda v: None, create_key=False)
     with pytest.raises(sec.SecretStoreError) as info:
         store.set("imap_password", PASSWORD)

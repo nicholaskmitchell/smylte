@@ -5,21 +5,27 @@ the predicates.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
+import httpx
+
 from smylted.db import store
+from smylted.mail.secrets import SecretStoreError
 from smylted.notify import rules as R
-from smylted.notify.scheduler import MAX_LOUD_PER_DAY, Notifier
+from smylted.notify import scheduler as sched
+from smylted.notify.scheduler import MAX_LOUD_PER_DAY, Notifier, loud_deliveries_since
+from smylted.notify.signal import SignalSender
+from smylted.notify.transport import SendResult
 
 from tests.test_notify_rules import NY, NullLog, StubSender, StubSvc, _event
 
 MORNING = datetime(2026, 8, 31, 11, 30, tzinfo=timezone.utc)   # 07:30 in NY
 
 
-def _notifier(svc, sender=None):
-    # "555" and the token stand in for the environment fallbacks; the account's
-    # own settings win over both when it sets them.
-    return Notifier(svc, sender or StubSender(), "555", log=NullLog(), token="env-token")
+def _notifier(svc, sender=None, token=lambda: "store-token"):
+    # The provider stands in for the secret store, read once per sweep.
+    return Notifier(svc, sender or StubSender(), log=NullLog(), token=token)
 
 
 # The master switch is an ACCOUNT setting now and absent means off, so every
@@ -44,7 +50,7 @@ def test_a_reminder_at_the_time_goes_out_on_the_next_real_sweep_and_once(db):
     svc = StubSvc(db, settings={**ON, "time_format": "24h", "notify_digest_time": "07:30"},
                   tasks=[_task(notify=0)])
     sender = StubSender()
-    n = Notifier(svc, sender, "555", log=NullLog(), token="env-token", interval_s=60.0)
+    n = Notifier(svc, sender, log=NullLog(), token=lambda: "store-token", interval_s=60.0)
 
     due = datetime(2026, 8, 31, 14, 0, tzinfo=timezone.utc)          # 10:00 in NY
     n.sweep(due.replace(second=37))
@@ -61,7 +67,7 @@ def test_a_reminder_at_the_time_survives_a_slow_sweep(db):
     from tests.test_notify_rules import _task
     svc = StubSvc(db, settings={**ON, "notify_digest_time": "07:30"}, tasks=[_task(notify=0)])
     sender = StubSender()
-    n = Notifier(svc, sender, "555", log=NullLog(), token="env-token", interval_s=60.0)
+    n = Notifier(svc, sender, log=NullLog(), token=lambda: "store-token", interval_s=60.0)
     reminder = "Renew passport due 10:00"      # not the digest, which lists it too
     n.sweep(datetime(2026, 8, 31, 13, 59, 30, tzinfo=timezone.utc))   # 30 s before
     assert not [m for m in sender.sent if reminder in m["text"]]
@@ -190,6 +196,24 @@ def test_a_burst_from_one_rule_becomes_one_message(db):
     assert len(store.recent_notifications(db)) == 3
 
 
+def test_a_batch_the_bot_named_no_message_for_is_charged_once(db):
+    # Delivered, but with no id (a 422 after a lost answer): the batch still
+    # rode in one message, so the ceiling must charge it one buzz, not three.
+    class Unnamed(StubSender):
+        def send(self, chat_id, text, *, silent=False, **kw):
+            self.sent.append({"text": text, "silent": silent, "chat_id": chat_id})
+            return SendResult(True, message_id=None)
+
+    events = [_event("2026-08-31T07:38:00", summary=f"Mtg {i}", uid=f"e{i}")
+              for i in range(3)]
+    svc = StubSvc(db, settings={**ON, "notify_triggers": {"daily_digest": False}},
+                  events=events)
+    sender = Unnamed()
+    result = _notifier(svc, sender).sweep(MORNING)
+    assert len(sender.sent) == 1 and result.sent == 3
+    assert loud_deliveries_since(db, Notifier._local_midnight(MORNING, NY)) == 1
+
+
 def test_two_at_once_stay_two_messages(db):
     events = [_event("2026-08-31T07:38:00", summary=f"Mtg {i}", uid=f"e{i}")
               for i in range(2)]
@@ -242,9 +266,9 @@ def test_a_disabled_trigger_is_never_evaluated(db):
 def test_an_unconfigured_notifier_does_nothing_at_all(db):
     svc = _digest_svc(db)
     sender = StubSender()
-    n = Notifier(svc, sender, "", log=NullLog(), token="")   # nothing anywhere
-    assert n.configured is False
-    assert n.sweep(MORNING).sent == 0 and sender.sent == []
+    for nothing in (lambda: None, lambda: "", lambda: "   "):
+        n = Notifier(svc, sender, log=NullLog(), token=nothing)
+        assert n.sweep(MORNING).sent == 0 and sender.sent == []
 
 
 def test_nothing_is_sent_until_the_account_switches_notifications_on(db):
@@ -257,34 +281,79 @@ def test_nothing_is_sent_until_the_account_switches_notifications_on(db):
     assert sender.sent == []
 
 
-def test_the_accounts_own_credentials_win_over_the_environment(db):
-    svc = _digest_svc(db, settings={**ON, "notify_digest_time": "07:30",
-                                    "notify_telegram_chat_id": "999",
-                                    "notify_telegram_bot_token": "account-token"})
-    sender = StubSender()
-    n = _notifier(svc, sender)
-    n.sweep(MORNING)
-    assert sender.sent[0]["chat_id"] == "999"
-    assert sender.token == "account-token"
-
-
-def test_the_environment_still_works_for_a_deployment_that_never_opens_the_ui(db):
+def test_the_providers_token_is_adopted_and_every_send_goes_to_the_owner(db):
     svc = _digest_svc(db)
     sender = StubSender()
-    _notifier(svc, sender).sweep(MORNING)
-    assert sender.sent[0]["chat_id"] == "555"
-    assert sender.token == "env-token"
+    _notifier(svc, sender, token=lambda: "  store-token\n").sweep(MORNING)
+    assert sender.sent[0]["chat_id"] == "owner"
+    assert sender.token == "store-token"
 
 
-def test_a_token_typed_into_settings_takes_effect_without_a_restart(db):
+def test_a_token_pasted_into_settings_takes_effect_without_a_restart(db):
     svc = _digest_svc(db)
     sender = StubSender()
-    n = _notifier(svc, sender)
+    held = {"token": "first-token"}
+    n = _notifier(svc, sender, token=lambda: held["token"])
     n.sweep(MORNING)
-    assert sender.token == "env-token"
-    svc._settings["notify_telegram_bot_token"] = "typed-later"
+    assert sender.token == "first-token"
+    held["token"] = "pasted-later"
     n.sweep(MORNING.replace(day=30))          # a different day, so a new digest
-    assert sender.token == "typed-later"
+    assert sender.token == "pasted-later"
+
+
+def test_an_unusable_secret_store_sends_nothing_and_says_so_once(db):
+    class Log:
+        def __init__(self):
+            self.warnings = []
+
+        def warning(self, msg, *args):
+            self.warnings.append(msg % args)
+
+        def info(self, *a, **kw):
+            pass
+
+    def broken():
+        raise SecretStoreError("the secrets file could not be decrypted")
+
+    svc = _digest_svc(db)
+    sender = StubSender()
+    log = Log()
+    n = Notifier(svc, sender, log=log, token=broken)
+    assert n.sweep(MORNING).sent == 0
+    assert n.sweep(MORNING.replace(minute=31)).sent == 0
+    assert sender.sent == []
+    assert log.warnings == [
+        "notify: the secret store is unavailable: the secrets file could not be decrypted"]
+
+
+def test_a_new_outage_of_the_secret_store_is_said_again(db):
+    class Log:
+        def __init__(self):
+            self.warnings = []
+
+        def warning(self, msg, *args):
+            self.warnings.append(msg % args)
+
+        def info(self, *a, **kw):
+            pass
+
+    down = {"now": True}
+
+    def flaky():
+        if down["now"]:
+            raise SecretStoreError("the secrets file could not be decrypted")
+        return "store-token"
+
+    log = Log()
+    n = Notifier(_digest_svc(db), StubSender(), log=log, token=flaky)
+    n.sweep(MORNING)
+    n.sweep(MORNING.replace(minute=31))
+    assert len(log.warnings) == 1, "one outage, said once"
+    down["now"] = False
+    n.sweep(MORNING.replace(minute=32))
+    down["now"] = True
+    n.sweep(MORNING.replace(minute=33))
+    assert len(log.warnings) == 2, "a second outage is a new one"
 
 
 # ── ledger housekeeping ──────────────────────────────────────────────────────
@@ -379,3 +448,76 @@ def test_the_loop_and_the_notifier_share_one_sanitised_cadence():
     assert cadence(2.0) == 5.0
     for bad in (0.0, -1.0, float("nan"), float("inf")):
         assert cadence(bad) == 60.0
+
+
+# ── the test send ────────────────────────────────────────────────────────────
+
+def _bot(*responses):
+    """A SignalSender wired to a fake bot answering with `responses` in turn;
+    returns (sender, the requests it saw)."""
+    seen: list[httpx.Request] = []
+    queue = list(responses)
+
+    def handler(request):
+        seen.append(request)
+        return queue.pop(0) if len(queue) > 1 else queue[0]
+
+    sender = SignalSender(transport=httpx.MockTransport(handler), sleep=lambda s: None)
+    return sender, seen
+
+
+def _sent_ok():
+    return httpx.Response(200, json={"ok": True, "result": {"timestamp": 1791055942166}})
+
+
+def test_a_refusal_from_the_bot_is_its_own_sentence_with_no_token_hint(db):
+    sentence = "Smylte has sent 30 messages this hour, its limit."
+    sender, _ = _bot(httpx.Response(422, json={"ok": False, "code": "refused",
+                                               "error": sentence}))
+    ok, detail = _notifier(StubSvc(db), sender).send_test()
+    assert not ok
+    assert detail == f"HTTP 422 refused: {sentence}"
+    assert "Check the token" not in detail
+
+
+def test_an_unauthorised_test_send_names_the_token(db):
+    sender, _ = _bot(httpx.Response(401, json={"ok": False, "code": "unauthorized",
+                                               "error": "No source has that token."}))
+    ok, detail = _notifier(StubSvc(db), sender).send_test()
+    assert not ok
+    assert detail == ("HTTP 401 unauthorized: No source has that token. Check the token, "
+                      "and that the Smylte source is enabled on the bot.")
+
+
+def test_two_presses_send_two_different_texts(db, monkeypatch):
+    # The bot refuses the same text within a minute, so the second press must
+    # not be a duplicate of the first. The time is the owner's local time.
+    class Clock(datetime):
+        ticks = iter([datetime(2026, 8, 31, 11, 30, 5, tzinfo=timezone.utc),
+                      datetime(2026, 8, 31, 11, 30, 9, tzinfo=timezone.utc)])
+
+        @classmethod
+        def now(cls, tz=None):
+            return next(cls.ticks)
+
+    monkeypatch.setattr(sched, "datetime", Clock)
+    sender, seen = _bot(_sent_ok())
+    n = _notifier(StubSvc(db), sender)
+    assert n.send_test() == (True, "Sent.")
+    assert n.send_test() == (True, "Sent.")
+    texts = [json.loads(r.read())["text"] for r in seen]
+    assert texts == [
+        "Connected at 07:30:05. This is the only message you will get that you asked for directly.",
+        "Connected at 07:30:09. This is the only message you will get that you asked for directly.",
+    ]
+
+
+def test_an_unreadable_secret_store_is_said_by_the_test_send(db):
+    def broken():
+        raise SecretStoreError("the secrets file could not be decrypted")
+
+    sender, seen = _bot(_sent_ok())
+    ok, detail = _notifier(StubSvc(db), sender, token=broken).send_test()
+    assert not ok
+    assert detail == "The secret store cannot be read: the secrets file could not be decrypted"
+    assert seen == []

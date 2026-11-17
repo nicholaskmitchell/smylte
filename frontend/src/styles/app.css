@@ -2312,7 +2312,7 @@ main.share { max-width: 680px; margin: 0 auto; display: flex; flex-direction: co
    and will never fire until a home timezone exists. */
 .hintline.warn { color: var(--warn); }
 .set-panel .menu-row .notif-time { max-width: 140px; }
-.set-panel .menu-row .notif-token, .set-panel .menu-row .notif-chat { max-width: min(240px, 60%); }
+.set-panel .menu-row .notif-token { max-width: min(240px, 60%); }
 /* A picker, so it sizes like the other cycling controls rather than like a
    text input that happens to be a select. */
 .reminder-field { max-width: 200px; }

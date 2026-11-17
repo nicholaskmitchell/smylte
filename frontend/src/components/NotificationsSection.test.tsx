@@ -1,9 +1,10 @@
 // The notifications settings section: toggling a rule, the digest time field's
 // commit-on-blur, and the one hint that is a warning.
-import { fireEvent, render, screen } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { NotificationsSection } from './NotificationsSection'
+import { en } from '../i18n/en'
 import { DEFAULT_OFF, DEFAULT_ON, TRIGGERS, TRIGGER_IS_LOUD } from '../notifications'
 
 function show(over: Partial<Parameters<typeof NotificationsSection>[0]> = {}) {
@@ -11,12 +12,10 @@ function show(over: Partial<Parameters<typeof NotificationsSection>[0]> = {}) {
   const onDigestTimeChange = vi.fn()
   const onEventLeadChange = vi.fn()
   const onEnabledChange = vi.fn()
-  const onChatIdChange = vi.fn()
   const onTokenChange = vi.fn()
   render(<NotificationsSection
     enabled onEnabledChange={onEnabledChange}
-    chatId="8517516151" onChatIdChange={onChatIdChange}
-    tokenSet={false} botId="" onTokenChange={onTokenChange}
+    tokenSet={false} tokenEnv={false} onTokenChange={onTokenChange}
     onExpire={vi.fn()}
     triggers={{}} onTriggersChange={onTriggersChange}
     digestTime="07:30" onDigestTimeChange={onDigestTimeChange}
@@ -26,7 +25,7 @@ function show(over: Partial<Parameters<typeof NotificationsSection>[0]> = {}) {
     homeTz="America/New_York"
     {...over} />)
   return { onTriggersChange, onDigestTimeChange, onEventLeadChange,
-           onEnabledChange, onChatIdChange, onTokenChange }
+           onEnabledChange, onTokenChange }
 }
 
 describe('the rule rows', () => {
@@ -126,8 +125,7 @@ describe('the home-timezone warning', () => {
     // A rule that is on but never fires is worse than one that is off.
     const { container } = render(<NotificationsSection
       enabled onEnabledChange={vi.fn()}
-      chatId="" onChatIdChange={vi.fn()}
-      tokenSet={false} botId="" onTokenChange={vi.fn()}
+      tokenSet={false} tokenEnv={false} onTokenChange={vi.fn()}
       onExpire={vi.fn()}
       triggers={{}} onTriggersChange={vi.fn()}
       digestTime="07:30" onDigestTimeChange={vi.fn()}
@@ -150,7 +148,7 @@ describe('the meeting lead', () => {
 })
 
 
-// ── the Telegram connection ──────────────────────────────────────────────────
+// ── the signal-bot connection ──────────────────────────────────────────────────
 
 describe('the bot token', () => {
   it('is a password field that starts empty even when one is stored', () => {
@@ -158,8 +156,7 @@ describe('the bot token', () => {
     // back, so the field can only ever be a place to type a new one.
     render(<NotificationsSection
       enabled onEnabledChange={vi.fn()}
-      chatId="1" onChatIdChange={vi.fn()}
-      tokenSet botId="123456789" onTokenChange={vi.fn()}
+      tokenSet tokenEnv={false} onTokenChange={vi.fn()}
       onExpire={vi.fn()}
       triggers={{}} onTriggersChange={vi.fn()}
       digestTime="07:30" onDigestTimeChange={vi.fn()}
@@ -170,8 +167,8 @@ describe('the bot token', () => {
     const field = document.getElementById('notif-token') as HTMLInputElement
     expect(field.type).toBe('password')
     expect(field.value).toBe('')
-    // It says WHICH bot without being able to speak as it.
-    expect(field.placeholder).toContain('123456789')
+    // It says one is stored without being able to speak as it.
+    expect(field.placeholder).toBe(en['notif.token.stored'])
   })
 
   it('saves a pasted token on blur and then forgets it', async () => {
@@ -188,7 +185,7 @@ describe('the bot token', () => {
     // A stray click in a field the owner never meant to touch must not silently
     // disconnect the bot. Remove is the only thing that clears it.
     const user = userEvent.setup()
-    const { onTokenChange } = show({ tokenSet: true, botId: '1' })
+    const { onTokenChange } = show({ tokenSet: true })
     const field = document.getElementById('notif-token') as HTMLInputElement
     await user.click(field)
     await user.tab()
@@ -198,9 +195,36 @@ describe('the bot token', () => {
   it('offers Remove only when there is something to remove', async () => {
     const user = userEvent.setup()
     expect(screen.queryByText('Remove it')).toBeNull()
-    const { onTokenChange } = show({ tokenSet: true, botId: '1' })
+    const { onTokenChange } = show({ tokenSet: true })
     await user.click(screen.getByText('Remove it'))
     expect(onTokenChange).toHaveBeenCalledWith('')
+  })
+
+  it('asks for a token from signal-bot while none is stored', () => {
+    show()
+    const field = document.getElementById('notif-token') as HTMLInputElement
+    expect(field.placeholder).toBe(en['notif.token.placeholder'])
+    expect(field.placeholder).not.toContain('123456789')
+    expect(screen.queryByLabelText('Chat id')).toBeNull()
+  })
+
+  it('is read-only, without Remove, when the server environment sets it', () => {
+    show({ tokenSet: true, tokenEnv: true })
+    expect(document.getElementById('notif-token')).toBeDisabled()
+    expect(screen.queryByText('Remove it')).toBeNull()
+    expect(screen.getByText(en['notif.token.env'])).toBeInTheDocument()
+  })
+
+  it('says the connection is set up once a token is stored', () => {
+    show({ tokenSet: true })
+    expect(screen.getByText('Connection: set up')).toBeInTheDocument()
+    expect(screen.queryByText('Connection: not set up')).toBeNull()
+  })
+
+  it('says the connection is not set up while no token is stored', () => {
+    show({ tokenSet: false })
+    expect(screen.getByText(en['notif.connection.summaryNone'])).toBeInTheDocument()
+    expect(screen.queryByText('Connection: set up')).toBeNull()
   })
 })
 
@@ -212,18 +236,5 @@ describe('the master switch', () => {
     expect(el).toHaveAttribute('aria-pressed', 'true')
     await user.click(el)
     expect(onEnabledChange).toHaveBeenCalledWith(false)
-  })
-})
-
-describe('the chat id', () => {
-  it('writes what was typed, trimmed', () => {
-    // fireEvent rather than user.type: the field is CONTROLLED and this harness
-    // does not feed the new value back, so typing would report one character at
-    // a time against a value that never advances. One change event is the same
-    // thing the real parent sees.
-    const { onChatIdChange } = show({ chatId: '' })
-    fireEvent.change(document.getElementById('notif-chat') as HTMLInputElement,
-      { target: { value: '  8517516151 ' } })
-    expect(onChatIdChange).toHaveBeenCalledWith('8517516151')
   })
 })

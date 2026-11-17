@@ -11,6 +11,8 @@ import os
 from dataclasses import dataclass, field
 
 from .limits import DEFAULT_MAX_BODY_BYTES
+from .notify.signal import DEFAULT_URL as SIGNAL_DEFAULT_URL
+from .notify.signal import loopback_url
 
 
 log = logging.getLogger("smylted.config")
@@ -122,6 +124,18 @@ def _secrets_backend(raw: str) -> str:
     return v
 
 
+def _signal_url(raw: str) -> str:
+    """SMYLTE_SIGNAL_URL, refusing anything that is not signal-bot on loopback.
+
+    Same posture as `_secrets_backend`: a bad value stops the service at start,
+    naming the rule, rather than sending the bearer token somewhere else."""
+    v = (raw or "").strip() or SIGNAL_DEFAULT_URL
+    try:
+        return loopback_url(v)
+    except ValueError as e:
+        raise ValueError(f"SMYLTE_SIGNAL_URL: {e}") from None
+
+
 def normalize_dav_url(raw: str) -> str:
     """Where raw CalDAV lives, as clients must reach it. Path or absolute URL,
     always with a trailing slash (it is a collection, and RFC 6764 discovery
@@ -188,31 +202,22 @@ class Settings:
     # ── outbound notifications ───────────────────────────────────────────────
     # An operator KILL SWITCH, not the feature's on/off. It defaults to
     # allowing, and nothing is sent regardless until the account turns
-    # notifications on in Settings AND a bot token and chat id exist — so a
+    # notifications on in Settings AND a signal-bot token exists — so a
     # deploy still does not grow an outbound surface on its own, which is what
     # the MCP connector's opt-in was protecting against. Set it false to
     # guarantee a deployment can never message anyone, whatever the settings
     # blob says.
     #
-    # Sending also needs egress: deploy/smylte.service is loopback-only
-    # (`IPAddressDeny=any`), so the unit must be widened before a single
-    # message can leave the box. See docs/DEPLOY.md.
+    # Sending needs no egress: signal-bot runs on this machine, on loopback,
+    # which deploy/smylte.service already allows. See docs/DEPLOY.md.
     notify_enabled: bool = True
-    # A FALLBACK for the account's own setting, for a deployment configured
-    # entirely from /etc/smylte/smylte.env and never through the UI. Settings wins
-    # when both are present.
-    #
-    # Worth knowing either way: a token set here stays out of smylte.db and so
-    # out of every backup of it, which is what the schema header's promise about
-    # reading that file is worth. One typed into Settings is stored in the clear
-    # in `meta.app_settings`, like `booking_links.token` beside it — the app has
-    # to be able to reproduce it to send, so it cannot be hashed. It is never
-    # read back out over HTTP (see `_public_settings`).
-    telegram_bot_token: str = ""
-    # Where notifications go. Not a secret (it is an integer naming a chat), but
-    # it is deployment configuration rather than a preference, and pairing it
-    # with the token keeps "who this bot talks to" in one file.
-    telegram_chat_id: str = ""
+    # Where signal-bot listens. Loopback only, checked when settings are
+    # loaded (`_signal_url`): the request carries the bearer token.
+    signal_url: str = SIGNAL_DEFAULT_URL
+    # An operator override: Settings stores the token in the secret store
+    # instead (smylted/mail/secrets.py), and this one wins over it when set.
+    # `repr=False` keeps it out of any `repr(settings)`.
+    signal_token: str = field(default="", repr=False)
     # How often the notification scheduler wakes. Sixty seconds is the whole
     # resolution of the feature: an event alert can be up to this late, which is
     # why the lead time is floored well above it. Raise it on a small box —
@@ -293,8 +298,8 @@ class Settings:
             ),
             csp_mode=_env("SMYLTE_CSP", "on").strip().lower() or "on",
             notify_enabled=_bool("SMYLTE_NOTIFY_ENABLED", True),
-            telegram_bot_token=_env("SMYLTE_TELEGRAM_BOT_TOKEN", "").strip(),
-            telegram_chat_id=_env("SMYLTE_TELEGRAM_CHAT_ID", "").strip(),
+            signal_url=_signal_url(_env("SMYLTE_SIGNAL_URL", "")),
+            signal_token=_env("SMYLTE_SIGNAL_TOKEN", "").strip(),
             notify_interval_s=float(_env("SMYLTE_NOTIFY_INTERVAL", "60")),
             mail_enabled=_bool("SMYLTE_MAIL_ENABLED", True),
             anthropic_api_key=_env("SMYLTE_ANTHROPIC_API_KEY", "").strip(),

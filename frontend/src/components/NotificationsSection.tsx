@@ -27,8 +27,7 @@ import { Hint } from './Hint'
 
 export function NotificationsSection({
   enabled, onEnabledChange,
-  chatId, onChatIdChange,
-  tokenSet, botId, onTokenChange,
+  tokenSet, tokenEnv, onTokenChange,
   triggers, onTriggersChange,
   digestTime, onDigestTimeChange,
   eveningTime, onEveningTimeChange,
@@ -38,14 +37,13 @@ export function NotificationsSection({
 }: {
   enabled: boolean
   onEnabledChange: (next: boolean) => void
-  chatId: string
-  onChatIdChange: (next: string) => void
-  /** Whether a bot token is stored. The token itself is never sent back — see
-   *  `_public_settings` server-side — so this and `botId` are all the UI has,
-   *  and all it needs: enough to say which bot is configured without being able
-   *  to speak as it. */
+  /** Whether a signal-bot token is stored. The token itself is never sent back
+   *  — see `_public_settings` server-side — so this and `tokenEnv` are all the
+   *  UI has, and all it needs. */
   tokenSet: boolean
-  botId: string
+  /** Whether the server's environment sets the token (SMYLTE_SIGNAL_TOKEN),
+   *  which overrides one saved here: the field is then read-only. */
+  tokenEnv: boolean
   onTokenChange: (next: string) => void
   triggers: Partial<Record<Trigger, boolean>>
   onTriggersChange: (next: Partial<Record<Trigger, boolean>>) => void
@@ -143,9 +141,9 @@ export function NotificationsSection({
 
   const withDefault = (hint: string, value: string) =>
     `${hint} ${tr('settings.default', { value })}`
-  // Open while there is something to set up; once both halves are stored the
-  // connection is set-and-forget, and its summary says which bot and chat.
-  const [connectionOpen] = useState(() => !(tokenSet && chatId))
+  // Open while there is something to set up; once the token is stored the
+  // connection is set-and-forget.
+  const [connectionOpen] = useState(() => !tokenSet)
   const extraOn = DEFAULT_OFF.filter((t) => triggerEnabled(triggers, t)).length
 
   return (
@@ -159,17 +157,16 @@ export function NotificationsSection({
       </div>
       <Hint>{withDefault(tr('notif.enabled.hint'), tr('notif.off'))}</Hint>
 
-      <div className="menu-head">{tr('notif.telegram')}</div>
+      <div className="menu-head">{tr('notif.connection')}</div>
       <Fold defaultOpen={connectionOpen}
-        summary={tokenSet && chatId
-          ? tr('notif.connection.summary', { bot: botId || '?', chat: chatId })
+        summary={tokenSet ? tr('notif.connection.summary')
           : tr('notif.connection.summaryNone')}>
 
       <div className="menu-row">
         <label htmlFor="notif-token">{tr('notif.token')}</label>
         <input className="input notif-token" id="notif-token" type="password"
-          autoComplete="off" spellCheck={false}
-          placeholder={tokenSet ? tr('notif.token.stored', { bot: botId || '?' })
+          autoComplete="off" spellCheck={false} disabled={tokenEnv}
+          placeholder={tokenSet ? tr('notif.token.stored')
             : tr('notif.token.placeholder')}
           value={token}
           onChange={(e) => setToken(e.target.value)}
@@ -189,25 +186,19 @@ export function NotificationsSection({
             if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setToken('') }
           }} />
       </div>
-      <div className="hintline">
-        {tr('notif.token.hint')}
-        {tokenSet && (
-          <>
-            {' '}
-            <button className="linklike" onClick={() => onTokenChange('')}>
-              {tr('notif.token.remove')}
-            </button>
-          </>
-        )}
-      </div>
-
-      <div className="menu-row">
-        <label htmlFor="notif-chat">{tr('notif.chatId')}</label>
-        <input className="input notif-chat" id="notif-chat" inputMode="numeric"
-          autoComplete="off" spellCheck={false} value={chatId}
-          onChange={(e) => onChatIdChange(e.target.value.trim())} />
-      </div>
-      <Hint>{tr('notif.chatId.hint')}</Hint>
+      {tokenEnv ? <Hint>{tr('notif.token.env')}</Hint> : (
+        <div className="hintline">
+          {tr('notif.token.hint')}
+          {tokenSet && (
+            <>
+              {' '}
+              <button className="linklike" onClick={() => onTokenChange('')}>
+                {tr('notif.token.remove')}
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       <div className="menu-actions">
         <button className="btn ghost" onClick={() => { void runTest() }} disabled={testing}>

@@ -7,6 +7,8 @@ the same message twice.
 """
 from __future__ import annotations
 
+import json
+
 from smylted.db import store
 
 TRIGGER = "event_starting"
@@ -36,7 +38,7 @@ def test_settling_records_the_outcome_without_freeing_the_key(db):
 
 
 def test_a_failed_send_is_recorded_and_not_retried(db):
-    # The transport has already retried (notify/telegram.py). A "starting in 10
+    # The transport has already retried (notify/signal.py). A "starting in 10
     # minutes" redelivered half an hour later is worse than silence.
     store.claim_notification(db, TRIGGER, KEY)
     store.settle_notification(db, TRIGGER, KEY, ok=False, error="HTTP 502: Bad Gateway")
@@ -85,3 +87,72 @@ def test_recent_notifications_is_newest_first_and_bounded(db):
     assert [r["dedupe_key"] for r in rows] == ["k4", "k3", "k2"]
     # The limit is clamped rather than trusted — this feeds an API route.
     assert len(store.recent_notifications(db, limit=10_000)) == 5
+
+
+# ── the move from Telegram to signal-bot ─────────────────────────────────────
+
+def _raw_claim(db, trigger, key, channel):
+    db.execute("INSERT INTO notification_deliveries (trigger, dedupe_key, channel) "
+               "VALUES (?, ?, ?)", (trigger, key, channel))
+
+
+def test_rows_told_on_telegram_are_cut_over_to_signal(db):
+    # An occasion already told on Telegram must not be told again on Signal.
+    _raw_claim(db, TRIGGER, KEY, "telegram")
+    _raw_claim(db, "daily_digest", "2026-08-31", "telegram")
+    _raw_claim(db, "daily_digest", "2026-08-31", "signal")     # both: keep one
+    store.init_db(db)
+    rows = db.execute("SELECT trigger, dedupe_key, channel FROM notification_deliveries "
+                      "ORDER BY trigger").fetchall()
+    assert [tuple(r) for r in rows] == [("daily_digest", "2026-08-31", "signal"),
+                                        (TRIGGER, KEY, "signal")]
+    assert store.claim_notification(db, TRIGGER, KEY) is False
+    assert store.claim_notification(db, "daily_digest", "2026-08-31") is False
+    store.init_db(db)                                       # idempotent
+    assert db.execute("SELECT COUNT(*) FROM notification_deliveries").fetchone()[0] == 2
+
+
+def test_the_old_telegram_settings_are_scrubbed_at_start(db):
+    store.set_meta(db, "app_settings", json.dumps({
+        "notify_telegram_bot_token": "123456789:AAHsecretsecretsecretsecret",
+        "notify_telegram_chat_id": "8517516151",
+        "theme": "dark"}))
+    store.init_db(db)
+    assert json.loads(store.get_meta(db, "app_settings")) == {"theme": "dark"}
+
+
+def test_a_blob_without_them_is_left_byte_for_byte(db):
+    raw = '{"theme":   "dark", "notify_digest_time": "07:30"}'
+    store.set_meta(db, "app_settings", raw)
+    store.init_db(db)
+    assert store.get_meta(db, "app_settings") == raw
+    store.set_meta(db, "app_settings", '["not", "an", "object"]')
+    store.init_db(db)
+    assert store.get_meta(db, "app_settings") == '["not", "an", "object"]'
+
+
+def test_the_scrub_leaves_no_copy_of_the_token_on_disk(tmp_path):
+    # Rewriting the row is not enough: every earlier save of the settings left
+    # a copy of the blob in a page that is now free, and the write-ahead log
+    # holds more. Overflow-sized blobs, so each save moves the blob to new pages.
+    secret = "123456789:AAHscrubbedscrubbedscrubbedscrub"
+    path = tmp_path / "smylte.db"
+    wal = tmp_path / "smylte.db-wal"
+    conn = store.connect(str(path))
+    store.init_db(conn)
+    for i in range(10):
+        store.set_meta(conn, "app_settings", json.dumps({
+            "notify_telegram_bot_token": secret, "theme": "dark", "pad": "p" * (5000 + 700 * i)}))
+    conn.close()
+    assert secret.encode() in path.read_bytes(), "the fixture must leave old copies on disk"
+
+    def on_disk() -> bytes:
+        return path.read_bytes() + (wal.read_bytes() if wal.exists() else b"")
+
+    conn = store.connect(str(path))
+    store.init_db(conn)
+    assert "notify_telegram_bot_token" not in json.loads(store.get_meta(conn, "app_settings"))
+    # While the connection is still open: nothing waits for a close to tidy up.
+    assert secret.encode() not in on_disk()
+    conn.close()
+    assert secret.encode() not in on_disk()

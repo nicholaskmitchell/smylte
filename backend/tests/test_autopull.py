@@ -116,8 +116,13 @@ def _make_box(root: Path) -> Box:
     home = root / "home"
     home.mkdir()
     calls = root / "calls"
+    # An empty env file in place of /etc/smylte/smylte.env, so no run reads the
+    # real one (and the Signal alert has nothing configured).
+    envfile = root / "smylte.env"
+    envfile.write_text("")
     env = {
         "PATH": os.environ["PATH"], "HOME": str(home), "LANG": "C", "CALLS": str(calls),
+        "SMYLTE_AUTOPULL_ENVFILES": str(envfile),
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
         "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",

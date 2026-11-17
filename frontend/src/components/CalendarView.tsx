@@ -23,6 +23,8 @@ import { useIsMobile } from '../hooks'
 import { NavCollections, useEmbeddedCollections } from '../shell'
 import { AgendaEvent, AgendaTask, DayPopover } from './DayPopover'
 import { CheckInk, StrikeInk } from './Marks'
+import { ViewDrawing } from './DayDrawing'
+import { EMPTY_DAY } from '../drawing'
 import { Sidebar } from './Sidebar'
 import { TaskModal } from './TaskModal'
 import { DateTimeInput } from './DateTimeInput'
@@ -685,6 +687,11 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
           // Same three-way as the tasks pane: an empty `cals` before the fetch
           // lands is ignorance, not an empty account.
           <div className="empty" aria-busy={!loaded || undefined}>
+            {fieldNotes && loaded && (
+              <div className="view-drawing" aria-hidden="true">
+                <ViewDrawing view="calendar" day={todayKey} state={EMPTY_DAY} />
+              </div>
+            )}
             {!loaded
               ? tr('common.loading')
               : cals.length === 0
@@ -938,7 +945,14 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                     onOpen={() => setTaskDetail(t)} />
                 ))}
                 {focusEvents.length === 0 && focusTasks.length === 0 && (
-                  <div className="agenda-empty">{tr('cal.nothingThisDay')}</div>
+                  <div className="agenda-empty">
+                    {fieldNotes && (
+                      <div className="view-drawing" aria-hidden="true">
+                        <ViewDrawing view="calendar" day={todayKey} state={EMPTY_DAY} />
+                      </div>
+                    )}
+                    {tr('cal.nothingThisDay')}
+                  </div>
                 )}
               </div>
             )}

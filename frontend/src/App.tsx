@@ -227,11 +227,15 @@ export function App() {
   const [notifyTriggers, setNotifyTriggers] =
     useState<Partial<Record<Trigger, boolean>>>({})
   const [notifyEnabled, setNotifyEnabled] = useState(false)
-  const [notifyChatId, setNotifyChatId] = useState('')
   // The token itself never comes back from the server (it is write-only over
-  // HTTP), so what the UI holds is whether one is stored and which bot it is.
+  // HTTP), so what the UI holds is whether one is stored, and whether the
+  // server's environment sets it (which Settings cannot change).
   const [notifyTokenSet, setNotifyTokenSet] = useState(false)
-  const [notifyBotId, setNotifyBotId] = useState('')
+  // Read at call time by `changeNotifyToken`, which is `useCallback(..., [])`
+  // and so cannot see the state: what to restore when its save fails.
+  const notifyTokenSetRef = useRef(false)
+  notifyTokenSetRef.current = notifyTokenSet
+  const [notifyTokenEnv, setNotifyTokenEnv] = useState(false)
   const [notifyDigestTime, setNotifyDigestTime] = useState(DEFAULT_DIGEST_TIME)
   const [notifyEventLead, setNotifyEventLead] = useState(DEFAULT_EVENT_LEAD_MINUTES)
   const [notifyEveningTime, setNotifyEveningTime] = useState(DEFAULT_EVENING_TIME)
@@ -739,19 +743,16 @@ export function App() {
         if (keep('notifications_enabled') && typeof s.notifications_enabled === 'boolean') {
           setNotifyEnabled(s.notifications_enabled)
         }
-        if (keep('notify_telegram_chat_id') && typeof s.notify_telegram_chat_id === 'string') {
-          setNotifyChatId(s.notify_telegram_chat_id)
-        }
         // Guarded like everything else. These two are DERIVED by the server
         // rather than typed here, which is why they looked exempt — but pasting
-        // a token sets them optimistically, so a read already in flight would
-        // land afterwards and put the row back to "no token" a moment after one
-        // was pasted. `changeNotifyToken` logs them for exactly this.
-        if (keep('notify_telegram_bot_token_set')) {
-          setNotifyTokenSet(s.notify_telegram_bot_token_set === true)
+        // a token sets the first optimistically, so a read already in flight
+        // would land afterwards and put the row back to "no token" a moment
+        // after one was pasted. `changeNotifyToken` logs it for exactly this.
+        if (keep('notify_signal_token_set')) {
+          setNotifyTokenSet(s.notify_signal_token_set === true)
         }
-        if (keep('notify_telegram_bot_id')) {
-          setNotifyBotId(typeof s.notify_telegram_bot_id === 'string' ? s.notify_telegram_bot_id : '')
+        if (keep('notify_signal_token_env')) {
+          setNotifyTokenEnv(s.notify_signal_token_env === true)
         }
         if (keep('notify_triggers')) setNotifyTriggers(sanitizeTriggers(s.notify_triggers))
         if (keep('notify_digest_time') && isDigestTime(s.notify_digest_time)) {
@@ -908,7 +909,10 @@ export function App() {
   const trRef = useRef(tr)
   trRef.current = tr
 
-  const saveSettings = useCallback((patch: Settings) => {
+  // Resolves true when the write landed and false when it did not (held back,
+  // refused or unreachable), for the one caller that has to undo an optimistic
+  // change — `changeNotifyToken`. Every other caller ignores it.
+  const saveSettings = useCallback((patch: Settings): Promise<boolean> => {
     writeLog.current.push(...Object.keys(patch))
     if (settingsFailed.current) {
       const held = MERGED_SETTINGS.filter((k) => k in patch)
@@ -917,14 +921,14 @@ export function App() {
           Object.entries(patch).filter(([k]) => !held.includes(k as never))) as Settings
         showToast(trRef.current('app.settingsNotLoaded'))
       }
-      if (!Object.keys(patch).length) return
+      if (!Object.keys(patch).length) return Promise.resolve(false)
     }
     // Counted, not flagged: two gestures can be in flight at once (an
     // immediate `saveSettings` alongside a debounced one), and the refetch
     // guard below must wait for the LAST of them.
     writesInFlight.current += 1
-    api.putSettings(patch).catch((e) => {
-      if (e instanceof AuthError) { setAuth('out'); return }
+    return api.putSettings(patch).then(() => true, (e) => {
+      if (e instanceof AuthError) { setAuth('out'); return false }
       // Offline is the ordinary case and the local state stands in fine; a
       // rejection from a server we *did* reach is what the user needs to know.
       // The server's own words ride along untranslated — see i18n/index.ts on
@@ -932,6 +936,7 @@ export function App() {
       if (e instanceof HttpError) {
         showToast(trRef.current('app.settingsSaveFailed', { error: e.message }))
       }
+      return false
     }).finally(() => { writesInFlight.current -= 1 })
   }, [showToast])
 
@@ -1194,25 +1199,26 @@ export function App() {
     saveSettings({ notifications_enabled: next })
   }, [])
 
-  const changeNotifyChatId = useCallback((next: string) => {
-    setNotifyChatId(next)
-    saveSettingsSoon({ notify_telegram_chat_id: next })
-  }, [])
-
   const changeNotifyToken = useCallback((next: string) => {
     // Optimistic, like every other write here — but on the DERIVED flags, since
     // the token itself is never held locally. An empty string is the explicit
     // Remove, not an accidentally cleared field: the section only calls this
     // with '' from its own Remove control.
+    const was = notifyTokenSetRef.current
+    notifyTokenSetRef.current = !!next
     setNotifyTokenSet(!!next)
-    setNotifyBotId(next.includes(':') ? next.split(':', 1)[0] : '')
     // The write log is keyed on what the PATCH carries, and the patch carries
-    // the token — but what this gesture changed on screen is the two derived
-    // flags, and they are what a read in flight would revert. Logged by hand
-    // because they are the one pair whose local value has no key of its own on
-    // the wire.
-    writeLog.current.push('notify_telegram_bot_token_set', 'notify_telegram_bot_id')
-    saveSettings({ notify_telegram_bot_token: next })
+    // the token — but what this gesture changed on screen is the derived flag,
+    // and it is what a read in flight would revert. Logged by hand because its
+    // local value has no key of its own on the wire.
+    writeLog.current.push('notify_signal_token_set')
+    // A refused or unreachable save must not leave the row reading "set" (or
+    // "not set") for a token the server never took: put the old value back.
+    void saveSettings({ notify_signal_token: next }).then((saved) => {
+      if (saved) return
+      notifyTokenSetRef.current = was
+      setNotifyTokenSet(was)
+    })
   }, [])
 
   const changeNotifyTriggers = useCallback((next: Partial<Record<Trigger, boolean>>) => {
@@ -1506,8 +1512,7 @@ export function App() {
       onTogglePlanOnDueToday={togglePlanOnDueToday}
       focus={focus} onFocusChange={changeFocus}
       notifyEnabled={notifyEnabled} onNotifyEnabledChange={changeNotifyEnabled}
-      notifyChatId={notifyChatId} onNotifyChatIdChange={changeNotifyChatId}
-      notifyTokenSet={notifyTokenSet} notifyBotId={notifyBotId}
+      notifyTokenSet={notifyTokenSet} notifyTokenEnv={notifyTokenEnv}
       onNotifyTokenChange={changeNotifyToken}
       notifyTriggers={notifyTriggers} onNotifyTriggersChange={changeNotifyTriggers}
       notifyDigestTime={notifyDigestTime}
