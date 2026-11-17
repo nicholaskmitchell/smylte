@@ -24,11 +24,14 @@ def _imul(a: int, b: int) -> int:
 def cyrb128(text: str) -> tuple[int, int, int, int]:
     """The cyrb128 hash over the UTF-8 bytes of `text`."""
     h1, h2, h3, h4 = 1779033703, 3144134277, 1013904242, 2773480762
+    # `_imul` inlined: a drawing forks a few hundred streams, and the call per
+    # byte was most of the cost of each. Same arithmetic, same numbers.
+    m = MASK
     for k in text.encode("utf-8"):
-        h1 = h2 ^ _imul(h1 ^ k, 597399067)
-        h2 = h3 ^ _imul(h2 ^ k, 2869860233)
-        h3 = h4 ^ _imul(h3 ^ k, 951274213)
-        h4 = h1 ^ _imul(h4 ^ k, 2716044179)
+        h1 = h2 ^ (((h1 ^ k) * 597399067) & m)
+        h2 = h3 ^ (((h2 ^ k) * 2869860233) & m)
+        h3 = h4 ^ (((h3 ^ k) * 951274213) & m)
+        h4 = h1 ^ (((h4 ^ k) * 2716044179) & m)
     h1 = _imul(h3 ^ (h1 >> 18), 597399067)
     h2 = _imul(h4 ^ (h2 >> 22), 2869860233)
     h3 = _imul(h1 ^ (h3 >> 17), 951274213)
@@ -45,9 +48,19 @@ class Rng:
 
     def __init__(self, path: str):
         self.path = path
-        self._a, self._b, self._c, self._d = cyrb128(path)
+        a, b, c, d = cyrb128(path)
+        # The twelve warm-up steps of `_next32`, inlined: a drawing makes a few
+        # hundred streams, and the method call was a large part of each.
+        m = MASK
         for _ in range(12):
-            self._next32()
+            t = (a + b) & m
+            a = b ^ (b >> 9)
+            b = (c + (c << 3)) & m
+            c = ((c << 21) | (c >> 11)) & m
+            d = (d + 1) & m
+            t = (t + d) & m
+            c = (c + t) & m
+        self._a, self._b, self._c, self._d = a, b, c, d
 
     def _next32(self) -> int:
         a, b, c, d = self._a, self._b, self._c, self._d
@@ -85,8 +98,9 @@ class Rng:
     def shuffled(self, seq: Sequence[T]) -> list[T]:
         """A Fisher-Yates shuffle of a copy of `seq`."""
         out = list(seq)
+        random = self.random              # `randint(0, i)`, with the lookups hoisted
         for i in range(len(out) - 1, 0, -1):
-            j = self.randint(0, i)
+            j = int(random() * (i + 1))
             out[i], out[j] = out[j], out[i]
         return out
 

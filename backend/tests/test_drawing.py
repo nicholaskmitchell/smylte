@@ -712,6 +712,35 @@ def test_a_moon_says_where_its_clouds_go():
                   30.0, 40.0, 6.5, clouds=0) == []
 
 
+def test_scattered_rewards_never_ease_into_touching():
+    # When the gap cannot be met, scatter_all eases it, but never below its
+    # floor: for rewards, the distance at which two of them would touch. It
+    # raises rather than place them closer.
+    from smylted.drawing.rng import Rng
+    from smylted.drawing.subjects import _kit as k
+    floor = k.apart(7.0)
+    assert floor == 2 * 7.0 + PEN + 2 * WOBBLE
+    pts = k.scatter_all(Rng("fits"), 6, 80, 100, 60, 60, 30.0, floor=floor)
+    assert min(math.dist(p, q) for i, p in enumerate(pts) for q in pts[i + 1:]) >= floor
+    # Twelve in a circle of radius 32: they fit once the gap eases to half
+    # (15 apart, where they would touch), and not at the floor, so the floor
+    # is what makes it raise.
+    assert len(k.scatter_all(Rng("crowded"), 12, 80, 100, 32, 32, 30.0)) == 12
+    with pytest.raises(ValueError):
+        k.scatter_all(Rng("crowded"), 12, 80, 100, 32, 32, 30.0, floor=floor)
+
+
+def test_the_tree_always_finds_room_for_its_rewards():
+    # Twelve fruit by day and twelve fireflies at night, never touching, on
+    # every tree: a tree that cannot place them would fail its whole day.
+    from smylted.drawing.rng import Rng
+    from smylted.drawing.subjects import tree
+    for d in range(60):
+        for salt in ("a", "b", "c"):
+            s = tree._structure(Rng.for_day(date(2026, 1, 1) + timedelta(days=d), salt, "subject|tree").fork("scene"))
+            assert len(s["fruit"]()) == 12 and len(s["flies"]()) == 12, f"day {d} salt {salt}"
+
+
 def test_crossings_are_fast_over_thousands_of_samples():
     marks = [_mark(f"m{i}", f"M 0 {i * 5} L 100 {i * 5}", part=f"row{i}") for i in range(20)]
     sk = _sketch(*marks)             # 20 lines x 200 samples

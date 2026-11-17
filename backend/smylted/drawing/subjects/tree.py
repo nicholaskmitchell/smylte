@@ -101,8 +101,14 @@ def _structure(r: Rng) -> dict:
     bird = (cx + rx * 0.5, cy - ry * 0.86 - 8)
     avoid = (*((x, y, FRUIT_R + 4.5) for x, y in ink), (*bird, FRUIT_R + 12),
              *((x, y, r_ + FRUIT_R + 3.0) for x, y, r_ in falls))
-    fruit = k.scatter_all(r.fork('fruit'), k.REWARDS, cx, cy - 4, rx * 0.8, ry * 0.74, 19.0, avoid=avoid)
-    fruit = k.spread(fruit, (cx, cy - ry))
+    # The fruit and the fireflies are placed only by the composition that draws
+    # them (fruit by day, fireflies at night), so a render pays for one. Each
+    # comes from its own fork of this stream, so placing it later, or not at
+    # all, changes nothing else.
+    def fruit() -> list:
+        pts = k.scatter_all(r.fork('fruit'), k.REWARDS, cx, cy - 4, rx * 0.86, ry * 0.8, 19.0, avoid=avoid,
+                            floor=k.apart(FRUIT_R))
+        return k.spread(pts, (cx, cy - ry))
 
     # Where the lantern hangs under the crown, away from the trunk; the
     # fireflies keep clear of it.
@@ -121,9 +127,11 @@ def _structure(r: Rng) -> dict:
                  *((x, y, r_ + FLY_R + 3.0) for x, y, r_ in falls),
                  (lx, lantern_y + 12, 19.0), (lx, lantern_y - 2, 13.0),
                  (*moon_spot, MOON_R + FLY_R + 5.0))
-    flies = k.scatter_all(r.fork('flies'), k.REWARDS, cx, cy - 2, rx * 1.16, ry * 1.04, 18.0,
-                          avoid=fly_avoid, ok=lambda p: 15 < p[0] < 145 and 15 < p[1] < top - 12)
-    flies = k.spread(flies, (cx, cy - ry))
+    def flies() -> list:
+        pts = k.scatter_all(r.fork('flies'), k.REWARDS, cx, cy - 2, rx * 1.16, ry * 1.04, 18.0,
+                            avoid=fly_avoid, ok=lambda p: 15 < p[0] < 145 and 15 < p[1] < top - 12,
+                            floor=k.apart(FLY_R))
+        return k.spread(pts, (cx, cy - ry))
 
     return {
         'lean': lean, 'pot': r.choice(['belly', 'taper', 'band']), 'pot_w': pot_w, 'top': top,
@@ -224,7 +232,7 @@ def _day(b: SketchBuilder, s: dict, r: Rng) -> None:
     _can(b, s, when=(('nothingPlanned',),))
     k.bird(b, s['cx'] + s['rx'] * 0.5, s['cy'] - s['ry'] * 0.86 + 0.5, when=(('allDone',),),
            facing=-1 if s['lean'] > 0 else 1)
-    for i, (x, y) in enumerate(s['fruit']):
+    for i, (x, y) in enumerate(s['fruit']()):
         k.fruit(b, x, y, FRUIT_R, when=(('reward', i),), part=f'fruit:{i}')
         b.anchor(i, x, y - FRUIT_R)
     b.ambient(1.0, (('focus',),), _stir(s))
@@ -239,7 +247,8 @@ def _night(b: SketchBuilder, s: dict, r: Rng) -> None:
     # No overdue cloud: the crown fills the top of the picture and leaves no
     # room for one that reads. Overdue work drops leaves by the pot, as by day.
     k.moon(b, x, y, MOON_R, clouds=0)
-    flies = tuple((fx, fy, FLY_R + 6) for fx, fy in s['flies'])
+    placed = s['flies']()
+    flies = tuple((fx, fy, FLY_R + 6) for fx, fy in placed)
     k.stars(b, r.fork('stars'), 4, (6, 4, 154, 34),
             avoid=((x, y + 7, 26), *flies),
             ok=lambda p: not _in_crown(s, p, 1.14), part='star')
@@ -261,7 +270,7 @@ def _night(b: SketchBuilder, s: dict, r: Rng) -> None:
     b.line(body, when=(('notAllDone',),), part='lantern')
     b.filled(body, when=done, part='lantern', paper='glint')
     b.line(line((lx - 3.6, rim + 20.4), (lx + 3.6, rim + 20.4)), part='lantern')
-    for i, (fx, fy) in enumerate(s['flies']):
+    for i, (fx, fy) in enumerate(placed):
         k.glow_dot(b, fx, fy, FLY_R, halo=14, when=(('reward', i),), part=f'fly:{i}', glass=False)
         b.anchor(i, fx, fy)
     b.ambient(1.0, (('focus',),), _stir(s))

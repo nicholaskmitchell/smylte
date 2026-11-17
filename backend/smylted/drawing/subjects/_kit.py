@@ -152,12 +152,20 @@ def clear_of(p: Point, avoid: Sequence[Circle]) -> bool:
     return all(math.dist(p, (x, y)) >= r for x, y, r in avoid)
 
 
+# Candidate points drawn per point `scatter_all` places, and the attempts it
+# makes at one gap before easing it.
+CANDIDATES = 120
+ATTEMPTS = 24
+
+
 class _Clearance:
     """`avoid` circles bucketed on a grid, each in every cell it overlaps, so
     a placement asks only its own cell: the ink of a whole tree is hundreds
-    of circles."""
+    of circles. The cell is about one avoid circle across: smaller cells make
+    each circle land in many more of them, larger ones make each query test
+    more circles. The test itself is exact either way."""
 
-    CELL = 6.0
+    CELL = 12.0
 
     def __init__(self, avoid: Sequence[Circle]):
         self.grid: dict[tuple[int, int], list[Circle]] = {}
@@ -168,8 +176,12 @@ class _Clearance:
                     self.grid.setdefault((gx, gy), []).append((x, y, r))
 
     def clear(self, p: Point) -> bool:
-        cell = (math.floor(p[0] / self.CELL), math.floor(p[1] / self.CELL))
-        return all((p[0] - x) ** 2 + (p[1] - y) ** 2 >= r * r for x, y, r in self.grid.get(cell, ()))
+        px, py = p
+        c = self.CELL
+        for x, y, r in self.grid.get((math.floor(px / c), math.floor(py / c)), ()):
+            if (px - x) ** 2 + (py - y) ** 2 < r * r:
+                return False
+        return True
 
 
 def scatter(rng: Rng, count: int, cx: float, cy: float, rx: float, ry: float,
@@ -180,32 +192,78 @@ def scatter(rng: Rng, count: int, cx: float, cy: float, rx: float, ry: float,
     `scatter_all`."""
     out: list[Point] = []
     room = room if room is not None else _Clearance(avoid)
+    # A tree's fruit can take a dozen attempts of 600 tries each, so a try is
+    # kept cheap: squared distances in a plain loop that stops at the first
+    # point too close. The same tests in the same order as ever, so the same
+    # points come out.
+    gap2 = gap * gap
+    clear, uniform, random = room.clear, rng.uniform, rng.random
     for _ in range(tries):
         if len(out) == count:
             break
-        a = rng.uniform(0, 2 * math.pi)
-        r = math.sqrt(rng.random())
-        p = (cx + rx * r * math.cos(a), cy + ry * r * math.sin(a))
-        if all(math.dist(p, q) >= gap for q in out) and room.clear(p) and (ok is None or ok(p)):
-            out.append(p)
+        a = uniform(0, 2 * math.pi)
+        r = math.sqrt(random())
+        px, py = cx + rx * r * math.cos(a), cy + ry * r * math.sin(a)
+        for qx, qy in out:
+            if (px - qx) ** 2 + (py - qy) ** 2 < gap2:
+                break
+        else:
+            p = (px, py)
+            if clear(p) and (ok is None or ok(p)):
+                out.append(p)
     return out
 
 
+def apart(r: float) -> float:
+    """How far apart the centres of two round rewards of radius `r` must be so
+    their ink never touches: both radii, a pen between them, and the wobble of
+    each."""
+    return 2 * r + PEN + 2 * WOBBLE
+
+
 def scatter_all(rng: Rng, count: int, cx: float, cy: float, rx: float, ry: float,
-                gap: float, **kw) -> list[Point]:
-    """Exactly `count` points: `scatter`, retried on fresh forks, then with the
-    gap eased a step at a time, down to half of it. Deterministic for a given
-    rng. ValueError when even that cannot place them all: the subject's
-    constraints leave no room, and that is a subject to fix, not a day to hang."""
-    room = _Clearance(kw.pop('avoid', ()))
+                gap: float, *, avoid: Sequence[Circle] = (),
+                ok: Callable[[Point], bool] | None = None,
+                floor: float | None = None) -> list[Point]:
+    """Exactly `count` points inside an ellipse, at least `gap` apart, clear of
+    `avoid` and passing `ok`.
+
+    Candidates are drawn once, CANDIDATES per point wanted, and each is tested
+    against `avoid` and `ok` once. An attempt then picks a candidate at random,
+    drops every candidate within `gap` of it, and repeats (random sequential
+    addition), so it costs a few list passes however crowded the subject is:
+    the tree's fruit used to take a dozen attempts of 600 dart throws each, and
+    the render ran past its time budget. After ATTEMPTS failures the gap eases a
+    step at a time, never below `floor` (by default half the gap). For rewards
+    the floor is where two of them would touch: twice their radius, a pen and
+    the wobble of both. Deterministic for a given rng. ValueError when even
+    that cannot place them all: the subject's constraints leave no room, and
+    that is a subject to fix, not a day to hang."""
+    floor = gap * 0.5 if floor is None else floor
+    room = _Clearance(avoid)
+    draw = rng.fork('candidates')
+    candidates: list[Point] = []
+    for _ in range(count * CANDIDATES):
+        a = draw.uniform(0, 2 * math.pi)
+        r = math.sqrt(draw.random())
+        p = (cx + rx * r * math.cos(a), cy + ry * r * math.sin(a))
+        if room.clear(p) and (ok is None or ok(p)):
+            candidates.append(p)
     g = gap
-    while g >= gap * 0.5:
-        for attempt in range(24):
-            pts = scatter(rng.fork(f'try{attempt}|{g:.2f}'), count, cx, cy, rx, ry, g, room=room, **kw)
-            if len(pts) == count:
-                return pts
+    while g >= floor:
+        g2 = g * g
+        for attempt in range(ATTEMPTS):
+            pick = rng.fork(f'order{attempt}|{g:.2f}')
+            left = candidates
+            out: list[Point] = []
+            while left and len(out) < count:
+                px, py = left[int(pick.random() * len(left))]
+                out.append((px, py))
+                left = [q for q in left if (q[0] - px) ** 2 + (q[1] - py) ** 2 >= g2]
+            if len(out) == count:
+                return out
         g *= 0.94
-    raise ValueError(f"cannot place {count} points {gap * 0.5:.1f} or more apart under these constraints")
+    raise ValueError(f"cannot place {count} points {floor:.1f} or more apart under these constraints")
 
 
 def spread(points: Sequence[Point], start: Point) -> list[Point]:
