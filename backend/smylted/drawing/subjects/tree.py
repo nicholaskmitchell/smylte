@@ -38,7 +38,7 @@ class PottedTree:
         ('trunk', 'canopy'), ('trunk', 'branch'), ('branch', 'canopy'), ('trunk', 'soil'),
         ('pot', 'soil'), ('pot', 'rim'), ('pot', 'sill'), ('can', 'sill'), ('fallen', 'sill'),
         ('bird', 'canopy'), ('stir', 'canopy'), ('echo', 'canopy'),
-        ('lantern', 'canopy'), ('rim', 'trunk'), ('rim', 'soil'), ('branch',),
+        ('hanger', 'canopy'), ('hanger', 'lantern'), ('rim', 'trunk'), ('rim', 'soil'), ('branch',),
     ))
 
     def render(self, state: DayState, theme: Theme, rng: Rng) -> Sketch:
@@ -107,11 +107,20 @@ def _structure(r: Rng) -> dict:
     # Where the lantern hangs under the crown, away from the trunk; the
     # fireflies keep clear of it.
     lx = cx - rx * 0.52 * (1 if lean >= 0 else -1)
-    lantern_y = cy + ry * math.sqrt(max(0.0, 1 - ((lx - cx) / rx) ** 2)) * 0.97
+    # Hung from the crown's own ink, not from the ellipse it was drawn round:
+    # the blob wanders up to 7% off that, and a lantern placed on the ellipse
+    # had the crown's line running through its crossbar and glass. This is the
+    # lowest the crown's line comes over the lantern's width; only the hanger
+    # crosses it, starting a little above where the line passes right over it,
+    # so it always reaches the crown however the line slopes there.
+    crown = k.samples(canopy, step=0.5)
+    lantern_y = max(y for x, y in crown if abs(x - lx) <= 6.0)
+    hook_y = max(y for x, y in crown if abs(x - lx) <= 0.5) - 3.0
     moon_spot = r.choice([(16.0, 16.0), (144.0, 16.0)])
     fly_avoid = (*((x, y, FLY_R + 5.0) for x, y in ink),
                  *((x, y, r_ + FLY_R + 3.0) for x, y, r_ in falls),
-                 (lx, lantern_y + 12, 19.0), (lx, lantern_y - 2, 13.0))
+                 (lx, lantern_y + 12, 19.0), (lx, lantern_y - 2, 13.0),
+                 (*moon_spot, MOON_R + FLY_R + 5.0))
     flies = k.scatter_all(r.fork('flies'), k.REWARDS, cx, cy - 2, rx * 1.16, ry * 1.04, 18.0,
                           avoid=fly_avoid, ok=lambda p: 15 < p[0] < 145 and 15 < p[1] < top - 12)
     flies = k.spread(flies, (cx, cy - ry))
@@ -119,7 +128,7 @@ def _structure(r: Rng) -> dict:
     return {
         'lean': lean, 'pot': r.choice(['belly', 'taper', 'band']), 'pot_w': pot_w, 'top': top,
         'cx': cx, 'cy': cy, 'rx': rx, 'ry': ry, 'canopy': canopy, 'trunk': trunk, 'forks': forks,
-        'echo': echo, 'fruit': fruit, 'flies': flies, 'rim': rim, 'lantern': (lx, lantern_y),
+        'echo': echo, 'fruit': fruit, 'flies': flies, 'rim': rim, 'lantern': (lx, lantern_y, hook_y),
         'can_side': r.choice([-1, 1]),
         'moon_spot': moon_spot,
     }
@@ -241,11 +250,11 @@ def _night(b: SketchBuilder, s: dict, r: Rng) -> None:
     _can(b, s, when=(('nothingPlanned',),))
     # A lantern hangs under the crown every night, a pale light; everything
     # done fills its glass coral.
-    lx, rim = s['lantern']
+    lx, rim, hook = s['lantern']
     done = (('allDone',),)
     b.glow(k.ring(lx, rim + 13, 15, 12), part='lantern')
     b.glow(k.ring(lx, rim + 13, 5, 9), part='lantern')
-    b.line(line((lx, rim - 4), (lx, rim + 5)), part='lantern')
+    b.line(line((lx, hook), (lx, rim + 5)), part='hanger')     # through the crown's line, to the crossbar
     b.line(line((lx - 4.6, rim + 6), (lx + 4.6, rim + 6.2)), part='lantern')
     body = loop((lx - 3.6, rim + 7), (lx + 3.6, rim + 7), (lx + 4.6, rim + 13), (lx + 3.4, rim + 19),
                 (lx - 3.4, rim + 19), (lx - 4.6, rim + 13), corners=(0, 1, 3, 4))

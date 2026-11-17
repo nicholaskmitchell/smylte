@@ -6,9 +6,12 @@ viewBox, 160 x 200, portrait, y growing downward.
 
 Rules for a subject. The tests hold every subject to four of them, over a week
 of days under two salts, both themes and every hour (tests/test_drawing.py): it
-stays in its frame, every reward is at least 10 units across, ink touches ink
-only where JOINS says, and the night is its own picture with a light always on.
-The rest are this kit's conventions, which the tests cannot see:
+stays in its frame; every reward is at least 10 units across and 60 units^2 of
+coral; ink touches ink only where JOINS says, measured at the pen's own width
+(PEN) on every boil frame and every frame of the focus loop, and two rewards
+never touch at all; and the night is its own picture, with a glow of at least
+600 units^2 that is always on. The rest are this kit's conventions, which the
+tests cannot see:
 
 * Fill the frame, as the mockup's tree does: the subject is the picture, not a
   vignette in a corner of sky. Nothing leaves the frame.
@@ -30,7 +33,9 @@ The rest are this kit's conventions, which the tests cannot see:
   composition is its own picture with light as its subject: one moon a day
   (its place chosen once, not by the hour), stars clear of it, and glows.
 * Overdue work is weather, never a warning: clouds, fallen leaves, a few
-  sheets. Never red, never heavy.
+  sheets. Never red, never heavy. A cloud by a night moon comes from `moon`,
+  beside it and never under it; keep other things clear of the circles it
+  returns. Where there is no room for a cloud that reads, pass `clouds=0`.
 """
 from __future__ import annotations
 
@@ -345,16 +350,26 @@ def cloud(b: SketchBuilder, cx: float, cy: float, w: float, *, when: Iterable = 
 def moon(b: SketchBuilder, cx: float, cy: float, r: float, *, when: Iterable = (),
          glow: bool = True, clouds: int = 2, part: str = 'moon',
          first: tuple[float, float] | None = None,
-         second: tuple[float, float] | None = None) -> None:
+         second: tuple[float, float] | None = None) -> list[Circle]:
     """A crescent opening to the right, always whole. With `glow`, a soft
     light round it. With `clouds` 1 or 2, overdue work draws a cloud beside it,
     toward the picture, and with 2, at two or more a second a step below and
-    beyond the first; `first` and `second` place them in moon radii from its
-    centre. Weather near the moon, never ink across it, and never straight
-    under it, where a small cloud and the crescent read as a little figure. Each cloud is at least
-    MOON_CLOUD units wide, three bumps: a smaller one reads as a speck at
-    phone size. Where there is no room for that (a window pane), pass
-    `clouds=0` and show overdue work some other way."""
+    beyond the first. Weather near the moon, never ink across it, and never
+    straight under it, where a small cloud and the crescent read as a little
+    figure. Each cloud is at least MOON_CLOUD units wide, three bumps: a
+    smaller one reads as a speck at phone size. Where there is no room for that
+    (a window pane, a crown that fills the sky), pass `clouds=0` and show
+    overdue work some other way.
+
+    `first` and `second` place the clouds in moon radii from its centre. By
+    default they are measured from the clouds' own size instead: a cloud is
+    never narrower than MOON_CLOUD, so offsets in a small moon's radius would
+    run its clouds into it and into each other.
+
+    Returns a circle round each cloud it may draw (none with `clouds=0`), so
+    the subject's stars and other scattered things can keep clear of them. The
+    two clouds are parts `cloud:1` and `cloud:2`, so the crossing check sees
+    them if they ever touch."""
     when = tuple(when)
     if glow:
         b.glow(ring(cx - r * 0.2, cy, r * 2.4, 12), when=when, part=part)
@@ -362,14 +377,19 @@ def moon(b: SketchBuilder, cx: float, cy: float, r: float, *, when: Iterable = (
     if clouds not in (0, 1, 2):
         raise ValueError(f"a moon has 0, 1 or 2 clouds, not {clouds!r}")
     if not clouds:
-        return
+        return []
     toward = 1 if cx < 80 else -1
-    first = (toward * 3.3, 0.5) if first is None else first
-    second = (toward * 5.2, 2.7) if second is None else second
-    w = max(3.4 * r, MOON_CLOUD)
-    cloud(b, cx + first[0] * r, cy + first[1] * r, w, when=(*when, ('overdue', 1)), part='cloud')
+    size = max(r, MOON_CLOUD / 3.4)            # the radius the clouds are sized for
+    w = 3.4 * size
+    fx, fy = (toward * 3.3 * size, 0.5 * size) if first is None else (first[0] * r, first[1] * r)
+    sx, sy = (toward * 5.2 * size, 2.7 * size) if second is None else (second[0] * r, second[1] * r)
+    reach = 0.5 * w + 4.0                      # half the cloud and a margin
+    out: list[Circle] = [(cx + fx, cy + fy, reach)]
+    cloud(b, cx + fx, cy + fy, w, when=(*when, ('overdue', 1)), part='cloud:1')
     if clouds == 2:
-        cloud(b, cx + second[0] * r, cy + second[1] * r, w, when=(*when, ('overdue', 2)), part='cloud')
+        cloud(b, cx + sx, cy + sy, w, when=(*when, ('overdue', 2)), part='cloud:2')
+        out.append((cx + sx, cy + sy, reach))
+    return out
 
 
 def stars(b: SketchBuilder, rng: Rng, count: int, box: tuple[float, float, float, float], *,

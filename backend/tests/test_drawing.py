@@ -659,6 +659,59 @@ def test_crossings_see_the_ambient():
     assert len(crossings(sk)) == 1
 
 
+def test_crossings_check_every_frame_of_the_loop_against_every_boil_frame():
+    # The loop runs over the boiling picture, so a loop frame meets each of the
+    # three boil frames in turn: touching only the third is still touching.
+    from smylted.drawing.scene import Ambient
+    still = _mark("m0", "", part="a",
+                  frames=("M 0 20 L 100 20", "M 0 20 L 100 20", "M 0 49.5 L 100 49.5"))
+    loop = (_mark("a0m0", "M 0 50 L 100 50", part="b"),)
+    sk = _sketch(still, ambient=Ambient(1.0, (), (loop,)))
+    assert [p[:2] for p in crossings(sk)] == [("a", "b")]
+
+
+def test_a_bare_spark_in_the_loop_is_ink():
+    from smylted.drawing.scene import Ambient
+    spark = (_mark("a0m0", "M 40 40 L 60 40 L 60 60 L 40 60 Z", role="accent", part="fly"),)
+    sk = _sketch(_mark("m0", "M 0 50 L 100 50", part="branch"), ambient=Ambient(1.0, (), (spark,)))
+    assert len(crossings(sk)) == 1
+
+
+@pytest.mark.parametrize("r", [4.0, 5.0, 6.0, 7.0, 8.0])
+@pytest.mark.parametrize("cx", [30.0, 130.0])
+def test_a_moons_clouds_keep_off_it_and_each_other(r, cx):
+    # The clouds are never narrower than MOON_CLOUD, so a small moon's default
+    # offsets must come from the clouds' size: measured in its own radius they
+    # ran into the crescent and into each other. No joins: nothing here may
+    # touch, and the two clouds are separate parts so the check can see them.
+    from smylted.drawing.rng import Rng
+    from smylted.drawing.scene import SketchBuilder
+    from smylted.drawing.subjects import _kit as k
+    for salt in ("a", "b", "c", "d", "e", "f"):
+        b = SketchBuilder("probe", "dark", Rng.for_day(date(2026, 11, 17), salt, "moon"))
+        k.moon(b, cx, 40.0, r)
+        sk = b.build(_DayState(overdue=2))
+        assert crossings(sk) == [], f"r={r} cx={cx} salt={salt}"
+
+
+def test_a_moon_says_where_its_clouds_go():
+    # The circles it returns hold every point of the clouds' ink, so a subject
+    # that keeps its stars out of them keeps them off the clouds.
+    from smylted.drawing.rng import Rng
+    from smylted.drawing.scene import SketchBuilder
+    from smylted.drawing.subjects import _kit as k
+    b = SketchBuilder("probe", "dark", Rng.for_day(date(2026, 11, 17), "salt", "moon"))
+    circles = k.moon(b, 30.0, 40.0, 6.5)
+    assert len(circles) == 2
+    sk = b.build(_DayState(overdue=2))
+    for n, (x, y, reach) in enumerate(circles, start=1):
+        ink = [p for m in sk.marks if m.part == f"cloud:{n}" for f in m.frames
+               for sub in checks.polyline(f) for p in sub]
+        assert ink and all(math.dist(p, (x, y)) <= reach for p in ink)
+    assert k.moon(SketchBuilder("probe", "dark", Rng.for_day(date(2026, 11, 17), "salt", "moon")),
+                  30.0, 40.0, 6.5, clouds=0) == []
+
+
 def test_crossings_are_fast_over_thousands_of_samples():
     marks = [_mark(f"m{i}", f"M 0 {i * 5} L 100 {i * 5}", part=f"row{i}") for i in range(20)]
     sk = _sketch(*marks)             # 20 lines x 200 samples
@@ -998,12 +1051,21 @@ _FULL_STATES = [
     for h in (9, 13, 16, 20, 23)
 ]
 _PLANNED_NOTHING = _DayState(nothing_planned=True, hour=10)
+# The everyday states the full grid above never reaches: half the day done,
+# Start running and overdue work showing, with everything that is on only while
+# the day is not finished (an open notebook, an unlit lantern's glass, the
+# laundry still in the basket); and a day with nothing planned that still has
+# overdue work and a running clock.
+_BUSY_STATES = [
+    _DayState(progress=0.5, rewards=6, focus_active=True, overdue=3, hour=h)
+    for h in (9, 13, 16, 20, 23)
+] + [_DayState(nothing_planned=True, focus_active=True, overdue=3, hour=20)]
 
 
 @pytest.mark.parametrize("subject", _roster_params())
 def test_subject_stays_in_its_frame(subject):
     for theme in ('light', 'dark'):
-        for state in _FULL_STATES + [_PLANNED_NOTHING]:
+        for state in _FULL_STATES + [_PLANNED_NOTHING] + _BUSY_STATES:
             for where, sketch in _renders(subject, state, theme):
                 errors = bounds_errors(sketch)
                 assert not errors, f"{subject.id} {theme} {where} hour {state.hour}: {errors[:5]}"
@@ -1027,7 +1089,7 @@ def test_no_ink_crosses_by_accident(subject):
         _DayState(rewards=0, hour=9),
         _DayState(rewards=4, all_done=True, progress=1, hour=16),
         _PLANNED_NOTHING,
-    ]
+    ] + _BUSY_STATES
     for theme in ('light', 'dark'):
         for state in states:
             for where, sketch in _renders(subject, state, theme):

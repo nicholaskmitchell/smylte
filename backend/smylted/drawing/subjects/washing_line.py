@@ -5,7 +5,7 @@ hedge, a basket at the foot. Each finished task pegs out a coral garment, the
 first few spread along both lines; Start sends a gust over the lines; with
 everything done the basket stands empty and a bird sits on a post; a day with
 nothing planned shows the bare lines over an empty basket; overdue work brings a
-cloud, a bigger one at more. The sun crosses the sky with the hour, sets on a
+cloud, and one more at each further level. The sun crosses the sky with the hour, sets on a
 far hill, and late at night is an ink moon.
 
 Night: the same posts and lines, beside a house on the far hill with a lit
@@ -50,7 +50,7 @@ class WashingLine:
     JOINS = frozenset(frozenset(p) for p in (
         ('post', 'line'), ('post', 'cap'), ('post', 'ground'), ('basket', 'ground'),
         ('tuft', 'ground'), ('garment', 'line'), ('bird', 'cap'), ('heap', 'basket'),
-        ('bulb', 'line'), ('house', 'hill'), ('sun', 'hill'), ('moon', 'cloud'), ('peg', 'line'),
+        ('bulb', 'line'), ('house', 'hill'), ('sun', 'hill'),
         ('bird', 'post'),
     ))
 
@@ -153,7 +153,7 @@ def _sky_day(b: SketchBuilder, s: dict, r: Rng) -> None:
             when=(k.LATE,), part='star')
     # Overdue work: weather, kept clear of every sun.
     for level, (cx, cy, w) in enumerate(clouds, start=1):
-        k.cloud(b, cx, cy, w, when=(('overdue', level),))
+        k.cloud(b, cx, cy, w, when=(('overdue', level),), part=f'cloud:{level}')
 
 
 def _day(b: SketchBuilder, s: dict, r: Rng) -> None:
@@ -189,9 +189,7 @@ def _night(b: SketchBuilder, s: dict, r: Rng) -> None:
     b.accent(win2, when=(('allDone',),), part='house', paper='glint')
     b.line(win2, part='house')
     x, y = s['moon_spot']
-    k.moon(b, x, y, 6.5)
-    toward = 1 if x < 80 else -1
-    clouds = ((x + toward * 3.3 * 6.5, y + 0.5 * 6.5, 15), (x + toward * 5.2 * 6.5, y + 2.7 * 6.5, 15))
+    clouds = k.moon(b, x, y, 6.5)
     k.stars(b, r.fork('stars'), 4, (8, 6, 152, 40), avoid=((x, y + 6, 24), *clouds), part='star')
     _frame(b, s)
     _basket(b, s)
