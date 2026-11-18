@@ -20,6 +20,10 @@ import { contrast, tryParseColor } from './contrast'
 /** The non-text floor the shipped accents are held to (appearance.test.ts). */
 export const MIN_ACCENT_CONTRAST = 3
 
+/** Field notes sets text in the accent (margin-note times, links), so there a
+ *  wallpaper tone has to clear the text floor, not the non-text one. */
+export const FIELD_NOTES_ACCENT_CONTRAST = 4.5
+
 /** The backgrounds an accent is drawn on or beside: the three the token tests
  *  measure the shipped accents against. */
 export const ACCENT_SURFACES = ['--bg', '--bg-elev', '--paper'] as const
@@ -41,6 +45,7 @@ export const DEVICE_ACCENT_KEY = 'smylte-device-accent'
  *  syntax are normalised by `applySystemAccent` first. */
 export function pickAccent(
   ramp: readonly string[], mode: Mode, surfaces: readonly string[],
+  floor: number = MIN_ACCENT_CONTRAST,
 ): string | null {
   if (!isAccentRamp(ramp) || surfaces.length === 0) return null
   for (const s of surfaces) {
@@ -49,7 +54,7 @@ export function pickAccent(
   }
   for (const tone of TRY[mode]) {
     const hex = ramp[ACCENT_TONES.indexOf(tone)]
-    if (surfaces.every((s) => contrast(hex, s) >= MIN_ACCENT_CONTRAST)) return hex
+    if (surfaces.every((s) => contrast(hex, s) >= floor)) return hex
   }
   return null
 }
@@ -103,7 +108,11 @@ function measurable(css: string): string | null {
 function readSurfaces(el: HTMLElement): string[] | null {
   const style = getComputedStyle(el)
   const out: string[] = []
-  for (const name of ACCENT_SURFACES) {
+  // Field notes also floats its menus and sheets on a fourth ground, which only
+  // its own stylesheet declares (it is absent where no stylesheet is loaded).
+  const names = fieldNotes(el) && style.getPropertyValue('--bg-float').trim()
+    ? [...ACCENT_SURFACES, '--bg-float'] : ACCENT_SURFACES
+  for (const name of names) {
     const c = measurable(style.getPropertyValue(name))
     if (c === null) return null
     out.push(c)
@@ -117,20 +126,33 @@ function readSurfaces(el: HTMLElement): string[] | null {
  *  clears the floor, or a tone that no longer clears it once painted, in which
  *  case the accent `el` had is put back. Call it after `applyTokens`, which
  *  clears every token first. */
+/** Is Field notes the design on `el` (applyDesign in appearance.ts)? */
+const fieldNotes = (el: HTMLElement) => el.dataset.surface === 'app'
+
 export function applySystemAccent(
   el: HTMLElement, mode: Mode, ramp: readonly string[] | null | undefined,
 ): string | null {
   if (!ramp) return null
   const before = readSurfaces(el)
   if (!before) return null
-  const tone = pickAccent(ramp, mode, before)
+  const floor = fieldNotes(el) ? FIELD_NOTES_ACCENT_CONTRAST : MIN_ACCENT_CONTRAST
+  const tone = pickAccent(ramp, mode, before, floor)
   if (!tone || !isValidToken('--accent', tone)) return null
   const previous = el.style.getPropertyValue('--accent')
   el.style.setProperty('--accent', tone)
   // A custom background may itself be defined from the accent (a colour token
   // may alias another), and would have moved with it.
   const after = readSurfaces(el)
-  if (after && after.every((s) => contrast(tone, s) >= MIN_ACCENT_CONTRAST)) return tone
+  if (after && after.every((s) => contrast(tone, s) >= floor)) {
+    // Field notes' coral fill follows the accent it now replaces, exactly as it
+    // does under a saved theme with an accent of its own (CUSTOM_ROLES).
+    if (fieldNotes(el)) {
+      const custom = new Set((el.dataset.custom ?? '').split(/\s+/).filter(Boolean))
+      custom.add('accent')
+      el.dataset.custom = [...custom].join(' ')
+    }
+    return tone
+  }
   if (previous) el.style.setProperty('--accent', previous)
   else el.style.removeProperty('--accent')
   return null

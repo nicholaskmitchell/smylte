@@ -93,6 +93,30 @@ def init_db(conn: sqlite3.Connection) -> None:
         # rows always carried, so an upgrade changes nothing about a day
         # already in progress.
         conn.execute("ALTER TABLE notification_deliveries ADD COLUMN message_id INTEGER")
+    # Notifications moved from Telegram to signal-bot. Both steps below are
+    # idempotent and each is committed on its own, so a start interrupted
+    # between them simply finishes the job next time.
+    #
+    # 1. The ledger cutover. The channel is part of each row's identity, so a
+    #    row left as 'telegram' would not stop the same occasion being claimed
+    #    again on 'signal' — the morning's digest, already read on Telegram,
+    #    told a second time on Signal. Relabel the rows; where an occasion
+    #    already has a 'signal' row, IGNORE keeps that one, and the DELETE then
+    #    drops the 'telegram' row it shadows.
+    conn.execute("UPDATE OR IGNORE notification_deliveries SET channel='signal' "
+                 "WHERE channel='telegram'")
+    conn.execute("DELETE FROM notification_deliveries WHERE channel='telegram'")
+    conn.commit()
+    # 2. The old Telegram bot token was kept in the clear in `app_settings`.
+    #    Nothing reads it any more, so remove it (and the chat id beside it)
+    #    from the blob. Rewriting the row is not enough on its own: every
+    #    earlier save of the settings left a copy of the old blob in a page
+    #    that is now free, and the write-ahead log holds more. So, only when a
+    #    key was actually removed, VACUUM rebuilds the file without its free
+    #    pages and a TRUNCATE checkpoint empties the log. Every other key is
+    #    left exactly as it was, and a missing or non-object blob is left
+    #    alone.
+    _scrub_legacy_notify_settings(conn)
     tok_cols = {r["name"] for r in conn.execute("PRAGMA table_info(oauth_tokens)")}
     if "cv" not in tok_cols:
         # Grants issued before this column read '' and are refused on first use,
@@ -293,6 +317,37 @@ def init_db(conn: sqlite3.Connection) -> None:
     conn.execute(
         "UPDATE displays SET refresh_seconds=180 "
         "WHERE palette='eink' AND refresh_seconds<180")
+
+
+_LEGACY_NOTIFY_KEYS = ("notify_telegram_bot_token", "notify_telegram_chat_id")
+
+
+def _scrub_legacy_notify_settings(conn: sqlite3.Connection) -> None:
+    """Remove the old Telegram credential from `meta.app_settings`. Idempotent."""
+    row = conn.execute("SELECT value FROM meta WHERE key=?", (_SETTINGS_KEY,)).fetchone()
+    if row is None or not row["value"]:
+        return
+    try:
+        data = json.loads(row["value"])
+    except (ValueError, TypeError):
+        return
+    if not isinstance(data, dict) or not any(k in data for k in _LEGACY_NOTIFY_KEYS):
+        return
+    conn.execute("PRAGMA secure_delete=ON")
+    for key in _LEGACY_NOTIFY_KEYS:
+        data.pop(key, None)
+    conn.execute("UPDATE meta SET value=? WHERE key=?", (json.dumps(data), _SETTINGS_KEY))
+    # Committed first: VACUUM refuses to run inside a transaction.
+    conn.commit()
+    # Free pages still hold copies of the blob from earlier saves, token and
+    # all; VACUUM rebuilds the file without them. The checkpoint then copies
+    # the log back and truncates it, so the WAL holds no copy either.
+    conn.execute("VACUUM")
+    row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    if row[0]:
+        log.warning("store: could not checkpoint after removing the Telegram settings; "
+                    "the old token may stay in the write-ahead log until the next checkpoint")
+    log.info("store: removed the old Telegram bot settings from app_settings")
 
 
 def upsert_collection(conn: sqlite3.Connection, ci: CollectionInfo) -> None:
@@ -1811,7 +1866,7 @@ def update_settings(conn: sqlite3.Connection, patch: dict) -> dict:
 # the two leaves a claimed-but-unsettled row, which is deliberately treated as
 # SENT: a duplicate 3am alert costs more trust than a missed one.
 
-_NOTIFY_CHANNEL = "telegram"
+_NOTIFY_CHANNEL = "signal"
 
 
 def claim_notification(
@@ -1848,14 +1903,16 @@ def settle_notification(
 ) -> None:
     """Record how a claimed send turned out.
 
-    `error` must already be redacted — the bot token travels in the request path
-    and httpx puts the URL in its exception text, so an unredacted string here is
-    a plaintext credential in every backup of this file. `notify.telegram`
-    redacts on the way out; this function is not the place to start trusting it.
+    `error` must already be redacted — an error string can carry the token the
+    request was sent with (an echoed header, an exception's text), so an
+    unredacted string here is a plaintext credential in every backup of this
+    file. `notify.signal` redacts on the way out; this function is not the place
+    to start trusting it.
 
     `message_id` names the DELIVERY the occasion rode in — the transport's id
-    for the message, shared by every row of a batch. It is what lets the daily
-    loud ceiling charge one combined message once (scheduler.loud_deliveries_since).
+    for the delivery: signal-bot's send timestamp (ms), shared by every row of a
+    batch. It is what lets the daily loud ceiling charge one combined message
+    once (scheduler.loud_deliveries_since).
     """
     conn.execute(
         "UPDATE notification_deliveries SET "
@@ -1906,7 +1963,7 @@ def notification_already_sent(
 
 def recent_notifications(conn: sqlite3.Connection, *, limit: int = 50) -> list[dict]:
     """The last `limit` deliveries, newest first — what Settings shows so the
-    owner can see what the bot has been saying without opening Telegram."""
+    owner can see what the bot has been saying without opening Signal."""
     rows = conn.execute(
         "SELECT * FROM notification_deliveries ORDER BY claimed_at DESC LIMIT ?",
         (max(1, min(limit, 500)),),

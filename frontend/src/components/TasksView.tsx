@@ -9,13 +9,16 @@ import {
 import { fmtClock, fmtDue, inputLang } from '../time'
 import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
-import { useSegmentThumb, useToday } from '../hooks'
+import { useFieldNotes, useSegmentThumb, useToday } from '../hooks'
 import { NavCollections, useEmbeddedCollections, useShell } from '../shell'
 import { AddMultipleModal } from './AddMultipleModal'
 import { WasDue } from './WasDue'
 import { dateOut, TaskModal } from './TaskModal'
 import { Sidebar } from './Sidebar'
 import { SuggestionsPane } from './SuggestionsPane'
+import { CheckInk, StrikeInk } from './Marks'
+import { ViewDrawing } from './DayDrawing'
+import { EMPTY_DAY } from '../drawing'
 import { useMailSuggestions } from '../mail'
 import { useI18n } from '../i18n'
 import { useT } from '../i18n'
@@ -103,6 +106,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   onAskHandled?: () => void
 }) {
   const { locale, t: tr } = useI18n()
+  const fieldNotes = useFieldNotes()
   const guard = makeGuard(onExpire)
   const sug = useMailSuggestions(mailRev ?? 0, onExpire)
   const embedded = useEmbeddedCollections()
@@ -117,6 +121,9 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
     taskListErrors, reloadTasks,
   } = useTaskData()
   const [detail, setDetail] = useState<Task | null>(null)
+  // The row the editor's "Add subtask" asked for (Field notes): its TaskGroup
+  // opens the inline field the row's own "+ sub" opens, then clears this.
+  const [subFor, setSubFor] = useState<string | null>(null)
   // The two create surfaces, both null when closed. `adding` is the single-task
   // form; `bulk` is the multi-row composer. Each carries the list and the title
   // typed into quick-add, so text moves between them instead of being lost.
@@ -607,7 +614,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   const quickAdd = defaultList && (
     <QuickAdd onSubmit={addTask}
       onExpand={(listId, summary) => setAdding({ listId, summary })}
-      defaultList={defaultList} lists={visibleLists} />
+      defaultList={defaultList} lists={visibleLists} fieldNotes={fieldNotes} />
   )
 
   return (
@@ -669,13 +676,13 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           <span className="spacer" />
           {!completedOnly && !parkedOnly && !suggestedOnly && view !== 'list' && (
             <div className="range-nav">
-              <button className="icon-btn" title={tr('tasks.earlier')}
+              <button className="icon-btn" title={fieldNotes ? undefined : tr('tasks.earlier')}
                 aria-label={tr('tasks.earlier')}
                 onClick={() => setAnchor(addDays(days[0], -span))}>‹</button>
               <button className="btn ghost" onClick={() => setAnchor(new Date())}>
                 {tr('tasks.today')}
               </button>
-              <button className="icon-btn" title={tr('tasks.later')}
+              <button className="icon-btn" title={fieldNotes ? undefined : tr('tasks.later')}
                 aria-label={tr('tasks.later')}
                 onClick={() => setAnchor(addDays(days[0], span))}>›</button>
             </div>
@@ -706,7 +713,8 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
             {completedTasks.map((t) => (
               <TaskGroup key={taskKey(t)} task={t} childrenOf={completedKids} dot={dotFor(t)}
                 progressOf={progressOf} isCollapsed={isCollapsed} onCollapse={setCollapsed}
-                onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
+                onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub}
+                fieldNotes={fieldNotes} subFor={subFor} onSubShown={() => setSubFor(null)} />
             ))}
           </div>
         ) : parkedOnly ? (
@@ -749,6 +757,11 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
           // "create a list to get started" was the loudest thing on screen
           // during every cold load and every tab switch.
           <div className="empty" aria-busy={!listsLoaded || undefined}>
+            {fieldNotes && listsLoaded && (
+              <div className="view-drawing" aria-hidden="true">
+                <ViewDrawing view="tasks" day={todayKey} state={EMPTY_DAY} />
+              </div>
+            )}
             {!listsLoaded
               ? tr('common.loading')
               : lists.length === 0
@@ -778,10 +791,16 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
                 <TaskGroup key={taskKey(t)} task={t} childrenOf={childrenOf} dot={dotFor(t)}
                   progressOf={progressOf} isCollapsed={isCollapsed} onCollapse={setCollapsed}
                   onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub}
-                  drag={reorderDrag} />
+                  drag={reorderDrag}
+                  fieldNotes={fieldNotes} subFor={subFor} onSubShown={() => setSubFor(null)} />
               ))}
               {active.length === 0 && taskListErrors.length === 0 && (
                 <div className="empty" aria-busy={!loaded || undefined}>
+                  {fieldNotes && loaded && (
+                    <div className="view-drawing" aria-hidden="true">
+                      <ViewDrawing view="tasks" day={todayKey} state={EMPTY_DAY} />
+                    </div>
+                  )}
                   {loaded ? tr('tasks.nothingToDo') : tr('common.loading')}
                 </div>
               )}
@@ -793,7 +812,8 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
                   {done.map((t) => (
                     <TaskGroup key={taskKey(t)} task={t} childrenOf={childrenOf} dot={dotFor(t)}
                       progressOf={progressOf} isCollapsed={isCollapsed} onCollapse={setCollapsed}
-                      onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub} />
+                      onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub}
+                      fieldNotes={fieldNotes} subFor={subFor} onSubShown={() => setSubFor(null)} />
                   ))}
                 </>
               )}
@@ -826,7 +846,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
                     onToggle={toggle} onOpen={setDetail}
                     onAdd={(summary) => addTask(defaultList, summary, key)}
                     dragActive={dragUid !== null} onDropTask={() => dropOnDay(key)}
-                    onDragTask={setDragUid} />
+                    onDragTask={setDragUid} fieldNotes={fieldNotes} />
                 )
               })}
             </div>
@@ -881,6 +901,10 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
             setDetail({ ...detail, original_due_moved: moved })
           }}
           onDelete={() => { remove(detail); setDetail(null) }}
+          // Field notes: on a touchscreen the rows show no tools, so the editor
+          // carries "+ sub". It closes, then opens the row's own inline field.
+          onAddSub={fieldNotes && !parkedOnly && !suggestedOnly && (showCompletedPane || view === 'list')
+            ? () => { const k = taskKey(detail); setDetail(null); setSubFor(k) } : undefined}
           onMultiple={() => {}} />
       )}
 
@@ -918,7 +942,8 @@ const MAX_INDENT = 6
  * gave out. A row already on its own path is dropped rather than repeated.
  */
 function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen, group = '',
-  isCollapsed, onCollapse, onToggle, onRemove, onOpen, onAddSub, drag }: {
+  isCollapsed, onCollapse, onToggle, onRemove, onOpen, onAddSub, drag,
+  fieldNotes, subFor, onSubShown }: {
   task: Task
   childrenOf: (t: Task) => Task[]
   dot?: string | null
@@ -947,9 +972,19 @@ function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen, group =
    *  carry them all along — `sort_order` is one account-wide sequence and
    *  `reorder` has always sent every task in it, subtasks included. */
   drag?: ReorderDrag
+  fieldNotes: boolean
+  /** The `taskKey` of the row the editor asked to add a subtask under; that
+   *  row opens its inline field and calls `onSubShown`. */
+  subFor?: string | null
+  onSubShown?: () => void
 }) {
   const tr = useT()
   const [adding, setAdding] = useState(false)
+  // The same pair of calls the row's own "+ sub" makes.
+  useEffect(() => {
+    if (subFor === taskKey(task)) { onCollapse(task, false); setAdding(true); onSubShown?.() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subFor])
   /** The last press on this row landed in a text field. Written on mousedown and
    *  read on dragstart — see the wrapper's comment for why the obvious
    *  `e.target` test cannot do this job. */
@@ -1045,7 +1080,8 @@ function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen, group =
         collapsed={kids.length > 0 ? folded : undefined}
         onCollapse={(next) => onCollapse(task, next)}
         onToggle={onToggle} onRemove={onRemove} onOpen={onOpen}
-        onAddSub={() => { onCollapse(task, false); setAdding(true) }} />
+        onAddSub={() => { onCollapse(task, false); setAdding(true) }}
+        fieldNotes={fieldNotes} />
       {!folded && kids.map((k) => (
         <TaskGroup key={taskKey(k)} task={k} childrenOf={childrenOf} dot={dot}
           progressOf={progressOf} depth={depth + 1} seen={path}
@@ -1054,7 +1090,8 @@ function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen, group =
           // pane passes no `drag` at all and so keeps handing on none.
           drag={drag} group={taskKey(task)}
           isCollapsed={isCollapsed} onCollapse={onCollapse}
-          onToggle={onToggle} onRemove={onRemove} onOpen={onOpen} onAddSub={onAddSub} />
+          onToggle={onToggle} onRemove={onRemove} onOpen={onOpen} onAddSub={onAddSub}
+          fieldNotes={fieldNotes} subFor={subFor} onSubShown={onSubShown} />
       ))}
       {!folded && adding && (
         <div className="task" style={indentStyle(indent + 1)}>
@@ -1072,13 +1109,14 @@ const indentStyle = (depth: number) =>
   (depth > 0 ? { '--task-depth': depth } as CSSProperties : undefined)
 
 function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen, onAdd,
-  dragActive, onDropTask, onDragTask }: {
+  dragActive, onDropTask, onDragTask, fieldNotes }: {
   date: Date; isToday: boolean
   open: Task[]; done: Task[]; overdue: Task[]
   dotOf: (t: Task) => string | null | undefined
   onToggle: (t: Task) => void; onOpen: (t: Task) => void
   onAdd: (summary: string) => void
   dragActive: boolean; onDropTask: () => void; onDragTask: (key: string | null) => void
+  fieldNotes: boolean
 }) {
   const { locale, t: tr } = useI18n()
   const [adding, setAdding] = useState(false)
@@ -1102,13 +1140,14 @@ function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen
             <div className="col-label label overdue">{tr('tasks.overdue')}</div>
             {overdue.map((t) => (
               <DayCard key={taskKey(t)} task={t} showDate dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen}
-                onDrag={onDragTask} />
+                onDrag={onDragTask} fieldNotes={fieldNotes} />
             ))}
             {open.length > 0 && <div className="col-label label">{tr('tasks.today')}</div>}
           </>
         )}
         {open.map((t) => (
-          <DayCard key={taskKey(t)} task={t} dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen} onDrag={onDragTask} />
+          <DayCard key={taskKey(t)} task={t} dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen} onDrag={onDragTask}
+            fieldNotes={fieldNotes} />
         ))}
         {open.length + overdue.length + done.length === 0 && !adding && (
           <div className="col-empty">—</div>
@@ -1117,7 +1156,8 @@ function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen
           <>
             <div className="col-label label">{tr('tasks.doneSection', { count: done.length })}</div>
             {done.map((t) => (
-              <DayCard key={taskKey(t)} task={t} dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen} onDrag={onDragTask} />
+              <DayCard key={taskKey(t)} task={t} dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen} onDrag={onDragTask}
+                fieldNotes={fieldNotes} />
             ))}
           </>
         )}
@@ -1140,10 +1180,11 @@ function priTier(label: Task['priority_label']): 'high' | 'med' | 'low' | undefi
   return label === 'high' ? 'high' : label === 'medium' ? 'med' : label === 'low' ? 'low' : undefined
 }
 
-function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
+function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag, fieldNotes }: {
   task: Task; showDate?: boolean; dot?: string | null
   onToggle: (t: Task) => void; onOpen: (t: Task) => void
   onDrag: (uid: string | null) => void
+  fieldNotes: boolean
 }) {
   const { locale, t: tr } = useI18n()
   const pri = task.priority_label
@@ -1165,9 +1206,10 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
       }}
       onDragEnd={() => onDrag(null)}>
       <div className={`pri-bar ${priClass}`} />
-      <button className={`check ${task.completed ? 'on' : ''}`} title={tr('tasks.toggleComplete')}
+      <button className={`check ${task.completed ? 'on' : ''}`}
+        title={fieldNotes ? undefined : tr('tasks.toggleComplete')}
         aria-label={tr('tasks.toggleComplete')} aria-pressed={task.completed}
-        onClick={() => onToggle(task)}>✓</button>
+        onClick={() => onToggle(task)}><CheckInk seed={task.uid} />✓</button>
       {/* The role/tabIndex/keydown trio the calendar's task chip has: this is
           the card's only route to the editor, and a plain div with onClick
           left the check button as the sole thing a keyboard could reach. */}
@@ -1181,6 +1223,9 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
         <div className="day-card-title">
           {dot !== undefined && <span className="list-dot" style={dot ? { background: dot } : undefined} />}
           {task.summary || tr('common.untitled')}
+          {/* Won't-do too: a cancelled card is `.done`, which Field notes
+              draws struck rather than lined through. */}
+          <StrikeInk on={task.completed || task.cancelled} seed={task.uid} />
         </div>
         {/* `slippedFrom` in the gate as well as in the row: a deadline can be
             CLEARED while the remembered one survives (the sidecar route keeps
@@ -1217,7 +1262,7 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag }: {
 }
 
 function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
-  onToggle, onRemove, onOpen, onAddSub }: {
+  onToggle, onRemove, onOpen, onAddSub, fieldNotes }: {
   task: Task
   /** Depth in the tree; 0 is a top-level row. Drives the indent only. */
   depth?: number
@@ -1229,6 +1274,7 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
   onCollapse?: (next: boolean) => void
   onToggle: (t: Task) => void; onRemove: (t: Task) => void
   onOpen: (t: Task) => void; onAddSub?: () => void
+  fieldNotes: boolean
 }) {
   const { locale, t: tr } = useI18n()
   const pri = task.priority_label
@@ -1244,7 +1290,7 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
       {collapsed === undefined ? <span className="twisty-gap" /> : (
         <button className={`twisty ${collapsed ? '' : 'open'}`}
           aria-expanded={!collapsed}
-          title={collapsed
+          title={fieldNotes ? undefined : collapsed
             ? tr('tasks.showSubtasks', { task: label })
             : tr('tasks.hideSubtasks', { task: label })}
           aria-label={collapsed
@@ -1252,9 +1298,10 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
             : tr('tasks.hideSubtasks', { task: label })}
           onClick={() => onCollapse?.(!collapsed)}>›</button>
       )}
-      <button className={`check ${task.completed ? 'on' : ''}`} title={tr('tasks.toggleComplete')}
+      <button className={`check ${task.completed ? 'on' : ''}`}
+        title={fieldNotes ? undefined : tr('tasks.toggleComplete')}
         aria-label={tr('tasks.toggleComplete')} aria-pressed={task.completed}
-        onClick={() => onToggle(task)}>✓</button>
+        onClick={() => onToggle(task)}><CheckInk seed={task.uid} />✓</button>
       {/* Keyboard-openable, like the calendar's chips and DayPopover's rows.
           Tabbing through a row reached the twisty, the checkbox, "+ sub" and
           "✕" — every control but the one that opens the task, and for an
@@ -1275,6 +1322,7 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
               two non-completions and the whole point is that they read
               differently: one is a verdict, the other is "not now". */}
           {task.parked && <span className="chip">{tr('tasks.parkedChip')}</span>}
+          <StrikeInk on={task.completed || task.cancelled} seed={task.uid} />
         </div>
         {(task.due || slippedFrom(task) || movedFrom(task) || progress
           || task.tags.length > 0) && (
@@ -1295,11 +1343,14 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
       </div>
       <div className="task-actions">
         {onAddSub && (
-          <button onClick={onAddSub} title={tr('tasks.addSubtask')}>
+          <button onClick={onAddSub} title={fieldNotes ? undefined : tr('tasks.addSubtask')}
+            aria-label={fieldNotes ? tr('tasks.addSubtask') : undefined}>
             {tr('tasks.addSubtaskShort')}
           </button>
         )}
-        <button className="danger" onClick={() => onRemove(task)} title={tr('common.delete')}>
+        <button className="danger" onClick={() => onRemove(task)}
+          title={fieldNotes ? undefined : tr('common.delete')}
+          aria-label={fieldNotes ? tr('common.delete') : undefined}>
           {tr('tasks.deleteShort')}
         </button>
       </div>
@@ -1307,7 +1358,7 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
   )
 }
 
-function QuickAdd({ onSubmit, onExpand, defaultList, lists }: {
+function QuickAdd({ onSubmit, onExpand, defaultList, lists, fieldNotes }: {
   onSubmit: (listId: string, v: string) => void
   // Opens the full single-task form, carrying whatever is typed here and the
   // list selected here. Enter still creates outright — that's the fast path,
@@ -1317,6 +1368,7 @@ function QuickAdd({ onSubmit, onExpand, defaultList, lists }: {
   // When provided (combined view), a compact picker chooses the target list;
   // otherwise the single focused list is implied.
   lists?: List[]
+  fieldNotes: boolean
 }) {
   const tr = useT()
   const [v, setV] = useState('')
@@ -1334,14 +1386,16 @@ function QuickAdd({ onSubmit, onExpand, defaultList, lists }: {
         onChange={(e) => setV(e.target.value)}
         onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') go() }} />
       {lists && lists.length > 1 && (
-        <select className="input quickadd-list" value={listId} title={tr('tasks.quickAddList')}
+        <select className="input quickadd-list" value={listId}
+          title={fieldNotes ? undefined : tr('tasks.quickAddList')}
+          aria-label={fieldNotes ? tr('tasks.quickAddList') : undefined}
           onChange={(e) => setListId(e.target.value)}>
           {lists.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
         </select>
       )}
       {/* Labelled with an ellipsis because it opens the form rather than
           creating outright — Enter in the field is the instant path. */}
-      <button className="btn" title={tr('tasks.openFullForm')}
+      <button className="btn" title={fieldNotes ? undefined : tr('tasks.openFullForm')}
         onClick={() => { onExpand(target, v.trim()); setV('') }}>{tr('tasks.newEllipsis')}</button>
     </div>
   )

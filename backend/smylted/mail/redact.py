@@ -1,6 +1,6 @@
 """Keep the two mail secrets out of every log line, error and traceback.
 
-A security control, not tidiness — the same position `notify/telegram.py` takes
+A security control, not tidiness — the same position `notify/signal.py` takes
 about its bot token, applied more broadly because there are more ways out here.
 An Anthropic key or a Bridge password can leave the process in:
 

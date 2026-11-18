@@ -1,12 +1,15 @@
-// The two designs, as the browser computes them.
+// The designs, as the browser computes them.
 //
 // design-tokens.test.ts holds the lever arrangement as TEXT; this holds what it
-// is for, as computed style: the shipped design is the September 2026
-// refinement, and Classic is the design before it — not an approximation of it.
+// is for, as computed style. The shipped design is Field notes (Nov 2026). The
+// September 2026 refinement it replaced ships as the "refined" preset and is
+// pinned here exactly as it was, under that preset; Classic is the design before
+// that — not an approximation of it.
 // The pins for the IDs that apply here name the change they guard by the
 // design system's CHANGES.md ID; the ones about Classic name what they restore.
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mount, viewport } from './test/browser-measure'
+import { applyDesign } from './appearance'
 
 const SINK = `
   <div class="shell">
@@ -42,9 +45,65 @@ const cs = (host: HTMLElement, sel: string, pseudo?: string) =>
   getComputedStyle(host.querySelector(sel)!, pseudo)
 const root = () => getComputedStyle(document.documentElement)
 
-afterEach(() => { delete document.documentElement.dataset.preset })
+afterEach(() => { applyDesign(document.documentElement, null) })
 
-describe('the shipped design is the refinement', () => {
+describe('Field notes is the shipped design', () => {
+  it('switches on with the attribute the design system names', async () => {
+    await mount(SINK)
+    expect(document.documentElement.dataset.surface).toBe('app')
+    expect(root().getPropertyValue('--bg').trim()).toBe('#F3EDE1')
+  })
+
+  it('reads in Newsreader, presses in Hanken Grotesk, and labels in Hanken too', async () => {
+    // Two families in apps: the design system's mono stack resolves to Hanken,
+    // and data takes tabular figures rather than a monospace face.
+    await viewport(1200)
+    const host = await mount(SINK)
+    expect(cs(host, '.content-title').fontFamily).toMatch(/^"?Newsreader/)
+    for (const sel of ['.btn', '.tab', '.view-tab', '.chip', '.label']) {
+      expect(cs(host, sel).fontFamily, sel).toMatch(/^"?Hanken Grotesk/)
+    }
+  })
+
+  it('sets controls at 15px in sentence case, at least 40px tall', async () => {
+    await viewport(1200)
+    const host = await mount(SINK)
+    const btn = cs(host, '.btn')
+    expect(btn.fontSize).toBe('15px')
+    expect(btn.textTransform).toBe('none')
+    expect(parseFloat(btn.minHeight)).toBe(40)
+    expect(btn.fontWeight).toBe('600')
+    expect(btn.borderTopLeftRadius).toBe('12px')   // --r-md: buttons are cards' kin
+  })
+
+  it('takes the design system radii: 3 for a check, 12 for a menu, 22 for a modal', async () => {
+    const host = await mount(SINK)
+    expect(cs(host, '.check').borderTopLeftRadius).toBe('3px')
+    expect(cs(host, '.menu').borderTopLeftRadius).toBe('12px')
+    expect(cs(host, '.modal').borderTopLeftRadius).toBe('22px')
+  })
+
+  it('floats on --bg-float with a paper edge and an ink-tinted lift', async () => {
+    const host = await mount(SINK)
+    expect(cs(host, '.menu').backgroundColor).toBe('rgb(255, 253, 248)')   // --bg-float
+    expect(cs(host, '.menu').boxShadow).toContain('rgba(42, 38, 34, 0.14) 0px 1px 0px')
+  })
+
+  it('moves with the design system motion: a softer press, an eased settle', () => {
+    expect(root().getPropertyValue('--press-scale').trim()).toBe('0.96')
+    expect(root().getPropertyValue('--ease').trim()).toBe('cubic-bezier(0.2, 0.8, 0.2, 1)')
+    expect(root().getPropertyValue('--dur-reward').trim()).toBe('0.42s')
+  })
+
+  it('keeps quiet text readable: what wore --fg-faint now wears --fg-muted', async () => {
+    const host = await mount(SINK)
+    expect(cs(host, '.label').color).toBe('rgb(102, 94, 84)')   // --fg-muted, 5.5:1
+  })
+})
+
+describe('the Sep 2026 design (the "refined" preset) is the refinement, untouched', () => {
+  beforeEach(() => applyDesign(document.documentElement, 'refined'))
+
   it('reads in Newsreader, controls in Hanken Grotesk, labels in JetBrains Mono (T0, T7)', async () => {
     await viewport(1200)
     const host = await mount(SINK)
@@ -121,7 +180,7 @@ describe('the shipped design is the refinement', () => {
 describe('Classic is the design before it', () => {
   const classic = async () => {
     await viewport(1200)
-    document.documentElement.dataset.preset = 'classic'
+    applyDesign(document.documentElement, 'classic')
     return mount(SINK)
   }
 
@@ -163,7 +222,8 @@ describe('Classic is the design before it', () => {
   })
 })
 
-describe('T9 · Hanken Grotesk, fitted to dense rows', () => {
+describe('T9 · Hanken Grotesk, fitted to dense rows (the refined preset)', () => {
+  beforeEach(() => applyDesign(document.documentElement, 'refined'))
   // The sans is x-height-normalised rather than resized: `font-size-adjust`
   // renders it at a 0.516em x-height of the size it is declared at, so every
   // size token and every line-height (both computed from font-size) is where
@@ -281,7 +341,7 @@ describe('T9 · Hanken Grotesk, fitted to dense rows', () => {
       document.documentElement.style.setProperty('--sans', '"Inter", -apple-system, BlinkMacSystemFont, sans-serif')
       document.documentElement.dataset.sans = 'other'
     } else {
-      document.documentElement.dataset.preset = which
+      applyDesign(document.documentElement, which)
     }
     const host = await mount(ROWS)
     for (const sel of [...SANS, ...CONTROLS]) expect(cs(host, sel).fontSizeAdjust, sel).toBe('none')

@@ -1,7 +1,8 @@
 import { describe, expect, it, beforeEach } from 'vitest'
 import {
-  DEFAULT_TAB_ORDER, DEFAULT_TAB_START, TABS, TAB_KEY, TAB_LABELS, cacheTab, isTab,
-  moveTab, readCachedTab, resolveStartTab, sanitizeTabOrder, sanitizeTabStart,
+  CAL_VIEW_KEY, DEFAULT_TAB_ORDER, DEFAULT_TAB_START, TABS, TAB_KEY, TAB_LABELS, cacheCalView,
+  cacheTab, fromStoredTab, isTab, moveTab, readCachedCalView, readCachedTab,
+  readLegacyCachedScheduling, resolveStartTab, sanitizeTabOrder, sanitizeTabStart,
 } from './tabs'
 import { translate } from './i18n/index'
 
@@ -33,8 +34,14 @@ describe('the shipped strip', () => {
 
 describe('sanitizeTabOrder', () => {
   it('keeps a well-formed order as it stands', () => {
-    expect(sanitizeTabOrder(['calendar', 'home', 'scheduling', 'tasks', 'today']))
-      .toEqual(['calendar', 'home', 'scheduling', 'tasks', 'today'])
+    expect(sanitizeTabOrder(['calendar', 'home', 'tasks', 'today']))
+      .toEqual(['calendar', 'home', 'tasks', 'today'])
+  })
+
+  it('drops the retired Scheduling tab from a stored order', () => {
+    // Scheduling is a view inside Calendar now; an older client or a blob from
+    // before the move can still carry the token.
+    expect(sanitizeTabOrder(['scheduling', 'tasks'])).toEqual(['tasks', 'today', 'home', 'calendar'])
   })
 
   it('falls back to the shipped order when nothing is stored', () => {
@@ -53,8 +60,8 @@ describe('sanitizeTabOrder', () => {
 
   it('appends any tab the stored order forgot', () => {
     // A tab missing from the strip would leave its view unreachable.
-    const order = sanitizeTabOrder(['scheduling'])
-    expect(order[0]).toBe('scheduling')
+    const order = sanitizeTabOrder(['calendar'])
+    expect(order[0]).toBe('calendar')
     expect([...order].sort()).toEqual([...DEFAULT_TAB_ORDER].sort())
   })
 
@@ -76,14 +83,31 @@ describe('sanitizeTabStart', () => {
     expect(sanitizeTabStart('gantt')).toBe('home')
     expect(sanitizeTabStart(3)).toBe('home')
   })
+
+  it('maps the retired Scheduling token to Calendar', () => {
+    expect(sanitizeTabStart('scheduling')).toBe('calendar')
+  })
+})
+
+describe('fromStoredTab', () => {
+  it('opens Calendar for the retired Scheduling token', () => {
+    expect(fromStoredTab('scheduling')).toBe('calendar')
+  })
+
+  it('passes a real tab through and refuses anything else', () => {
+    expect(fromStoredTab('tasks')).toBe('tasks')
+    expect(fromStoredTab('gantt')).toBeNull()
+    expect(fromStoredTab('last')).toBeNull()
+    expect(fromStoredTab(undefined)).toBeNull()
+  })
 })
 
 describe('moveTab', () => {
   it('swaps a tab with its neighbour', () => {
-    expect(moveTab(['home', 'tasks', 'calendar', 'scheduling'], 'tasks', -1))
-      .toEqual(['tasks', 'home', 'calendar', 'scheduling'])
-    expect(moveTab(['home', 'tasks', 'calendar', 'scheduling'], 'tasks', 1))
-      .toEqual(['home', 'calendar', 'tasks', 'scheduling'])
+    expect(moveTab(['home', 'tasks', 'calendar', 'today'], 'tasks', -1))
+      .toEqual(['tasks', 'home', 'calendar', 'today'])
+    expect(moveTab(['home', 'tasks', 'calendar', 'today'], 'tasks', 1))
+      .toEqual(['home', 'calendar', 'tasks', 'today'])
   })
 
   it('does nothing at either end, or for a tab that is not there', () => {
@@ -103,12 +127,12 @@ describe('resolveStartTab', () => {
   })
 
   it('opens on the remembered tab when set to "last"', () => {
-    expect(resolveStartTab('last', 'scheduling', DEFAULT_TAB_ORDER)).toBe('scheduling')
+    expect(resolveStartTab('last', 'tasks', DEFAULT_TAB_ORDER)).toBe('tasks')
   })
 
   it('falls back to the strip’s first tab when nothing is remembered', () => {
     expect(resolveStartTab('last', undefined, DEFAULT_TAB_ORDER)).toBe(DEFAULT_TAB_ORDER[0])
-    expect(resolveStartTab('last', undefined, ['calendar', 'home', 'tasks', 'scheduling']))
+    expect(resolveStartTab('last', undefined, ['calendar', 'home', 'tasks', 'today']))
       .toBe('calendar')
   })
 })
@@ -117,14 +141,48 @@ describe('the boot cache', () => {
   beforeEach(() => localStorage.clear())
 
   it('round-trips a tab', () => {
-    cacheTab('scheduling')
-    expect(readCachedTab()).toBe('scheduling')
+    cacheTab('calendar')
+    expect(readCachedTab()).toBe('calendar')
+  })
+
+  it('reads the retired Scheduling tab as Calendar', () => {
+    localStorage.setItem(TAB_KEY, 'scheduling')
+    expect(readCachedTab()).toBe('calendar')
   })
 
   it('ignores a missing or junk value rather than trusting it', () => {
     expect(readCachedTab()).toBeNull()
     localStorage.setItem(TAB_KEY, 'gantt')
     expect(readCachedTab()).toBeNull()
+  })
+})
+
+describe('the calendar view cache', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('round-trips a view', () => {
+    cacheCalView('scheduling')
+    expect(readCachedCalView()).toBe('scheduling')
+    cacheCalView('month')
+    expect(readCachedCalView()).toBe('month')
+  })
+
+  it('ignores a missing or junk value rather than trusting it', () => {
+    expect(readCachedCalView()).toBeNull()
+    localStorage.setItem(CAL_VIEW_KEY, 'agenda')
+    expect(readCachedCalView()).toBeNull()
+  })
+})
+
+describe('readLegacyCachedScheduling', () => {
+  beforeEach(() => localStorage.clear())
+
+  it('is true only while the tab cache holds the retired Scheduling tab', () => {
+    expect(readLegacyCachedScheduling()).toBe(false)
+    localStorage.setItem(TAB_KEY, 'calendar')
+    expect(readLegacyCachedScheduling()).toBe(false)
+    localStorage.setItem(TAB_KEY, 'scheduling')
+    expect(readLegacyCachedScheduling()).toBe(true)
   })
 })
 

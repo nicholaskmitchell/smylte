@@ -1175,8 +1175,7 @@ describe('aug19 leftovers — every dialog answers Escape at the window', () => 
     planOnDueToday={false} onTogglePlanOnDueToday={vi.fn()}
       focus={DEFAULT_FOCUS} onFocusChange={vi.fn()}
       notifyEnabled={false} onNotifyEnabledChange={vi.fn()}
-      notifyChatId="" onNotifyChatIdChange={vi.fn()}
-      notifyTokenSet={false} notifyBotId="" onNotifyTokenChange={vi.fn()}
+      notifyTokenSet={false} notifyTokenEnv={false} onNotifyTokenChange={vi.fn()}
       notifyTriggers={{}} onNotifyTriggersChange={vi.fn()}
       notifyDigestTime="07:30" onNotifyDigestTimeChange={vi.fn()}
       notifyEventLead={10} onNotifyEventLeadChange={vi.fn()}

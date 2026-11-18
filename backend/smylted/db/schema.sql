@@ -617,7 +617,7 @@ CREATE TABLE IF NOT EXISTS habits (
 -- the INSERT re-arms a message that already reached the phone, and a duplicate
 -- 3am alert costs more trust than a missed one. The outcome is stamped back
 -- onto the claimed row afterwards, so a failed send is recorded rather than
--- retried: the transport has already retried it (notify/telegram.py), and a
+-- retried: the transport has already retried it (notify/signal.py), and a
 -- "starting in 10 minutes" redelivered half an hour later is worse than
 -- silence.
 --
@@ -634,7 +634,10 @@ CREATE TABLE IF NOT EXISTS habits (
 CREATE TABLE IF NOT EXISTS notification_deliveries (
     trigger     TEXT NOT NULL,            -- which rule fired, e.g. 'event_starting'
     dedupe_key  TEXT NOT NULL,            -- the occasion it fired about
-    channel     TEXT NOT NULL DEFAULT 'telegram',
+    -- A database created before signal-bot keeps its old DEFAULT ('telegram'):
+    -- CREATE TABLE IF NOT EXISTS never alters a table. That is harmless,
+    -- because every write passes the channel explicitly (store._NOTIFY_CHANNEL).
+    channel     TEXT NOT NULL DEFAULT 'signal',
     -- When the row was CLAIMED. The send happens after, outside the service
     -- lock, so this is within a few seconds of delivery and never after it.
     claimed_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -642,12 +645,13 @@ CREATE TABLE IF NOT EXISTS notification_deliveries (
     -- was claimed and never resolved, which is what a crash mid-send looks like.
     settled_at  TEXT,
     ok          INTEGER NOT NULL DEFAULT 0,
-    silent      INTEGER NOT NULL DEFAULT 0,   -- sent with disable_notification
-    -- The transport's error, ALREADY REDACTED (notify/telegram.py::_redact).
-    -- The bot token travels in the request path, so an unredacted httpx error
-    -- string here would be a plaintext credential in every backup of this file.
+    silent      INTEGER NOT NULL DEFAULT 0,   -- sent without buzzing the phone
+    -- The transport's error, ALREADY REDACTED (notify/signal.py::_redact).
+    -- An error string can carry the bearer token, so an unredacted one here
+    -- would be a plaintext credential in every backup of this file.
     error       TEXT,
-    -- Which DELIVERY carried this occasion: Telegram's message_id, NULL for a
+    -- Which DELIVERY carried this occasion: the transport's id for the
+    -- delivery, signal-bot's send timestamp (ms); NULL for a
     -- row that never settled as sent or whose transport returned none. One
     -- batched message settles one row per occasion, and the daily loud ceiling
     -- counts BUZZES, not rows — so the ceiling counts distinct values here

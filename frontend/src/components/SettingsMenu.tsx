@@ -15,7 +15,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { DEFAULT_CALENDAR_FIT, calendarFitKey, type CalendarFit } from '../calendar'
-import { useIsMobile, useEscape } from '../hooks'
+import { useIsMobile, useEscape, useFieldNotes, useToday } from '../hooks'
 import { PendingWrite, UnsentInput, useLayer, usePendingCount, useUnsentCount } from '../layers'
 import { SESSION_DEFAULT, sessionKey } from '../session'
 import { DEFAULT_TIME_FORMAT, timeFormatKey, type TimeFormat } from '../time'
@@ -35,6 +35,10 @@ import { DesktopSection } from './DesktopSection'
 import { TabsSection } from './TabsSection'
 import { CapacitySection } from './CapacitySection'
 import { FocusSection } from './FocusSection'
+import { Hint } from './Hint'
+import { TabInk } from './Marks'
+import { ViewDrawing } from './DayDrawing'
+import { EMPTY_DAY } from '../drawing'
 import type { FocusSettings } from '../focus'
 import { NotificationsSection } from './NotificationsSection'
 import { MailSection } from './MailSection'
@@ -97,8 +101,7 @@ export function SettingsMenu({
   planOnDueToday, onTogglePlanOnDueToday,
   focus, onFocusChange,
   notifyEnabled, onNotifyEnabledChange,
-  notifyChatId, onNotifyChatIdChange,
-  notifyTokenSet, notifyBotId, onNotifyTokenChange,
+  notifyTokenSet, notifyTokenEnv, onNotifyTokenChange,
   notifyTriggers, onNotifyTriggersChange,
   notifyDigestTime, onNotifyDigestTimeChange,
   notifyEveningTime, onNotifyEveningTimeChange,
@@ -155,12 +158,11 @@ export function SettingsMenu({
   onFocusChange: (patch: Partial<FocusSettings>) => void
   notifyEnabled: boolean
   onNotifyEnabledChange: (next: boolean) => void
-  notifyChatId: string
-  onNotifyChatIdChange: (next: string) => void
-  /** Whether a bot token is stored, and which bot. The token itself never comes
-   *  back from the server, so this is all the UI has — and all it needs. */
+  /** Whether a signal-bot token is stored, and whether the server's environment
+   *  sets it. The token itself never comes back from the server, so these are
+   *  all the UI has — and all it needs. */
   notifyTokenSet: boolean
-  notifyBotId: string
+  notifyTokenEnv: boolean
   onNotifyTokenChange: (next: string) => void
   /** Sparse overrides: an absent rule means that rule's own default. */
   notifyTriggers: Partial<Record<Trigger, boolean>>
@@ -190,6 +192,8 @@ export function SettingsMenu({
   panelRef: React.RefObject<HTMLDivElement>
 }) {
   const isMobile = useIsMobile()
+  const fieldNotes = useFieldNotes()
+  const today = useToday()
   const [section, setSection] = useState<Section>(initialSection ?? 'general')
   // Only meaningful on a phone. On a desktop the nav is a permanent column, so
   // there is nothing to be "in" and nothing to go back to.
@@ -308,15 +312,24 @@ export function SettingsMenu({
           aria-selected={section === s.id} aria-controls={`set-panel-${s.id}`}
           // Named by its label alone, so the blurb reads as a description
           // rather than as part of what the item is called.
-          aria-label={tr(s.label)} aria-describedby={`set-blurb-${s.id}`}
-          title={tr(s.blurb)}
+          aria-label={tr(s.label)}
+          aria-describedby={fieldNotes ? undefined : `set-blurb-${s.id}`}
+          title={fieldNotes ? undefined : tr(s.blurb)}
           onClick={() => show(s.id)}>
           <span className="set-nav-text">
             <span className="set-nav-label">{tr(s.label)}</span>
-            <span className="set-nav-blurb" id={`set-blurb-${s.id}`}>{tr(s.blurb)}</span>
+            {!fieldNotes && (
+              <span className="set-nav-blurb" id={`set-blurb-${s.id}`}>{tr(s.blurb)}</span>
+            )}
           </span>
+          {fieldNotes && <TabInk />}
         </button>
       ))}
+      {fieldNotes && (
+        <div className="view-drawing set-nav-drawing" aria-hidden="true">
+          <ViewDrawing view="settings" day={today} state={EMPTY_DAY} />
+        </div>
+      )}
     </div>
   )
 
@@ -329,7 +342,7 @@ export function SettingsMenu({
             {/* First in the panel, above the clock: it decides what every
                 other label on this screen says, so a reader who cannot read
                 them should not have to get past them to reach it. */}
-            <div className="menu-head">{tr('settings.language')}</div>
+            {!fieldNotes && <div className="menu-head">{tr('settings.language')}</div>}
             <div className="menu-row">
               <label htmlFor="set-language">{tr('settings.language')}</label>
               {/* A picker, not a cycling toggle like the ones under it. The
@@ -346,11 +359,11 @@ export function SettingsMenu({
                 ))}
               </select>
             </div>
-            <div className="hintline">
+            <Hint>
               {withDefault(tr('settings.language.hint'), languageLabel(DEFAULT_LANGUAGE))}
-            </div>
+            </Hint>
 
-            <div className="menu-head">{tr('settings.clock')}</div>
+            {!fieldNotes && <div className="menu-head">{tr('settings.clock')}</div>}
             <div className="menu-row">
               <label>{tr('settings.clock')}</label>
               <button className="menu-toggle" onClick={onToggleTimeFormat}
@@ -358,9 +371,9 @@ export function SettingsMenu({
                 {tr(timeFormatKey(timeFormat))}
               </button>
             </div>
-            <div className="hintline">
+            <Hint>
               {withDefault(tr('settings.clock.short'), tr(timeFormatKey(DEFAULT_TIME_FORMAT)))}
-            </div>
+            </Hint>
             <HowFold title={tr('settings.clock.how')}>{tr('settings.clock.hint')}</HowFold>
 
             {/* Beside the clock, because both answer "how does this account
@@ -376,15 +389,15 @@ export function SettingsMenu({
               <label>{tr('settings.homeTimezone')}</label>
               <button className="menu-toggle" onClick={onToggleHomeTz}
                 aria-label={tr('settings.homeTimezone.aria')}
-                title={tr('settings.homeTimezone.title')}>
+                title={fieldNotes ? undefined : tr('settings.homeTimezone.title')}>
                 {/* An IANA zone name is not translated: it is an identifier the
                     server and every other CalDAV client share. */}
                 {homeTz || tr('settings.notSet')}
               </button>
             </div>
-            <div className="hintline">
+            <Hint>
               {withDefault(tr('settings.homeTimezone.hint'), tr('settings.notSet'))}
-            </div>
+            </Hint>
           </>
         )}
 
@@ -400,18 +413,18 @@ export function SettingsMenu({
                 {tr(layoutKey(layout))}
               </button>
             </div>
-            <div className="hintline">
+            <Hint>
               {withDefault(tr('settings.layout.hint'), tr(layoutKey(DEFAULT_LAYOUT)))}
-            </div>
+            </Hint>
             <div className="menu-row">
               <label>{tr('settings.theme')}</label>
               <button className="menu-toggle" onClick={onToggleTheme}>
                 {tr(theme === 'dark' ? 'theme.dark' : 'theme.light')}
               </button>
             </div>
-            <div className="hintline">
+            <Hint>
               {withDefault(tr('settings.theme.hint'), tr('theme.light'))}
-            </div>
+            </Hint>
             <div className="menu-row">
               <label>{tr('settings.appearance')}</label>
               <button className="menu-toggle" aria-label={tr('settings.appearance.aria')}
@@ -419,7 +432,7 @@ export function SettingsMenu({
                 {tr('settings.appearance.customize')}
               </button>
             </div>
-            <div className="hintline">{tr('settings.appearance.hint')}</div>
+            <Hint>{tr('settings.appearance.hint')}</Hint>
 
             {/* Here rather than under General since the tidy: which views
                 the strip or the sidebar shows, and in what order, is how the
@@ -445,13 +458,13 @@ export function SettingsMenu({
               <label>{tr('settings.calendarWindow')}</label>
               <button className="menu-toggle" onClick={onToggleCalFit}
                 aria-label={tr('settings.calendarFit.aria')}
-                title={tr('settings.calendarFit.title')}>
+                title={fieldNotes ? undefined : tr('settings.calendarFit.title')}>
                 {tr(calendarFitKey(calFit))}
               </button>
             </div>
-            <div className="hintline">
+            <Hint>
               {withDefault(tr('settings.calendarFit.hint'), tr(calendarFitKey(DEFAULT_CALENDAR_FIT)))}
-            </div>
+            </Hint>
             </>)}
             {/* A fold whose summary counts them. Opening an agenda takes the
                 panel (`bare` hides the summary under the calendar's own name
@@ -481,9 +494,9 @@ export function SettingsMenu({
                   ? 'settings.completedTasks.shown' : 'settings.completedTasks.hidden')}
               </button>
             </div>
-            <div className="hintline">
+            <Hint>
               {withDefault(tr('settings.completedTasks.hint'), tr('settings.completedTasks.hidden'))}
-            </div>
+            </Hint>
             <div className="menu-row">
               <label htmlFor="set-autoclose">{tr('settings.autoCloseParents')}</label>
               <button className="menu-toggle" id="set-autoclose"
@@ -493,7 +506,9 @@ export function SettingsMenu({
               </button>
             </div>
             <div className="hintline">
-              {withDefault(tr('settings.autoCloseParents.hint'), tr('settings.autoCloseParents.on'))}
+              {/* Kept under Field notes for what it warns of; its default tail is not. */}
+              {fieldNotes ? tr('settings.autoCloseParents.hint')
+                : withDefault(tr('settings.autoCloseParents.hint'), tr('settings.autoCloseParents.on'))}
             </div>
             {/* The overdue strip's two levers, set once by most people, so
                 folded under a line that says what they are set to. */}
@@ -524,11 +539,11 @@ export function SettingsMenu({
                   }
                 }} />
             </div>
-            <div className="hintline">
+            <Hint>
               {staleOverdue > 0
                 ? withDefault(tr('settings.staleOverdue.hint'), String(STALE_OVERDUE_DAYS))
                 : tr('settings.staleOverdue.off')}
-            </div>
+            </Hint>
             {/* Directly under the threshold, because the two describe one
                 strip: that one says when a task starts being asked about, this
                 says what one of the answers does. Left visible when the
@@ -545,19 +560,19 @@ export function SettingsMenu({
                   ? 'settings.planOnDueToday.on' : 'settings.planOnDueToday.off')}
               </button>
             </div>
-            <div className="hintline">
+            <Hint>
               {staleOverdue > 0
                 ? withDefault(tr('settings.planOnDueToday.hint'),
                   tr(PLAN_ON_DUE_TODAY ? 'settings.planOnDueToday.on' : 'settings.planOnDueToday.off'))
                 : tr('settings.planOnDueToday.moot')}
-            </div>
+            </Hint>
             </Fold>
           </>
         )}
 
         {section === 'focus' && (
           <>
-            <div className="hintline">{tr('settings.focus.intro')}</div>
+            <Hint>{tr('settings.focus.intro')}</Hint>
             <FocusSection value={focus} onChange={onFocusChange} />
           </>
         )}
@@ -566,8 +581,7 @@ export function SettingsMenu({
           <>
             <NotificationsSection
               enabled={notifyEnabled} onEnabledChange={onNotifyEnabledChange}
-              chatId={notifyChatId} onChatIdChange={onNotifyChatIdChange}
-              tokenSet={notifyTokenSet} botId={notifyBotId}
+              tokenSet={notifyTokenSet} tokenEnv={notifyTokenEnv}
               onTokenChange={onNotifyTokenChange}
               onExpire={onExpire}
               triggers={notifyTriggers}
@@ -586,7 +600,7 @@ export function SettingsMenu({
 
         {section === 'mail' && (
           <>
-            <div className="hintline">{tr('mail.intro')}</div>
+            <Hint>{tr('mail.intro')}</Hint>
             <MailSection onExpire={onExpire} mailRev={mailRev} />
           </>
         )}
@@ -599,10 +613,10 @@ export function SettingsMenu({
                   <span>{tr('dmode.row')}</span>
                   <button className="btn" onClick={onEnterDisplayMode}>{tr('dmode.start')}</button>
                 </div>
-                <div className="hintline">{tr('dmode.hint')}</div>
+                <Hint>{tr('dmode.hint')}</Hint>
               </>
             )}
-            <div className="hintline">{tr('disp.intro')}</div>
+            <Hint>{tr('disp.intro')}</Hint>
             <DisplaysSection onExpire={onExpire} archived={archivedCals} />
             {/* What was the Developer section: every mode at common panel
                 sizes. Rendering them all is not free, and they are a
@@ -615,7 +629,7 @@ export function SettingsMenu({
 
         {section === 'shares' && (
           <>
-            <div className="hintline">{tr('shares.intro')}</div>
+            <Hint>{tr('shares.intro')}</Hint>
             <SharesSection onExpire={onExpire} archived={archivedCals} />
           </>
         )}
@@ -633,9 +647,9 @@ export function SettingsMenu({
                 {tr(sessionKey(sessionTtl))}
               </button>
             </div>
-            <div className="hintline">
+            <Hint>
               {withDefault(tr('settings.session.hint'), tr(sessionKey(SESSION_DEFAULT)))}
-            </div>
+            </Hint>
 
             <div className="menu-head">{tr('settings.connectedApps')}</div>
             <ConnectionsSection onExpire={onExpire} />

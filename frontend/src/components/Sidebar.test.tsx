@@ -350,7 +350,7 @@ describe('<Sidebar> a hostile wire color', () => {
     const { container } = render(withWireColor(new Set(['work'])))
     const swatch = container.querySelector('.side-item .swatch') as HTMLElement
     expect(swatch.getAttribute('style') ?? '').not.toContain('evil.example')
-    expect(swatch.style.boxShadow).toContain('var(--fg-faint)')
+    expect(swatch.style.boxShadow).toContain('var(--mark-quiet)')
   })
 })
 

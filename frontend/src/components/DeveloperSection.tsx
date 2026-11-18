@@ -16,6 +16,7 @@
 
 import { useMemo, useState } from 'react'
 import { useI18n } from '../i18n'
+import { Hint } from './Hint'
 
 type Mode = 'calendar' | 'habits' | 'now'
 const MODES: readonly Mode[] = ['calendar', 'habits', 'now']
@@ -75,7 +76,7 @@ export function DeveloperSection() {
 
   return (
     <div className="dev">
-      <div className="hintline">{tr('dev.intro')}</div>
+      <Hint>{tr('dev.intro')}</Hint>
 
       <div className="menu-row">
         <label>{tr('disp.mode')}</label>
@@ -144,7 +145,7 @@ export function DeveloperSection() {
           )
         })}
       </div>
-      <div className="hintline">{tr('dev.hint')}</div>
+      <Hint>{tr('dev.hint')}</Hint>
     </div>
   )
 }

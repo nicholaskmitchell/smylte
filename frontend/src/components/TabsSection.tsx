@@ -11,6 +11,7 @@ import { useEffect, useRef } from 'react'
 import { TAB_LABELS, moveTab, type Tab, type TabStart } from '../tabs'
 import { useT } from '../i18n'
 import type { Layout } from '../layout'
+import { Hint } from './Hint'
 
 export function TabsSection({ order, start, layout, onOrderChange, onStartChange }: {
   order: Tab[]
@@ -71,7 +72,7 @@ export function TabsSection({ order, start, layout, onOrderChange, onStartChange
         </select>
       </div>
 
-      <p className="hintline">{tr(layout === 'sidebar' ? 'tabs.hint.sidebar' : 'tabs.hint')}</p>
+      <Hint as="p">{tr(layout === 'sidebar' ? 'tabs.hint.sidebar' : 'tabs.hint')}</Hint>
     </>
   )
 }

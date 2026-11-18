@@ -1,0 +1,167 @@
+/* Product scopes. Each is a single selector so the compiler reads it as a
+   theme. Since Nov 2026 the site and the apps are two looks of one system:
+   the site keeps the broadsheet values in tokens.json's light/dark themes; the
+   apps (Smylte, Søren and every app that follows) take "Field notes" here, and
+   tokens.json's app-light/app-dark themes mirror these values for reference.
+   Motion, reduced motion and the hand-drawn helpers are in tokens/app-motion.css. */
+
+/* ---- app surfaces: Field notes — light ---- */
+:root[data-surface="app"] {
+  --bg: #F3EDE1;
+  --bg-elev: #FBF8F1;
+  --paper: #ECE4D6;
+  --bg-float: #FFFDF8;
+  --fg: #2A2622;
+  --fg-muted: #665E54;
+  --fg-faint: #A0978A;  /* disabled and decorative only, never readable text */
+  --rule: rgba(42, 38, 34, 0.14);
+  --rule-faint: rgba(42, 38, 34, 0.08);
+  --rule-strong: #857B6E;
+  --accent: #A3432A;       /* coral ink: accent text and marks */
+  --accent-fill: #E27B5B;  /* coral: fills only */
+  --on-accent: #2A2622;
+  --highlight: #F5DB86;    /* the highlighter, behind --fg text only */
+  --wash: #DCE3C4;         /* sage, illustration only */
+  --warn: #A12F27;
+  --ok: #4E6A36;
+  --pri-high: #A12F27;
+  --pri-med: #9C7A1F;
+  --pri-low: #4E6A36;
+  --soren-ink: #3F6283;
+  --scrim: rgba(42, 38, 34, 0.32);
+
+  /* Type: two families in apps. The mono stack resolves to Hanken Grotesk;
+     data uses tabular figures instead of a monospace face. */
+  --font-mono: "Hanken Grotesk", -apple-system, BlinkMacSystemFont, sans-serif; /* @kind font */
+  --mono: var(--font-mono); /* @kind font */
+  --fs-control: 15px;
+  --fs-control-sm: 13px;
+  --label-case: none; /* @kind other */
+  --tracking: 0; /* @kind other */
+
+  /* Shape: circles allowed; sheets and modals rounder */
+  --r-xs: 3px;
+  --r-lg: 22px;
+  --r-dot: 50%;
+  --r-round: 50%;
+  --control-h: 40px;
+  --enter-y: 8px; /* @kind spacing */
+
+  /* Elevation: paper lies flat; only floats lift */
+  --shadow-rest: 0 1px 0 rgba(42, 38, 34, 0.14), 0 4px 14px rgba(42, 38, 34, 0.06);
+  --shadow: 0 1px 0 rgba(42, 38, 34, 0.14), 0 10px 24px rgba(42, 38, 34, 0.10);
+  --shadow-lg: 0 2px 0 rgba(42, 38, 34, 0.14), 0 24px 56px rgba(42, 38, 34, 0.16);
+  --shadow-sheet: 0 -1px 0 rgba(42, 38, 34, 0.14), 0 -12px 32px rgba(42, 38, 34, 0.12);
+  --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+}
+
+/* ---- app surfaces: Field notes — dark (desk at night, not black) ---- */
+:root[data-surface="app"][data-theme="dark"] {
+  --bg: #272420;
+  --bg-elev: #312D28;
+  --paper: #36312B;
+  --bg-float: #3B362F;
+  --fg: #EFE8DC;
+  --fg-muted: #B9AFA1;
+  --fg-faint: #6F675D;
+  --rule: rgba(239, 232, 220, 0.14);
+  --rule-faint: rgba(239, 232, 220, 0.07);
+  --rule-strong: #8A8174;
+  --accent: #F09C7E;
+  --accent-fill: #E98A6A;
+  --on-accent: #272420;
+  --highlight: #5C4E2A;
+  --wash: #3D4233;
+  --warn: #F2958A;
+  --ok: #A9C28C;
+  --pri-high: #F2958A;
+  --pri-med: #D9B45A;
+  --pri-low: #A9C28C;
+  --soren-ink: #9DBAD6;
+  --scrim: rgba(0, 0, 0, 0.45);
+
+  --shadow-rest: 0 1px 0 rgba(239, 232, 220, 0.10), 0 4px 14px rgba(0, 0, 0, 0.25);
+  --shadow: 0 1px 0 rgba(239, 232, 220, 0.10), 0 10px 24px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 2px 0 rgba(239, 232, 220, 0.10), 0 24px 56px rgba(0, 0, 0, 0.50);
+  --shadow-sheet: 0 -1px 0 rgba(239, 232, 220, 0.10), 0 -12px 32px rgba(0, 0, 0, 0.40);
+}
+
+/* ---- Søren — the same system, blue-pen ink as its accent ---- */
+:root[data-accent="soren"] {
+  --accent: oklch(0.55 0.14 264);
+  --warn: oklch(0.62 0.17 35);
+}
+:root[data-accent="soren"][data-theme="dark"] {
+  --accent: oklch(0.72 0.13 264);
+  --warn: oklch(0.72 0.16 40);
+}
+:root[data-surface="app"][data-accent="soren"] {
+  --accent: #3F6283;
+  --accent-fill: #3F6283;
+  --on-accent: #FBF8F1;
+}
+:root[data-surface="app"][data-accent="soren"][data-theme="dark"] {
+  --accent: #9DBAD6;
+  --accent-fill: #9DBAD6;
+  --on-accent: #272420;
+}
+
+/* ---- shipped preset: "workspace" ----
+   A second design, carried by an attribute: one system family in all three
+   type slots, 6px corners, blue. Since the Sep 2026 refinement (rounded
+   corners, sentence-case labels) it is close to the default — see R3. */
+:root[data-preset="workspace"] {
+  --bg: #FBFBFC;
+  --bg-elev: #FFFFFF;
+  --paper: #F5F5F7;
+  --fg: #1D1D1F;
+  --fg-muted: rgba(29, 29, 31, 0.62);
+  --fg-faint: rgba(29, 29, 31, 0.38);
+  --rule: rgba(29, 29, 31, 0.11);
+  --rule-faint: rgba(29, 29, 31, 0.06);
+  --accent: oklch(0.56 0.16 253);
+  --warn: oklch(0.55 0.19 27);
+  --ok: oklch(0.56 0.12 155);
+  --pri-high: oklch(0.56 0.18 25);
+  --pri-med: oklch(0.66 0.12 72);
+  --pri-low: oklch(0.58 0.08 250);
+
+  /* One family in all three slots, which is what the reference designs do —
+     they separate the tiers by weight and size, not by typeface. */
+  --serif: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; /* @kind font */
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; /* @kind font */
+  --mono: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; /* @kind font */
+
+  --radius: 6px;
+  --fs-scale: 1; /* @kind other */
+  --gutter: 24px;
+  --row-y: 11px;
+  --label-case: none; /* @kind other */
+  --tracking: 0; /* @kind other */
+}
+:root[data-preset="workspace"][data-theme="dark"] {
+  --bg: #191919;
+  --bg-elev: #232323;
+  --paper: #202020;
+  --fg: #F5F5F5;
+  --fg-muted: rgba(245, 245, 245, 0.60);
+  --fg-faint: rgba(245, 245, 245, 0.36);
+  --rule: rgba(245, 245, 245, 0.13);
+  --rule-faint: rgba(245, 245, 245, 0.07);
+  --accent: oklch(0.70 0.14 253);
+  --warn: oklch(0.68 0.17 28);
+  --ok: oklch(0.70 0.12 158);
+  --pri-high: oklch(0.66 0.18 22);
+  --pri-med: oklch(0.78 0.12 78);
+  --pri-low: oklch(0.70 0.09 252);
+
+  --serif: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; /* @kind font */
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; /* @kind font */
+  --mono: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; /* @kind font */
+
+  --radius: 6px;
+  --gutter: 24px;
+  --row-y: 11px;
+  --label-case: none; /* @kind other */
+  --tracking: 0; /* @kind other */
+}

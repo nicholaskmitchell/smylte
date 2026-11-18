@@ -17,12 +17,15 @@ import { useEffect, useState } from 'react'
 import { FOCUS_BOUNDS, type FocusSettings } from '../focus'
 import { useT } from '../i18n'
 import { notifyPermission, requestNotify } from '../notify'
+import { useFieldNotes } from '../hooks'
+import { Hint } from './Hint'
 
 export function FocusSection({ value, onChange }: {
   value: FocusSettings
   onChange: (patch: Partial<FocusSettings>) => void
 }) {
   const tr = useT()
+  const fieldNotes = useFieldNotes()
   // Re-read after the ask, and on every render otherwise: the browser can
   // change its answer behind the page's back (site settings), and a stale
   // "allowed" beside a switch that will never fire is the one thing this row
@@ -46,7 +49,7 @@ export function FocusSection({ value, onChange }: {
         value={value.longEvery} bounds={FOCUS_BOUNDS.longEvery}
         unit={tr('settings.focus.intervals')} zero={tr('settings.focus.longEvery.never')}
         onCommit={(n) => onChange({ longEvery: n })} />
-      <div className="hintline">{tr('settings.focus.clock.hint')}</div>
+      <Hint>{tr('settings.focus.clock.hint')}</Hint>
 
       <div className="menu-head">{tr('settings.focus.end')}</div>
       <div className="menu-row">
@@ -56,7 +59,7 @@ export function FocusSection({ value, onChange }: {
           {tr(value.autoContinue ? 'settings.focus.end.roll' : 'settings.focus.end.wait')}
         </button>
       </div>
-      <div className="hintline">{tr('settings.focus.end.hint')}</div>
+      <Hint>{tr('settings.focus.end.hint')}</Hint>
 
       <div className="menu-row">
         <label htmlFor="focus-cap">{tr('settings.focus.cap')}</label>
@@ -65,7 +68,7 @@ export function FocusSection({ value, onChange }: {
           {tr(value.capDefault ? 'settings.focus.cap.capped' : 'settings.focus.cap.open')}
         </button>
       </div>
-      <div className="hintline">{tr('settings.focus.cap.hint')}</div>
+      <Hint>{tr('settings.focus.cap.hint')}</Hint>
 
       <div className="menu-head">{tr('settings.focus.alerts')}</div>
       <div className="menu-row">
@@ -86,12 +89,14 @@ export function FocusSection({ value, onChange }: {
         <div className="menu-row">
           {/* The permission is the browser's, not the account's: it is asked
               for here, inside a click, and reported as it stands. */}
-          <span className="hintline">
-            {perm === 'granted' ? tr('settings.focus.notifyGranted')
-              : perm === 'denied' ? tr('settings.focus.notifyDenied')
-                : perm === 'unsupported' ? tr('settings.focus.notifyUnsupported')
-                  : tr('settings.focus.notify.hint')}
-          </span>
+          {(!fieldNotes || perm !== 'default') && (
+            <span className="hintline">
+              {perm === 'granted' ? tr('settings.focus.notifyGranted')
+                : perm === 'denied' ? tr('settings.focus.notifyDenied')
+                  : perm === 'unsupported' ? tr('settings.focus.notifyUnsupported')
+                    : tr('settings.focus.notify.hint')}
+            </span>
+          )}
           {perm === 'default' && (
             <button className="btn ghost"
               onClick={() => { void requestNotify().then(() => setAsked((n) => n + 1)) }}>

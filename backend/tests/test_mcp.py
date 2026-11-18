@@ -209,32 +209,36 @@ def test_full_connector_flow(mcp):
 
 def test_tools_round_trip_real_data(mcp):
     token = _connect(mcp)["access_token"]
+    run_id = uuid.uuid4().hex
+    title = f"Renew passport {run_id}"
     created = _call(mcp, token, "smylte_create_list",
-                    {"name": f"MCP {uuid.uuid4().hex[:6]}"})
+                    {"name": f"MCP {run_id[:8]}"})
     list_id = created["structuredContent"]["id"]
 
-    made = _call(mcp, token, "smylte_create_task", {
-        "list_id": list_id, "summary": "Renew passport",
-        "due": "2026-09-01", "priority": "high", "tags": ["admin"],
-    })["structuredContent"]
-    assert made["summary"] == "Renew passport" and made["priority_label"] == "high"
+    try:
+        made = _call(mcp, token, "smylte_create_task", {
+            "list_id": list_id, "summary": title,
+            "due": "2026-09-01", "priority": "high", "tags": ["admin"],
+        })["structuredContent"]
+        assert made["summary"] == title and made["priority_label"] == "high"
 
-    listed = _call(mcp, token, "smylte_list_tasks", {"list_id": list_id})
-    assert listed["structuredContent"]["total"] == 1
+        listed = _call(mcp, token, "smylte_list_tasks", {"list_id": list_id})
+        assert listed["structuredContent"]["total"] == 1
 
-    found = _call(mcp, token, "smylte_search_tasks", {"query": "passport"})
-    assert any(t["uid"] == made["uid"] for t in found["structuredContent"]["tasks"])
+        found = _call(mcp, token, "smylte_search_tasks", {"query": title})
+        assert [t["uid"] for t in found["structuredContent"]["tasks"]] == [made["uid"]]
 
-    done = _call(mcp, token, "smylte_complete_task",
-                 {"list_id": list_id, "uid": made["uid"]})["structuredContent"]
-    assert done["completed"] is True
-    # Completed work drops out of the default view but is still there on request.
-    assert _call(mcp, token, "smylte_list_tasks",
-                 {"list_id": list_id})["structuredContent"]["total"] == 0
-    assert _call(mcp, token, "smylte_list_tasks",
-                 {"list_id": list_id, "include_done": True})["structuredContent"]["total"] == 1
-
-    _call(mcp, token, "smylte_delete_list", {"list_id": list_id})
+        done = _call(mcp, token, "smylte_complete_task",
+                     {"list_id": list_id, "uid": made["uid"]})["structuredContent"]
+        assert done["completed"] is True
+        # Completed work drops out of the default view but is still there on request.
+        assert _call(mcp, token, "smylte_list_tasks",
+                     {"list_id": list_id})["structuredContent"]["total"] == 0
+        assert _call(mcp, token, "smylte_list_tasks",
+                     {"list_id": list_id, "include_done": True})["structuredContent"]["total"] == 1
+    finally:
+        deleted = _call(mcp, token, "smylte_delete_list", {"list_id": list_id})
+        assert deleted["structuredContent"]["deleted"] == list_id
 
 
 def test_the_connector_parks_and_un_parks_without_calling_it_done(mcp):

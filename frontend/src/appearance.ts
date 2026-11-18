@@ -138,55 +138,63 @@ export const GROUP_LABEL: Record<string, string> = {
 }
 
 // ── the shipped defaults ────────────────────────────────────────────────────
-// A mirror of styles/tokens.css. Duplicated deliberately: the editor needs to
-// show what a token *is* before the user overrides it, and reading it back out
-// of getComputedStyle would return the override once one is set. appearance.test.ts
-// parses tokens.css and asserts these stay identical, so the copy cannot drift.
+// A mirror of the shipped design, which since Nov 2026 is Field notes: its
+// colours are the design system's own (styles/ds/themes.css, copied verbatim)
+// and its shared tokens the Field notes lever block in tokens.css. Duplicated
+// deliberately: the editor needs to show what a token *is* before the user
+// overrides it, and reading it back out of getComputedStyle would return the
+// override once one is set. appearance.test.ts parses both files and asserts
+// these stay identical, so the copy cannot drift.
 
 export const DEFAULTS: Record<Mode, ThemeTokens> = {
   light: {
-    '--bg': '#FBFAF7',
-    '--bg-elev': '#FFFFFF',
-    '--paper': '#F2F0EA',
-    '--fg': '#14131A',
-    '--fg-muted': 'rgba(20, 19, 26, 0.60)',
-    '--fg-faint': 'rgba(20, 19, 26, 0.48)',
-    '--rule': 'rgba(20, 19, 26, 0.13)',
-    '--rule-faint': 'rgba(20, 19, 26, 0.07)',
-    '--accent': 'oklch(0.60 0.19 42)',
-    '--warn': 'oklch(0.58 0.20 27)',
-    '--ok': 'oklch(0.58 0.13 150)',
-    '--pri-high': 'oklch(0.60 0.19 25)',
-    '--pri-med': 'oklch(0.68 0.15 70)',
-    '--pri-low': 'oklch(0.60 0.10 240)',
+    '--bg': '#F3EDE1',
+    '--bg-elev': '#FBF8F1',
+    '--paper': '#ECE4D6',
+    '--fg': '#2A2622',
+    '--fg-muted': '#665E54',
+    '--fg-faint': '#A0978A',
+    '--rule': 'rgba(42, 38, 34, 0.14)',
+    '--rule-faint': 'rgba(42, 38, 34, 0.08)',
+    '--accent': '#A3432A',
+    '--warn': '#A12F27',
+    '--ok': '#4E6A36',
+    '--pri-high': '#A12F27',
+    '--pri-med': '#9C7A1F',
+    '--pri-low': '#4E6A36',
   },
   dark: {
-    '--bg': '#0C0C10',
-    '--bg-elev': '#16161C',
-    '--paper': '#1A1A22',
-    '--fg': '#ECEAF2',
-    '--fg-muted': 'rgba(236, 234, 242, 0.60)',
-    '--fg-faint': 'rgba(236, 234, 242, 0.38)',
-    '--rule': 'rgba(236, 234, 242, 0.14)',
-    '--rule-faint': 'rgba(236, 234, 242, 0.07)',
-    '--accent': 'oklch(0.72 0.16 45)',
-    '--warn': 'oklch(0.70 0.18 28)',
-    '--ok': 'oklch(0.70 0.14 155)',
-    '--pri-high': 'oklch(0.70 0.18 30)',
-    '--pri-med': 'oklch(0.80 0.14 75)',
-    '--pri-low': 'oklch(0.72 0.11 245)',
+    '--bg': '#272420',
+    '--bg-elev': '#312D28',
+    '--paper': '#36312B',
+    '--fg': '#EFE8DC',
+    '--fg-muted': '#B9AFA1',
+    '--fg-faint': '#6F675D',
+    '--rule': 'rgba(239, 232, 220, 0.14)',
+    '--rule-faint': 'rgba(239, 232, 220, 0.07)',
+    '--accent': '#F09C7E',
+    '--warn': '#F2958A',
+    '--ok': '#A9C28C',
+    '--pri-high': '#F2958A',
+    '--pri-med': '#D9B45A',
+    '--pri-low': '#A9C28C',
   },
 }
+
+/** Hanken Grotesk, which Field notes also puts in the mono slot: the apps set
+ *  data in tabular figures rather than a monospace face (ds/themes.css). */
+const HANKEN = '"Hanken Grotesk", -apple-system, BlinkMacSystemFont, sans-serif'
+const JETBRAINS = '"JetBrains Mono", ui-monospace, Menlo, monospace'
 
 /** Shipped values for the tokens that are shared across both modes. */
 export const SHARED_DEFAULTS: ThemeTokens = {
   '--serif': '"Newsreader", Georgia, "Times New Roman", serif',
-  '--sans': '"Hanken Grotesk", -apple-system, BlinkMacSystemFont, sans-serif',
-  '--mono': '"JetBrains Mono", ui-monospace, Menlo, monospace',
+  '--sans': HANKEN,
+  '--mono': HANKEN,
   '--radius': '8px',
   '--fs-scale': '1',
   '--gutter': '26px',
-  '--row-y': '10px',
+  '--row-y': '8px',
   '--label-case': 'none',
   '--tracking': '0',
 }
@@ -223,12 +231,63 @@ const SYSTEM_SANS = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
 const FRAUNCES = '"Fraunces", Georgia, "Times New Roman", serif'
 const INTER = '"Inter", -apple-system, BlinkMacSystemFont, sans-serif'
 
-/** Classic's shared tokens. Its colours are the default's own: the refinement
- *  changed no colour, so Classic spreads DEFAULTS rather than restating it. */
+/** The Sep 2026 design's colours: the default until Field notes, and since
+ *  then a preset. They are tokens.css's `:root` blocks, which that design reads
+ *  with no attribute of its own beyond `data-preset="refined"` (see
+ *  applyDesign). Classic shares them: the refinement changed no colour. */
+const REFINED_COLOURS: Record<Mode, ThemeTokens> = {
+  light: {
+    '--bg': '#FBFAF7',
+    '--bg-elev': '#FFFFFF',
+    '--paper': '#F2F0EA',
+    '--fg': '#14131A',
+    '--fg-muted': 'rgba(20, 19, 26, 0.60)',
+    '--fg-faint': 'rgba(20, 19, 26, 0.48)',
+    '--rule': 'rgba(20, 19, 26, 0.13)',
+    '--rule-faint': 'rgba(20, 19, 26, 0.07)',
+    '--accent': 'oklch(0.60 0.19 42)',
+    '--warn': 'oklch(0.58 0.20 27)',
+    '--ok': 'oklch(0.58 0.13 150)',
+    '--pri-high': 'oklch(0.60 0.19 25)',
+    '--pri-med': 'oklch(0.68 0.15 70)',
+    '--pri-low': 'oklch(0.60 0.10 240)',
+  },
+  dark: {
+    '--bg': '#0C0C10',
+    '--bg-elev': '#16161C',
+    '--paper': '#1A1A22',
+    '--fg': '#ECEAF2',
+    '--fg-muted': 'rgba(236, 234, 242, 0.60)',
+    '--fg-faint': 'rgba(236, 234, 242, 0.38)',
+    '--rule': 'rgba(236, 234, 242, 0.14)',
+    '--rule-faint': 'rgba(236, 234, 242, 0.07)',
+    '--accent': 'oklch(0.72 0.16 45)',
+    '--warn': 'oklch(0.70 0.18 28)',
+    '--ok': 'oklch(0.70 0.14 155)',
+    '--pri-high': 'oklch(0.70 0.18 30)',
+    '--pri-med': 'oklch(0.80 0.14 75)',
+    '--pri-low': 'oklch(0.72 0.11 245)',
+  },
+}
+
+/** The Sep 2026 design's shared tokens: tokens.css's base `:root` block. */
+const REFINED_SHARED: ThemeTokens = {
+  '--serif': '"Newsreader", Georgia, "Times New Roman", serif',
+  '--sans': HANKEN,
+  '--mono': JETBRAINS,
+  '--radius': '8px',
+  '--fs-scale': '1',
+  '--gutter': '26px',
+  '--row-y': '10px',
+  '--label-case': 'none',
+  '--tracking': '0',
+}
+
+/** Classic's shared tokens. Its colours are the Sep 2026 design's own. */
 const CLASSIC_SHARED: ThemeTokens = {
   '--serif': FRAUNCES,
   '--sans': INTER,
-  '--mono': SHARED_DEFAULTS['--mono'],
+  '--mono': JETBRAINS,
   '--radius': '0px',
   '--fs-scale': '1',
   '--gutter': '26px',
@@ -306,8 +365,20 @@ export const PRESETS: readonly CustomTheme[] = [
     id: 'preset:classic',
     name: 'Classic',
     base: 'light',
-    light: { ...DEFAULTS.light, ...CLASSIC_SHARED },
-    dark: { ...DEFAULTS.dark, ...CLASSIC_SHARED },
+    light: { ...REFINED_COLOURS.light, ...CLASSIC_SHARED },
+    dark: { ...REFINED_COLOURS.dark, ...CLASSIC_SHARED },
+  },
+  {
+    // The design Smylte shipped from the September 2026 refinement until Field
+    // notes. Its tokens are tokens.css's base `:root` blocks, untouched, so it
+    // needs no CSS of its own: applyDesign takes `data-surface` off <html>,
+    // which switches Field notes off, and what is left is exactly that design.
+    // The slug is only an identifier; the name is the owner's to write.
+    id: 'preset:refined',
+    name: '[placeholder: name of the Sep 2026 design]',
+    base: 'light',
+    light: { ...REFINED_COLOURS.light, ...REFINED_SHARED },
+    dark: { ...REFINED_COLOURS.dark, ...REFINED_SHARED },
   },
 ]
 
@@ -325,6 +396,54 @@ export function findPreset(id: string | null | undefined): CustomTheme | null {
 export function presetSlug(id: string | null | undefined): string | null {
   const preset = findPreset(id)
   return preset ? preset.id.slice(PRESET_PREFIX.length) : null
+}
+
+/** The value of `data-surface` that switches Field notes on. */
+export const FIELD_NOTES_SURFACE = 'app'
+
+/**
+ * Put the design for `slug` on `root`: a preset's slug on `data-preset`, or,
+ * for the shipped design (Field notes), `data-surface="app"`.
+ *
+ * The two never coexist. Field notes is the design system's app look and is
+ * scoped to `[data-surface="app"]` throughout (ds/*.css, the Field notes lever
+ * block, fieldnotes.css); a preset is a design that predates it and has its own
+ * cascade in tokens.css and classic.css. Taking the attribute off under a
+ * preset is what keeps every preset exactly as it was. index.html's pre-paint
+ * script does the same before the bundle loads.
+ */
+export function applyDesign(root: HTMLElement, slug: string | null): void {
+  if (slug) {
+    root.dataset.preset = slug
+    delete root.dataset.surface
+  } else {
+    delete root.dataset.preset
+    root.dataset.surface = FIELD_NOTES_SURFACE
+  }
+}
+
+/**
+ * Field notes paints with six roles a saved theme cannot set (--bg-float,
+ * --rule-strong, --accent-fill, --on-accent, --highlight, --wash): they are the
+ * design system's, and a colour picker for each would invite breaking the rules
+ * that come with them (the highlighter is for ink text only, the wash for
+ * drawings only). So a theme that moves its surfaces or its accent away from
+ * Field notes' own takes those roles from its own tokens instead, through
+ * `data-custom` (tokens.css), and a custom palette never keeps a coral fill or
+ * a yellow highlighter that belongs to another one. index.html restates this.
+ */
+export const CUSTOM_ROLES: Record<'surfaces' | 'accent', readonly string[]> = {
+  surfaces: ['--bg', '--bg-elev', '--paper', '--fg'],
+  accent: ['--accent'],
+}
+
+/** Which of the role groups `tokens` moves away from the shipped design in `mode`. */
+export function customRoles(tokens: ThemeTokens, mode: Mode): string[] {
+  const out: string[] = []
+  for (const [group, names] of Object.entries(CUSTOM_ROLES)) {
+    if (names.some((n) => tokens[n] !== undefined && tokens[n] !== DEFAULTS[mode][n])) out.push(group)
+  }
+  return out
 }
 
 // ── validation ──────────────────────────────────────────────────────────────
@@ -613,6 +732,9 @@ export function applyTokens(el: HTMLElement, tokens: ThemeTokens): void {
   }
   if (fitsSans(clean['--sans'])) delete el.dataset.sans
   else el.dataset.sans = 'other'
+  const custom = customRoles(clean, el.dataset.theme === 'dark' ? 'dark' : 'light')
+  if (custom.length) el.dataset.custom = custom.join(' ')
+  else delete el.dataset.custom
 }
 
 const hexCache = new Map<string, string>()
@@ -779,7 +901,8 @@ export const FONT_CHOICES: Record<'serif' | 'sans' | 'mono', FontChoice[]> = {
     { label: 'Atkinson Hyperlegible', stack: '"Atkinson Hyperlegible", sans-serif', google: 'Atkinson+Hyperlegible:wght@400;700' },
   ],
   mono: [
-    { label: 'JetBrains Mono (default)', stack: SHARED_DEFAULTS['--mono'] },
+    { label: 'Hanken Grotesk (default)', stack: SHARED_DEFAULTS['--mono'] },
+    { label: 'JetBrains Mono', stack: JETBRAINS },
     { label: 'System mono', stack: 'ui-monospace, Menlo, Consolas, monospace' },
     { label: 'System sans', stack: SYSTEM_SANS },
     { label: 'IBM Plex Mono', stack: '"IBM Plex Mono", monospace', google: 'IBM+Plex+Mono:wght@400;500' },

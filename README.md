@@ -45,9 +45,9 @@ The reasoning behind most of the design is in [`docs/DESIGN.md`](docs/DESIGN.md)
   step (what carries over, a note), and a read-only review of past days.
 - **Focus.** A pomodoro view of today's plan at `/focus` that records time
   worked per row. The desktop client can show it in a floating window.
-- **Notifications.** Optional, through Telegram: a daily digest, event
-  reminders, bookings, sync failures and reminders you set on a task or event.
-  More rules are available in Settings, off by default.
+- **Notifications.** Optional, on Signal through the owner's signal-bot: a
+  daily digest, event reminders, bookings, sync failures and reminders you set
+  on a task or event. More rules are available in Settings, off by default.
 - **Email suggestions.** Optional. Reads chosen folders through Proton Mail
   Bridge and suggests tasks, task updates and events. Nothing is added until you
   approve it. Bulk mail is filtered in code before anything reaches the model.
@@ -96,7 +96,8 @@ backend/
     sync/         sync engine and write path with 412 merge
     mcp/          MCP server: OAuth 2.1 (oauth.py), transport (server.py),
                   tools (tools.py, api.py)
-    notify/       Telegram sender, trigger rules, delivery sweep
+    notify/       Signal sender (through the owner's signal-bot), trigger
+                  rules, delivery sweep
     mail/         email suggestions: IMAP, parsing, sender auth, LLM call,
                   pipeline, review, secret store
     display/      display frames (frame.py) and the rasterizer (render.py)

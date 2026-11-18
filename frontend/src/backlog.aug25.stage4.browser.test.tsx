@@ -431,6 +431,10 @@ describe('2026-08-25 — the Today row on a phone', () => {
       .toBeLessThanOrEqual(16)
     expect(px('.today-est'), 'the estimate text grew instead of its box')
       .toBeLessThanOrEqual(16)
-    expect(px('.today-title'), 'the row title changed size').toBeLessThanOrEqual(16)
+    // The row's own text at its designed size: the Sep 2026 sans, or Field
+    // notes' Newsreader at the item size (--fs-app-item).
+    const fieldNotes = document.documentElement.dataset.surface === 'app'
+    if (fieldNotes) expect(px('.today-title'), 'the row title changed size').toBe(20)
+    else expect(px('.today-title'), 'the row title changed size').toBeLessThanOrEqual(16)
   })
 })

@@ -13,6 +13,7 @@ state any migration is written for.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -198,7 +199,7 @@ def test_autopull_applies_migrations_and_refuses_to_restart_past_one():
     assert "migrate.sh --auto" in body
     assert "--status" in body and "needs root" in body
     # Anchor on the GUARD LINE, not the bare phrase. "needs root" also appears in
-    # the Telegram message near the top of the file, so body.index() of the
+    # the Signal message near the top of the file, so body.index() of the
     # phrase found that instead — and both orderings below then passed on the
     # exact regression they are named for.
     guard = body.index("""grep -q 'needs root'""")
@@ -216,7 +217,7 @@ def test_autopull_applies_migrations_and_refuses_to_restart_past_one():
 
 def test_the_pending_migration_notice_is_sent_once_not_every_tick():
     """Consequence of the line above. The check runs every minute, so an
-    unguarded Telegram send would be a message a minute until the migration is
+    unguarded Signal send would be a message a minute until the migration is
     applied — which trains you to ignore it, the opposite of the point. The
     marker is cleared once nothing is pending, so the next migration notifies."""
     body = (REPO / "deploy" / "smylte-autopull.sh").read_text()
@@ -224,16 +225,107 @@ def test_the_pending_migration_notice_is_sent_once_not_every_tick():
     assert 'NOTIFIED="$HOME/.smylte-migration-notified"' in body
     assert '[ -f "$NOTIFIED" ] && return 0' in body, "the once-only guard is gone"
     assert 'rm -f "$NOTIFIED"' in body, "the marker is never cleared; a later migration would be silent"
-    # The bot token is in the URL because Telegram offers no alternative, so the
-    # call must neither log it nor expose it in the process table.
-    send = body.index("api.telegram.org")
+    # The request carries the bearer token, so the call must neither log it nor
+    # expose it in the process table, nor hand it to a proxy.
+    send = body.index("printf 'header = \"Authorization: Bearer %s\"\\n' \"$token\"")
     line_end = body.index("touch \"$NOTIFIED\"", send)
     call = body[send:line_end]
-    assert '>>"$LOG"' not in call, "the telegram call must not log (it carries the token)"
+    assert "/v1/send" in call, "the send must target signal-bot's /v1/send"
+    assert "api.telegram.org" not in body
+    assert '>>"$LOG"' not in call and "$LOG" not in call, (
+        "the signal-bot call must not log (it carries the token)")
     assert "--config -" in call, (
-        "the token-bearing URL must reach curl on stdin, not in argv where "
+        "the token must reach curl on stdin, not in argv where "
         "/proc/<pid>/cmdline exposes it to every local user")
+    curl_args = call[call.index("| curl"):]
+    assert "$token" not in curl_args, "the token must not be on curl's command line"
+    assert "--noproxy '*'" in call, "the bearer token must not go through a proxy"
     assert "--fail" in call, "a failed send must not be recorded as delivered"
+    # The marker is touched only inside the success branch of that call.
+    assert call.rstrip().endswith("then"), "the marker must be set only on success"
+    assert body.count('touch "$NOTIFIED"') == 1
+
+
+_CURL_STUB = """#!/bin/bash
+d="$CURL_CALLS/$(ls "$CURL_CALLS" | wc -l)"
+mkdir -p "$d"
+printf '%s\\0' "$@" > "$d/argv"
+cat > "$d/stdin"
+exit 0
+"""
+
+
+def _notify(tmp_path: Path, env_lines: str, repo_dir: str = "/home/u/smylte") -> dict:
+    """Run the script's own notify_pending_migration, as the test above reads
+    it, against an env file holding `env_lines` and a curl that records each
+    call's argv and stdin instead of sending anything."""
+    body = (REPO / "deploy" / "smylte-autopull.sh").read_text()
+    start = body.index("notify_pending_migration() {")
+    func = body[start:body.index("\n}\n", start) + 3]
+    home, bin_dir, calls = tmp_path / "home", tmp_path / "bin", tmp_path / "calls"
+    for d in (home, bin_dir, calls):
+        d.mkdir()
+    (bin_dir / "curl").write_text(_CURL_STUB)
+    (bin_dir / "curl").chmod(0o755)
+    envfile = tmp_path / "smylte.env"
+    envfile.write_text(env_lines)
+    script = ('LOG="$HOME/smylte-autopull.log"\n'
+              'NOTIFIED="$HOME/.smylte-migration-notified"\n'
+              "ts() { date '+%Y-%m-%d %H:%M:%S'; }\n"
+              f"{func}notify_pending_migration\n")
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30, env={
+        "PATH": f"{bin_dir}:{os.environ['PATH']}", "HOME": str(home), "REPO_DIR": repo_dir,
+        "SMYLTE_AUTOPULL_ENVFILES": str(envfile), "CURL_CALLS": str(calls)})
+    assert r.returncode == 0, r.stderr
+    log = home / "smylte-autopull.log"
+    return {
+        "calls": [{"argv": (c / "argv").read_bytes().decode().split("\0")[:-1],
+                   "stdin": (c / "stdin").read_text()}
+                  for c in sorted(calls.iterdir(), key=lambda c: int(c.name))],
+        "marker": (home / ".smylte-migration-notified").exists(),
+        "log": log.read_text() if log.exists() else "",
+    }
+
+
+def test_the_pending_migration_notice_reaches_the_bot_with_the_token_on_stdin(tmp_path):
+    out = _notify(tmp_path, "SMYLTE_SIGNAL_URL=http://127.0.0.1:8801/\n"
+                            "SMYLTE_SIGNAL_TOKEN=abc123\n")
+    [call] = out["calls"]
+    assert call["argv"][-1] == "http://127.0.0.1:8801/v1/send"
+    assert not [a for a in call["argv"] if "abc123" in a], "the token must not be in argv"
+    assert call["stdin"] == 'header = "Authorization: Bearer abc123"\n'
+    assert out["marker"] and out["log"] == ""
+
+
+@pytest.mark.parametrize("env_lines", [
+    "SMYLTE_SIGNAL_URL=http://10.0.0.1:8801\nSMYLTE_SIGNAL_TOKEN=abc123\n",
+    "SMYLTE_SIGNAL_TOKEN=abc 123\n",
+    'SMYLTE_SIGNAL_TOKEN=abc"123\n',
+], ids=["not-loopback", "space-in-token", "quote-in-token"])
+def test_an_unusable_setting_sends_nothing_and_says_so_without_the_value(tmp_path, env_lines):
+    out = _notify(tmp_path, env_lines)
+    assert out["calls"] == [] and not out["marker"]
+    assert "signal alert skipped" in out["log"]
+    assert "abc" not in out["log"] and "10.0.0.1" not in out["log"]
+
+
+def test_no_token_sends_nothing_and_logs_nothing(tmp_path):
+    out = _notify(tmp_path, "SMYLTE_SIGNAL_URL=http://127.0.0.1:8801\n")
+    assert out["calls"] == [] and not out["marker"] and out["log"] == ""
+
+
+def test_a_quoted_token_is_read_without_its_quotes(tmp_path):
+    out = _notify(tmp_path, 'SMYLTE_SIGNAL_TOKEN="abc123"\n')
+    [call] = out["calls"]
+    assert call["stdin"] == 'header = "Authorization: Bearer abc123"\n'
+    assert out["marker"]
+
+
+def test_a_checkout_path_with_a_newline_still_makes_valid_json(tmp_path):
+    out = _notify(tmp_path, "SMYLTE_SIGNAL_TOKEN=abc123\n", repo_dir='/srv/a\nb\t"c\\d')
+    [call] = out["calls"]
+    data = json.loads(call["argv"][call["argv"].index("--data-binary") + 1])
+    assert data["text"].endswith('Run: sudo /srv/a\nb\t"c\\d/deploy/migrate.sh')
 
 
 # ── the `run` contract ──────────────────────────────────────────────────────

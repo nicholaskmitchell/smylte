@@ -254,6 +254,43 @@ describe('2026-09-03 — a settings write the server rejects, on a German accoun
   })
 })
 
+describe('a bot token the server refuses', () => {
+  // `changeNotifyToken` flips the "set" flag at once, before the PUT answers.
+  // A refused write used to leave it flipped: the row read "set up" for a
+  // token the server never took.
+  it('puts the connection back to "not set up" when the save is refused', async () => {
+    m.putSettings.mockRejectedValue(new HttpError(409, 'conflict'))
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await openSettings('Notifications')
+    const field = await screen.findByLabelText(translate('en', 'notif.token'))
+    expect(field).toHaveAttribute('placeholder', translate('en', 'notif.token.placeholder'))
+
+    await userEvent.type(field, 'abc123')
+    await userEvent.tab()                       // blur is the write
+
+    await waitFor(() => expect(m.putSettings).toHaveBeenCalledWith({ notify_signal_token: 'abc123' }))
+    await screen.findByRole('alert')
+    await waitFor(() => expect(field)
+      .toHaveAttribute('placeholder', translate('en', 'notif.token.placeholder')))
+    expect(screen.getByText(translate('en', 'notif.connection.summaryNone'))).toBeInTheDocument()
+    expect(screen.queryByText(translate('en', 'notif.connection.summary'))).not.toBeInTheDocument()
+  })
+
+  it('CONTROL: keeps it "set up" when the save lands', async () => {
+    render(<App />)
+    await screen.findByRole('button', { name: 'Tasks' })
+    await openSettings('Notifications')
+    const field = await screen.findByLabelText(translate('en', 'notif.token'))
+    await userEvent.type(field, 'abc123')
+    await userEvent.tab()
+    await waitFor(() => expect(m.putSettings).toHaveBeenCalledWith({ notify_signal_token: 'abc123' }))
+    await waitFor(() => expect(field)
+      .toHaveAttribute('placeholder', translate('en', 'notif.token.stored')))
+    expect(screen.getByText(translate('en', 'notif.connection.summary'))).toBeInTheDocument()
+  })
+})
+
 describe('2026-09-03 — the document language', () => {
   // ── index.html:2 — `<html lang="en">` is static and nothing writes
   //    `document.documentElement.lang`, so a German UI is read with English

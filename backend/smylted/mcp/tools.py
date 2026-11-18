@@ -164,7 +164,7 @@ _ESTIMATE = {
 _REMINDER = {
     "type": "integer", "minimum": -1, "maximum": 10080,
     "description": (
-        "Send a Telegram reminder this many minutes before the task's due time "
+        "Send a Signal reminder this many minutes before the task's due time "
         "or the event's start. 0 means at the moment itself, -1 clears an "
         "existing reminder, and the maximum is a week. Set it only when the "
         "owner asks to be reminded — nothing else in the app notifies about a "

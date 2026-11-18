@@ -1,0 +1,515 @@
+/* Field notes — the app look from the N.K.M. design system (Nov 2026).
+
+   Every rule in this file is scoped under [data-surface="app"], which <html>
+   carries only while no preset is active (see applyDesign in appearance.ts).
+   So Classic, Workspace and the Sep 2026 design never see a rule from here:
+   they render the cascade they always had.
+
+   Values come only from tokens: ds/themes.css and ds/app-motion.css (copied
+   verbatim from the design system) and the Field notes lever block in
+   tokens.css. No colour, radius, duration or easing is written here as a
+   literal; design-tokens.test.ts holds that.
+
+   Loaded after layout.css and before display.css (main.tsx). */
+
+/* ---- the check --------------------------------------------------------------
+   The `.check` button keeps its box (--check-size, the row's geometry) and its
+   semantics; Field notes draws on it instead of filling it. The frame is the
+   pen in ink; the tick is coral ink and draws itself over --dur-ink when the
+   button goes on. 28px of drawing on a box of 17–21px: the hand overruns. */
+[data-surface="app"] .check {
+  position: relative; overflow: visible;
+  border-color: transparent; background: none; color: transparent; font-size: 0;
+}
+[data-surface="app"] .check.on { border-color: transparent; background: none; color: transparent; }
+[data-surface="app"] .check-ink {
+  display: block; position: absolute; left: 50%; top: 50%; width: 28px; height: 28px;
+  translate: -50% -50%; overflow: visible; pointer-events: none;
+  fill: none; stroke-linecap: round; stroke-linejoin: round;
+}
+[data-surface="app"] .check-frame {
+  stroke: var(--fg); stroke-width: var(--stroke-pen);
+  transition: stroke var(--dur-fast) var(--ease);
+}
+[data-surface="app"] .check-tick { stroke: var(--accent); stroke-width: var(--stroke-tick); }
+[data-surface="app"] .check.on .check-tick { stroke-dashoffset: 0; }
+[data-surface="app"] .check:disabled .check-frame { stroke: var(--rule-strong); }
+@media (hover: hover) {
+  [data-surface="app"] .check:not(:disabled):hover .check-frame { stroke: var(--accent); }
+}
+
+/* ---- the strike ---------------------------------------------------------------
+   A finished title keeps its words and gets a wavy coral-ink strike, one per
+   line, that draws itself a beat after the tick. --tx-quiet already moved its
+   colour to --fg-muted. */
+[data-surface="app"] .today-title,
+[data-surface="app"] .task-title,
+[data-surface="app"] .dash-task-title,
+[data-surface="app"] .day-card-title { position: relative; }
+[data-surface="app"] .today-row.done .today-title,
+[data-surface="app"] .task.done .task-title,
+[data-surface="app"] .dash-task.done .dash-task-title,
+[data-surface="app"] .day-card.done .day-card-title { text-decoration: none; }
+[data-surface="app"] .strike-ink {
+  display: block; position: absolute; left: 0; top: 0;
+  overflow: visible; pointer-events: none; fill: none;
+}
+[data-surface="app"] .strike-ink path {
+  stroke: var(--accent); stroke-width: var(--stroke-strike); stroke-linecap: round;
+  stroke-dasharray: 1; stroke-dashoffset: 1;
+  transition: stroke-dashoffset var(--dur-stroke) var(--ease-ink);
+}
+[data-surface="app"] .strike-ink.on path {
+  stroke-dashoffset: 0;
+  transition-delay: calc(var(--stagger) * (2 + var(--line, 0)));
+}
+
+/* ---- tabs ----------------------------------------------------------------------
+   The open view gets a drawn underline; every tab carries one, so moving
+   between them draws one on and the other off. */
+[data-surface="app"] .tab-ink { display: block; width: 34px; height: 6px; overflow: visible; fill: none; }
+[data-surface="app"] .tab-ink path { stroke: var(--accent); stroke-width: var(--stroke-strike); stroke-linecap: round; }
+[data-surface="app"] .tab.active .tab-ink path { stroke-dashoffset: 0; transition-duration: var(--dur-stroke); }
+[data-surface="app"] .tab-icon {
+  display: block; width: 24px; height: 24px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: var(--stroke-pen);
+  stroke-linecap: round; stroke-linejoin: round;
+}
+
+/* The desktop column: the icon, the label, and the underline under the label,
+   in place of the fill and inset bar the Sep 2026 design draws. */
+[data-surface="app"] .appnav .tab {
+  position: relative; gap: 12px; padding-block: 10px 12px;
+  font-size: calc(var(--fs-app-ui) * var(--fs-scale)); font-weight: 500;
+}
+[data-surface="app"] .appnav .tab.active { background: transparent; box-shadow: none; font-weight: 600; }
+[data-surface="app"] .appnav .tab-ink { position: absolute; left: 48px; bottom: 3px; }
+
+/* The phone's bar: the views as drawn icons over their labels, the gear, and
+   the coral add button. */
+[data-surface="app"] .tabbar {
+  gap: 4px; padding: 10px 12px calc(12px + env(safe-area-inset-bottom));
+  border-top-color: var(--rule);
+}
+[data-surface="app"] .tabbar .tab {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  min-height: 52px; padding: 2px 2px 0; border-radius: var(--r-md);
+  color: var(--fg-muted); background: transparent; box-shadow: none;
+  font-size: calc(var(--fs-app-small) * var(--fs-scale)); font-weight: 500;
+}
+[data-surface="app"] .tabbar .tab.active { color: var(--fg); background: transparent; box-shadow: none; font-weight: 600; }
+[data-surface="app"] .tabbar .tab-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+[data-surface="app"] .tab-add {
+  display: grid; place-items: center; flex: none; position: relative;
+  width: 56px; height: 56px; padding: 0; border: 0; border-radius: var(--r-md);
+  background: var(--accent-fill); color: var(--on-accent); cursor: pointer;
+  transition: background var(--dur) var(--ease), scale var(--dur) var(--ease-spring);
+}
+[data-surface="app"] .tab-add:active { scale: var(--press-scale); }
+[data-surface="app"] .add-ink { width: 56px; height: 56px; overflow: visible; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+[data-surface="app"] .add-edge { stroke: var(--fg); stroke-width: var(--stroke-pen); }
+[data-surface="app"] .add-cross { stroke: currentColor; stroke-width: var(--stroke-tick); }
+
+/* ---- Today's composer on a phone ---------------------------------------------
+   Put away until the tab bar's coral add opens it (TodayView, `data-open`), so
+   the page is the day and its drawing rather than a field. */
+@media (max-width: 720px) {
+  [data-surface="app"] .today-pane > .composer-foot:not([data-open]) { display: none; }
+}
+
+/* The check's 44px tap area (app.css, `.today-row button::after`) has to stay
+   on top of the title beside it, which the strike makes a positioned box. */
+[data-surface="app"] .check { z-index: 1; }
+
+/* ---- priority -----------------------------------------------------------------
+   A 3px mark beside the task's own title, in the tier's colour. The Sep 2026
+   design carried the tier on the tick's border instead; Field notes draws the
+   tick, so it puts the mark back and the border stays clear. */
+[data-surface="app"] .shell[data-layout="sidebar"] .pri-bar { display: block; }
+[data-surface="app"] .shell[data-layout="sidebar"] :is(.task, .day-card)[data-pri] > .check:not(.on) {
+  border-color: transparent;
+}
+[data-surface="app"] .pri-bar:is(.pri-high, .pri-med, .pri-low) {
+  align-self: flex-start; height: calc(15px * var(--fs-scale) * 1.5); border-radius: var(--r-pill);
+}
+
+/* The narrowest phones (320px): the labels, the gear and the add are set a
+   step smaller and tighter, as the Sep 2026 bar's are. */
+@media (max-width: 359px) {
+  [data-surface="app"] .tabbar { gap: 0; padding-inline: 4px; }
+  [data-surface="app"] .tabbar .tab { padding-inline: 1px; font-size: calc(12px * var(--fs-scale)); }
+}
+
+/* ---- the day's drawing ---------------------------------------------------------
+   Inline SVG from the server (DayDrawing.tsx). Roles, not colours: a line is the
+   pen in ink, a wash is the sage, a glow is the sage with a soft edge (light at
+   night), an accent is the coral reward.
+
+   The pen scales with the drawing, as the mockup's does, so the phone and the
+   desktop show the same drawing at two sizes. The drawing is 160 units wide and
+   the phone shows it at 128px, so 1.25 units of pen are one pixel there: the pen
+   is exactly --stroke-pen on the phone, and in proportion on the desktop.
+
+   A line is a group of three boil frames, or (in the focus loop, and a reward's
+   outline, which holds still) a single path: both are inked. */
+[data-surface="app"] .day-drawing { display: block; overflow: visible; --dm-glow: var(--wash); }
+[data-surface="app"] .day-drawing .dm-line path,
+[data-surface="app"] .day-drawing path.dm-line {
+  fill: none; stroke: var(--fg); stroke-width: calc(var(--stroke-pen) * 1.25);
+  stroke-linecap: round; stroke-linejoin: round;
+}
+[data-surface="app"] .day-drawing .dm-wash { fill: var(--wash); }
+[data-surface="app"] .day-drawing .dm-glow { fill: var(--dm-glow); }
+[data-surface="app"] .day-drawing .dm-glow-stop { stop-color: var(--wash); }
+[data-surface="app"] .day-drawing .dm-glow-edge { stop-opacity: 0; }
+/* At night the sage is too near the dark paper to read as light (1.5:1), and
+   over the sage wash it vanishes: lift it 30% toward the ink (3:1 on the
+   ground, 2:1 over the wash). Still the sage, and still a token. */
+[data-surface="app"][data-theme="dark"] .day-drawing .dm-glow-stop {
+  stop-color: color-mix(in oklab, var(--wash) 70%, var(--fg));
+}
+[data-surface="app"] .day-drawing .dm-accent { fill: var(--accent-fill); }
+
+/* A reward grows in with the reward easing when its task is ticked, and goes
+   back when it is unticked. A condition that is not a reward (everything done,
+   Start, the hour, overdue work) fades in and out. */
+[data-surface="app"] .day-drawing .dm-reward {
+  transform-box: fill-box; transform-origin: center; scale: 0;
+  transition: scale var(--dur-reward) var(--ease-reward);
+}
+[data-surface="app"] .day-drawing .dm-reward.on { scale: 1; }
+[data-surface="app"] .day-drawing .dm-cond {
+  opacity: 0; transition: opacity var(--dur-slow) var(--ease);
+}
+[data-surface="app"] .day-drawing .dm-cond.on { opacity: 1; }
+
+/* The focus loop: one frame of --n at a time, at the design system's ambient
+   rate, while Start is on. The loop's length is --n / --ambient-fps seconds,
+   written from the boil's own cycle (3 frames at 8fps) so no time is a
+   literal. */
+[data-surface="app"] .day-drawing .dm-ambient { display: none; }
+[data-surface="app"] .day-drawing .dm-ambient.on { display: inline; }
+[data-surface="app"] .day-drawing .amb {
+  visibility: hidden;
+  animation: fn-ambient calc(var(--boil-cycle) * 8 / 3 * var(--n) / var(--ambient-fps)) steps(1, end) infinite;
+  animation-delay: calc(var(--boil-cycle) * -8 / 3 * var(--k) / var(--ambient-fps));
+}
+@keyframes fn-ambient {
+  0% { visibility: visible; }
+  16.66%, 100% { visibility: hidden; }
+}
+[data-surface="app"] .day-drawing[data-paused] .boil,
+[data-surface="app"] .day-drawing[data-paused] .amb { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+  [data-surface="app"] .day-drawing .amb { visibility: hidden !important; }
+  [data-surface="app"] .day-drawing .amb:first-child { visibility: visible !important; }
+}
+
+/* ---- Today ---------------------------------------------------------------------
+   The date and the day's drawing, the focus card, then the list under a plain
+   "Today" and its count (TodayView's Field notes composition). */
+:root[data-surface="app"] {
+  /* The row's first line, which its check and cells sit on, is the title's:
+     Newsreader at the item size. */
+  --today-line: calc(var(--fs-app-item) * var(--fs-scale) * 1.25);
+}
+[data-surface="app"] .today-head.fn-head {
+  display: flex; flex-wrap: nowrap; align-items: flex-end; justify-content: space-between; gap: 12px;
+  padding: 28px var(--gutter) 0; border-bottom-color: transparent;
+}
+[data-surface="app"] .fn-date { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding-bottom: 14px; }
+[data-surface="app"] .fn-weekday {
+  font-family: var(--serif); font-size-adjust: none; font-style: italic;
+  font-size: calc(var(--fs-app-section) * var(--fs-scale)); color: var(--fg-muted);
+}
+[data-surface="app"] .fn-day {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500; line-height: 1; letter-spacing: -0.025em;
+  font-size: calc(var(--fs-app-display) * var(--fs-scale)); color: var(--fg);
+}
+[data-surface="app"] .fn-date .today-nav { margin-top: 12px; }
+/* The drawing is 160 x 200; it is never drawn below 160px tall. */
+[data-surface="app"] .fn-drawing { flex: none; width: 128px; height: 160px; }
+@media (min-width: 721px) {
+  [data-surface="app"] .fn-drawing { width: 192px; height: 240px; }
+}
+
+[data-surface="app"] .focus-card {
+  display: flex; flex-direction: column; gap: 10px;
+  margin: 6px var(--gutter) 0; padding: 18px;
+  background: var(--bg-elev); border: 1px solid var(--rule); border-radius: var(--r-md);
+  animation: fn-rise var(--dur-slow) var(--ease) both;
+}
+[data-surface="app"] .focus-card__time {
+  font-family: var(--serif); font-size-adjust: none; font-style: italic; font-variant-numeric: tabular-nums;
+  font-size: calc(var(--fs-app-note) * var(--fs-scale)); color: var(--accent);
+}
+[data-surface="app"] .focus-card__title {
+  position: relative; align-self: flex-start; padding: 0; border: 0; background: none;
+  text-align: left; color: var(--fg); cursor: pointer;
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500; line-height: 1.15; letter-spacing: -0.012em;
+  font-size: calc(var(--fs-app-headline) * var(--fs-scale));
+}
+/* The highlighter, swept once behind the title as the card arrives. */
+[data-surface="app"] .focus-card__mark {
+  position: absolute; left: -4px; right: -6px; bottom: 2px; height: 46%;
+  border-radius: var(--r-xs); background: var(--highlight);
+  transform-origin: left center; transform: skewX(-8deg);
+  animation: fn-swipe var(--dur-marker) var(--ease-ink) both;
+  animation-delay: calc(var(--stagger) * 6);
+}
+[data-surface="app"] .focus-card__text { position: relative; }
+[data-surface="app"] .focus-card__foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+[data-surface="app"] .focus-card__meta { font-size: calc(var(--fs-app-ui) * var(--fs-scale)); color: var(--fg-muted); }
+[data-surface="app"] .focus-card__go { margin-left: auto; min-height: 44px; padding-inline: 18px; }
+[data-surface="app"] .focus-card__go.on { background: var(--highlight); color: var(--fg); }
+@keyframes fn-swipe {
+  from { transform: scaleX(0) skewX(-8deg); }
+  to { transform: scaleX(1) skewX(-8deg); }
+}
+@keyframes fn-rise {
+  from { opacity: 0; translate: 0 var(--enter-y); }
+  to { opacity: 1; translate: 0 0; }
+}
+
+[data-surface="app"] .fn-list-head { display: flex; align-items: baseline; gap: 10px; padding: 26px var(--gutter) 6px; }
+[data-surface="app"] .fn-list-head .content-title {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500;
+  font-size: calc(var(--fs-app-section) * var(--fs-scale));
+}
+[data-surface="app"] .fn-list-head .today-count {
+  font-family: var(--serif); font-size-adjust: none; font-style: italic; text-transform: none; letter-spacing: 0;
+  font-variant-numeric: tabular-nums; font-size: calc(var(--fs-app-note) * var(--fs-scale)); color: var(--fg-muted);
+}
+[data-surface="app"] .today-row .today-title {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500; letter-spacing: 0;
+  font-size: calc(var(--fs-app-item) * var(--fs-scale));
+}
+
+/* An undrawn ink stroke is a dash of length zero, and a round cap still paints
+   a dot for it. Hidden while undrawn: shown at once when it starts to draw on,
+   and hidden only once it has finished drawing back off. */
+[data-surface="app"] .check:not(.on) .check-tick,
+[data-surface="app"] .tab:not(.active) .tab-ink path,
+[data-surface="app"] .strike-ink:not(.on) path {
+  opacity: 0;
+  transition: stroke-dashoffset var(--dur-ink) var(--ease-ink), opacity var(--dur-ink) step-end;
+}
+[data-surface="app"] .check.on .check-tick,
+[data-surface="app"] .tab.active .tab-ink path,
+[data-surface="app"] .strike-ink.on path { opacity: 1; }
+
+[data-surface="app"] .fn-date .today-nav { align-self: flex-start; }
+[data-surface="app"] .fn-list-head { flex-wrap: wrap; row-gap: 8px; }
+[data-surface="app"] .fn-list-head .today-count { border: 0; padding: 0; margin: 0; white-space: nowrap; }
+
+/* Calm rows: a row's unset estimate and its remove button stay out of sight
+   until the row is in use, so the list reads as titles. Hidden with opacity and
+   pointer-events, not visibility: they stay in the accessibility tree and
+   focusable, so tabbing into the row reveals them (:focus-within), and an
+   invisible ✕ can never be tapped by accident. A row's [data-tools] is set by
+   tapping its title, which is how a phone, with no hover, reaches them. A set
+   estimate and the due date are information rather than tools and stay as they
+   are. Only the page's own list (.today-pane > .scroll): the planning ritual's
+   estimate step and the shutdown review list the same rows in a dialog in order
+   to edit them, and there the tools are the point. */
+[data-surface="app"] .today-pane > .scroll .today-row .today-est.unset,
+[data-surface="app"] .today-pane > .scroll .today-row .today-drop {
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+[data-surface="app"] .today-pane > .scroll .today-row:focus-within .today-est.unset,
+[data-surface="app"] .today-pane > .scroll .today-row:focus-within .today-drop,
+[data-surface="app"] .today-pane > .scroll .today-row[data-tools] .today-est.unset,
+[data-surface="app"] .today-pane > .scroll .today-row[data-tools] .today-drop {
+  opacity: 1; pointer-events: auto;
+}
+@media (hover: hover) {
+  [data-surface="app"] .today-pane > .scroll .today-row:hover .today-est.unset,
+  [data-surface="app"] .today-pane > .scroll .today-row:hover .today-drop {
+    opacity: 1; pointer-events: auto;
+  }
+}
+
+/* Plan my day as a link (the band keeps no sentence and no ✕ under Field
+   notes). The band's line is set at a caption size for its figures, and a link
+   at that size is a 13px-tall target; the control the day is planned from takes
+   the app's small text and a full 44px tap box instead. */
+[data-surface="app"] .today-load .today-load-plan.today-linkish {
+  font-size: calc(var(--fs-app-small) * var(--fs-scale));
+  min-height: 44px; display: inline-flex; align-items: center;
+}
+
+/* ==== cp3 · shared ==== */
+
+/* Control edges at 3:1: --rule is a 1.3:1 hairline (contrast-table.test.ts names --rule-strong, via --edge-control, as the control edge). */
+[data-surface="app"] .menu-toggle,
+[data-surface="app"] .content-head > .view-tab,
+[data-surface="app"] .col-add,
+[data-surface="app"] .sched-add-range,
+[data-surface="app"] .bulk-add-row,
+[data-surface="app"] .booking-day:not(.active),
+[data-surface="app"] .slot-btn,
+[data-surface="app"] .habit-day:not(.on) { border-color: var(--edge-control); }
+/* A view header's count is a margin note, as Today's is. */
+[data-surface="app"] .content-head > .content-sub {
+  font-family: var(--serif); font-size-adjust: none; font-style: italic; text-transform: none; letter-spacing: 0;
+  font-variant-numeric: tabular-nums; font-size: calc(var(--fs-app-note) * var(--fs-scale)); color: var(--fg-muted);
+}
+/* ‹ › beside a view's Today: square, not a sliver. Desktop only: .cal-title has min-width 220px, and 44px buttons overflow a 320px phone. */
+@media (min-width: 721px) {
+  [data-surface="app"] :is(.cal-head, .range-nav) > .icon-btn { min-width: var(--control-h); }
+}
+
+/* ==== cp3 · Tasks ==== */
+
+/* A Tasks row's title is set as Today's is: Newsreader at the item size, on the
+   item line, with the tick and the list's square centred on its first line. */
+[data-surface="app"] .task-title,
+[data-surface="app"] .task-row > .task-main {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500; letter-spacing: 0;
+  font-size: calc(var(--fs-app-item) * var(--fs-scale)); line-height: var(--today-line);
+}
+[data-surface="app"] .task > .check { margin-top: calc(var(--today-line) / 2 - var(--check-size) / 2); }
+[data-surface="app"] .task-title .list-dot { top: calc(var(--today-line) / 2 - 7px / 2); }
+[data-surface="app"] .task-row > .list-dot { margin-top: calc((var(--today-line) - 7px) / 2); }
+[data-surface="app"] .day-card-title { font-family: var(--serif); font-size-adjust: none; font-weight: 500; font-size: calc(var(--fs-app-ui) * var(--fs-scale)); }
+[data-surface="app"] .task-meta .due { font-size: calc(var(--fs-app-meta) * var(--fs-scale)); font-variant-numeric: tabular-nums; }
+[data-surface="app"] .child-progress { font-size: calc(var(--fs-app-small) * var(--fs-scale)); font-variant-numeric: tabular-nums; }
+/* Calm rows: the page's own panes only (.content[data-pane] > .scroll), never a dialog. */
+[data-surface="app"] .content[data-pane] > .scroll .task > .task-actions {
+  opacity: 0; pointer-events: none; transition: opacity var(--dur-fast) var(--ease);
+}
+[data-surface="app"] .content[data-pane] > .scroll .task:focus-within > .task-actions { opacity: 1; pointer-events: auto; }
+@media (hover: hover) {
+  [data-surface="app"] .content[data-pane] > .scroll .task:hover > .task-actions { opacity: 1; pointer-events: auto; }
+}
+@media (hover: none) {   /* D1: on a touchscreen the editor carries Add subtask and Delete */
+  [data-surface="app"] .content[data-pane] > .scroll .task > .task-actions { display: none; }
+}
+[data-surface="app"] .content[data-pane] > .composer-foot > .quickadd { box-shadow: var(--shadow-rest); }
+[data-surface="app"] .content[data-pane] > .composer-foot > .quickadd:focus-within { box-shadow: var(--shadow-rest), var(--ring); }
+
+/* ==== cp3 · Sidebar ==== */
+
+/* An empty group holds no words under Field notes, but it stays the drop zone
+   it was: the height its one line of text gave it. */
+[data-surface="app"] .group-empty:empty { min-height: calc(18px * var(--fs-scale)); }
+
+/* ==== cp3 · Home ==== */
+
+[data-surface="app"] .dash-mod-head { border-bottom-color: transparent; }
+[data-surface="app"] .dash-mod-head > .label {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500; text-transform: none; letter-spacing: 0;
+  font-size: calc(var(--fs-app-note) * var(--fs-scale)); color: var(--fg);
+}
+[data-surface="app"] .dash-task-title { font-family: var(--serif); font-size-adjust: none; font-weight: 500; font-size: calc(var(--fs-app-ui) * var(--fs-scale)); }
+[data-surface="app"] .dash-task-due { font-size: calc(var(--fs-app-small) * var(--fs-scale)); font-variant-numeric: tabular-nums; }
+[data-surface="app"] .mini-dot { width: 4px; height: 4px; border-radius: var(--r-dot); }
+
+/* ==== cp3 · Calendar ==== */
+
+[data-surface="app"] :is(.cal-task, .agenda-task) .tick { position: relative; display: inline-block; width: 12px; height: 12px; vertical-align: -1px; }
+[data-surface="app"] :is(.cal-task, .agenda-task) .tick .check-ink { width: 16px; height: 16px; }
+[data-surface="app"] :is(.cal-task, .agenda-task):not(.done) .check-tick { opacity: 0; }
+[data-surface="app"] :is(.cal-task, .agenda-task).done .check-tick { opacity: 1; }
+[data-surface="app"] :is(.cal-task, .agenda-task).done { text-decoration: none; }
+[data-surface="app"] .cal-task > bdi,
+[data-surface="app"] .agenda-ev > .t + span { position: relative; }
+[data-surface="app"] .sched-switch ~ .scroll > .empty { padding: 18px var(--gutter); }
+[data-surface="app"] .sched-switch ~ .scroll > .section-label {
+  padding: 22px var(--gutter) 4px; font-family: var(--serif); font-size-adjust: none; font-weight: 500;
+  text-transform: none; letter-spacing: 0; font-size: calc(var(--fs-app-section) * var(--fs-scale)); color: var(--fg);
+}
+[data-surface="app"] .sched-switch ~ .scroll > .section-label + .empty { padding: 8px var(--gutter); }
+[data-surface="app"] :is(.sched-toggle, .sched-check, .sched-day-name) input[type="checkbox"] { accent-color: var(--accent); }
+[data-surface="app"] .agenda-task .tick { margin-inline-end: 6px; }   /* the space the glyph's text carried */
+
+/* ==== cp3 · Focus ==== */
+
+/* The floating window is left alone: its face is fitted exactly. */
+[data-surface="app"] .focus:not([data-float]) :is(.focus-head, .focus-foot) { border-color: transparent; }
+[data-surface="app"] .focus:not([data-float]) :is(.focus-head__interval, .focus-head__tally, .focus-phase) {
+  font-family: var(--serif); font-size-adjust: none; font-style: italic; text-transform: none; letter-spacing: 0;
+  font-size: calc(var(--fs-app-note) * var(--fs-scale));
+}
+[data-surface="app"] .focus:not([data-float]) .focus-now__eyebrow { font-weight: 500; font-size: calc(var(--fs-app-small) * var(--fs-scale)); }
+[data-surface="app"] .focus:not([data-float]) :is(.focus-now__meta, .focus-next__more) { font-size: calc(var(--fs-app-meta) * var(--fs-scale)); }
+[data-surface="app"] .focus:not([data-float]) .focus-next__text { font-family: var(--serif); font-size-adjust: none; font-weight: 500; }
+
+/* ==== cp3 · Settings ==== */
+
+/* The section list: the open one carries the drawn underline, not the coral bar. */
+[data-surface="app"] .set-nav-item { position: relative; }
+[data-surface="app"] .set-nav-item.active { border-left-color: transparent; }
+[data-surface="app"] .set-nav-item .tab-ink { position: absolute; left: 10px; bottom: 1px; }
+[data-surface="app"] .set-nav-item.active .tab-ink path { stroke-dashoffset: 0; opacity: 1; transition-duration: var(--dur-stroke); }
+[data-surface="app"] .set-nav-item:not(.active) .tab-ink path {
+  opacity: 0; transition: stroke-dashoffset var(--dur-ink) var(--ease-ink), opacity var(--dur-ink) step-end;
+}
+@media (max-width: 720px) { [data-surface="app"] .set-sheet .set-nav-item .tab-ink { display: none; } }
+/* A panel's headings are set the way a notebook's are, not as small capitals. */
+[data-surface="app"] .set-panel > .menu-head,
+[data-surface="app"] .appear-group > .menu-head {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500; text-transform: none; letter-spacing: 0;
+  font-size: calc(var(--fs-app-reading) * var(--fs-scale)); color: var(--fg);
+}
+[data-surface="app"] .set-head .set-title {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500; letter-spacing: -0.01em;
+  font-size: calc(var(--fs-app-section) * var(--fs-scale)); color: var(--fg);
+}
+
+/* ==== cp3 · Dialogs ==== */
+
+[data-surface="app"] .modal-title { font-size: calc(var(--fs-app-headline) * var(--fs-scale)); line-height: 1.15; letter-spacing: -0.012em; }
+[data-surface="app"] .plan-step {
+  font-family: var(--serif); font-size-adjust: none; font-style: italic; text-transform: none; letter-spacing: 0;
+  font-variant-numeric: tabular-nums; font-size: calc(var(--fs-app-note) * var(--fs-scale)); color: var(--fg-muted);
+}
+[data-surface="app"] .today-mark { position: relative; }
+[data-surface="app"] .today-mark .check-tick { stroke-dashoffset: 0; opacity: 1; }
+
+/* ==== cp3 · Public ==== */
+
+/* The open row's mark was a --rule circle at 1.3:1; the drawn frame replaces it. */
+[data-surface="app"] .share-row__mark {
+  position: relative; width: 18px; height: 18px; border: 0; border-radius: 0; background: none;
+  align-self: start; margin-top: calc((var(--today-line) - 18px) / 2);
+}
+[data-surface="app"] .share-row.is-done .share-row__mark { border-color: transparent; background: none; }
+[data-surface="app"] .share-row__mark .check-ink { width: 24px; height: 24px; }
+[data-surface="app"] .share-row:not(.is-done) .check-tick { opacity: 0; }
+[data-surface="app"] .share-row.is-done .check-tick { stroke-dashoffset: 0; opacity: 1; }
+[data-surface="app"] .share-row.is-done .share-row__text { text-decoration: none; }
+[data-surface="app"] .share-row__name { position: relative; }
+[data-surface="app"] .share-row__text {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500;
+  font-size: calc(var(--fs-app-item) * var(--fs-scale)); line-height: var(--today-line);
+}
+[data-surface="app"] :is(.share-ev__title, .share-task__text) {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500;
+  font-size: calc(var(--fs-app-reading) * var(--fs-scale));
+}
+[data-surface="app"] .slot-btn {
+  font-family: var(--font-control); font-size-adjust: none; font-weight: var(--wght-control); font-variant-numeric: tabular-nums;
+  font-size: calc(var(--fs-app-ui) * var(--fs-scale)); min-height: var(--control-h);
+}
+[data-surface="app"] :is(.booking-day .dow, .busy-chip) { font-size: calc(var(--fs-app-small) * var(--fs-scale)); }
+
+/* ==== cp3 · review fixes ==== */
+/* Display mode is a tablet you tap to check things off: its mode switch keeps
+   the 44px tap height the presets' buttons have (app.css .dmode-bar .btn),
+   which a .view-tab does not get on its own. */
+[data-surface="app"] .dmode-bar .view-tabs > .view-tab { min-height: 44px; }
+
+/* ==== view drawings ==== */
+/* Tasks, Calendar and Settings each keep one static drawing in a quiet spot: an
+   empty state, and the foot of Settings' section column. Decoration only. */
+[data-surface="app"] .view-drawing { display: flex; justify-content: center; }
+[data-surface="app"] .view-drawing .day-drawing { width: 112px; height: 140px; flex: none; }
+[data-surface="app"] .empty .view-drawing,
+[data-surface="app"] .agenda-empty .view-drawing { margin: 4px auto 14px; }
+/* Desktop: the foot of the section column, where it has room; hidden when it would not fit. */
+[data-surface="app"] .set-nav-drawing { margin-top: auto; padding-top: 16px; }
+@media (max-height: 759px) { [data-surface="app"] .settings-menu:not(.set-sheet) .set-nav-drawing { display: none; } }
+/* Phone sheet: after the last row, centred. */
+@media (max-width: 720px) { [data-surface="app"] .set-sheet .set-nav-drawing { margin: 24px auto 8px; padding-top: 0; } }

@@ -1,6 +1,7 @@
-"""Outbound notifications. Telegram is the first (and for now only) transport."""
+"""Outbound notifications, through the owner's signal-bot."""
 from __future__ import annotations
 
-from .telegram import MAX_MESSAGE_CHARS, SendResult, TelegramSender, clip, escape_html
+from .signal import SignalSender
+from .transport import MAX_MESSAGE_CHARS, SendResult, clip
 
-__all__ = ["MAX_MESSAGE_CHARS", "SendResult", "TelegramSender", "clip", "escape_html"]
+__all__ = ["MAX_MESSAGE_CHARS", "SendResult", "SignalSender", "clip"]

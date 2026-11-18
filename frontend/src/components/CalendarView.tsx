@@ -1,11 +1,12 @@
 import {
   useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties,
+  type ReactNode,
 } from 'react'
 import {
   api, clientId, uidFor, type CalEvent, type EventScope, type List, type Task,
 } from '../api'
 import { useCalendarData, useTaskData } from '../data'
-import { useEscape, useToday } from '../hooks'
+import { useEscape, useFieldNotes, useToday } from '../hooks'
 import { useLayer } from '../layers'
 import {
   cssColor, dayKey, hasZone, instantFromLocal, makeGuard, pad, sameValue, textDir, toLocalInput, ymd,
@@ -21,6 +22,9 @@ import { taskKey } from '../order'
 import { useIsMobile } from '../hooks'
 import { NavCollections, useEmbeddedCollections } from '../shell'
 import { AgendaEvent, AgendaTask, DayPopover } from './DayPopover'
+import { CheckInk, StrikeInk } from './Marks'
+import { ViewDrawing } from './DayDrawing'
+import { EMPTY_DAY } from '../drawing'
 import { Sidebar } from './Sidebar'
 import { TaskModal } from './TaskModal'
 import { DateTimeInput } from './DateTimeInput'
@@ -117,6 +121,7 @@ function CalendarTasksSection({ lists, shown, onShownChange, showDone, onShowDon
   onShowDoneChange: () => void
 }) {
   const tr = useT()
+  const fieldNotes = useFieldNotes()
   const [collapsed, setCollapsed] = useState(false)
   if (!lists.length) return null
   const anyShown = lists.some((l) => shown.has(l.id))
@@ -133,7 +138,7 @@ function CalendarTasksSection({ lists, shown, onShownChange, showDone, onShowDon
         </button>
         <span className="group-name">{tr('cal.tasksGroup')}</span>
         <button className="group-eye" aria-pressed={anyShown}
-          title={anyShown ? tr('cal.takeTasksOff') : tr('cal.putTasksOn')}
+          title={fieldNotes ? undefined : (anyShown ? tr('cal.takeTasksOff') : tr('cal.putTasksOn'))}
           aria-label={anyShown ? tr('cal.takeTasksOff') : tr('cal.putTasksOn')}
           onClick={() => onShownChange(anyShown ? [] : lists.map((l) => l.id))}>
           {anyShown ? '◉' : '◌'}
@@ -153,7 +158,7 @@ function CalendarTasksSection({ lists, shown, onShownChange, showDone, onShowDon
                 <span className="swatch" style={on
                   ? (cssColor(l.color) ? { background: cssColor(l.color)! } : undefined)
                   : { background: 'transparent',
-                      boxShadow: `inset 0 0 0 1.5px ${cssColor(l.color) ?? 'var(--fg-faint)'}` }} />
+                      boxShadow: `inset 0 0 0 1.5px ${cssColor(l.color) ?? 'var(--mark-quiet)'}` }} />
                 <span className="name">{l.name}</span>
                 <span className="count">{l.open_count}</span>
               </div>
@@ -173,7 +178,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   hiddenCalendars, onHiddenCalendarsChange,
   archivedCalendars, onArchivedCalendarsChange,
   calTaskLists, onCalTaskListsChange,
-  calShowDone, onCalShowDoneChange, fit }: {
+  calShowDone, onCalShowDoneChange, fit, viewTabs }: {
   onExpire: () => void
   // The month lives above the tab strip too, so coming back to Calendar returns
   // to where you were rather than snapping to today.
@@ -189,12 +194,16 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   // choice is made in the settings menu, like the clock and the completed-task
   // toggle, so there is nothing to hand back from here.
   fit: CalendarFit
+  // The Calendar / Scheduling switch, which App owns because it decides which of
+  // the two views is mounted. Drawn first so it sits above the month header.
+  viewTabs?: ReactNode
 }) {
   const guard = makeGuard(onExpire)
   const isMobile = useIsMobile()
   const embedded = useEmbeddedCollections()
   const tf = useTimeFormat()
   const { locale, t: tr } = useI18n()
+  const fieldNotes = useFieldNotes()
   // Sunday-first, because the grid's columns are indexed by `Date#getDay` and
   // the header row has to line up with them.
   const dow = weekdayNames(locale, 'short', 'sun')
@@ -661,11 +670,12 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
       </NavCollections>
 
       <div className="content">
+        {viewTabs && <div className="content-switch">{viewTabs}</div>}
         <div className="cal-head">
-          <button className="icon-btn" title={tr('cal.prevMonth')} aria-label={tr('cal.prevMonth')}
+          <button className="icon-btn" title={fieldNotes ? undefined : tr('cal.prevMonth')} aria-label={tr('cal.prevMonth')}
             onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}>‹</button>
           <button className="btn ghost" onClick={() => { const n = new Date(); setCursor(new Date(n.getFullYear(), n.getMonth(), 1)) }}>{tr('tasks.today')}</button>
-          <button className="icon-btn" title={tr('cal.nextMonth')} aria-label={tr('cal.nextMonth')}
+          <button className="icon-btn" title={fieldNotes ? undefined : tr('cal.nextMonth')} aria-label={tr('cal.nextMonth')}
             onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}>›</button>
           <span className="cal-title">{months[cursor.getMonth()]} {cursor.getFullYear()}</span>
           <span className="spacer" />
@@ -677,6 +687,11 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
           // Same three-way as the tasks pane: an empty `cals` before the fetch
           // lands is ignorance, not an empty account.
           <div className="empty" aria-busy={!loaded || undefined}>
+            {fieldNotes && loaded && (
+              <div className="view-drawing" aria-hidden="true">
+                <ViewDrawing view="calendar" day={todayKey} state={EMPTY_DAY} />
+              </div>
+            )}
             {!loaded
               ? tr('common.loading')
               : cals.length === 0
@@ -811,7 +826,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                               className={`cal-ev ${e.all_day ? 'allday' : ''} ${e.cont ? 'cont' : ''}`}
                               style={evStyle(e)}
                               dir={textDir(e.summary)}
-                              title={e.is_recurring
+                              title={fieldNotes ? undefined : e.is_recurring
                                 ? tr('cal.repeatingTitle', { summary: e.summary || '' })
                                 : (e.summary || '')}
                               // Operable, and OUT of the roving walk: a chip is
@@ -855,7 +870,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                                   prefix and the ↻ around it. */}
                               <bdi>{e.summary || tr('common.untitled')}</bdi>
                               {resizable && (
-                                <span className="ev-resize" title={tr('cal.dragEndDay')}
+                                <span className="ev-resize" title={fieldNotes ? undefined : tr('cal.dragEndDay')}
                                   draggable
                                   onDragStart={(ev) => {
                                     ev.stopPropagation()
@@ -872,7 +887,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                           const done = t.completed || t.cancelled
                           return (
                             <div key={taskKey(t)} className={`cal-task ${done ? 'done' : ''}`}
-                              style={taskStyle(t)} dir={textDir(t.summary)} title={t.summary || ''}
+                              style={taskStyle(t)} dir={textDir(t.summary)} title={fieldNotes ? undefined : (t.summary || '')}
                               // Same treatment as the event chip beside it. The
                               // finding names the event chip; a task chip in the
                               // same cell that stayed unreachable would be the
@@ -886,11 +901,16 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                                 setTaskDetail(t)
                               }}
                               onClick={(ev) => { ev.stopPropagation(); setTaskDetail(t) }}>
-                              <span className="tick" aria-hidden="true">{done ? '☑' : '☐'}</span>
+                              <span className="tick" aria-hidden="true">
+                                {fieldNotes ? <CheckInk seed={taskKey(t)} /> : (done ? '☑' : '☐')}
+                              </span>
                               {timed && <span className="t">{fmtClock(t.due!, tf, locale)}</span>}
                               {/* Cut by CSS, never by the string — see the event
                                   chip above for why that distinction matters. */}
-                              <bdi>{t.summary || tr('common.untitled')}</bdi>
+                              <bdi>
+                                {t.summary || tr('common.untitled')}
+                                {fieldNotes && <StrikeInk on={done} seed={taskKey(t)} />}
+                              </bdi>
                             </div>
                           )
                         })}
@@ -921,11 +941,18 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                     onOpen={() => setDraft({ event: e })} />
                 ))}
                 {focusTasks.map((t) => (
-                  <AgendaTask key={taskKey(t)} task={t} style={taskStyle(t)}
+                  <AgendaTask key={taskKey(t)} task={t} style={taskStyle(t)} fieldNotes={fieldNotes}
                     onOpen={() => setTaskDetail(t)} />
                 ))}
                 {focusEvents.length === 0 && focusTasks.length === 0 && (
-                  <div className="agenda-empty">{tr('cal.nothingThisDay')}</div>
+                  <div className="agenda-empty">
+                    {fieldNotes && (
+                      <div className="view-drawing" aria-hidden="true">
+                        <ViewDrawing view="calendar" day={todayKey} state={EMPTY_DAY} />
+                      </div>
+                    )}
+                    {tr('cal.nothingThisDay')}
+                  </div>
                 )}
               </div>
             )}
@@ -1035,6 +1062,7 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete,
   const { lang: appLang } = useI18n()
   const lang = inputLang(useTimeFormat(), appLang)
   const tr = useT()
+  const fieldNotes = useFieldNotes()
   const recurring = !!e?.is_recurring
   // Named once: the dialog's visible title and its accessible name are the same
   // sentence, and the old code spelled the three-way ternary out twice.
@@ -1418,7 +1446,7 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete,
                   half of it a person cannot see: an event that blocks is what
                   every event does, and saying so would be a line of chrome
                   under every event in the app. */}
-              {!busy && (
+              {!fieldNotes && !busy && (
                 <p className="field-hint">{tr('cal.freeHint')}</p>
               )}
             </div>
@@ -1449,7 +1477,7 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete,
               <label className="label">{tr('field.tags')}</label>
               <TagInput label={tr('field.tags')} value={tags} onChange={setTags} />
             </div>
-            {recurring && (
+            {!fieldNotes && recurring && (
               <p className="scope-hint">{tr('cal.moveHint')}</p>
             )}
             <div className="modal-actions">

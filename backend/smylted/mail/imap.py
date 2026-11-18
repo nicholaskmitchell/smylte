@@ -12,7 +12,7 @@ Choices worth knowing about:
   alternatives. Both are another dependency on the path that holds the Bridge
   password, and the async one would put a second threading discipline in a
   process whose outbound I/O is synchronous code reached through
-  `asyncio.to_thread` (see `notify/telegram.py`). `imaplib` is clumsy but
+  `asyncio.to_thread` (see `notify/signal.py`). `imaplib` is clumsy but
   small, and the clumsiness stays inside this file.
 
 - **Read-only, always.** Folders are opened with EXAMINE (`readonly=True`) and

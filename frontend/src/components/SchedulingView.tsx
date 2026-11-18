@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState, type KeyboardEvent, useRef } from 'react'
+import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode, useRef } from 'react'
 import { api, type Availability, type Booking, type BookingLink, type BookingLinkInput,
   type List } from '../api'
 import { makeGuard } from '../util'
 import { fmtWhen, inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
-import { useEscape } from '../hooks'
+import { useEscape, useFieldNotes } from '../hooks'
 import { useLayer } from '../layers'
 import { DateTimeInput } from './DateTimeInput'
 import { useI18n } from '../i18n'
@@ -36,10 +36,16 @@ function clamp(raw: string, lo: number, hi: number, fallback: number): number {
   return Math.max(lo, Math.min(hi, n))
 }
 
-export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () => void }) {
+export function SchedulingView({ rev, onExpire, viewTabs }: {
+  rev: number; onExpire: () => void
+  // The Calendar / Scheduling switch. When it is there it already names the
+  // view, so the title is left out rather than said twice.
+  viewTabs?: ReactNode
+}) {
   const guard = makeGuard(onExpire)
   const tf = useTimeFormat()
   const { locale, t: tr } = useI18n()
+  const fieldNotes = useFieldNotes()
   const [links, setLinks] = useState<BookingLink[]>([])
   const [cals, setCals] = useState<List[]>([])
   const [bookings, setBookings] = useState<Booking[]>([])
@@ -160,20 +166,30 @@ export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () =>
   return (
     <div className="work">
       <div className="content">
-        <div className="content-head">
-          <span className="content-title">{tr('sched.title')}</span>
-          <span className="spacer" />
-          <button className="btn" onClick={() => setEditing('new')}>{tr('sched.newLink')}</button>
-        </div>
+        {viewTabs ? (
+          // Inside Calendar the switch names the view, so New link sits on the
+          // switch's row and the view starts one row higher.
+          <div className="content-switch sched-switch">
+            {viewTabs}
+            <span className="spacer" />
+            <button className="btn" onClick={() => setEditing('new')}>{tr('sched.newLink')}</button>
+          </div>
+        ) : (
+          <div className="content-head">
+            <span className="content-title">{tr('sched.title')}</span>
+            <span className="spacer" />
+            <button className="btn" onClick={() => setEditing('new')}>{tr('sched.newLink')}</button>
+          </div>
+        )}
         <div className="scroll">
           {!loaded ? (
-            <div className="empty" style={{ padding: '18px 26px' }}>{tr('common.loading')}</div>
+            <div className="empty" style={fieldNotes ? undefined : { padding: '18px 26px' }}>{tr('common.loading')}</div>
           ) : failed ? (
-            <div className="empty" style={{ padding: '18px 26px' }} role="alert">
+            <div className="empty" style={fieldNotes ? undefined : { padding: '18px 26px' }} role="alert">
               {tr('sched.loadFailed')}
             </div>
           ) : links.length === 0 ? (
-            <div className="empty" style={{ padding: '18px 26px' }}>
+            <div className="empty" style={fieldNotes ? undefined : { padding: '18px 26px' }}>
               {tr('sched.empty')}
             </div>
           ) : null}
@@ -186,7 +202,7 @@ export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () =>
                       cannot be switched back on until it is repointed, so the
                       toggle says why rather than sitting there inert. */}
                   <label className="sched-toggle"
-                    title={l.calendar_missing
+                    title={fieldNotes ? undefined : l.calendar_missing
                       ? tr('sched.calendarGone')
                       : l.enabled ? tr('sched.linkLive') : tr('sched.linkOff')}>
                     <input type="checkbox" checked={l.enabled} disabled={l.calendar_missing}
@@ -220,11 +236,11 @@ export function SchedulingView({ rev, onExpire }: { rev: number; onExpire: () =>
             ))}
           </div>
 
-          <div className="section-label label" style={{ padding: '22px 26px 4px' }}>
+          <div className="section-label label" style={fieldNotes ? undefined : { padding: '22px 26px 4px' }}>
             {tr('sched.upcoming')}
           </div>
           {loaded && !failed && upcoming.length === 0 && (
-            <div className="empty" style={{ padding: '8px 26px' }}>{tr('sched.nothingBooked')}</div>
+            <div className="empty" style={fieldNotes ? undefined : { padding: '8px 26px' }}>{tr('sched.nothingBooked')}</div>
           )}
           <div className="sched-bookings">
             {upcoming.map((b) => (
@@ -332,6 +348,7 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
   onDelete: (l: BookingLink) => void
 }) {
   const { lang: appLang, locale, t: tr } = useI18n()
+  const fieldNotes = useFieldNotes()
   const lang = inputLang(useTimeFormat(), appLang)
   const modalTitle = link ? tr('sched.editLink') : tr('sched.newLinkTitle')
   const [title, setTitle] = useState(link?.title ?? '')
@@ -526,7 +543,7 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
                         <DateTimeInput className="input" type="time" value={r[1]} lang={lang}
                           onChange={(e) => patchRange(i, k, 1, e.target.value)} />
                         {days[i].ranges.length > 1 && (
-                          <button className="icon-btn" title={tr('sched.removeRange')}
+                          <button className="icon-btn" title={fieldNotes ? undefined : tr('sched.removeRange')}
                             aria-label={tr('sched.removeRange')}
                             onClick={() => patchDay(i, { ranges: days[i].ranges.filter((_, j) => j !== k) })}>
                             ✕
@@ -534,7 +551,8 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
                         )}
                       </span>
                     ))}
-                    <button className="sched-add-range" title={tr('sched.addRange')}
+                    <button className="sched-add-range" title={fieldNotes ? undefined : tr('sched.addRange')}
+                      aria-label={fieldNotes ? tr('sched.addRange') : undefined}
                       onClick={() => patchDay(i, { ranges: [...days[i].ranges, ['', '']] })}>
                       {tr('sched.addRangeShort')}
                     </button>
@@ -551,9 +569,11 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
             <input type="checkbox" checked={showBusy} onChange={(e) => setShowBusy(e.target.checked)} />
             <span>{tr('sched.showBusy')}</span>
           </label>
-          <div className="hintline">
-            {tr('sched.showBusyHint')}
-          </div>
+          {!fieldNotes && (
+            <div className="hintline">
+              {tr('sched.showBusyHint')}
+            </div>
+          )}
         </div>
         <div className="field-row">
           <div className="field">

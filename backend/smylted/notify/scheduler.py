@@ -10,19 +10,24 @@ a minute, on a bad network, with retries. So:
     3. SETTLE, under the lock again.
 
 Claiming before sending rather than after is what makes a crash safe. A row
-written afterwards leaves a window in which the process dies between Telegram
+written afterwards leaves a window in which the process dies between signal-bot
 accepting the message and the INSERT landing, and the next sweep sends it again.
 A claimed-but-unsettled row is therefore read as SENT, which is the right way
 round: a duplicate 3am alert costs more trust than a missed one.
 """
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 from ..db import store
+from ..mail.secrets import SecretStoreError
 from . import rules as R
-from .telegram import TelegramSender, clip
+from .signal import OWNER, SignalSender
+from .transport import clip
 
 # The ceiling, per local day, on notifications that BUZZ. Past it, further
 # messages are downgraded to silent — never dropped. Downgrade rather than drop
@@ -59,7 +64,7 @@ def loud_deliveries_since(conn, stamp: str) -> int:
     Two things the ledger's row count gets wrong, both in the direction of
     silencing a meeting alert on a day that barely interrupted anyone.
 
-    A loud send Telegram refused settles `ok=0, silent=0`. Charged per row it
+    A loud send the transport refused settles `ok=0, silent=0`. Charged per row it
     spent a slot on every later sweep although `_dispatch` charges a buzz only
     `if outcome.ok` — eight refusals silenced the day. A row counts here when it
     went out, or when it is claimed and not yet settled (a crash mid-send, read
@@ -101,8 +106,8 @@ class SweepResult:
 class Notifier:
     """Owns one sender and the sweep over the rules. One per process."""
 
-    def __init__(self, svc, sender: TelegramSender, chat_id: str, *, log,
-                 token: str = "", interval_s: float = 60.0) -> None:
+    def __init__(self, svc, sender: SignalSender, *, log,
+                 token: Callable[[], str | None], interval_s: float = 60.0) -> None:
         self._svc = svc
         # How often sweep() runs (SMYLTE_NOTIFY_INTERVAL; the default is the
         # shipped one). The rules need it: it is the width of the window an
@@ -112,27 +117,34 @@ class Notifier:
         # time" window starts exactly where that one's ended (rules.late_floor).
         self._last_swept: datetime | None = None
         self._sender = sender
-        # Environment fallbacks. The account's own values (Settings →
-        # Notifications) win when present: the settings blob is the more
-        # specific and more recent statement, and an owner who has just typed a
-        # chat id into the app should not have to work out that a stale env var
-        # is overriding them. Env remains the way to configure a deployment that
-        # never opens the UI.
-        self._env_chat_id = chat_id
-        self._env_token = token or sender.token
+        # Where the signal-bot token comes from: the secret store, with
+        # SMYLTE_SIGNAL_TOKEN overriding it (see app._build_notifier). Called
+        # once per sweep and per test send, so a token pasted into Settings
+        # takes effect on the next tick rather than the next restart.
+        self._token_provider = token
         self._log = log
         # Latched so a misconfiguration is stated once rather than every minute.
         self._warned_no_tz = False
+        self._warned_store: str | None = None
 
-    def _credentials(self, prefs: dict) -> tuple[str, str]:
-        """(token, chat_id), account settings first, environment second."""
-        token = prefs.get("notify_telegram_bot_token")
-        chat = prefs.get("notify_telegram_chat_id")
-        return (
-            (token if isinstance(token, str) and token.strip() else self._env_token),
-            (str(chat).strip() if isinstance(chat, (str, int)) and str(chat).strip()
-             else self._env_chat_id),
-        )
+    def _token(self) -> str:
+        """The current token, stripped, or "" when there is none.
+
+        An unusable secret store reads as "no token" — the sweep then sends
+        nothing, which is what it would do anyway — and is said once per
+        distinct reason rather than every minute. The error's str() is safe to
+        log: SecretStoreError never carries a secret."""
+        try:
+            value = self._token_provider()
+        except SecretStoreError as exc:
+            reason = str(exc)
+            if self._warned_store != reason:
+                self._warned_store = reason
+                self._log.warning("notify: the secret store is unavailable: %s", reason)
+            return ""
+        # Readable again: the next outage is a new one, and is said once too.
+        self._warned_store = None
+        return value.strip() if isinstance(value, str) else ""
 
     def enabled(self, prefs: dict) -> bool:
         """Whether the account has switched notifications on at all.
@@ -144,20 +156,11 @@ class Notifier:
         """
         return prefs.get("notifications_enabled") is True
 
-    @property
-    def configured(self) -> bool:
-        """Configurable at all — i.e. the environment alone could send.
-
-        The per-sweep answer is `_ready`, which also consults the account's own
-        settings; this one exists for callers that have no prefs in hand.
-        """
-        return bool(self._env_chat_id and self._env_token)
-
     def close(self) -> None:
         """Release the HTTP connection pool. Called from the app's lifespan."""
         self._sender.close()
 
-    def send_test(self, prefs: dict) -> tuple[bool, str]:
+    def send_test(self) -> tuple[bool, str]:
         """Send one proof-of-life message. Returns (ok, a sentence to show).
 
         Every misconfiguration here fails the same silent way, so the value of
@@ -165,30 +168,47 @@ class Notifier:
         transport's redacted error is passed through rather than flattened to
         "failed".
         """
-        token, chat_id = self._credentials(prefs)
+        # The provider directly rather than `_token()`: the owner pressed a
+        # button and is waiting for an answer, so an unreadable store is said
+        # here, not logged once and passed off as "no token". Its str() is safe
+        # by contract: SecretStoreError never carries a secret.
+        try:
+            value = self._token_provider()
+        except SecretStoreError as exc:
+            return False, f"The secret store cannot be read: {exc}"
+        token = value.strip() if isinstance(value, str) else ""
         if not token:
-            return False, "No bot token set. Create a bot with @BotFather and paste its token."
-        if not chat_id:
-            return False, "No chat id set. Message your bot once, then put your chat id here."
+            return False, ("No signal-bot token is set. Add Smylte as a source on the bot "
+                           "(signal-bot source add Smylte), then paste the token it prints.")
         self._sender.token = token
+        # The local time in the text, because the bot refuses the same text
+        # within a minute: a second press would otherwise be "refused" as a
+        # duplicate of the first. No "Smylte: " here: the bot labels every
+        # message with its source.
+        tz = self._svc._home_tz() or timezone.utc
+        at = datetime.now(timezone.utc).astimezone(tz).strftime("%H:%M:%S")
         result = self._sender.send(
-            chat_id,
-            "Smylte is connected. This is the only message you will get that "
-            "you asked for directly.",
+            OWNER,
+            f"Connected at {at}. This is the only message you will get that you "
+            "asked for directly.",
             silent=True,
         )
         if result.ok:
-            return True, f"Sent to chat {chat_id}."
-        hint = result.error or "the send failed"
-        if result.permanent:
+            return True, "Sent."
+        error = result.error or "the send failed"
+        # One trailing full stop off before a hint goes on, so the two do not
+        # read "..".
+        stem = error[:-1] if error.endswith(".") else error
+        if not result.permanent:
+            where = urlsplit(self._sender.base_url).netloc
+            return False, f"{stem}. Check that signal-bot is running and listening on {where}."
+        if result.status in (401, 403):
             # The two that are almost always the cause, named rather than left
-            # to a Bot API error string nobody should have to interpret.
-            hint += (". Check the chat id, and make sure you have messaged the "
-                     "bot at least once — a bot cannot open a conversation.")
-        else:
-            hint += (". If this persists, check that the service is allowed to "
-                     "reach api.telegram.org (see deploy/smylte.service).")
-        return False, hint
+            # to an error string nobody should have to interpret.
+            return False, f"{stem}. Check the token, and that the Smylte source is enabled on the bot."
+        # Any other refusal (a 422 above all) gets no hint: the bot's own
+        # sentence says why it refused.
+        return False, error
 
     def sweep(self, now: datetime | None = None) -> SweepResult:
         """One pass. Never raises — the caller is a background loop."""
@@ -198,13 +218,13 @@ class Notifier:
         prefs = self._svc.get_settings()
         if not self.enabled(prefs):
             return result
-        token, chat_id = self._credentials(prefs)
-        if not (token and chat_id):
+        token = self._token()
+        if not token:
             return result
-        # Adopted per sweep, not per process: both can be edited in Settings and
-        # must take effect on the next tick rather than the next restart.
+        # Adopted per sweep, not per process: the token can be pasted into
+        # Settings and must take effect on the next tick rather than the next
+        # restart.
         self._sender.token = token
-        self._chat_id = chat_id
         # Same-package private on purpose: the alternative is a second reading
         # of `home_timezone`, and a second reading is how two parts of this app
         # end up disagreeing about what day it is.
@@ -278,7 +298,15 @@ class Notifier:
                 silent = True
                 result.downgraded += len(group)
             text = self._render(group)
-            outcome = self._sender.send(self._chat_id, text, silent=silent)
+            outcome = self._sender.send(OWNER, text, silent=silent)
+            message_id = outcome.message_id
+            if outcome.ok and message_id is None:
+                # Delivered, but the bot named no message (a 422 after a lost
+                # answer). Every row of the group still rode in ONE delivery,
+                # so they share one id and the ceiling charges the batch once.
+                # Negative, so it never collides with signal-bot's positive ms
+                # timestamps; microseconds, so two deliveries never share one.
+                message_id = -(time.time_ns() // 1000)
             if outcome.ok:
                 result.sent += len(group)
                 if not silent:
@@ -291,7 +319,7 @@ class Notifier:
                 self._svc.notifications(
                     store.settle_notification, p.trigger, p.dedupe_key,
                     ok=outcome.ok, silent=silent, error=outcome.error,
-                    message_id=outcome.message_id,
+                    message_id=message_id,
                 )
 
     @staticmethod

@@ -8,7 +8,7 @@ import { DataProvider } from './data'
 import { FoldFollower } from './components/FoldFollower'
 import { clearCache, setCacheUser, sweepOldVersions } from './cache'
 import {
-  applyTokens, cacheAppearance, ensureFonts, presetSlug, readCachedAppearance,
+  applyDesign, applyTokens, cacheAppearance, ensureFonts, presetSlug, readCachedAppearance,
   resolve, sanitizeAppearance, syncThemeColor, type Appearance, type Mode,
 } from './appearance'
 import {
@@ -20,6 +20,7 @@ import {
   readCachedLayout, readCachedSidebarCollapsed, type Layout,
 } from './layout'
 import { ShellProvider } from './shell'
+import { AddActionProvider, useAddRegistry } from './addaction'
 import { useIsMobile } from './hooks'
 import { isSessionTtl, nextSessionTtl } from './session'
 import {
@@ -35,13 +36,15 @@ import { TimeFormatProvider } from './timeformat'
 import { haptic, hostAccent, hostClock, markReady, onHostEnv } from './android'
 import { applySystemAccent, readDeviceAccent, writeDeviceAccent } from './system-accent'
 import {
-  DEFAULT_TAB_ORDER, DEFAULT_TAB_START, TAB_LABELS, cacheTab, isTab, readCachedTab,
-  resolveStartTab, sanitizeTabOrder, sanitizeTabStart, type Tab, type TabStart,
+  DEFAULT_TAB_ORDER, DEFAULT_TAB_START, TAB_LABELS, cacheCalView, cacheTab, fromStoredTab,
+  isTab, readCachedCalView, readCachedTab, readLegacyCachedScheduling, resolveStartTab,
+  sanitizeTabOrder, sanitizeTabStart, type CalView, type Tab, type TabStart,
 } from './tabs'
 import { Login } from './components/Login'
 import { TasksView } from './components/TasksView'
 import { CalendarView } from './components/CalendarView'
 import { SchedulingView } from './components/SchedulingView'
+import { CalendarViewTabs } from './components/CalendarViewTabs'
 import { HomeView } from './components/HomeView'
 import { TodayView, STALE_OVERDUE_DAYS, PLAN_ON_DUE_TODAY } from './components/TodayView'
 import { FocusView } from './components/FocusView'
@@ -88,8 +91,41 @@ export function App() {
   // yanked the view to Home, which is precisely the flash this seed exists to
   // remove. `isTab` narrows away the 'last' case, which names no tab to paint;
   // with nothing remembered "last" resolves to the strip's head anyway.
+  // What the phone's coral add button does on each view (addaction.tsx).
+  const adds = useAddRegistry()
   const [tab, setTab] = useState<Tab>(
     () => readCachedTab() ?? (isTab(DEFAULT_TAB_START) ? DEFAULT_TAB_START : DEFAULT_TAB_ORDER[0]))
+  // Calendar's two views. A cache from before Scheduling folded into Calendar
+  // left the retired tab behind, and that still means "open on Scheduling".
+  // It is read once and written back as this device's view, so from then on it
+  // is a choice like any other and the month can be picked over it.
+  const [calView, setCalView] = useState<CalView>(() => {
+    const cached = readCachedCalView()
+    if (cached) return cached
+    if (readLegacyCachedScheduling()) {
+      cacheCalView('scheduling')
+      return 'scheduling'
+    }
+    return 'month'
+  })
+  const changeCalView = useCallback((v: CalView) => {
+    setCalView(v)
+    cacheCalView(v)
+  }, [])
+  // Each view mounts its own switch, so picking a segment unmounts the button
+  // that had focus. The flag tells the new switch to take focus back, for a
+  // pick from the switch only: arriving on Calendar from the tab bar must not
+  // move focus into it.
+  const calViewFocus = useRef(false)
+  const pickCalView = useCallback((v: CalView) => {
+    if (v !== calView) calViewFocus.current = true
+    changeCalView(v)
+  }, [calView, changeCalView])
+  const takeCalViewFocus = useCallback(() => {
+    const f = calViewFocus.current
+    calViewFocus.current = false
+    return f
+  }, [])
   const [tabOrder, setTabOrder] = useState<Tab[]>(DEFAULT_TAB_ORDER)
   const [startTab, setStartTab] = useState<TabStart>(DEFAULT_TAB_START)
   // A tab picked while settings were still loading wins over the stored choice —
@@ -191,11 +227,15 @@ export function App() {
   const [notifyTriggers, setNotifyTriggers] =
     useState<Partial<Record<Trigger, boolean>>>({})
   const [notifyEnabled, setNotifyEnabled] = useState(false)
-  const [notifyChatId, setNotifyChatId] = useState('')
   // The token itself never comes back from the server (it is write-only over
-  // HTTP), so what the UI holds is whether one is stored and which bot it is.
+  // HTTP), so what the UI holds is whether one is stored, and whether the
+  // server's environment sets it (which Settings cannot change).
   const [notifyTokenSet, setNotifyTokenSet] = useState(false)
-  const [notifyBotId, setNotifyBotId] = useState('')
+  // Read at call time by `changeNotifyToken`, which is `useCallback(..., [])`
+  // and so cannot see the state: what to restore when its save fails.
+  const notifyTokenSetRef = useRef(false)
+  notifyTokenSetRef.current = notifyTokenSet
+  const [notifyTokenEnv, setNotifyTokenEnv] = useState(false)
   const [notifyDigestTime, setNotifyDigestTime] = useState(DEFAULT_DIGEST_TIME)
   const [notifyEventLead, setNotifyEventLead] = useState(DEFAULT_EVENT_LEAD_MINUTES)
   const [notifyEveningTime, setNotifyEveningTime] = useState(DEFAULT_EVENING_TIME)
@@ -454,9 +494,7 @@ export function App() {
   // so it wins over both.
   useEffect(() => {
     const mode: Mode = theme === 'dark' ? 'dark' : 'light'
-    const slug = presetSlug(appearance?.active)
-    if (slug) document.documentElement.dataset.preset = slug
-    else delete document.documentElement.dataset.preset
+    applyDesign(document.documentElement, presetSlug(appearance?.active))
     const tokens = resolve(appearance, mode)
     applyTokens(document.documentElement, tokens)
     ensureFonts(tokens)
@@ -534,6 +572,12 @@ export function App() {
         if (keep('theme') && (s.theme === 'dark' || s.theme === 'light')) applyTheme(s.theme)
         const order = sanitizeTabOrder(s.tab_order)
         const start = sanitizeTabStart(s.start_tab)
+        // Typed `unknown`: the Settings type no longer has the retired token,
+        // but a stored blob (or an older client's write) still can.
+        const storedStart: unknown = s.start_tab
+        const storedLast: unknown = s.last_tab
+        const legacyScheduling = storedStart === 'scheduling'
+          || (storedStart === 'last' && storedLast === 'scheduling')
         if (keep('tab_order')) setTabOrder(order)
         if (keep('start_tab')) setStartTab(start)
         // Restoring the opening tab is a FIRST-LOAD action, not something to
@@ -544,9 +588,18 @@ export function App() {
         // account last recorded and `cacheTab` persisted the yank.
         if (!tabTouched.current && !tabRestored.current && keep('last_tab')) {
           tabRestored.current = true
-          const opening = resolveStartTab(start, isTab(s.last_tab) ? s.last_tab : undefined, order)
+          const opening = resolveStartTab(start, fromStoredTab(s.last_tab) ?? undefined, order)
           setTab(opening)
           cacheTab(opening)
+          // Scheduling used to be a tab of its own, so a stored "scheduling"
+          // (as the opening tab, or as the last one) now means Calendar's
+          // Scheduling view; without this it would open on the month grid.
+          // Only while this device has no Calendar view of its own: the
+          // server keeps the old token until the opening tab is next saved,
+          // and re-applying it on every load would undo picking the month.
+          if (legacyScheduling && opening === 'calendar' && readCachedCalView() === null) {
+            changeCalView('scheduling')
+          }
         }
         if (keep('tasks_view')
           && (s.tasks_view === 'list' || s.tasks_view === 'day3' || s.tasks_view === 'week')) {
@@ -690,19 +743,16 @@ export function App() {
         if (keep('notifications_enabled') && typeof s.notifications_enabled === 'boolean') {
           setNotifyEnabled(s.notifications_enabled)
         }
-        if (keep('notify_telegram_chat_id') && typeof s.notify_telegram_chat_id === 'string') {
-          setNotifyChatId(s.notify_telegram_chat_id)
-        }
         // Guarded like everything else. These two are DERIVED by the server
         // rather than typed here, which is why they looked exempt — but pasting
-        // a token sets them optimistically, so a read already in flight would
-        // land afterwards and put the row back to "no token" a moment after one
-        // was pasted. `changeNotifyToken` logs them for exactly this.
-        if (keep('notify_telegram_bot_token_set')) {
-          setNotifyTokenSet(s.notify_telegram_bot_token_set === true)
+        // a token sets the first optimistically, so a read already in flight
+        // would land afterwards and put the row back to "no token" a moment
+        // after one was pasted. `changeNotifyToken` logs it for exactly this.
+        if (keep('notify_signal_token_set')) {
+          setNotifyTokenSet(s.notify_signal_token_set === true)
         }
-        if (keep('notify_telegram_bot_id')) {
-          setNotifyBotId(typeof s.notify_telegram_bot_id === 'string' ? s.notify_telegram_bot_id : '')
+        if (keep('notify_signal_token_env')) {
+          setNotifyTokenEnv(s.notify_signal_token_env === true)
         }
         if (keep('notify_triggers')) setNotifyTriggers(sanitizeTriggers(s.notify_triggers))
         if (keep('notify_digest_time') && isDigestTime(s.notify_digest_time)) {
@@ -859,7 +909,10 @@ export function App() {
   const trRef = useRef(tr)
   trRef.current = tr
 
-  const saveSettings = useCallback((patch: Settings) => {
+  // Resolves true when the write landed and false when it did not (held back,
+  // refused or unreachable), for the one caller that has to undo an optimistic
+  // change — `changeNotifyToken`. Every other caller ignores it.
+  const saveSettings = useCallback((patch: Settings): Promise<boolean> => {
     writeLog.current.push(...Object.keys(patch))
     if (settingsFailed.current) {
       const held = MERGED_SETTINGS.filter((k) => k in patch)
@@ -868,14 +921,14 @@ export function App() {
           Object.entries(patch).filter(([k]) => !held.includes(k as never))) as Settings
         showToast(trRef.current('app.settingsNotLoaded'))
       }
-      if (!Object.keys(patch).length) return
+      if (!Object.keys(patch).length) return Promise.resolve(false)
     }
     // Counted, not flagged: two gestures can be in flight at once (an
     // immediate `saveSettings` alongside a debounced one), and the refetch
     // guard below must wait for the LAST of them.
     writesInFlight.current += 1
-    api.putSettings(patch).catch((e) => {
-      if (e instanceof AuthError) { setAuth('out'); return }
+    return api.putSettings(patch).then(() => true, (e) => {
+      if (e instanceof AuthError) { setAuth('out'); return false }
       // Offline is the ordinary case and the local state stands in fine; a
       // rejection from a server we *did* reach is what the user needs to know.
       // The server's own words ride along untranslated — see i18n/index.ts on
@@ -883,6 +936,7 @@ export function App() {
       if (e instanceof HttpError) {
         showToast(trRef.current('app.settingsSaveFailed', { error: e.message }))
       }
+      return false
     }).finally(() => { writesInFlight.current -= 1 })
   }, [showToast])
 
@@ -1145,25 +1199,26 @@ export function App() {
     saveSettings({ notifications_enabled: next })
   }, [])
 
-  const changeNotifyChatId = useCallback((next: string) => {
-    setNotifyChatId(next)
-    saveSettingsSoon({ notify_telegram_chat_id: next })
-  }, [])
-
   const changeNotifyToken = useCallback((next: string) => {
     // Optimistic, like every other write here — but on the DERIVED flags, since
     // the token itself is never held locally. An empty string is the explicit
     // Remove, not an accidentally cleared field: the section only calls this
     // with '' from its own Remove control.
+    const was = notifyTokenSetRef.current
+    notifyTokenSetRef.current = !!next
     setNotifyTokenSet(!!next)
-    setNotifyBotId(next.includes(':') ? next.split(':', 1)[0] : '')
     // The write log is keyed on what the PATCH carries, and the patch carries
-    // the token — but what this gesture changed on screen is the two derived
-    // flags, and they are what a read in flight would revert. Logged by hand
-    // because they are the one pair whose local value has no key of its own on
-    // the wire.
-    writeLog.current.push('notify_telegram_bot_token_set', 'notify_telegram_bot_id')
-    saveSettings({ notify_telegram_bot_token: next })
+    // the token — but what this gesture changed on screen is the derived flag,
+    // and it is what a read in flight would revert. Logged by hand because its
+    // local value has no key of its own on the wire.
+    writeLog.current.push('notify_signal_token_set')
+    // A refused or unreachable save must not leave the row reading "set" (or
+    // "not set") for a token the server never took: put the old value back.
+    void saveSettings({ notify_signal_token: next }).then((saved) => {
+      if (saved) return
+      notifyTokenSetRef.current = was
+      setNotifyTokenSet(was)
+    })
   }, [])
 
   const changeNotifyTriggers = useCallback((next: Partial<Record<Trigger, boolean>>) => {
@@ -1457,8 +1512,7 @@ export function App() {
       onTogglePlanOnDueToday={togglePlanOnDueToday}
       focus={focus} onFocusChange={changeFocus}
       notifyEnabled={notifyEnabled} onNotifyEnabledChange={changeNotifyEnabled}
-      notifyChatId={notifyChatId} onNotifyChatIdChange={changeNotifyChatId}
-      notifyTokenSet={notifyTokenSet} notifyBotId={notifyBotId}
+      notifyTokenSet={notifyTokenSet} notifyTokenEnv={notifyTokenEnv}
       onNotifyTokenChange={changeNotifyToken}
       notifyTriggers={notifyTriggers} onNotifyTriggersChange={changeNotifyTriggers}
       notifyDigestTime={notifyDigestTime}
@@ -1492,16 +1546,22 @@ export function App() {
         showCompleted={showCompleted} mailRev={mailRev}
         ask={tasksAsk} onAskHandled={() => setTasksAsk(null)} />
     )}
-    {!booting && tab === 'calendar' && (
+    {!booting && tab === 'calendar' && calView === 'month' && (
       <CalendarView onExpire={onExpire} cursor={cursor} onCursorChange={setCursor}
         sideCollapsed={sideCollapsed} onToggleSide={toggleSide}
         hiddenCalendars={hiddenCals} onHiddenCalendarsChange={changeHiddenCals}
         archivedCalendars={archivedCals} onArchivedCalendarsChange={changeArchivedCals}
         calTaskLists={calTaskLists} onCalTaskListsChange={changeCalTaskLists}
         calShowDone={calShowDone} onCalShowDoneChange={toggleCalShowDone}
-        fit={calFit} />
+        fit={calFit}
+        viewTabs={<CalendarViewTabs view={calView} onView={pickCalView}
+          takeFocus={takeCalViewFocus} />} />
     )}
-    {!booting && tab === 'scheduling' && <SchedulingView rev={rev} onExpire={onExpire} />}
+    {!booting && tab === 'calendar' && calView === 'scheduling' && (
+      <SchedulingView rev={rev} onExpire={onExpire}
+        viewTabs={<CalendarViewTabs view={calView} onView={pickCalView}
+          takeFocus={takeCalViewFocus} />} />
+    )}
     {!booting && tab === 'today' && (
       // The same two calendar-visibility sets the Home dashboard is handed,
       // and read-only here for the same reason: the Calendar tab owns editing
@@ -1561,6 +1621,7 @@ export function App() {
     // the boot markup away and mount a fresh tree — losing the very frame this
     // exists to paint (and any click already in flight against it).
     <ShellProvider value={shell}>
+    <AddActionProvider register={adds.register}>
     <div className="shell" data-layout={layout}
       data-display={displayMode ? '' : undefined}>
       {focusOpen ? (
@@ -1603,7 +1664,7 @@ export function App() {
           {isMobile && (
             <TabBar tabOrder={tabOrder} tab={tab} onTab={changeTab} booting={booting}
               gearRef={gearRef} settingsOpen={settingsOpen}
-              onToggleSettings={toggleSettings} />
+              onToggleSettings={toggleSettings} onAdd={adds.opens[tab]} />
           )}
           {settingsMenu}
         </div>
@@ -1611,10 +1672,10 @@ export function App() {
       <div className="topbar">
         <span className="brand">Smylte<span className="dot">.</span></span>
         {/* The strip SCROLLS on a phone (see app.css), which means the tab you
-            are actually on can start out beyond the right edge — five tabs come
-            to more than a 390px bar holds. Nothing else brings it back, so the
+            are actually on can start out beyond the right edge — four tabs can
+            come to more than a narrow bar holds. Nothing else brings it back, so the
             active one is scrolled into view whenever it changes and on the
-            first paint, which is the reload case: land on Scheduling, reload,
+            first paint, which is the reload case: land on Calendar, reload,
             and without this the bar opens showing Today with no indication of
             where you are.
 
@@ -1625,7 +1686,7 @@ export function App() {
           {/* `aria-current="page"`, not `role="tab"`: the strip IS the app's
               page-level navigation — each tab is a whole view, and Focus is a
               real address beside them — and the class alone told assistive
-              tech nothing, so a screen reader heard five identical buttons
+              tech nothing, so a screen reader heard four identical buttons
               with no way to tell which view was open. (SettingsMenu's nav is
               the tablist; keeping the strip as buttons is also what keeps
               its *Tasks* apart from that nav's *Tasks* by role.) */}
@@ -1675,6 +1736,7 @@ export function App() {
         </div>
       )}
     </div>
+    </AddActionProvider>
     </ShellProvider>
         )}
       </TimeFormatProvider>

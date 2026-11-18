@@ -20,6 +20,8 @@ import { capacityInput, parseCapacity } from '../capacity'
 import { fmtDuration } from '../time'
 import { useI18n, useT, useTx } from '../i18n'
 import { habitDayLabel } from '../names'
+import { useFieldNotes } from '../hooks'
+import { Hint } from './Hint'
 
 
 export function CapacitySection({ minutes, byWeekday, onChange, onWeekdayChange }: {
@@ -34,19 +36,20 @@ export function CapacitySection({ minutes, byWeekday, onChange, onWeekdayChange 
   const { locale } = useI18n()
   const tr = useT()
   const tx = useTx()
+  const fieldNotes = useFieldNotes()
   return (
     <>
       <div className="menu-row">
         <label htmlFor="cap-default">{tr('capacity.mostDays')}</label>
         <CapacityField id="cap-default" value={minutes} placeholder={tr('capacity.notSet')}
-          name={tr('capacity.defaultDay')} onCommit={onChange} />
+          name={tr('capacity.defaultDay')} fieldNotes={fieldNotes} onCommit={onChange} />
       </div>
 
       <div className="cap-week">
         {HABIT_DAYS.map((d) => (
           <div key={d} className="cap-day">
             <span className="cap-day-name">{habitDayLabel(d, locale)}</span>
-            <CapacityField id={`cap-${d}`} value={byWeekday[d] ?? null}
+            <CapacityField id={`cap-${d}`} value={byWeekday[d] ?? null} fieldNotes={fieldNotes}
               // An unset weekday says it INHERITS rather than showing 0. Those
               // are different statements — "same as most days" and "I do not
               // work Sundays" — and a zero standing in for silence would make
@@ -62,23 +65,25 @@ export function CapacitySection({ minutes, byWeekday, onChange, onWeekdayChange 
         ))}
       </div>
 
-      <p className="hintline">
+      <Hint as="p">
         {tx('capacity.hint', {
           short: <span className="mono">5h</span>,
           long: <span className="mono">300</span>,
         })}
-      </p>
+      </Hint>
     </>
   )
 }
 
 /** One capacity field: reads what is typed, shows back what is stored. */
-function CapacityField({ id, value, placeholder, name, onCommit }: {
+function CapacityField({ id, value, placeholder, name, fieldNotes, onCommit }: {
   id: string
   value: number | null
   placeholder: string
   /** What this sets, for the field's accessible name. */
   name: string
+  /** From `CapacitySection`, which asks once rather than once per field. */
+  fieldNotes: boolean
   onCommit: (next: number | null) => void
 }) {
   const tr = useT()
@@ -115,7 +120,7 @@ function CapacityField({ id, value, placeholder, name, onCommit }: {
       placeholder={placeholder} aria-label={tr('capacity.workingTimeFor', { name })}
       // The stored value in words, for anyone who cannot see the field snap
       // back to "5h" after typing "300".
-      title={value == null ? placeholder : fmtDuration(value)}
+      title={fieldNotes ? undefined : value == null ? placeholder : fmtDuration(value)}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {

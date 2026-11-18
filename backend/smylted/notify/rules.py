@@ -1,7 +1,7 @@
 """Which notifications exist, when each one fires, and what it says.
 
 Read this file as the answer to "when should the app interrupt me", because
-that is what it is. The mechanism (`telegram.py`, the ledger, `scheduler.py`)
+that is what it is. The mechanism (`signal.py`, the ledger, `scheduler.py`)
 is deliberately trigger-agnostic; the policy is all here.
 
 THE BAR. Smylte already has a place to put information the owner will come

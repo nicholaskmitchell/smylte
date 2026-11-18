@@ -585,7 +585,9 @@ describe('2026-08-25 — the Today tab', () => {
     // repair the suggested fix happens to lead with.
     m.openDay.mockResolvedValue(plan(THREE))
     setup()
-    await screen.findByText('Alpha')
+    // The row, not the first "Alpha" on the page: Field notes' focus card
+    // names the next row too.
+    await waitFor(() => expect(rowFor('Alpha')).toBeTruthy())
 
     const down = hoverDuringDrag('Alpha', 'Bravo')
     fireEvent.dragEnd(rowFor('Alpha'))
@@ -609,7 +611,9 @@ describe('2026-08-25 — the Today tab', () => {
   it('draws below the target on a downward drag and above it on an upward one', async () => {
     m.openDay.mockResolvedValue(plan(THREE))
     setup()
-    await screen.findByText('Alpha')
+    // The row, not the first "Alpha" on the page: Field notes' focus card
+    // names the next row too.
+    await waitFor(() => expect(rowFor('Alpha')).toBeTruthy())
 
     hoverDuringDrag('Alpha', 'Bravo')                    // downward
     expect(rowFor('Bravo').className).toContain('today-below')

@@ -363,6 +363,27 @@
      system font the stack falls back to. */
   --font-glyph: var(--mono);
 
+  /* Field notes roles. Each lever holds the value this design always used,
+     so nothing here changes how it renders; the Field notes lever block below
+     points each one at a role the design system defines, because Field notes
+     reads these colours differently. Its --fg-faint is decoration only (2.5:1,
+     never text), so quiet TEXT and the glyph-only controls that wore it take
+     --tx-quiet (Field notes: --fg-muted), and quiet MARKS (an empty swatch, a
+     checkbox frame) take --mark-quiet (Field notes: --rule-strong, 3:1). */
+  --tx-quiet: var(--fg-faint);
+  --mark-quiet: var(--fg-faint);
+  --edge-control: var(--rule);        /* the border of an input, a ghost or icon button */
+  --float-bg: var(--bg-elev);         /* popovers, menus, modals, sheets, toasts */
+  --scrim-bg: rgba(0, 0, 0, 0.32);    /* behind a modal or sheet */
+  --eink-paper: #FFFFFF;              /* a 1-bit render's paper, which is white on the glass */
+  /* A button's corner, weight, hover and press. Field notes rounds it a step
+     further, sets it at 600, hovers to coral and presses with a small spring. */
+  --r-control: var(--r-sm);
+  --wght-btn: 500;
+  --btn-hover-bg: var(--accent);
+  --btn-hover-fg: var(--bg);
+  --ease-press: var(--ease);
+
   /* E1 · elevation. Two layers, contact plus ambient, in this app's own ink
      rather than black, so a shadow is the same temperature as the page. Only
      things that float take one. */
@@ -426,6 +447,94 @@
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 24px rgba(0, 0, 0, 0.35);
   --shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.30), 0 24px 64px rgba(0, 0, 0, 0.50);
   --shadow-sheet: 0 -8px 40px rgba(0, 0, 0, 0.40);
+}
+
+/* ---- Field notes (Nov 2026) ---------------------------------------------
+   The apps' own look from the design system. Its colours, shadows, motion and
+   most of its shape are ds/themes.css and ds/app-motion.css, copied verbatim and
+   scoped to [data-surface="app"]; this block is what the repo adds on top, in
+   the same scope, so it is inert under a preset (applyDesign takes the
+   attribute off while one is active).
+
+   Three kinds of value live here, and nothing else:
+
+   - The radius scale, still derived from --radius so the Appearance editor's
+     one slider moves every corner. The design system writes --r-xs: 3px and
+     --r-lg: 22px as literals; at the default 8px these give exactly those
+     (fieldnotes-tokens.test.ts holds the equality), and the slider keeps
+     working. --r-sm and --r-md are already 8 and 12 from the base scale, and
+     --r-dot / --r-round are the design system's 50%: Field notes allows circles.
+   - The role levers above, pointed at the design system's roles.
+   - Values the design system states in tokens.json but not as CSS: the app type
+     scale and the pen. These are gaps, listed in docs/fieldnotes-gaps.md.
+
+   After the dark block above, so that at equal specificity this wins in both
+   themes. */
+:root[data-surface="app"] {
+  --r-xs: calc(var(--radius) * 0.375);
+  --r-lg: calc(var(--radius) * 2.75);
+
+  --tx-quiet: var(--fg-muted);
+  --mark-quiet: var(--rule-strong);
+  --r-control: var(--r-md);
+  --wght-btn: 600;
+  --btn-hover-bg: var(--accent-fill);
+  --btn-hover-fg: var(--on-accent);
+  --ease-press: var(--ease-spring);
+  --edge-control: var(--rule-strong);
+  --ghost-hover-edge: var(--rule-strong);
+  --thumb-edge: var(--rule-strong);
+  --float-bg: var(--bg-float);
+  --scrim-bg: var(--scrim);
+
+  /* Two families, and data in tabular figures rather than a monospace face.
+     The T9 fit was for Hanken set at sizes chosen for Inter; Field notes sets
+     Hanken at its own fixed scale, so nothing is adjusted. */
+  --sans-adjust: none;
+  --wght-ui: 400;
+  --wght-content: 500;
+  --ls-content: 0;
+  --wght-control: 600;
+
+  /* The app type scale (tokens.json, "Apps · Field notes"): fixed px, every use
+     multiplied by --fs-scale. 13px is the floor. */
+  --fs-app-display: 52px;   /* the day's date on Today */
+  --fs-app-title: 32px;     /* view titles */
+  --fs-app-headline: 26px;  /* the focus card, sheet and modal titles */
+  --fs-app-section: 22px;   /* list and group heads */
+  --fs-app-item: 20px;      /* task, event titles */
+  --fs-app-reading: 18px;   /* notes and descriptions */
+  --fs-app-note: 17px;      /* margin notes: times, counts, asides (italic) */
+  --fs-app-ui: 15px;        /* supporting UI text, input values */
+  --fs-app-meta: 14px;      /* row meta, captions */
+  --fs-app-small: 13px;     /* tab-bar labels, badges */
+
+  /* The pen (tokens.json): icons, checkbox frames and doodles on a 24px grid. */
+  --stroke-pen: 1.8px;
+  --stroke-tick: 2.6px;
+  --stroke-strike: 2px;
+  --wobble: 1px;
+
+  /* Density: Field notes rows run 8px with a 60px floor (tokens.json). One of
+     the 23 Appearance tokens, so appearance.ts's SHARED_DEFAULTS says 8px too,
+     and a saved theme's inline value still outranks this. */
+  --row-y: 8px;
+}
+
+/* A saved theme that moves its surfaces or its accent away from Field notes'
+   own takes the six roles a theme cannot set from its own tokens instead
+   (CUSTOM_ROLES in appearance.ts, which sets the attribute; index.html's
+   pre-paint script does too). Three attributes, so these win over the design
+   system's dark block, which has three as well, on source order. */
+:root[data-surface="app"][data-custom~="surfaces"] {
+  --bg-float: var(--bg-elev);
+  --rule-strong: var(--fg-muted);
+  --highlight: var(--paper);
+  --wash: var(--paper);
+}
+:root[data-surface="app"][data-custom~="accent"] {
+  --accent-fill: var(--accent);
+  --on-accent: var(--bg);
 }
 
 /* M5 · reduced motion keeps the fades and drops the travel: a press does not
@@ -530,7 +639,7 @@ input, select, textarea { font-family: inherit; }
 /* ---- primitives ---- */
 .label {
   font-family: var(--mono); font-size-adjust: none; font-size: calc(var(--fs-micro) * var(--fs-scale)); text-transform: var(--label-case);
-  letter-spacing: calc(0.1em * var(--tracking)); color: var(--fg-faint);
+  letter-spacing: calc(0.1em * var(--tracking)); color: var(--tx-quiet);
 }
 .mono { font-family: var(--mono); font-size-adjust: none; }
 .serif { font-family: var(--serif); font-size-adjust: none; font-weight: var(--wght-serif); }
@@ -559,21 +668,21 @@ input, select, textarea { font-family: inherit; }
    --press-scale — the individual `scale` property, never `transform`, which
    several rules below already use for positioning and would be clobbered. */
 .btn {
-  background: var(--fg); color: var(--bg); border: 1px solid transparent; border-radius: var(--r-sm);
-  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control) * var(--fs-scale)); font-weight: 500; text-transform: var(--label-case);
+  background: var(--fg); color: var(--bg); border: 1px solid transparent; border-radius: var(--r-control);
+  font-family: var(--font-control); font-size-adjust: none; font-size: calc(var(--fs-control) * var(--fs-scale)); font-weight: var(--wght-btn); text-transform: var(--label-case);
   letter-spacing: calc(0.06em * var(--tracking)); line-height: var(--lh-control);
   padding: var(--btn-pad); min-height: var(--control-h); cursor: pointer;
   transition: background var(--dur) var(--ease), color var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease), scale var(--dur) var(--ease);
+    border-color var(--dur-fast) var(--ease), scale var(--dur) var(--ease-press);
 }
 .btn:disabled { opacity: 0.5; cursor: default; }
-.btn.ghost { background: none; color: var(--ghost-fg); border: 1px solid var(--rule); }
+.btn.ghost { background: none; color: var(--ghost-fg); border: 1px solid var(--edge-control); }
 
 /* Compact on purpose: an icon button is a toolbar glyph, and the phone gives
    the topbar's gear a 44px invisible tap area (app.css) rather than a 44px
    box; icon buttons elsewhere keep their drawn size. */
 .icon-btn {
-  background: none; color: var(--fg-muted); border: 1px solid var(--rule); border-radius: var(--r-sm);
+  background: none; color: var(--fg-muted); border: 1px solid var(--edge-control); border-radius: var(--r-sm);
   padding: 7px; display: inline-flex; align-items: center; justify-content: center;
   cursor: pointer;
   transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease),
@@ -595,17 +704,17 @@ input, select, textarea { font-family: inherit; }
    already filled, and keeps its fill: hovering it used to paint its glyph in
    the accent on an accent ground, which is to say not at all. */
 @media (hover: hover) {
-  .btn:hover { background: var(--accent); }
+  .btn:hover { background: var(--btn-hover-bg); color: var(--btn-hover-fg); }
   .btn.ghost:hover { color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg); }
   .icon-btn:not(.active):hover { color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg); }
 }
-.btn:active { background: var(--accent); scale: var(--press-scale); }
+.btn:active { background: var(--btn-hover-bg); color: var(--btn-hover-fg); scale: var(--press-scale); }
 .btn.ghost:active { color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg); }
 .icon-btn:not(.active):active { color: var(--ghost-hover-fg); border-color: var(--ghost-hover-edge); background: var(--ghost-hover-bg); }
 .icon-btn:active { scale: var(--press-scale); }
 
 .input {
-  background: var(--bg); color: var(--fg); border: 1px solid var(--rule); border-radius: var(--r-sm);
+  background: var(--bg); color: var(--fg); border: 1px solid var(--edge-control); border-radius: var(--r-sm);
   padding: var(--input-pad); min-height: var(--control-h); font-size: calc(14px * var(--fs-scale)); width: 100%;
   font-weight: var(--wght-ui);   /* T9 · the value, and the placeholder, which inherits it; not adjusted (see button {}) */
   transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur) var(--ease);
@@ -635,7 +744,7 @@ button.chip:active { scale: var(--press-scale); }
    delimited string — each one is held whole, with its own remove control. */
 .tag-input {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
-  background: var(--bg); border: 1px solid var(--rule); border-radius: var(--r-sm);
+  background: var(--bg); border: 1px solid var(--edge-control); border-radius: var(--r-sm);
   padding: 5px 6px; min-height: var(--control-h);
   transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur) var(--ease);
 }

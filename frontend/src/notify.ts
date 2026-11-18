@@ -3,8 +3,8 @@
 // working is the ordinary case.
 //
 // Net-new surface for an app that has kept every notification policy
-// server-side, in Telegram, on purpose. It earns its place because it is the
-// opposite kind of message: the Telegram rules exist for things you cannot
+// server-side, on Signal, on purpose. It earns its place because it is the
+// opposite kind of message: the Signal rules exist for things you cannot
 // recover by opening the app later, and this one is for a thing you cannot
 // recover by opening the app NOW — the app is open, the tab is just not the one
 // in front. Nothing here is scheduled, nothing is sent while the surface is

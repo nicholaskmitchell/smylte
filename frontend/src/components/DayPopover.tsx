@@ -10,9 +10,10 @@ import { taskKey } from '../order'
 import { dayKey } from '../util'
 import { fmtClock, type TimeFormat } from '../time'
 import { useTimeFormat } from '../timeformat'
-import { useEscape } from '../hooks'
+import { useEscape, useFieldNotes } from '../hooks'
 import { useLayer } from '../layers'
 import { useI18n, type I18n } from '../i18n'
+import { CheckInk, StrikeInk } from './Marks'
 
 /** The time label for an event as it appears on `day`: a continuation day shows
  *  the end time if the span finishes that day, and otherwise reads as all day. */
@@ -52,10 +53,13 @@ export function AgendaEvent({ ev, day, style, onOpen }: {
 /** A task on the calendar, as an agenda row. Same shape as AgendaEvent so the
  *  two stack in one list, but a task is a deadline rather than a span: it shows
  *  its due time, or nothing at all when the due is all-day. */
-export function AgendaTask({ task, style, onOpen }: {
+export function AgendaTask({ task, style, onOpen, fieldNotes = false }: {
   task: Task
   style?: CSSProperties
   onOpen?: (t: Task) => void
+  /** Field notes draws the tick and the strike. Passed down by the list, so a
+   *  row does not watch <html> itself. */
+  fieldNotes?: boolean
 }) {
   const { locale, t: tr } = useI18n()
   const tf = useTimeFormat()
@@ -65,8 +69,11 @@ export function AgendaTask({ task, style, onOpen }: {
     <>
       <span className="t">{timed ? fmtClock(task.due!, tf, locale) : ''}</span>
       <span>
-        <span className="tick" aria-hidden="true">{done ? '☑ ' : '☐ '}</span>
+        <span className="tick" aria-hidden="true">
+          {fieldNotes ? <CheckInk seed={taskKey(task)} /> : (done ? '☑ ' : '☐ ')}
+        </span>
         {task.summary || tr('common.untitled')}
+        {fieldNotes && <StrikeInk on={done} seed={taskKey(task)} />}
       </span>
     </>
   )
@@ -88,6 +95,7 @@ export function DayPopover({ day, x, y, events, tasks = [], styleOf, taskStyleOf
   onClose: () => void
 }) {
   const { locale, t: tr } = useI18n()
+  const fieldNotes = useFieldNotes()
   useEscape(onClose)
   const dialogRef = useRef<HTMLDivElement>(null)
   useLayer(onClose, { dialog: dialogRef })
@@ -111,14 +119,15 @@ export function DayPopover({ day, x, y, events, tasks = [], styleOf, taskStyleOf
             {new Date(`${day}T00:00`).toLocaleDateString(locale,
               { weekday: 'short', month: 'short', day: 'numeric' })}
           </span>
-          <button className="icon-btn" title={tr('common.close')}
+          <button className="icon-btn" title={fieldNotes ? undefined : tr('common.close')}
             aria-label={tr('common.close')} onClick={onClose}>✕</button>
         </div>
         {events.map((e) => (
           <AgendaEvent key={eventKey(e)} ev={e} day={day} style={styleOf(e)} onOpen={onOpen} />
         ))}
         {tasks.map((t) => (
-          <AgendaTask key={taskKey(t)} task={t} style={taskStyleOf?.(t)} onOpen={onOpenTask} />
+          <AgendaTask key={taskKey(t)} task={t} style={taskStyleOf?.(t)} onOpen={onOpenTask}
+            fieldNotes={fieldNotes} />
         ))}
       </div>
     </div>

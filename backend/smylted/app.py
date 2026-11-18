@@ -47,6 +47,7 @@ from .auth import Authenticator, HashBudget, RateLimiter, hash_password, limiter
 from .config import Settings, normalize_dav_url
 from .db import store
 from .display import frame as frame_mod
+from .drawing import drawing_payload
 from .display import render
 from .notify.rules import TRIGGERS as NOTIFY_TRIGGERS
 from .dav.errors import AuthError as DavAuthError
@@ -59,6 +60,7 @@ from .csp import CSPMiddleware, policy_for_index
 from .limits import BodySizeLimitMiddleware
 from .mail.redact import redact_exc
 from .mail.runtime import build_runtime as build_mail_runtime
+from .mail.secrets import SecretStoreError
 from .scheduling import SlotTaken
 from . import logredact
 from . import share as share_mod
@@ -1034,16 +1036,27 @@ class SettingsPatch(BaseModel):
     # off: it is what stands between a deploy that merely has a bot token in its
     # env and one whose owner asked to be messaged.
     notifications_enabled: bool | None = None
-    # Where messages go. Not a secret (an integer naming a chat), so it reads
-    # back like any other preference.
-    notify_telegram_chat_id: str | None = Field(default=None, max_length=64)
-    # The bot token. WRITE-ONLY: accepted here, never returned by GET /settings
-    # — `_public_settings` strips it and substitutes a boolean. It is the whole
-    # bot, and a settings blob is fetched by the SPA on every load, so echoing
-    # it would put a working credential into the page, into any screenshot of
-    # it, and within reach of anything that can read the DOM. '' clears it and
-    # falls back to the environment.
-    notify_telegram_bot_token: str | None = Field(default=None, max_length=200)
+    # The signal-bot source token. WRITE-ONLY, and never stored in the settings
+    # blob: PUT /settings pops it before the blob is written and puts it in the
+    # secret store (smylted/mail/secrets.py), and `_public_settings` reports only
+    # whether one is set. Echoing it would put a working credential into the
+    # page, into any screenshot of it, and within reach of anything that can
+    # read the DOM. '' clears it.
+    notify_signal_token: str | None = Field(default=None, max_length=4096)
+
+    @field_validator("notify_signal_token")
+    @classmethod
+    def _header_safe_token(cls, v: str | None) -> str | None:
+        """Stripped; when non-empty, printable ASCII with no spaces.
+
+        Refused rather than stored: the token goes in an HTTP header, and one
+        pasted with a space or a control character in it can never send."""
+        if v is None:
+            return None
+        v = v.strip()
+        if v and not re.fullmatch(r"[\x21-\x7e]+", v):
+            raise ValueError("the token must be printable characters with no spaces")
+        return v
 
     @field_validator("day_capacity_by_weekday")
     @classmethod
@@ -1330,26 +1343,29 @@ async def _sync_loop(app: FastAPI) -> None:
 
 # ── background notification scheduler ─────────────────────────────────────────
 
-def _build_notifier(settings: Settings, svc: SmylteService):
+def _build_notifier(settings: Settings, svc: SmylteService, secrets):
     """The notifier, or None when notifications are switched off.
 
-    None is the ordinary case — `SMYLTE_NOTIFY_ENABLED` is false by default — and
-    `_notification_loop` returns immediately when it finds one, so a deployment
-    that has not opted in runs no extra task and opens no HTTP client.
+    None when `SMYLTE_NOTIFY_ENABLED` is false, and `_notification_loop`
+    returns immediately when it finds one, so a deployment that has opted out
+    runs no extra task and opens no HTTP client.
+
+    No token at boot is normal. The token lives in the secret store
+    (`secrets`, with SMYLTE_SIGNAL_TOKEN overriding it) and can be pasted into
+    Settings at any moment, so it is read through a provider on every sweep
+    rather than once here.
     """
     if not settings.notify_enabled:
         log.info("notify: disabled by SMYLTE_NOTIFY_ENABLED; no scheduler will run")
         return None
     from .notify.scheduler import Notifier
-    from .notify.telegram import TelegramSender
+    from .notify.signal import SignalSender
 
-    # Built whether or not anything is configured yet, because the configuration
-    # now lives in the account's settings and can arrive at any moment. The
-    # sweep is a no-op until notifications are switched on and a token and chat
-    # id exist, so an unconfigured deployment pays one idle timer.
-    sender = TelegramSender(settings.telegram_bot_token)
-    return Notifier(svc, sender, settings.telegram_chat_id, log=log,
-                    token=settings.telegram_bot_token,
+    # Built whether or not anything is configured yet. The sweep is a no-op
+    # until notifications are switched on and a token exists, so an
+    # unconfigured deployment pays one idle timer.
+    sender = SignalSender(settings.signal_url)
+    return Notifier(svc, sender, log=log, token=lambda: secrets.get("signal_token"),
                     interval_s=notify_cadence(settings))
 
 
@@ -1449,6 +1465,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # rather than another record-factory scrub; see smylted/logredact.py.
     logredact.install()
     settings = settings or Settings.from_env()
+    if any(os.environ.get(name) for name in (
+            "SMYLTE_TELEGRAM_BOT_TOKEN", "SMYLTE_TELEGRAM_CHAT_ID",
+            "TASKS_TELEGRAM_BOT_TOKEN", "TASKS_TELEGRAM_CHAT_ID")):
+        # Named, never valued: the old bot token is still a credential.
+        log.warning(
+            "notify: SMYLTE_TELEGRAM_* is no longer read; notifications go through "
+            "signal-bot (SMYLTE_SIGNAL_TOKEN, or Settings → Notifications). Remove it "
+            "from smylte.env."
+        )
     if settings.access_required and not (settings.access_team_domain and settings.access_aud):
         raise RuntimeError(
             "SMYLTE_ACCESS_REQUIRED is set but SMYLTE_ACCESS_TEAM_DOMAIN / SMYLTE_ACCESS_AUD "
@@ -1552,9 +1577,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.service = svc
         app.state.sync_trigger = asyncio.Event()
         app.state.notify_trigger = asyncio.Event()
-        app.state.notifier = _build_notifier(settings, svc)
         app.state.mail_trigger = asyncio.Event()
+        # The mail runtime first: it owns the secret store, which is where the
+        # notifier reads the signal-bot token.
         app.state.mail = build_mail_runtime(settings, svc)
+        app.state.notifier = _build_notifier(settings, svc, app.state.mail.secrets)
         if authenticator is not None:
             # Sessions ended before this process started stay ended.
             authenticator.load_revocations(await asyncio.to_thread(svc.live_revocations))
@@ -2227,6 +2254,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown habit {habit_id}")
         return Response(status_code=204)
 
+    # -- the daily drawing --
+    @api.get("/drawing")
+    async def get_drawing(
+        request: Request,
+        # The one spelling the client sends. `date.fromisoformat` alone also
+        # takes `20261116` and `2026-W47-1`, which would cache a second copy of
+        # the same day under another key.
+        day: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}$"),
+        theme: Literal["light", "dark"] = "light",
+        view: Literal["today", "tasks", "calendar", "settings"] = "today",
+    ):
+        """The drawing for `day` (YYYY-MM-DD): its marks and the conditions
+        each shows under, so the client toggles them against the day's state
+        without asking again. Seeded by the account's salt, which never leaves
+        the server."""
+        try:
+            d = date.fromisoformat(day)
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+        salt = await _run(_svc(request).drawing_salt)
+        payload = await _run(drawing_payload, d, theme, salt, view=view)
+        if payload is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no drawing")
+        return JSONResponse(payload, headers={"Cache-Control": "private, max-age=3600"})
+
     # -- calendars / events --
     @api.get("/calendars")
     async def get_calendars(request: Request):
@@ -2385,25 +2437,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return await _run(_svc(request).list_bookings, link)
 
     # -- settings (account-synced UI preferences) --
-    def _public_settings(stored: dict) -> dict:
+    def _public_settings(stored: dict, token_status) -> dict:
         """The settings blob as the browser may see it.
 
-        Exactly one key is withheld. The bot token is a credential and this
-        document is fetched on every page load, so returning it would put a
-        working bot in the DOM, in the network tab, and in any screenshot of
-        either. What the UI actually needs is whether one is set, which is not
-        a secret — so it gets a boolean and a short fingerprint of the bot id,
-        enough to tell two bots apart without being able to speak as either.
+        The signal-bot token lives in the secret store, never in this blob, and
+        this document is fetched on every page load — so no token is ever part
+        of it. What the UI needs is two booleans from the store's
+        `SecretStatus`: whether a token is set, and whether SMYLTE_SIGNAL_TOKEN
+        set it (then Settings cannot change it). `token_status` is None when
+        the app has no secret store; both are then False.
+
+        The two keys of the old Telegram transport are dropped if a legacy blob
+        still holds them (store.init_db scrubs them at start; this covers a
+        blob written back from somewhere else).
         """
         out = dict(stored)
-        token = out.pop("notify_telegram_bot_token", "")
-        token = token.strip() if isinstance(token, str) else ""
-        out["notify_telegram_bot_token_set"] = bool(token)
-        # A bot token is "<bot_id>:<secret>". The id half is public — it is the
-        # bot's user id — so naming it identifies which bot is configured while
-        # revealing nothing that could send as it.
-        out["notify_telegram_bot_id"] = token.split(":", 1)[0] if ":" in token else ""
+        out.pop("notify_telegram_bot_token", None)
+        out.pop("notify_telegram_chat_id", None)
+        out.pop("notify_signal_token", None)
+        out["notify_signal_token_set"] = bool(token_status is not None and token_status.set)
+        out["notify_signal_token_env"] = bool(
+            token_status is not None and token_status.source == "env")
         return out
+
+    async def _signal_token_status(request: Request):
+        """The token's `SecretStatus`, or None without a secret store. Read
+        defensively, like `notify_trigger`: a test may build the app without
+        the lifespan. `status` never raises on an unusable store."""
+        rt = getattr(request.app.state, "mail", None)
+        if rt is None:
+            return None
+        return await asyncio.to_thread(rt.secrets.status, "signal_token")
 
     # -- displays (the passive screens) --
     #
@@ -2610,12 +2674,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @api.get("/settings")
     async def get_settings(request: Request):
-        return _public_settings(await _run(_svc(request).get_settings))
+        stored = await _run(_svc(request).get_settings)
+        return _public_settings(stored, await _signal_token_status(request))
 
     @api.put("/settings")
     async def put_settings(request: Request, body: SettingsPatch):
         _check_session_ttl(body.session_ttl_s)
-        merged = await _run(_svc(request).update_settings, body.model_dump(exclude_unset=True))
+        patch = body.model_dump(exclude_unset=True)
+        # Never part of the blob: it goes to the secret store, and BEFORE
+        # anything else in the patch is written, so a refused token leaves the
+        # whole PUT unapplied rather than half of it.
+        token = patch.pop("notify_signal_token", None)
+        if token is not None:
+            rt = getattr(request.app.state, "mail", None)
+            if rt is None:
+                raise HTTPException(status.HTTP_409_CONFLICT,
+                                    "the secret store is not available")
+            held = await asyncio.to_thread(rt.secrets.status, "signal_token")
+            if held.source == "env":
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "the token is set by SMYLTE_SIGNAL_TOKEN, which overrides one saved "
+                    "here; unset it to manage the token in Settings",
+                )
+            try:
+                # "" deletes it, which SecretStore.set already does.
+                await asyncio.to_thread(rt.secrets.set, "signal_token", token)
+            except SecretStoreError as e:
+                # str() is safe by contract: it never contains a secret.
+                raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from None
+        merged = await _run(_svc(request).update_settings, patch)
         # Adopted straight away, so shortening the session takes effect on the
         # next request rather than the next restart.
         _refresh_session_ttl(merged)
@@ -2626,14 +2714,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         notify_trigger = getattr(request.app.state, "notify_trigger", None)
         if notify_trigger is not None:
             notify_trigger.set()
-        return _public_settings(merged)
+        return _public_settings(merged, await _signal_token_status(request))
 
     # -- notifications --
     #
     # Read-only, and deliberately so. Everything that CONFIGURES notifications
     # is a preference and goes through PUT /api/settings with the rest; this is
     # the one thing that is not a preference — what the bot has actually been
-    # saying — so the owner can audit the channel without opening Telegram, and
+    # saying — so the owner can audit the channel without opening Signal, and
     # can see what the daily ceiling swallowed (`silent` on a rule that buzzes).
     @api.get("/notifications/recent")
     async def get_recent_notifications(request: Request, limit: int = Query(50, ge=1, le=200)):
@@ -2644,10 +2732,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def post_test_notification(request: Request):
         """Send one message now, to prove the configuration works.
 
-        The whole reason this exists: a bot token and a chat id are two opaque
-        strings, and every way of getting them wrong fails identically and
-        silently — the wrong chat id, a bot nobody has messaged first, a token
-        with a character missing, and the loopback-only systemd unit all end as
+        The whole reason this exists: every way of getting the setup wrong
+        fails identically and silently — signal-bot not running, a wrong or
+        mistyped token, the Smylte source disabled on the bot all end as
         "nothing arrived". Without a button that reports the actual error, the
         owner's only feedback loop is to wait for tomorrow's digest not to come.
 
@@ -2663,8 +2750,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "notifications are disabled for this deployment "
                 "(SMYLTE_NOTIFY_ENABLED=false)",
             )
-        prefs = await _run(_svc(request).get_settings)
-        ok, detail = await asyncio.to_thread(notifier.send_test, prefs)
+        ok, detail = await asyncio.to_thread(notifier.send_test)
         if not ok:
             # 409 rather than 502: nothing is broken about this server, the
             # configuration does not work yet, and the body says how.

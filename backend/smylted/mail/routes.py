@@ -224,7 +224,7 @@ def _payload(rt) -> dict:
     cfg = rt.ingestor.config()
     return {
         "settings": settings.public(cfg),
-        "secrets": rt.secrets.statuses(),
+        "secrets": {name: rt.secrets.status(name).as_dict() for name in _SECRET_FIELDS},
         "secrets_backend": rt.secrets.backend_status(),
         "pinned_cert_fingerprint": settings.pem_fingerprint(cfg.imap_pinned_cert),
         "deployment_enabled": rt.deployment_enabled,

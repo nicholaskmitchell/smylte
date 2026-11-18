@@ -71,8 +71,7 @@ function deferred<T>() {
 
 const notifProps = {
   enabled: true, onEnabledChange: vi.fn(),
-  chatId: '1', onChatIdChange: vi.fn(),
-  tokenSet: false, botId: '', onTokenChange: vi.fn(),
+  tokenSet: false, tokenEnv: false, onTokenChange: vi.fn(),
   onExpire: vi.fn(),
   triggers: {}, onTriggersChange: vi.fn(),
   digestTime: '07:30', onDigestTimeChange: vi.fn(),
@@ -151,8 +150,7 @@ function showSettings(lang: 'en' | 'de', over: Partial<Parameters<typeof Setting
     planOnDueToday={false} onTogglePlanOnDueToday={vi.fn()}
         focus={DEFAULT_FOCUS} onFocusChange={vi.fn()}
         notifyEnabled={false} onNotifyEnabledChange={vi.fn()}
-        notifyChatId="" onNotifyChatIdChange={vi.fn()}
-        notifyTokenSet={false} notifyBotId="" onNotifyTokenChange={vi.fn()}
+        notifyTokenSet={false} notifyTokenEnv={false} onNotifyTokenChange={vi.fn()}
         notifyTriggers={{}} onNotifyTriggersChange={vi.fn()}
         notifyDigestTime="07:30" onNotifyDigestTimeChange={vi.fn()}
         notifyEventLead={10} onNotifyEventLeadChange={vi.fn()}

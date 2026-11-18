@@ -9,6 +9,9 @@ import {
   ongoingEvent, progress, remainingS, skewOf, toBucket,
 } from '../share'
 import { fmtCountdown } from '../time'
+import { useFieldNotes } from '../hooks'
+import { Hint } from './Hint'
+import { CheckInk, StrikeInk } from './Marks'
 import { parseDate, textDir, ymd } from '../util'
 
 // The public page at /share/<token>: somebody else's tasks, events and focus
@@ -60,6 +63,7 @@ function flippedKeys(prev: ShareView | null, next: ShareView): ReadonlySet<strin
 export function SharePage({ token }: { token: string }) {
   // The browser's language and region, not an account setting: nobody on this
   // page is signed in. See BookingPage for the same argument.
+  const fieldNotes = useFieldNotes()
   const lang = useMemo(() => deviceLanguage(), [])
   const locale = useMemo(() => localeFor(lang), [lang])
   const tr = useMemo<Translate>(() => (key, vars) => translate(lang, key, vars), [lang])
@@ -288,7 +292,7 @@ export function SharePage({ token }: { token: string }) {
       <div className="share-wrap">
         <div className="share-card share-gone">
           <p className="share-gone__title">{tr('share.gone')}</p>
-          <p className="hintline">{tr('share.goneHint')}</p>
+          <Hint as="p">{tr('share.goneHint')}</Hint>
           <button className="btn" onClick={() => retry.current(false)}>{tr('share.checkAgain')}</button>
         </div>
       </div>
@@ -300,7 +304,7 @@ export function SharePage({ token }: { token: string }) {
       <div className="share-wrap">
         <div className="share-card share-unavailable">
           <p className="share-gone__title">{tr('share.unavailable')}</p>
-          <p className="hintline">{tr('share.unavailableHint')}</p>
+          <Hint as="p">{tr('share.unavailableHint')}</Hint>
           <button className="btn" onClick={() => retry.current(true)}>{tr('share.tryAgain')}</button>
         </div>
       </div>
@@ -327,14 +331,16 @@ export function SharePage({ token }: { token: string }) {
           </div>
         </header>
         <ShareBody view={view} nowMs={now} skewMs={skewMs} tr={tr} locale={locale} justDone={justDone} />
-        <footer className="share-foot">
-          <span>{tr('share.footer')}</span>
-          {canWake && (
-            <button className="btn ghost" aria-pressed={awake} onClick={() => setAwake((a) => !a)}>
-              {awake ? tr('share.keepAwakeOn') : tr('share.keepAwake')}
-            </button>
-          )}
-        </footer>
+        {(!fieldNotes || canWake) && (
+          <footer className="share-foot">
+            {!fieldNotes && <span>{tr('share.footer')}</span>}
+            {canWake && (
+              <button className="btn ghost" aria-pressed={awake} onClick={() => setAwake((a) => !a)}>
+                {awake ? tr('share.keepAwakeOn') : tr('share.keepAwake')}
+              </button>
+            )}
+          </footer>
+        )}
       </main>
     </div>
   )
@@ -422,6 +428,7 @@ function Presence({ view, focus, nowMs, skewMs, tr, locale, justDone }: {
   locale: string
   justDone: ReadonlySet<string>
 }) {
+  const fieldNotes = useFieldNotes()
   const state = localState(focus, nowMs, skewMs)
   const left = remainingS(focus, nowMs, skewMs)
   const showClock = (state === 'focusing' || state === 'break' || state === 'paused') && left !== null
@@ -516,9 +523,13 @@ function Presence({ view, focus, nowMs, skewMs, tr, locale, justDone }: {
                 return (
                   <li key={r.key}
                     className={`share-row${r.done ? ' is-done' : ''}${r.key === nowKey && state !== 'idle' ? ' is-now' : ''}${justDone.has(r.key) ? ' just-done' : ''}`}>
-                    <span className="share-row__mark" aria-hidden="true" />
+                    <span className="share-row__mark" aria-hidden="true">
+                      {fieldNotes && <CheckInk seed={r.key} />}
+                    </span>
                     <span className="share-row__text" dir={textDir(name)}>
-                      {name}
+                      {fieldNotes
+                        ? <span className="share-row__name">{name}<StrikeInk on={r.done} seed={r.key} /></span>
+                        : name}
                       {r.done && <span className="share-sr"> {tr('share.done')}</span>}
                     </span>
                     {r.due && (

@@ -41,7 +41,7 @@ import {
   capReached, clockOf, currentFinished, elapsedIn, isCapped, nextPhase, queueOf, wasAway,
   workedNow, type FocusSettings,
 } from '../focus'
-import { useEscape, useToday } from '../hooks'
+import { useEscape, useFieldNotes, useToday } from '../hooks'
 import { useI18n } from '../i18n'
 import { notifyPermission, requestNotify, showNotify } from '../notify'
 import { fmtClock, fmtCountdown, fmtDuration } from '../time'
@@ -75,6 +75,7 @@ export function FocusView({
   const guard = useMemo(() => makeGuard(() => expire.current()), [])
   const { tasks, loaded, toggle, taskListErrors, taskListsFailed, reloadTasks } = useTaskData()
   const today = useToday()
+  const fieldNotes = useFieldNotes()
   // The lists whose fetch failed, as the set `focus.ts` reads. A task row from
   // one of them is unknown rather than finished — see `finished` there.
   const failedLists = useMemo(() => new Set(taskListsFailed), [taskListsFailed])
@@ -445,7 +446,7 @@ export function FocusView({
         <p className="focus-empty">{tr('focus.notPlanned')}</p>
         {/* The way back is the header's button; a second one here would be
             two controls with one name on a screen that has nothing else. */}
-        <p className="focus-hint">{tr('focus.notPlannedHint')}</p>
+        {!fieldNotes && <p className="focus-hint">{tr('focus.notPlannedHint')}</p>}
       </>
     )
   } else if (session === undefined) {
@@ -487,7 +488,7 @@ export function FocusView({
       <>
         <div className="focus-phase" role="status">{phaseLabel}</div>
         <div className="focus-clock" aria-live="off">{fmtCountdown(clock!.remaining)}</div>
-        {state === 'away' && <p className="focus-hint">{tr('focus.awayHint')}</p>}
+        {state === 'away' && !fieldNotes && <p className="focus-hint">{tr('focus.awayHint')}</p>}
 
         <div className="focus-now">
           <div className="focus-now__eyebrow">{tr(onBreak ? 'focus.upNext' : 'focus.now')}</div>
@@ -554,7 +555,7 @@ export function FocusView({
           <div className="focus-next">
             <div className="focus-now__eyebrow">{tr('focus.next')}</div>
             <div className="focus-next__text" dir={textDir(title(queue.next))}>
-              <button type="button" className="focus-pick" title={tr('focus.pickRow')}
+              <button type="button" className="focus-pick" title={fieldNotes ? undefined : tr('focus.pickRow')}
                 onClick={() => select(queue.next!.entry_id)}>
                 {title(queue.next)}
               </button>
@@ -590,7 +591,7 @@ export function FocusView({
             {canPin && (
               <button type="button" className="btn ghost focus-pin" aria-pressed={pinned}
                 aria-label={tr(pinned ? 'focus.unpin' : 'focus.pin')}
-                title={tr(pinned ? 'focus.unpin' : 'focus.pin')} onClick={togglePin}>
+                title={fieldNotes ? undefined : tr(pinned ? 'focus.unpin' : 'focus.pin')} onClick={togglePin}>
                 {pinned ? '●' : '○'}
               </button>
             )}

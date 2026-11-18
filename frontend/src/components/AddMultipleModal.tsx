@@ -5,7 +5,7 @@ import { clientId, PRIORITIES, type CreateTaskBody, type List } from '../api'
 import { sameValue } from '../util'
 import { inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
-import { useEscape } from '../hooks'
+import { useEscape, useFieldNotes } from '../hooks'
 import { useLayer } from '../layers'
 import { DateTimeInput } from './DateTimeInput'
 import { useI18n, useT } from '../i18n'
@@ -282,6 +282,7 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
 }) {
   const lang = inputLang(useTimeFormat(), useI18n().lang)
   const tr = useT()
+  const fieldNotes = useFieldNotes()
   const [rows, setRows] = useState<Row[]>(() => [
     { ...blankRow(defaultList), summary: initialTitle?.trim() || '' },
     blankRow(defaultList), blankRow(defaultList),
@@ -532,15 +533,17 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
         </div>
 
         <div className="bulk-foot">
-          <button className="bulk-add-row" title={tr('bulk.addRow')}
+          <button className="bulk-add-row" title={fieldNotes ? undefined : tr('bulk.addRow')}
             onClick={() => addRow()} disabled={busy || rows.length >= MAX_ROWS}>
             {tr('bulk.addRowShort')}
           </button>
-          <span className="hintline">
-            {truncated
-              ? tr('bulk.truncated', { max: MAX_ROWS })
-              : tr('bulk.pasteHint')}
-          </span>
+          {(!fieldNotes || truncated) && (
+            <span className="hintline">
+              {truncated
+                ? tr('bulk.truncated', { max: MAX_ROWS })
+                : tr('bulk.pasteHint')}
+            </span>
+          )}
         </div>
 
         {failed.length > 0 && (

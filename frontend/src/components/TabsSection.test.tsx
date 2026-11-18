@@ -15,9 +15,9 @@ function show(order: Tab[] = DEFAULT_TAB_ORDER, start: TabStart = 'home') {
 
 describe('<TabsSection>', () => {
   it('lists the tabs in their current order', () => {
-    show(['calendar', 'home', 'tasks', 'scheduling'])
+    show(['calendar', 'home', 'tasks', 'today'])
     const names = [...document.querySelectorAll('.tab-order-row .name')].map((n) => n.textContent)
-    expect(names).toEqual(['Calendar', 'Home', 'Tasks', 'Scheduling'])
+    expect(names).toEqual(['Calendar', 'Home', 'Tasks', 'Today'])
   })
 
   it('moves a tab along the strip', async () => {
@@ -26,11 +26,11 @@ describe('<TabsSection>', () => {
     const { onOrderChange } = show()
     await userEvent.click(screen.getByRole('button', { name: 'Move Tasks left' }))
     expect(onOrderChange)
-      .toHaveBeenCalledWith(['today', 'tasks', 'home', 'calendar', 'scheduling'])
+      .toHaveBeenCalledWith(['today', 'tasks', 'home', 'calendar'])
 
     await userEvent.click(screen.getByRole('button', { name: 'Move Tasks right' }))
     expect(onOrderChange)
-      .toHaveBeenLastCalledWith(['today', 'home', 'calendar', 'tasks', 'scheduling'])
+      .toHaveBeenLastCalledWith(['today', 'home', 'calendar', 'tasks'])
   })
 
   it('cannot move the ends off the strip', () => {
@@ -68,9 +68,9 @@ describe('<TabsSection>', () => {
     // The rows swap places on a move; without the refocus a keyboard reorder
     // would drop focus to the body after the first press.
     const { rerender } = renderControlled()
-    await userEvent.click(screen.getByRole('button', { name: 'Move Scheduling left' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Move Calendar left' }))
     rerender()
-    expect(screen.getByRole('button', { name: 'Move Scheduling left' })).toHaveFocus()
+    expect(screen.getByRole('button', { name: 'Move Calendar left' })).toHaveFocus()
   })
 })
 
@@ -93,7 +93,7 @@ describe('<TabsSection> hint', () => {
     ['sidebar', /order in the sidebar/],
     ['classic', /order of the tabs/],
   ] as const)('says where the order shows under %s', (layout, text) => {
-    render(<TabsSection layout={layout} order={['today', 'home', 'tasks', 'calendar', 'scheduling']}
+    render(<TabsSection layout={layout} order={['today', 'home', 'tasks', 'calendar']}
       start="home" onOrderChange={vi.fn()} onStartChange={vi.fn()} />)
     expect(screen.getByText(text)).toBeInTheDocument()
   })
