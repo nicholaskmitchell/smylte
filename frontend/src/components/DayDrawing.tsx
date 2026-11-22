@@ -31,6 +31,7 @@ import {
   evaluate, fetchDrawing, readCachedDrawing, type DayState, type DrawMark, type DrawingPayload,
 } from '../drawing'
 import { useThemeName } from '../hooks'
+import { parseTime } from '../motion'
 
 /** One mark, drawn once per drawing. A conditional mark is drawn without
  *  `.on`; the drawing's layout effect owns that class from then on. */
@@ -58,12 +59,6 @@ function Mark({ m, cond }: { m: DrawMark; cond?: number }) {
 }
 
 const ROLES = ['wash', 'glow', 'accent', 'line'] as const
-
-/** A CSS time ("0.375s" or "375ms") in milliseconds; NaN if it is neither. */
-function parseTime(v: string): number {
-  const m = /^(\d*\.?\d+)(ms|s)$/.exec(v.trim())
-  return m ? Number(m[1]) * (m[2] === 's' ? 1000 : 1) : Number.NaN
-}
 
 /** The whole picture for a drawing: every mark, in paint order (by role, as
  *  the server sends them), and the focus loop's frames. Memoised on the

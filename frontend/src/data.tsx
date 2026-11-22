@@ -302,6 +302,8 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
   // after the move finds no task there (`set_sidecar` writes nothing, the rest
   // 404), so a reminder saved together with a new list was lost.
   const inFlight = useRef(new Map<string, Promise<unknown>>())
+  // The latest toggle of each task, by `taskKey`: see `toggle`.
+  const toggleSeq = useRef(new Map<string, number>())
   /** `guard`, counted. Every optimistic write below goes through this so the
    *  bookkeeping above cannot be forgotten by one of them. `t` names the task
    *  the write is about, for `inFlight`. */
@@ -674,11 +676,20 @@ function TaskProvider({ rev, guard, enabled, taskGroups, onExpire, children }: {
 
   const toggle = async (t: Task) => {
     const done = !t.completed
+    const key = taskKey(t)
+    // Only the latest toggle of a task settles it. Writes are not serialised, so
+    // a tick undone before its answer lands would otherwise be re-applied by that
+    // answer (done again, after the untick the user just made); the later
+    // toggle's own answer settles the task, or rolls it back if that write fails.
+    const seq = (toggleSeq.current.get(key) ?? 0) + 1
+    toggleSeq.current.set(key, seq)
     invalidateFetches()
     patchLocal(t, {
       completed: done, cancelled: false, status: done ? 'COMPLETED' : 'NEEDS-ACTION',
     })
-    settle(await write(() => api.complete(t.list, t.uid, done), t), t)
+    const dto = await write(() => api.complete(t.list, t.uid, done), t)
+    if (toggleSeq.current.get(key) !== seq) return
+    settle(dto, t)
   }
 
   const remove = async (t: Task) => {

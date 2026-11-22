@@ -1,5 +1,6 @@
 import {
-  useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent,
+  useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
+  type CSSProperties, type KeyboardEvent, type RefObject,
 } from 'react'
 import { api, uidFor, uidCandidatesFor, type CreateTaskBody, type List, type Task, type TaskGroup, type TasksViewMode } from '../api'
 import { useTaskData } from '../data'
@@ -10,6 +11,7 @@ import { fmtClock, fmtDue, inputLang } from '../time'
 import { sortByCompletion, sortTasks, taskKey } from '../order'
 import { useTimeFormat } from '../timeformat'
 import { useFieldNotes, useSegmentThumb, useToday } from '../hooks'
+import { tickExit } from '../motion'
 import { NavCollections, useEmbeddedCollections, useShell } from '../shell'
 import { AddMultipleModal } from './AddMultipleModal'
 import { WasDue } from './WasDue'
@@ -76,6 +78,44 @@ const isParked = (t: Task) => t.parked
  *  The three are different answers and the pane says which is which; this is
  *  the one question that treats them alike. */
 const isHidden = (t: Task) => isDone(t) || isParked(t)
+
+/**
+ * A row ticked here under Field notes, kept where it was while its tick and
+ * strike draw (`ink`), then while it fades and folds away (`leave`). Without
+ * this the tick took the row out of the pane in the same render, so neither mark
+ * was ever seen: Today keeps a ticked row, and this pane does not.
+ *
+ * `watch` is an open ancestor of a row ticked here. The server closes a parent
+ * whose last open subtask was just ticked (`auto_close_parents`), and the close
+ * reaches this pane on the next fetch; a watched parent that arrives finished
+ * draws its own tick and strike, then leaves with its subtasks, instead of
+ * vanishing under the strike still drawing on its child.
+ *
+ * `until` is a `performance.now()` deadline for the phase; `ink` and `leave` are
+ * the two durations read from the tokens when the row was ticked (`tickExit`).
+ */
+type Hold = { phase: 'watch' | 'ink' | 'leave'; until: number; ink: number; leave: number }
+const NO_HOLDS: ReadonlyMap<string, Hold> = new Map()
+/** How long an ancestor is watched for the server's close. It costs nothing
+ *  while the parent stays open, so it is generous: a slow round trip and the
+ *  fetch after it, not a guess at a fast one. */
+const WATCH_MS = 10_000
+
+/** The holds once the clock reaches `due`: an inked row starts to leave, and a
+ *  row that has left, or a watch that saw nothing, is let go. `due` is the
+ *  deadline the timer was set for, so the entry it was set for always moves even
+ *  if the clock reads a hair early. */
+function advanceHolds(prev: ReadonlyMap<string, Hold>, due: number): ReadonlyMap<string, Hold> {
+  const at = Math.max(performance.now(), due)
+  let next: Map<string, Hold> | null = null
+  for (const [key, h] of prev) {
+    if (h.until > at) continue
+    next ??= new Map(prev)
+    if (h.phase === 'ink' && h.leave > 0) next.set(key, { ...h, phase: 'leave', until: at + h.leave })
+    else next.delete(key)
+  }
+  return next ?? prev
+}
 
 /** The shape a bare client_id has, matching the backend's `_CLIENT_ID_RE`.
  *  Only a `parent` looking exactly like this is a candidate for the legacy
@@ -221,6 +261,8 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // Day-column drag: dropping a card on a column reschedules it to that day.
   // A timed due keeps its local time-of-day; an all-day due stays all-day.
   const [dragUid, setDragUid] = useState<string | null>(null)
+  // Rows ticked a moment ago and still on their way out (see `Hold`).
+  const [holds, setHolds] = useState<ReadonlyMap<string, Hold>>(NO_HOLDS)
   const dropOnDay = (key: string) => {
     const t = tasks.find((x) => taskKey(x) === dragUid)
     setDragUid(null)
@@ -334,7 +376,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // rendered, and the subtask goes with it.
   //
   // A PARKED parent counts as absent too, and it has to: it is excluded from
-  // `active` by `isHidden` whatever `showCompleted` says, so a rule that only
+  // `active` by `showsOpen` whatever `showCompleted` says, so a rule that only
   // asked `isDone` left an OPEN subtask of a parked parent claiming to render
   // under a row that is not on the screen — and it rendered nowhere at all,
   // while the sidebar badge went on counting it. Exactly the failure the
@@ -342,10 +384,27 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // (It is not in the Parked pane either: the subtask is not parked, only its
   // parent is.)
   const shownKeys = new Set(shownTasks.map(taskKey))
+  /** Done, and still kept where open work shows while it leaves (see `Hold`). */
+  const held = (t: Task) => isDone(t) && holds.has(taskKey(t))
+  /** Shown where open work is: open and not parked, or ticked here a moment ago
+   *  and not yet gone. Every place the pane used to ask `!isHidden` for a ROW
+   *  asks this; the counts still ask `isDone`. */
+  const showsOpen = (t: Task) => !isParked(t) && (!isDone(t) || held(t))
+  /** How far a kept row is on its way out: `hold` while its tick and strike
+   *  draw, `leave` while it fades and folds. Undefined for every other row. */
+  const exitOf = (t: Task): 'hold' | 'leave' | undefined =>
+    held(t) ? (holds.get(taskKey(t))!.phase === 'leave' ? 'leave' : 'hold') : undefined
   const rendersUnder = (t: Task) => {
     const p = parentOf(t)
     return p && shownKeys.has(taskKey(p))
-      && (showCompleted || !isDone(p)) && !isParked(p) ? p : undefined
+      && (showCompleted || showsOpen(p)) && !isParked(p)
+      // A parent on its way out takes only its finished subtasks with it: open
+      // work (and a subtask ticked a moment ago, still drawing) moves to the top
+      // level as the fold starts rather than fading away with it, unfinished,
+      // and coming back as a new row. With completed tasks shown the parent's
+      // next place is "Completed", under which its open subtask will hang
+      // anyway, so there it travels with the parent rather than jumping twice.
+      && !(exitOf(p) === 'leave' && !showCompleted && (!isDone(t) || held(t))) ? p : undefined
   }
   // A RELATED-TO loop — which nothing on either side of the wire prevents —
   // leaves every task in it with a rendered parent, so a plain "no parent here"
@@ -375,6 +434,63 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   const parentIsRendered = (t: Task) => anchorsRing(t, rendersUnder)
   const tops = shownTasks.filter((t) => !parentIsRendered(t))
 
+  /** Ticks or unticks from a row or a card. Ticking under Field notes keeps the
+   *  row where it is until its tick and strike have drawn, then lets it fold
+   *  away (see `Hold`); under a preset or reduced motion `tickExit` is null and
+   *  this is `toggle`, the row going at once as it always has. */
+  const tick = (t: Task) => {
+    const timing = fieldNotes && !isDone(t) ? tickExit() : null
+    if (timing) {
+      const now = performance.now()
+      // The row itself only where the tick would take it off the screen: a row
+      // at the top of the list, or any day card. A subtask under an open
+      // parent stays on its own, struck, as it always has.
+      const own = view !== 'list' || !parentIsRendered(t)
+      // Its open ancestors, up to the server's own climb (_CLOSE_PARENT_DEPTH).
+      const ancestors: string[] = []
+      const seen = new Set([taskKey(t)])
+      for (let p = parentOf(t); p && !seen.has(taskKey(p)) && ancestors.length < 8; p = parentOf(p)) {
+        seen.add(taskKey(p))
+        if (!isDone(p)) ancestors.push(taskKey(p))
+      }
+      setHolds((prev) => {
+        const next = new Map(prev)
+        if (own) next.set(taskKey(t), { phase: 'ink', until: now + timing.ink, ...timing })
+        for (const k of ancestors) {
+          // Renew a watch (each tick restarts its wait for the server's close); never
+          // downgrade an ancestor that is already drawing or leaving.
+          const cur = next.get(k)
+          if (!cur || cur.phase === 'watch') next.set(k, { phase: 'watch', until: now + WATCH_MS, ...timing })
+        }
+        return next
+      })
+    }
+    void toggle(t)
+  }
+
+  // Keeps the holds true to the tasks and moves them on. A held row that is no
+  // longer done (unticked, or its write failed and was rolled back) or no longer
+  // there is let go at once; a watched ancestor that has arrived done starts its
+  // own ink. Then one timer, for the next deadline.
+  useEffect(() => {
+    if (holds.size === 0) return
+    const byKey = new Map(tasks.map((t) => [taskKey(t), t] as const))
+    const now = performance.now()
+    let next: Map<string, Hold> | null = null
+    for (const [key, h] of holds) {
+      const t = byKey.get(key)
+      if (!t || (h.phase !== 'watch' && !isDone(t))) {
+        (next ??= new Map(holds)).delete(key)
+      } else if (h.phase === 'watch' && isDone(t)) {
+        (next ??= new Map(holds)).set(key, { ...h, phase: 'ink', until: now + h.ink })
+      }
+    }
+    if (next) { setHolds(next); return }
+    const due = Math.min(...[...holds.values()].map((h) => h.until))
+    const timer = setTimeout(() => setHolds((prev) => advanceHolds(prev, due)), Math.max(0, due - now))
+    return () => clearTimeout(timer)
+  }, [holds, tasks])
+
   // Nesting goes as deep as the data does: a subtask can have subtasks of its
   // own, so the rows render as a tree rather than one parent and a flat run of
   // children. Built once here, keyed by the parent each row actually renders
@@ -394,7 +510,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
     for (const [p, kids] of m) m.set(p, sortTasks(kids))
     return m
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks, hiddenSet, showCompleted, parentByKey])
+  }, [tasks, hiddenSet, showCompleted, parentByKey, holds])
   const childrenOf = useCallback(
     (t: Task) => kidRows.get(taskKey(t)) ?? [], [kidRows])
 
@@ -449,11 +565,14 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   // and then jumped when the refetch replaced the array. `compareTasks` is a
   // total order, so the array's own order stops mattering entirely.
   //
-  // `isHidden` and not `isDone`: parked work is neither active nor done, and
-  // it has its own pane. Putting it in `done` would file setting-aside under
-  // finishing, which is the exact conflation the state exists to break.
-  const active = sortTasks(tops.filter((t) => !isHidden(t)))
-  const done = sortTasks(tops.filter(isDone))
+  // `showsOpen` and not `!isDone`: it excludes parked rows, and keeps a row on
+  // its way out. Parked work is neither active nor done, and it has its own
+  // pane. Putting it in `done` would file setting-aside under finishing, which
+  // is the exact conflation the state exists to break.
+  const active = sortTasks(tops.filter(showsOpen))
+  const done = sortTasks(tops.filter((t) => isDone(t) && !held(t)))
+  // What the header counts: a row on its way out is already done.
+  const openCount = active.filter((t) => !isDone(t)).length
 
   // ── the runs a drag can happen inside ────────────────────────────────────
   //
@@ -479,7 +598,8 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
   const runs = new Map<string, { group: string; index: number; run: Task[] }>()
   const addRun = (group: string, run: Task[]) =>
     run.forEach((t, index) => runs.set(taskKey(t), { group, index, run }))
-  addRun('', active)
+  // A row on its way out is no drop target and cannot be picked up.
+  addRun('', active.filter((t) => !held(t)))
   for (const [parent, kids] of kidRows) addRun(parent, kids)
 
   const reorderDrag: ReorderDrag = {
@@ -593,15 +713,15 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
     .filter(isParked)
     .sort((a, b) => (b.parked_at ?? '').localeCompare(a.parked_at ?? ''))
   const openOn = (key: string) =>
-    sortTasks(shownTasks.filter((t) => !isHidden(t) && dueDay(t) === key))
+    sortTasks(shownTasks.filter((t) => showsOpen(t) && dueDay(t) === key))
   const doneOn = (key: string) =>
-    sortTasks(shownTasks.filter((t) => (t.completed || t.cancelled) && dueDay(t) === key))
+    sortTasks(shownTasks.filter((t) => isDone(t) && !held(t) && dueDay(t) === key))
   // Overdue tasks pool in the today column — but only ones due before the
   // visible window, so a task never shows both there and in its own column.
   const firstKey = ymd(days[0])
   const overdue = sortTasks(shownTasks.filter((t) => {
     const d = dueDay(t)
-    return !isHidden(t) && d !== null && d < todayKey && d < firstKey
+    return showsOpen(t) && d !== null && d < todayKey && d < firstKey
   }))
   const undated = sortTasks(shownTasks.filter((t) => !isHidden(t) && !t.due))
 
@@ -669,7 +789,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
               : suggestedOnly
               ? tr('mail.sug.count', { count: sug.items.length })
               : view === 'list'
-                ? tr('tasks.openCount', { count: active.length })
+                ? tr('tasks.openCount', { count: openCount })
                 : tr('tasks.range',
                   { from: fmtD(days[0]), to: fmtD(days[span - 1]) })}
           </span>
@@ -713,7 +833,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
             {completedTasks.map((t) => (
               <TaskGroup key={taskKey(t)} task={t} childrenOf={completedKids} dot={dotFor(t)}
                 progressOf={progressOf} isCollapsed={isCollapsed} onCollapse={setCollapsed}
-                onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub}
+                onToggle={tick} onRemove={remove} onOpen={setDetail} onAddSub={addSub}
                 fieldNotes={fieldNotes} subFor={subFor} onSubShown={() => setSubFor(null)} />
             ))}
           </div>
@@ -790,8 +910,8 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
               {active.map((t) => (
                 <TaskGroup key={taskKey(t)} task={t} childrenOf={childrenOf} dot={dotFor(t)}
                   progressOf={progressOf} isCollapsed={isCollapsed} onCollapse={setCollapsed}
-                  onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub}
-                  drag={reorderDrag}
+                  onToggle={tick} onRemove={remove} onOpen={setDetail} onAddSub={addSub}
+                  drag={held(t) ? undefined : reorderDrag} leaving={exitOf(t) === 'leave'}
                   fieldNotes={fieldNotes} subFor={subFor} onSubShown={() => setSubFor(null)} />
               ))}
               {active.length === 0 && taskListErrors.length === 0 && (
@@ -812,7 +932,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
                   {done.map((t) => (
                     <TaskGroup key={taskKey(t)} task={t} childrenOf={childrenOf} dot={dotFor(t)}
                       progressOf={progressOf} isCollapsed={isCollapsed} onCollapse={setCollapsed}
-                      onToggle={toggle} onRemove={remove} onOpen={setDetail} onAddSub={addSub}
+                      onToggle={tick} onRemove={remove} onOpen={setDetail} onAddSub={addSub}
                       fieldNotes={fieldNotes} subFor={subFor} onSubShown={() => setSubFor(null)} />
                   ))}
                 </>
@@ -842,8 +962,8 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
                 return (
                   <DayColumn key={key} date={d} isToday={key === todayKey}
                     open={openOn(key)} done={showCompleted ? doneOn(key) : []}
-                    overdue={key === todayKey ? overdue : []} dotOf={dotFor}
-                    onToggle={toggle} onOpen={setDetail}
+                    overdue={key === todayKey ? overdue : []} dotOf={dotFor} exitOf={exitOf}
+                    onToggle={tick} onOpen={setDetail}
                     onAdd={(summary) => addTask(defaultList, summary, key)}
                     dragActive={dragUid !== null} onDropTask={() => dropOnDay(key)}
                     onDragTask={setDragUid} fieldNotes={fieldNotes} />
@@ -942,7 +1062,7 @@ const MAX_INDENT = 6
  * gave out. A row already on its own path is dropped rather than repeated.
  */
 function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen, group = '',
-  isCollapsed, onCollapse, onToggle, onRemove, onOpen, onAddSub, drag,
+  isCollapsed, onCollapse, onToggle, onRemove, onOpen, onAddSub, drag, leaving = false,
   fieldNotes, subFor, onSubShown }: {
   task: Task
   childrenOf: (t: Task) => Task[]
@@ -972,6 +1092,9 @@ function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen, group =
    *  carry them all along — `sort_order` is one account-wide sequence and
    *  `reorder` has always sent every task in it, subtasks included. */
   drag?: ReorderDrag
+  /** Ticked a moment ago and now fading and folding away, subtasks and all
+   *  (see `Hold`). Only ever set on a top-level row. */
+  leaving?: boolean
   fieldNotes: boolean
   /** The `taskKey` of the row the editor asked to add a subtask under; that
    *  row opens its inline field and calls `onSubShown`. */
@@ -1013,9 +1136,11 @@ function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen, group =
    * from the desktop.
    */
   const mine = !!drag && drag.uid !== null && drag.group === group
+  const box = useRef<HTMLDivElement>(null)
+  useLeaving(box, leaving)
   return (
-    <div
-      className={drag
+    <div ref={box}
+      className={leaving ? 'leaving' : drag
         ? `task-drag ${mine && drag.over === taskKey(task) && drag.uid !== taskKey(task)
             ? (drag.below ? 'drag-over drag-below' : 'drag-over') : ''}`
         : undefined}
@@ -1104,15 +1229,34 @@ function TaskGroup({ task, childrenOf, dot, progressOf, depth = 0, seen, group =
   )
 }
 
+/** A row that has started to leave: its height, measured as it starts, for
+ *  fieldnotes.css's fold to start from (`--leave-h`), and `inert`, so the row
+ *  is out of the tab order and the accessibility tree while it goes. */
+function useLeaving(ref: RefObject<HTMLElement>, leaving: boolean) {
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    if (!leaving) {
+      el.style.removeProperty('--leave-h')
+      el.removeAttribute('inert')
+      return
+    }
+    el.style.setProperty('--leave-h', `${el.getBoundingClientRect().height}px`)
+    el.setAttribute('inert', '')
+  }, [ref, leaving])
+}
+
 /** Indent a row by its depth in the tree. Level 0 keeps the pane's own gutter. */
 const indentStyle = (depth: number) =>
   (depth > 0 ? { '--task-depth': depth } as CSSProperties : undefined)
 
-function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen, onAdd,
+function DayColumn({ date, isToday, open, done, overdue, dotOf, exitOf, onToggle, onOpen, onAdd,
   dragActive, onDropTask, onDragTask, fieldNotes }: {
   date: Date; isToday: boolean
   open: Task[]; done: Task[]; overdue: Task[]
   dotOf: (t: Task) => string | null | undefined
+  /** How far a card ticked a moment ago is on its way out (see `Hold`). */
+  exitOf: (t: Task) => 'hold' | 'leave' | undefined
   onToggle: (t: Task) => void; onOpen: (t: Task) => void
   onAdd: (summary: string) => void
   dragActive: boolean; onDropTask: () => void; onDragTask: (key: string | null) => void
@@ -1122,6 +1266,8 @@ function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen
   const [adding, setAdding] = useState(false)
   // dragover bubbles up from the cards, so entering a child re-asserts `over`.
   const [over, setOver] = useState(false)
+  // A card on its way out is already done, so it is not counted.
+  const count = [...overdue, ...open].filter((t) => !isDone(t)).length
   return (
     <div className={`day-col ${isToday ? 'today' : ''} ${over && dragActive ? 'drag-over' : ''}`}
       onDragOver={(e) => { if (!dragActive) return; e.preventDefault(); setOver(true) }}
@@ -1130,24 +1276,22 @@ function DayColumn({ date, isToday, open, done, overdue, dotOf, onToggle, onOpen
       <div className="day-col-head">
         <span className="dow">{date.toLocaleDateString(locale, { weekday: 'short' })}</span>
         <span className="dnum">{date.getDate()}</span>
-        {open.length + overdue.length > 0 && (
-          <span className="count">{open.length + overdue.length}</span>
-        )}
+        {count > 0 && <span className="count">{count}</span>}
       </div>
       <div className="day-col-body">
         {overdue.length > 0 && (
           <>
             <div className="col-label label overdue">{tr('tasks.overdue')}</div>
             {overdue.map((t) => (
-              <DayCard key={taskKey(t)} task={t} showDate dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen}
-                onDrag={onDragTask} fieldNotes={fieldNotes} />
+              <DayCard key={taskKey(t)} task={t} showDate dot={dotOf(t)} exit={exitOf(t)} onToggle={onToggle}
+                onOpen={onOpen} onDrag={onDragTask} fieldNotes={fieldNotes} />
             ))}
             {open.length > 0 && <div className="col-label label">{tr('tasks.today')}</div>}
           </>
         )}
         {open.map((t) => (
-          <DayCard key={taskKey(t)} task={t} dot={dotOf(t)} onToggle={onToggle} onOpen={onOpen} onDrag={onDragTask}
-            fieldNotes={fieldNotes} />
+          <DayCard key={taskKey(t)} task={t} dot={dotOf(t)} exit={exitOf(t)} onToggle={onToggle} onOpen={onOpen}
+            onDrag={onDragTask} fieldNotes={fieldNotes} />
         ))}
         {open.length + overdue.length + done.length === 0 && !adding && (
           <div className="col-empty">—</div>
@@ -1180,8 +1324,10 @@ function priTier(label: Task['priority_label']): 'high' | 'med' | 'low' | undefi
   return label === 'high' ? 'high' : label === 'medium' ? 'med' : label === 'low' ? 'low' : undefined
 }
 
-function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag, fieldNotes }: {
+function DayCard({ task, showDate, dot, exit, onToggle, onOpen, onDrag, fieldNotes }: {
   task: Task; showDate?: boolean; dot?: string | null
+  /** Ticked a moment ago: `hold` while the marks draw, `leave` while it goes. */
+  exit?: 'hold' | 'leave'
   onToggle: (t: Task) => void; onOpen: (t: Task) => void
   onDrag: (uid: string | null) => void
   fieldNotes: boolean
@@ -1192,11 +1338,14 @@ function DayCard({ task, showDate, dot, onToggle, onOpen, onDrag, fieldNotes }: 
   const done = task.completed || task.cancelled
   const timed = !!task.due && task.due.includes('T') && !task.due_is_date
   const tf = useTimeFormat()
+  const box = useRef<HTMLDivElement>(null)
+  useLeaving(box, exit === 'leave')
   return (
     // `data-pri` carries the tier to the row itself, for the sidebar layout's
     // tick (layout.css). An attribute rather than the `pri-*` classes, which
     // paint a background wherever they land.
-    <div className={`day-card ${done ? 'done' : ''}`} data-pri={priTier(pri)} draggable
+    <div ref={box} className={`day-card ${done ? 'done' : ''} ${exit === 'leave' ? 'leaving' : ''}`}
+      data-pri={priTier(pri)} draggable={!exit}
       onDragStart={(e) => {
         // The KEY, not the uid — the day column resolves it back to this row,
         // and a bare uid is first-wins across lists.

@@ -407,6 +407,19 @@ describe('the Today header the phone rules aim at', () => {
       .toMatch(/className="fn-head-text"[\s\S]*?className="fn-head-tools"[\s\S]*?className="today-linkish fn-plan"/)
   })
 
+  it('renders the pane today-scroll.browser.test.tsx mounts, class for class', () => {
+    // That test mounts Today's pane as raw markup and finds what scrolls. These
+    // are the classes its fixture copies; a renamed one would leave it measuring
+    // markup the app no longer renders.
+    const today = read('src/components/TodayView.tsx')
+    for (const cls of ['content today-pane', 'content-head today-head fn-head', 'fn-date', 'fn-drawing',
+      'fn-list-head', 'scroll', 'today-cols', 'today-main', 'today-side', 'composer-foot']) {
+      expect(today, `TodayView lost className="${cls}"`).toContain(`className="${cls}"`)
+    }
+    expect(read('src/components/FocusCard.tsx'), 'FocusCard lost className="focus-card"')
+      .toContain('className="focus-card"')
+  })
+
   it('wraps the cells after the title in `today-meta`, as the browser fixtures do', () => {
     const count = (src: string) => src.split('className="today-meta"').length - 1
     expect(count(read('src/components/TodayView.tsx')), 'TodayView lost (or gained) a '

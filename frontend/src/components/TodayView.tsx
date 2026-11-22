@@ -2352,6 +2352,10 @@ export function TodayView({
    *  `isToday`-gated, so stepping the picker back would otherwise leave an
    *  empty popover standing over a screen headed "Look back". */
   useEffect(() => { setMenu(false) }, [day])
+  // The pane scrolls as one page under Field notes, and on a short phone the
+  // menu can open below its fold: bring the whole menu into view. `?.` because
+  // jsdom has no scrollIntoView.
+  useEffect(() => { if (menu) menuRef.current?.scrollIntoView?.({ block: 'nearest' }) }, [menu])
   /** The screen is showing a record rather than a plan — because the day is
    *  finished, or because the owner asked for today's. */
   const reviewing = !isToday || mode === 'review'

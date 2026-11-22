@@ -110,6 +110,29 @@ describe('<TodayView> under Field notes', () => {
     expect(screen.queryByRole('button', { name: 'Review' })).not.toBeInTheDocument()
   })
 
+  it('brings the ⋯ menu into view as it opens, since the pane scrolls', async () => {
+    // jsdom has no scrollIntoView, so one is installed here and the prototype
+    // put back afterwards.
+    const proto = Element.prototype as unknown as { scrollIntoView?: (o?: ScrollIntoViewOptions) => void }
+    const had = Object.prototype.hasOwnProperty.call(proto, 'scrollIntoView')
+    const prior = proto.scrollIntoView
+    const spy = vi.fn()
+    proto.scrollIntoView = spy
+    try {
+      m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+      const user = setup()
+      await dayList()
+      expect(spy).not.toHaveBeenCalled()
+      await user.click(screen.getByRole('button', { name: 'More actions' }))
+      await screen.findByRole('button', { name: 'Review' })
+      expect(spy).toHaveBeenCalledWith({ block: 'nearest' })
+      expect(spy.mock.contexts).toContain(document.querySelector('.today-menu'))
+    } finally {
+      if (had) proto.scrollIntoView = prior
+      else delete proto.scrollIntoView
+    }
+  })
+
   it('nudges with Plan my day on the Today line, with no band, when the day has no capacity', async () => {
     m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
     const user = setup()

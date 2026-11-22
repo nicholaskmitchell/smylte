@@ -64,6 +64,24 @@
   transition-delay: calc(var(--stagger) * (2 + var(--line, 0)));
 }
 
+/* ---- a ticked row leaving -----------------------------------------------------
+   Tasks keeps a row it has just ticked where it was until the tick and the
+   strike above have drawn (TasksView's `Hold`), then fades it and folds the gap
+   it leaves, over the design system's enter/exit for rows. The fold starts from
+   the row's own height, measured into --leave-h as it starts (border-box, so a
+   day card's padding is inside it). Reduced motion never reaches here: every
+   token is zero, so nothing is held and the row goes at once. */
+[data-surface="app"] .leaving {
+  box-sizing: border-box; overflow: hidden; pointer-events: none;
+  animation: fn-leave-fade var(--dur-slow) var(--ease) both,
+    fn-leave-fold var(--dur-slow) var(--ease-in-out) both;
+}
+@keyframes fn-leave-fade { to { opacity: 0; } }
+@keyframes fn-leave-fold {
+  from { height: var(--leave-h, auto); }
+  to { height: 0; padding-block: 0; border-block-width: 0; }
+}
+
 /* ---- tabs ----------------------------------------------------------------------
    The open view gets a drawn underline; every tab carries one, so moving
    between them draws one on and the other off. */
@@ -354,6 +372,35 @@
   content: ''; position: absolute; left: 0; right: 0; top: 50%;
   height: 44px; transform: translateY(-50%);
 }
+
+/* ---- Today scrolls as one page --------------------------------------------------
+   The date, the drawing, the focus card and the Today line scroll with the list
+   instead of standing over it. With `.scroll` the only scroller, the list got
+   what they left: 376px of an 844px phone, 303px with the composer open, and at
+   320x568 nothing but its own padding. So the pane scrolls. `.scroll` keeps its
+   element and class (the calm rows above and layout.css's measure name it) but
+   is laid out at its content's height, growing to fill a short day so the
+   composer still sits at the foot. Nothing in the pane shrinks. The tab bar is
+   outside the pane and does not move. The composer stays at the foot, opaque,
+   as the sidebar's Settings foot does (layout.css, .appnav-foot), and above the
+   check's z-index of 1. Today's calendar column (layout.css, .today-side) now
+   sticks against the pane, so it stays in view once the head has gone. The
+   scroll padding is the resting composer (80px on a desktop, 73px on a phone)
+   and a little: a row reached with Tab is scrolled clear of it, not left under
+   it. */
+[data-surface="app"] .today-pane { overflow-y: auto; scroll-padding-bottom: 96px; }
+[data-surface="app"] .today-pane > * { flex-shrink: 0; }
+[data-surface="app"] .today-pane > .scroll { flex: 1 0 auto; overflow: visible; }
+[data-surface="app"] .today-pane > .composer-foot {
+  position: sticky; bottom: 0; z-index: 2; background: var(--bg);
+}
+/* The ⋯ menu hangs from its own button. Under Field notes the button is on the
+   Today line, not in .today-head, which is what app.css positions the menu
+   against; so on a phone, and under the Classic layout at any width, nothing
+   positioned held it and it opened at the foot of the frame, off screen.
+   layout.css does the same for the Sep 2026 header on a desktop. */
+[data-surface="app"] .fn-list-head .today-acts { position: relative; }
+[data-surface="app"] .fn-list-head .today-menu { right: 0; top: calc(100% + 6px); }
 
 /* ==== cp3 · shared ==== */
 
