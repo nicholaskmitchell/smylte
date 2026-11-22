@@ -394,17 +394,30 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
    *  draw, `leave` while it fades and folds. Undefined for every other row. */
   const exitOf = (t: Task): 'hold' | 'leave' | undefined =>
     held(t) ? (holds.get(taskKey(t))!.phase === 'leave' ? 'leave' : 'hold') : undefined
+  /** When a hold ends: a row still drawing has its leave still to come. */
+  const endOf = (h: Hold) => (h.phase === 'ink' ? h.until + h.leave : h.until)
+  /** Under a parent that is leaving, whether `t` goes its own way: open work
+   *  does (parked work fades with the parent, as finished work does), and so
+   *  does a finished row whose own exit ends after the parent's. */
+  const leavesOwnWay = (t: Task, p: Task) => {
+    if (!isDone(t)) return !isParked(t)
+    const ht = held(t) ? holds.get(taskKey(t)) : undefined
+    const hp = holds.get(taskKey(p))
+    return !!ht && !!hp && endOf(ht) > endOf(hp)
+  }
   const rendersUnder = (t: Task) => {
     const p = parentOf(t)
     return p && shownKeys.has(taskKey(p))
       && (showCompleted || showsOpen(p)) && !isParked(p)
-      // A parent on its way out takes only its finished subtasks with it: open
-      // work (and a subtask ticked a moment ago, still drawing) moves to the top
-      // level as the fold starts rather than fading away with it, unfinished,
-      // and coming back as a new row. With completed tasks shown the parent's
-      // next place is "Completed", under which its open subtask will hang
-      // anyway, so there it travels with the parent rather than jumping twice.
-      && !(exitOf(p) === 'leave' && !showCompleted && (!isDone(t) || held(t))) ? p : undefined
+      // A parent on its way out takes its finished subtasks with it: open work
+      // moves to the top level as the fold starts rather than fading away with
+      // it, unfinished, and coming back as a new row; and a subtask ticked after
+      // it moved out stays out until it has gone (its own exit outlasts the
+      // parent's), while a subtask leaving with it (the server closed both in
+      // one climb) stays inside. With completed tasks shown the parent's next
+      // place is "Completed", under which its subtasks hang anyway, so there
+      // they all travel with it rather than jumping twice.
+      && !(exitOf(p) === 'leave' && !showCompleted && leavesOwnWay(t, p)) ? p : undefined
   }
   // A RELATED-TO loop — which nothing on either side of the wire prevents —
   // leaves every task in it with a rendered parent, so a plain "no parent here"

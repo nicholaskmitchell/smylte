@@ -399,6 +399,33 @@ describe('<TasksView> a tick under Field notes', () => {
     expect(screen.queryByText('Book flight')).not.toBeInTheDocument()
   })
 
+  it('keeps a subtask the server closed with its parent inside the parent as both leave', async () => {
+    // auto_close_parents climbs: ticking Leaf closes Mid, then Grand.
+    const g = task({ uid: 'g1', summary: 'Grand', children: ['m1'] })
+    const mid = task({ uid: 'm1', summary: 'Mid', parent: 'g1', children: ['f1'] })
+    const leaf = task({ uid: 'f1', summary: 'Leaf', parent: 'm1' })
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [g, mid, leaf] : []))
+    m.complete.mockImplementation(async (_l: string, uid: string, done?: boolean) => ({
+      ...[g, mid, leaf].find((t) => t.uid === uid)!,
+      completed: done ?? true, status: (done ?? true) ? 'COMPLETED' : 'NEEDS-ACTION',
+    }))
+    const { bumpRev } = setup()
+    await screen.findByText('Leaf')
+    const top = rowOf('Grand')
+    tickRow(rowOf('Leaf'))
+    await waitFor(() => expect(m.complete).toHaveBeenCalledTimes(1))
+    m.tasks.mockImplementation(async (id: string) => (id === 'l1' ? [g, mid, leaf].map((t) => (
+      { ...t, completed: true, status: 'COMPLETED' })) : []))
+    bumpRev(1)
+    await waitFor(() => expect(top).toHaveClass('done'))
+    const midRow = rowOf('Mid')
+    await later(INK + 100)
+    const group = top.parentElement as HTMLElement
+    expect(group).toHaveClass('leaving')
+    expect(rowOf('Mid')).toBe(midRow)
+    expect(group.contains(midRow)).toBe(true)
+  })
+
   it('renews a parent\'s watch on each subtask tick, so a late close still draws', async () => {
     const p = task({ uid: 'p2', summary: 'Pack the car', children: ['k1', 'k2'] })
     const a = task({ uid: 'k1', summary: 'Tent', parent: 'p2' })
