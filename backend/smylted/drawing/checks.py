@@ -113,6 +113,32 @@ def bounds_errors(sketch: Sketch, margin: float | None = None) -> list[str]:
     return errors
 
 
+# A wash is a plate of colour under the ink. Cut by the frame it shows the
+# frame: a straight, jagged edge the picture never drew (a headland running off
+# the bottom, a lawn as a band across the width). Every wash closes inside the
+# picture, this far from each edge; the subjects that read best keep 6.4 or more.
+WASH_MARGIN = 6.0
+
+
+def wash_edge_errors(sketch: Sketch, margin: float = WASH_MARGIN) -> list[str]:
+    """One message for each wash with an on-curve point nearer than `margin`
+    to an edge of the view box, on any frame (the focus loop's included)."""
+    x0, y0, w, h = sketch.view_box
+    errors = []
+    for mark in _every_mark(sketch):
+        if mark.role != 'wash':
+            continue
+        bad = next(
+            ((x, y) for d in mark.frames for x, y in endpoints(d)
+             if not (x0 + margin <= x <= x0 + w - margin
+                     and y0 + margin <= y <= y0 + h - margin)),
+            None)
+        if bad is not None:
+            errors.append(f"{mark.id} ({mark.part}) reaches the frame at "
+                          f"({bad[0]:.1f}, {bad[1]:.1f})")
+    return errors
+
+
 def _area(pts: list[Point]) -> float:
     total = 0.0
     for i, (x, y) in enumerate(pts):

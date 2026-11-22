@@ -25,24 +25,24 @@ from ..scene import Sketch, SketchBuilder
 from ..state import DayState, Theme
 from . import _kit as k
 
-# The pond's rim, from where the inlet leaves the picture on the right round
-# to where it comes back: a stream's two banks into the pond, the far edge
-# flatter, a bulge at the near left. Each day moves the points by up to
-# RIM_JITTER, all but the inlet's.
-RIM = ((159.5, 112.0), (150.5, 116.0), (152.0, 100.0), (147.0, 82.0), (134.0, 71.5),
+# The pond's rim, all the way round from the inlet's upper lip: the far edge
+# flatter, a bulge at the near left, and on the right a stream's mouth, a
+# short rounded notch that ends inside the picture. Each day moves the points
+# by up to RIM_JITTER.
+RIM = ((147.0, 115.5), (150.0, 100.0), (147.0, 82.0), (134.0, 71.5),
        (112.0, 67.5), (84.0, 66.5), (56.0, 67.5), (30.0, 71.0), (22.0, 86.0),
-       (19.0, 102.0), (16.0, 120.0), (9.0, 138.0), (5.0, 158.0), (10.0, 176.0),
-       (28.0, 185.5), (56.0, 187.0), (86.0, 183.0), (114.0, 175.0), (135.0, 160.0),
-       (146.0, 142.0), (149.5, 127.5), (159.5, 124.5))
-INLET = (0, 1, len(RIM) - 2, len(RIM) - 1)  # the stream's banks: where they leave the picture and the mouth
+       (19.0, 102.0), (16.0, 120.0), (10.5, 138.0), (8.2, 158.0), (11.5, 176.0),
+       (28.0, 185.5), (56.0, 186.5), (86.0, 183.0), (114.0, 175.0), (135.0, 160.0),
+       (146.0, 142.0), (146.5, 128.0), (149.5, 125.6), (150.8, 121.8), (149.8, 118.0))
+MOUTH = (0, 20)  # the inlet's two lips, where the rim turns into the notch
 RIM_JITTER = 0.8
 # The far bank, behind the reeds, across the whole picture.
 BANK = ((0.0, 58.0), (42.0, 55.5), (90.0, 53.0), (128.0, 52.5), (160.0, 54.0))
 DUSK_X = 104.0                             # where the sun sets on it
 # The pads: (x, y, radius), the largest first, at the centre-left; the frog
 # sits on it when everything is done.
-PADS = ((42.6, 151.1, 16.0), (118.5, 88.5, 14.0), (99.1, 155.5, 13.0),
-        (36.8, 108.7, 12.0), (73.2, 118.9, 12.0), (130.0, 130.9, 12.0))
+PADS = ((43.5, 150.5, 16.0), (118.0, 88.5, 14.0), (99.1, 155.0, 13.0),
+        (36.8, 108.7, 12.0), (73.2, 118.9, 12.0), (128.0, 130.5, 12.0))
 NOTCH = math.radians(16)                   # half the notch's opening
 NOTCH_CLEAR = math.radians(26)             # no lily nearer the notch than this
 LILY_R = 7.0               # a lily's reach from its middle
@@ -73,8 +73,8 @@ PLANNED = (('planned',),)
 # bulrush 4.4 wide and 11 tall, a short spike above it.
 REEDS = (((17.0, 115.0), 8.0, 74.0), ((19.0, 99.0), 13.0, 46.5),
          ((22.0, 86.0), 22.0, 49.0), ((29.0, 71.5), 31.0, 45.0),
-         ((147.0, 82.0), 143.5, 67.0), ((151.0, 92.0), 150.0, 71.0),
-         ((152.0, 106.0), 156.0, 78.0))
+         ((147.0, 82.0), 143.0, 66.0), ((150.0, 92.0), 149.5, 70.0),
+         ((150.0, 106.0), 155.5, 79.5))
 HEAD = (2.2, 5.5)
 SPIKE = 3.0
 
@@ -113,16 +113,11 @@ class LilyPond:
 # ── geometry ────────────────────────────────────────────────────────────────
 
 def _rim(pts):
-    """The rim as the pen draws it: open where the stream leaves the picture."""
-    return curve(*pts, corners=INLET[1:3])
+    """The rim as the pen draws it, closed all round: the water's edge."""
+    return loop(*pts, corners=MOUTH)
 
 
-def _water(pts):
-    """The water's edge all round, closed along the picture's edge."""
-    return loop(*pts, corners=INLET)
-
-
-RIM_LINE = k.samples(_water(RIM), 1.0)
+RIM_LINE = k.samples(_rim(RIM), 1.0)
 
 
 def _in_pond(p, margin: float) -> bool:
@@ -225,8 +220,7 @@ def _place_lilies(r: Rng, notches: list) -> list | None:
 
 def _structure(r: Rng) -> dict:
     """What both compositions share, so the night is the same pond after dark."""
-    pts = [(x, y) if i in INLET else (x + r.uniform(-RIM_JITTER, RIM_JITTER), y + r.uniform(-RIM_JITTER, RIM_JITTER))
-           for i, (x, y) in enumerate(RIM)]
+    pts = [(x + r.uniform(-RIM_JITTER, RIM_JITTER), y + r.uniform(-RIM_JITTER, RIM_JITTER)) for x, y in RIM]
     rim = _rim(pts)
     edge = k.samples(rim, 1.0)
     # Each pad's notch, and its lilies round the rest of it. The largest
@@ -248,7 +242,7 @@ def _structure(r: Rng) -> dict:
         hy += r.uniform(-1.0, 1.0)
         reeds.append(((bx, by - 0.6), (hx, hy)))
     return {
-        'rim': rim, 'water': _water(pts), 'notches': notches, 'lilies': order, 'reeds': reeds,
+        'rim': rim, 'notches': notches, 'lilies': order, 'reeds': reeds,
         'tilt': [r.uniform(0, 2 * math.pi / 5) for _ in range(k.REWARDS)],
         'leaf': math.radians(r.uniform(-28, -12)),
     }
@@ -344,7 +338,7 @@ def _ripples(frame: int, child: SketchBuilder) -> None:
 def _setting(b: SketchBuilder, s: dict) -> None:
     """The pond both compositions share: the far bank, the water, the reeds,
     the pads and the frog."""
-    b.wash(k.wash_of(s['water'], dx=2.0, dy=3.0), part='rim')
+    b.wash(k.wash_of(s['rim'], dx=2.0, dy=3.0), part='rim')
     b.line(curve(*BANK), part='bank')
     b.line(s['rim'], part='rim')
     for base, head in s['reeds']:

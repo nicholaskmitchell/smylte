@@ -43,8 +43,17 @@ FLOWER_R = 6.0
 # so it never shows without them: the front row comes first).
 BASKET_FRONT = ((110.0, 87.0), (127.0, 87.0), (144.0, 87.0))
 BASKET_BACK = ((101.5, 72.0), (118.5, 72.0), (135.5, 72.0))
-# The ivy's flowers, in three staggered rows on its wash.
-IVY = ((14.0, 74.0), (32.0, 74.0), (23.0, 91.0), (41.0, 91.0), (14.0, 108.0), (32.0, 108.0))
+# The ivy: a clump on the wall's left end, its top a pen-gap clear below the
+# coping so the two never fuse, closing inside the picture, its lobes softly
+# rounded.
+IVY_CLUMP = ((14.6, 68.4), (20.5, 66.4), (29.0, 65.6), (37.5, 66.1), (46.0, 65.6), (52.5, 66.3),
+             (56.2, 69.6), (58.2, 74.5), (58.6, 79.0), (56.5, 87.0), (53.9, 93.2), (54.2, 97.8),
+             (56.0, 101.6), (58.0, 108.0), (56.2, 114.0), (51.0, 119.0), (42.5, 120.3), (37.0, 119.0),
+             (29.0, 120.3), (21.0, 118.5), (13.5, 111.5), (10.3, 102.0), (9.7, 92.0), (10.3, 82.0),
+             (11.7, 74.5))
+# The ivy's flowers, in three staggered rows on its wash, clear of the setting
+# sun above, the saddle at the right and the back wheel below.
+IVY = ((29.0, 77.0), (46.0, 77.0), (21.3, 92.0), (38.3, 92.0), (28.5, 107.5), (45.5, 107.5))
 PLANNED = ('planned',)
 
 # Overdue weather by day, clear of every sun and the moon: (x, y, width).
@@ -58,7 +67,7 @@ class Bicycle:
     JOINS = frozenset(frozenset(p) for p in (
         ('frame', 'wheel'), ('frame', 'saddle'), ('frame', 'bar'), ('rack', 'basket'),
         ('rack', 'frame'), ('rack', 'wheel'), ('wheel', 'ground'), ('flower', 'basket'),
-        ('ribbon', 'bar'), ('ivy', 'wall'), ('sun', 'wall'), ('lamp', 'ground'),
+        ('ribbon', 'bar'), ('sun', 'wall'), ('lamp', 'ground'),
         ('lamp', 'wall'),
     ))
 
@@ -134,23 +143,22 @@ def _wall(b: SketchBuilder, *, night: bool) -> None:
     # A few bricks: above the saddle and bar, and through the frame. None
     # behind the basket or in the ivy.
     for stroke in (
-        line((58, 72), (89, 72.3)), line((68, COPING), (68, 72)), line((82, COPING), (82, 72.2)),
-        line((61, 72), (61, 82)),
+        line((68, 72), (89, 72.3)), line((68, COPING), (68, 72)), line((82, COPING), (82, 72.2)),
+        line((75, 72.1), (75, 78)),
         line((81, 126), (97, 126.3)), line((86, 126.2), (86, 133)),
     ):
         b.line(stroke, part='wall')
 
 
 def _ivy(b: SketchBuilder) -> None:
-    """A vine hanging from the coping beside the ivy's flowers and trailing
-    back along under them; its leaves only on a day with something planned
+    """The ivy's clump on the wall round the ivy's flowers; its
+    leaves, sprouting from its edge, only on a day with something planned
     (the ivy is bare otherwise)."""
-    b.line(curve((50, COPING), (53, 72), (53.2, 88), (53.6, 100), (51, 112), (40, 120), (26, 121.5),
-                 (12, 121), (3, 115)), part='ivy')
+    b.line(loop(*IVY_CLUMP), part='ivy')
     when = (PLANNED,)
-    for x, y, length, angle in ((52.6, 76.0, 8.0, 0), (53.0, 105.0, 8.0, 125),
-                                (9.0, 121.0, 8.0, 100), (21.0, 121.4, 8.5, 80),
-                                (51.2, 64.0, 7.5, 160)):
+    for x, y, length, angle in ((57.3, 72.0, 8.0, -45), (58.4, 81.0, 8.0, 15),
+                                (13.6, 111.6, 8.0, 130), (21.2, 118.6, 8.5, 100),
+                                (31.1, 120.1, 7.5, 130)):
         k.draw_leaf(b, x, y, length, math.radians(angle), when=when, part='ivy')
 
 
@@ -237,9 +245,7 @@ def _flowers(b: SketchBuilder, s: dict, *, night: bool) -> None:
 # ── compositions ────────────────────────────────────────────────────────────
 
 def _day(b: SketchBuilder, s: dict, r: Rng) -> None:
-    b.wash(k.wash_of(loop((1, 61), (30, 61), (54, 62), (59, 75), (54, 87), (60, 99), (55, 112),
-                          (46, 124), (32, 129), (19, 125), (6, 130), (1, 120), (3, 90)), dx=2.0, dy=1.5),
-           part='ivy')
+    b.wash(k.wash_of(loop(*IVY_CLUMP), dx=2.0, dy=1.5), part='ivy')
     _wall(b, night=False)
     _ivy(b)
     _ground(b)

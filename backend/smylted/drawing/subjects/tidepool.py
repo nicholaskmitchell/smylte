@@ -1,15 +1,16 @@
 """A tide pool.
 
-Day: two rocks frame a pool on the shore, the far sea a line under the sky, a
-starfish on the left rock and shells in the sand. Each finished task opens a
-coral anemone on the pool's floor, the first few spread across it; Start drops
-ripples on the water; everything done brings a crab onto the right rock; a day
-with nothing planned leaves the pool empty and still, one line of reflection
-on it; overdue work hangs seaweed on the right rock, then brings a cloud, and a
-second. The sun crosses the sky over the sea with the hour, sets on the sea
-line, and late at night is an ink moon.
+Day: a low rocky bank on the shore, the far sea a line under the sky, the
+pool on the sand in front of it and a flat stone lying over its near edge; a
+starfish on the biggest rock and shells in the sand. Each finished task opens
+a coral anemone on the pool's floor, the first few spread across it; Start
+drops ripples on the water; everything done brings a crab onto the bank; a
+day with nothing planned leaves the pool empty and still, one line of
+reflection on it; overdue work hangs seaweed down the bank, then brings a
+cloud, and a second. The sun crosses the sky over the sea with the hour, sets
+on the sea line, and late at night is an ink moon.
 
-Night: the same rocks and pool under the moon, its light lying on the water.
+Night: the same bank and pool under the moon, its light lying on the water.
 Each finished task lights a glowing speck of plankton in the pool; everything
 done brings the crab; Start ripples the moon's reflection; overdue work brings
 a cloud beside the moon, a second a step beyond it at more.
@@ -26,31 +27,42 @@ from ..state import DayState, Theme
 from . import _kit as k
 
 SEA = 36.0                # the far sea line
-# The pool: no oval but a rock pool's shape, its far edge flat and running in
-# behind the boulder's foot, a small notch in it, narrow under the ledge and
-# out in a lobe at the lower right. Its corners, and the notch's (drawn sharp).
-POOL_PTS = ((36.0, 111.0), (52.0, 110.5), (70.0, 111.0), (86.0, 110.5), (95.0, 111.0), (100.0, 116.0),
-            (105.0, 111.0), (113.0, 111.5), (118.0, 116.0), (120.0, 127.0), (120.0, 137.0),
-            (129.0, 146.0), (143.0, 152.0), (151.0, 162.0), (148.0, 173.0), (135.0, 180.0),
-            (112.0, 185.0), (82.0, 186.0), (55.0, 184.0), (34.0, 179.0), (20.0, 169.0),
-            (15.0, 155.0), (17.0, 140.0), (25.0, 124.0))
-POOL_NOTCH = 5
-# The ellipse anemones are scattered in: round the floor they may use.
-FLOOR = (88.0, 150.0, 62.0, 30.0)          # centre x, centre y, half width, half height
-# The rocks, each running off its side of the frame: at the left a big low
-# boulder, its top flattish and notched, standing in front of the pool's far
-# corner; at the right a low flat ledge behind the pool. A facet line from one
-# corner (index, end point): the boulder's crack from its notch. The ledge has
-# none: its face holds the crab and the seaweed.
-LEFT_ROCK = ((-4.0, 128.0), (-4.0, 87.0), (7.0, 84.0), (17.0, 82.0), (26.0, 83.0), (30.0, 89.0),
-             (34.0, 83.5), (45.0, 84.0), (53.0, 91.0), (55.0, 101.0), (52.0, 111.0), (45.0, 119.0),
-             (30.0, 124.0), (12.0, 127.0))
-LEFT_FACET = (5, (35.0, 99.0))
-RIGHT_ROCK = ((164.0, 143.0), (164.0, 106.0), (151.0, 106.5), (139.0, 105.5), (127.0, 107.0),
-              (117.0, 108.5), (109.0, 118.0), (110.0, 130.0), (116.0, 143.0), (128.0, 150.0),
-              (146.0, 144.5))
-RIGHT_FACET = None
-ANEMONE_R = 6.25          # 12.5 across: 13 leaves too little floor for twelve
+# The shore: the sand's far edge, an ink line from near the left edge to
+# near the right, the ground the bank stands on: (x, y) along it.
+SHORE = ((3.0, 111.0), (80.0, 109.2), (157.0, 111.2))
+# The bank: a low run of four rocks standing on the shore, left to right a
+# middling one, the biggest and a smaller one (both with flat, faceted tops)
+# and a low flat one, each joined to the next at a dip (corners 5, 12 and 17).
+# Its top from its left foot to its right, both on the shore.
+BANK = ((12.0, 110.5), (14.0, 104.0), (19.0, 97.0), (26.0, 92.5), (33.0, 93.0), (37.0, 95.0),
+        (40.0, 85.0), (45.0, 76.5), (51.0, 72.5), (65.0, 71.5), (71.0, 75.0), (77.0, 86.0), (80.0, 90.0),
+        (83.5, 87.0), (88.0, 85.0), (100.0, 85.5), (104.5, 90.0), (108.0, 95.0),
+        (114.0, 93.0), (125.0, 93.0), (134.0, 96.0), (140.0, 102.0), (143.0, 110.5))
+# A crack down from each dip, where one rock meets the next: the dip and two
+# points on the way down, ending short of the shore.
+CLEFTS = ((5, (36.5, 99.0), (35.5, 103.0)), (12, (80.5, 96.0), (79.5, 101.5)),
+          (17, (108.5, 99.5), (108.0, 103.0)))
+# The pool, on the sand in front of the bank: wide, its far rim near the
+# shore at the left and falling away from it toward the right, with no dip in
+# it, its near edge swelling in a lobe at the left and drawn in a little bay
+# right of the middle. Its corners, clockwise from the far rim's left.
+POOL_PTS = ((16.0, 142.0), (22.0, 130.0), (34.0, 123.0), (54.0, 119.0), (76.0, 118.0), (96.0, 119.5),
+            (113.0, 122.5), (129.0, 125.5), (142.0, 128.5), (150.0, 136.5), (154.0, 148.0),
+            (150.0, 160.0), (141.0, 169.0), (128.0, 175.0), (112.0, 179.0), (94.0, 182.0),
+            (74.0, 185.0), (54.0, 186.0), (38.0, 182.0), (26.0, 175.0), (18.0, 164.0), (15.0, 153.0))
+# A flat stone in front of the pool, right of the middle, over its near rim,
+# which runs behind it.
+STONE = ((96.0, 182.0), (102.0, 175.0), (114.0, 171.5), (128.0, 171.0), (138.0, 174.0), (142.0, 181.0),
+         (136.0, 186.0), (118.0, 187.5), (102.0, 186.5))
+# The anemones' places on the pool's floor (and the plankton's, at night),
+# in spread order, the first five away from the ripples so that none lies
+# under their arcs: each clear of the rim, the stone and the ripples by CLEAR,
+# and of the others by SPACING, however the hand moves the pool, the stone
+# and each place by up to SLOT_JITTER.
+SLOTS = ((30.7, 158.2), (138.1, 144.4), (88.7, 169.0), (102.1, 153.0), (47.4, 170.7), (115.2, 137.2),
+         (68.0, 171.8), (34.3, 137.8), (122.2, 157.5), (57.1, 152.5), (77.7, 151.6), (93.5, 133.5))
+SLOT_JITTER = 1.0
+ANEMONE_R = 6.25          # 12.5 across
 LOBES = 6
 # Where two anemones (or two specks of plankton, the same size) would touch.
 SPACING = k.apart(ANEMONE_R)
@@ -68,9 +80,36 @@ RIPPLE_SPAN = math.radians(160)
 RIPPLE_FLAT = 0.8
 # The moon's light on the water: long, tilted, and toward the moon's side of
 # the pool (centre, half length, half width, tilt).
-REFLECTION = (74.0, 134.0, 35.0, 9.0, math.radians(-8))
+REFLECTION = (74.0, 136.0, 35.0, 9.0, math.radians(-8))
 # Nothing planned: the one line of reflection on the still water.
-STILL = (84.0, 152.0)
+STILL = (84.0, 154.0)
+# The rocks' washes: how much smaller than the rock, and how far down and
+# right of it (k.wash_of's inset, dx and dy).
+WASH_INSET = 0.93
+WASH_SHIFT = (1.5, 3.0)
+# The starfish on the biggest rock; where the crab stands on the smaller
+# one's flat top; and where the seaweed hangs from the low flat one's top,
+# well clear of its cleft.
+STAR_AT = (57.0, 90.0)
+CRAB_X = 94.0
+WEED_X = 126.5
+# The seaweed: three strands hung side by side from the rock's top, this far
+# apart, swaying together down its face toward the water, the middle one to
+# the shore, the others shorter (how much shorter than the middle one).
+WEED_STEP = 5.5
+WEED_SHORT = (2.0, 0.0, 3.0)
+# How far the strands sway (together), and how far each leans out at its foot:
+# measured over 2,000 days and four salts, every boil frame, the left strand
+# keeps 6.8 from the cleft (MIN_GAP + PEN is 6.75) and neighbours stay 2.5
+# apart, centre to centre (more than a pen).
+WEED_SWAY = 1.6
+WEED_LEAN = (-1.4, 0.0, 1.4)
+# The shells in the sand, never a pair: one at the left, one in front of the
+# pool left of the stone, smaller (x, y, which way they turn, size). The small
+# one sits low enough that the near rim, moved by hand and boiling, never comes
+# within a pen of it (3.4 centre to centre at worst over 2,000 days and four
+# salts), its ink 3 above the picture's foot.
+SHELLS = ((12.0, 189.0, 1, 6.0), (92.0, 191.0, -1, 4.4))
 MOON_R = 7.0
 PLANNED = (('planned',),)
 
@@ -86,10 +125,12 @@ class TidePool:
     since = date(2026, 1, 1)
     until = None
     JOINS = frozenset(frozenset(p) for p in (
-        # The rocks stand behind the pool: their outlines end on its rim.
-        ('rock', 'rim'),
-        # The setting sun rests on the sea line; the seaweed hangs from the rock.
-        ('sun', 'sea'), ('seaweed', 'rock'),
+        # The bank stands on the shore; the rim runs behind the stone, its
+        # ends on the stone's outline.
+        ('rock', 'rim'), ('shore', 'rock'),
+        # The setting sun rests on the sea line; the seaweed hangs from the
+        # bank down to the shore, and the crab stands on the bank.
+        ('sun', 'sea'), ('seaweed', 'rock'), ('seaweed', 'shore'), ('crab', 'rock'),
     ))
 
     def render(self, state: DayState, theme: Theme, rng: Rng) -> Sketch:
@@ -121,100 +162,45 @@ def _interior(points):
     return inside
 
 
-def _sparse(pts: list, step: float = 3.5) -> list:
-    """Every point of `pts` at least `step` from the last one kept (and the
-    last point), for avoid circles: `k.samples` keeps a point per spline
-    piece however short."""
-    out = pts[:1]
-    for p in pts[1:]:
-        if math.dist(p, out[-1]) >= step:
-            out.append(p)
-    if pts and out[-1] != pts[-1]:
-        out.append(pts[-1])
-    return out
-
-
 def _pool(r: Rng):
-    """The pool's whole outline, its corners moved a little by hand (the
-    notch's sharp)."""
+    """The pool's whole outline, its corners moved a little by hand."""
     pts = [(x + r.uniform(-1.0, 1.0), y + r.uniform(-1.0, 1.0)) for x, y in POOL_PTS]
-    return loop(*pts, corners=(POOL_NOTCH,))
+    return loop(*pts)
 
 
-def _rim(outline, samples: list, inside_boulder) -> tuple:
-    """The rim as drawn: the pool's outline where the boulder does not hide
+def _rim(outline, samples: list, inside_stone) -> object:
+    """The rim as drawn: the pool's outline where the stone does not hide
     it, one stroke through the outline's own corners from where it comes out
-    from behind the boulder round to where it goes back, each end on the
-    boulder's outline (they are joined), the notch kept sharp. And the points
-    along it, to keep clear of."""
+    from behind the stone round to where it goes back, each end on the
+    stone's outline (they are joined)."""
     corners = outline.points
     n = len(corners)
-    hid = [inside_boulder(p) for p in corners]
+    hid = [inside_stone(p) for p in corners]
     first = next(i for i in range(n) if hid[i - 1] and not hid[i])
     seen = []
     while not hid[(first + len(seen)) % n]:
         seen.append((first + len(seen)) % n)
-    # Where the pen crosses the boulder's outline: midway between the last
-    # point along it that the boulder hides and the first it does not, and
+    # Where the pen crosses the stone's outline: midway between the last
+    # point along it that the stone hides and the first it does not, and
     # back.
     pts = samples
     m = len(pts)
-    hidden = [inside_boulder(p) for p in pts]
+    hidden = [inside_stone(p) for p in pts]
     out_at = next(j for j in range(m) if hidden[j - 1] and not hidden[j])
     in_at = next(j for j in range(m) if not hidden[j - 1] and hidden[j])
     mid = lambda p, q: ((p[0] + q[0]) / 2, (p[1] + q[1]) / 2)
     start, end = mid(pts[out_at - 1], pts[out_at]), mid(pts[in_at - 1], pts[in_at])
     # Corners right by an end would make a kink in the pen's spline.
     keep = [i for i in seen if math.dist(corners[i], start) >= 3 and math.dist(corners[i], end) >= 3]
-    rim = curve(start, *(corners[i] for i in keep), end, corners=(keep.index(POOL_NOTCH) + 1,))
-    along = [p for p, h in zip(pts, hidden) if not h]
-    return rim, along
+    return curve(start, *(corners[i] for i in keep), end)
 
 
-def _rock(corners, facet, r: Rng, pool_pts: list) -> tuple[list, object, list]:
-    """A rock behind the pool: its outline's visible runs (in the frame and
-    outside the pool, each ending on the rim or at the frame's edge, its
-    corners kept), a facet line, the region its wash fills, which follows
-    the rim where the pool hides the rock, and its corners as drawn."""
-    pts = [(x, y) if x < 0 or x > 160 else (x + r.uniform(-1.5, 1.5), y + r.uniform(-1.5, 1.5))
-           for x, y in corners]
-    walk = []                                    # (point, is a corner)
-    for i, p in enumerate(pts):
-        q = pts[(i + 1) % len(pts)]
-        n = max(1, math.ceil(math.dist(p, q)))
-        walk.extend(((p[0] + (q[0] - p[0]) * j / n, p[1] + (q[1] - p[1]) * j / n), j == 0)
-                    for j in range(n))
-    # (The pool lies below y 96: nothing above it needs the polygon test.)
-    inside_pool = _interior(pool_pts)
-    seen = [1.5 <= x <= 158.5 and (y <= 96 or not inside_pool((x, y))) for (x, y), _ in walk]
-    # Start the walk at a hidden point, so no run wraps past the list's end.
-    start = seen.index(False)
-    order = walk[start:] + walk[:start]
-    flags = seen[start:] + seen[:start]
-    runs, cur = [], []
-    for item, ok in zip(order, flags):
-        if ok:
-            cur.append(item)
-        elif cur:
-            runs.append(cur)
-            cur = []
-    if cur:
-        runs.append(cur)
-    strokes = []
-    for run in runs:
-        if len(run) < 6:
-            continue
-        keep = [run[0][0], *(p for p, corner in run[1:-1] if corner), run[-1][0]]
-        strokes.append(line(*keep))
-    if facet is not None:
-        i, end = facet
-        strokes.append(line(pts[i], end))
-    region = []
-    for (x, y), _ in walk[::8]:
-        if y > 96 and inside_pool((x, y)):
-            x, y = min(pool_pts, key=lambda q: (q[0] - x) ** 2 + (q[1] - y) ** 2)
-        region.append((min(158.5, max(1.5, x)), y))
-    return strokes, poly(*region), pts
+def _bank(r: Rng) -> tuple[object, list]:
+    """The bank's top, its corners moved a little by hand (its feet only
+    along the shore), and its corners."""
+    pts = [(x + r.uniform(-1.5, 1.5), y + (0.0 if i in (0, len(BANK) - 1) else r.uniform(-1.5, 1.5)))
+           for i, (x, y) in enumerate(BANK)]
+    return line(*pts), pts
 
 
 def _ripple_angles(n: int) -> list[float]:
@@ -235,88 +221,54 @@ def _ring_sizes(frame: int) -> list[float]:
 def _structure(r: Rng) -> dict:
     """What both compositions share, so the night is the same pool after dark."""
     outline = _pool(r.fork('pool'))
-    samples = k.samples(outline, step=2.0)
-    coarse = _sparse(samples)   # enough to tell inside from out
-    # The boulder stands in front of the pool, the ledge behind it.
-    rocks = [_rock(LEFT_ROCK, LEFT_FACET, r.fork('left'), []),
-             _rock(RIGHT_ROCK, RIGHT_FACET, r.fork('right'), coarse)]
-    boulder = rocks[0][2]
-    inside_boulder = _interior(boulder)
-    rim, rim_pts = _rim(outline, samples, inside_boulder)
-    star_at = (15 + r.uniform(-1.5, 1.5), 107 + r.uniform(-2, 2))
+    rim_pts = k.samples(outline, step=2.0)
+    stone = [(x + r.uniform(-1.0, 1.0), y + r.uniform(-1.0, 1.0)) for x, y in STONE]
+    rim = _rim(outline, rim_pts, _interior(stone))
+    ridge, bank = _bank(r.fork('bank'))
+    shore = curve(*SHORE)
+    strokes = [ridge]
+    # A crack down from each dip, where one rock meets the next.
+    for dip, p, q in CLEFTS:
+        strokes.append(curve(bank[dip], p, (q[0] + r.uniform(-0.5, 0.5), q[1] + r.uniform(-0.5, 0.5))))
+    # The wash fills the bank down to the shore it stands on.
+    region = poly(*bank, *reversed([p for p in k.samples(shore, step=6.0) if bank[0][0] < p[0] < bank[-1][0]]))
+    star_at = (STAR_AT[0] + r.uniform(-1.0, 1.0), STAR_AT[1] + r.uniform(-0.5, 0.5))
     star_turn = r.uniform(0, 2 * math.pi / 5)
-    crab_at = (139 + r.uniform(-0.3, 0.3), 127 + r.uniform(-0.5, 0.5))
-    weed_x = 156.6 + r.uniform(-0.25, 0.25)
-    # Where the seaweed hangs from: the right rock's top edge above weed_x
-    # (a short edge, which the hand leaves straight).
-    corners = rocks[1][2]
-    weed_top = min(y0 + (y1 - y0) * (weed_x - x0) / (x1 - x0)
-                   for (x0, y0), (x1, y1) in zip(corners, corners[1:])
-                   if min(x0, x1) <= weed_x <= max(x0, x1) and x0 != x1) + 0.6
 
-    # Anemones and plankton keep clear of the rim, the boulder and the
-    # starfish by their own reach, out of the ripples' ground (and its ink),
-    # on the pool's floor.
+    # The bank's top above x: the crab stands on it, its inner feet just
+    # over it, and the seaweed hangs from it, starting just inside it (both
+    # are joined).
+    def top_y(x: float) -> float:
+        return min(y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+                   for (x0, y0), (x1, y1) in zip(bank, bank[1:])
+                   if min(x0, x1) <= x <= max(x0, x1) and x0 != x1)
+
+    shore_pts = k.samples(shore, step=1.0)
+    weed = []
+    for i, short in enumerate(WEED_SHORT):
+        x = WEED_X + WEED_STEP * (i - 1) + r.uniform(-0.3, 0.3)
+        foot = min(shore_pts, key=lambda p: abs(p[0] - x))[1]
+        weed.append((x, top_y(x) + 0.6, foot - 0.4 - short))
+    crab_x, crab_dy = CRAB_X + r.uniform(-0.3, 0.3), r.uniform(-0.5, 0.5)
+    crab_at = (crab_x, (top_y(crab_x - 4.4) + top_y(crab_x + 4.4)) / 2 - 8.1 + crab_dy)
+
+    # The ripples sit as high on the water as the far rim lets them.
     sizes = [3.0 + RIPPLE_STEP * i for i in range(6)]
     top = sizes[-1] * RIPPLE_FLAT                                # how high the widest arc rises
-    drop = sizes[-1] * RIPPLE_FLAT * -math.cos(RIPPLE_SPAN / 2)  # how far its ends fall below the centre
-    # The ripples sit as high on the water as the far rim lets them.
     back = max(y for x, y in rim_pts if abs(x - RIPPLE_X) <= sizes[-1] + 2 and y < 130)
     ripple = (RIPPLE_X, back + PEN + 2 * WOBBLE + top + 1.0)
-    # Both are cheap to trace from their own geometry: the arcs from the
-    # ellipses they lie on, the starfish from its points and the midpoints
-    # between them.
-    ripple_ink = [(ripple[0] + rx * math.cos(a), ripple[1] + rx * RIPPLE_FLAT * math.sin(a))
-                  for rx in sizes for a in _ripple_angles(9)]
-    star = _starfish(star_at, star_turn).points
-    star_ink = [*star, *((((x0 + x1) / 2, (y0 + y1) / 2)) for (x0, y0), (x1, y1) in zip(star, star[1:] + star[:1]))]
-    # The boulder's outline where it stands in the pool.
-    foot = [p for st in rocks[0][0] for p in _sparse(k.samples(st, step=2.0)) if p[1] > 100]
-    # Circles a few units apart, each a little wider to cover the scallops
-    # between them: fewer circles, and the placement is that much quicker.
-    wide = CLEAR + 0.3
-    avoid = (*((x, y, wide) for x, y in _sparse(rim_pts)),
-             *((x, y, wide) for x, y in ripple_ink),
-             *((x, y, wide) for x, y in star_ink),
-             *((x, y, wide) for x, y in foot),
-             *((x, y, wide) for x, y in rim.points))    # the notch's tip and all
-    bx0, bx1 = ripple[0] - sizes[-1] - 1.0, ripple[0] + sizes[-1] + 1.0
-    by0, by1 = ripple[1] - top - 1.0, ripple[1] + drop + 1.0
-    reach = ANEMONE_R + WOBBLE
-    # Clear of the rim by CLEAR, a point is in the pool when it is inside its
-    # outline's corners (the spline strays from them by far less), and out
-    # of the boulder's when it is right of its foot or outside its corners.
-    inside_pool = _interior(outline.points)
-    foot_x = max(x for x, _ in boulder)
 
-    def ok(p) -> bool:
-        dx = max(bx0 - p[0], 0.0, p[0] - bx1)
-        dy = max(by0 - p[1], 0.0, p[1] - by1)
-        return (math.hypot(dx, dy) >= reach and inside_pool(p)
-                and (p[0] > foot_x or not inside_boulder(p)))
-
-    # Placed only by the composition that draws them, each from its own fork.
-    # Candidates come from an ellipse just round the floor they may use (the
-    # pool drawn in by CLEAR), a little looser to reach the lobe: a looser
-    # one wastes them on the rim and leaves too few to pack twelve.
-    cx, cy, fa, fb = FLOOR
-
-    # The floor is tight: on the rare day one pass cannot place all twelve, a
-    # second stream tries again.
+    # Anemones and plankton take the fixed places on the pool's floor, each
+    # moved a little by hand: only the composition that draws them asks, each
+    # from its own fork.
     def floor_points(label: str) -> list:
-        for n in range(3):
-            try:
-                pts = k.scatter_all(r.fork(f'{label}|{n}'), k.REWARDS, cx, cy, fa, fb, SPACING,
-                                    avoid=avoid, ok=ok, floor=SPACING)
-            except ValueError:
-                if n == 2:
-                    raise
-                continue
-            return k.spread(pts, (cx, cy))
+        h = r.fork(label)
+        return [(x + h.uniform(-SLOT_JITTER, SLOT_JITTER), y + h.uniform(-SLOT_JITTER, SLOT_JITTER))
+                for x, y in SLOTS]
 
     return {
-        'rim': rim, 'rocks': rocks, 'star': (star_at, star_turn), 'crab': crab_at,
-        'weed': (weed_x, weed_top), 'ripple': ripple,
+        'rim': rim, 'stone': poly(*stone), 'shore': shore, 'bank': (strokes, region),
+        'star': (star_at, star_turn), 'crab': crab_at, 'weed': weed, 'ripple': ripple,
         'anemones': lambda: floor_points('anemones'),
         'plankton': lambda: floor_points('plankton'),
         'turns': [r.uniform(0, math.pi) for _ in range(k.REWARDS)],
@@ -344,13 +296,13 @@ def _anemone(x: float, y: float, turn: float):
     return loop(*pts)
 
 
-def _shell(cx: float, cy: float, facing: int):
+def _shell(cx: float, cy: float, facing: int, size: float = 6.0):
     """A small spiral shell, its turns MIN_GAP apart."""
     pts = []
     for i in range(9):
         t = i / 8
         a = facing * (1.9 * math.pi * t) + math.pi / 2
-        rr = 6.0 - 4.8 * t
+        rr = size - 0.8 * size * t
         pts.append((cx + rr * math.cos(a), cy + rr * 0.85 * math.sin(a)))
     return curve(*pts)
 
@@ -358,28 +310,30 @@ def _shell(cx: float, cy: float, facing: int):
 def _setting(b: SketchBuilder, s: dict) -> None:
     """The shore both compositions stand on."""
     b.line(line((1.0, SEA), (159.0, SEA + 0.3)), part='sea')
-    # The sea between the rocks: two long, low swells.
+    # The sea beyond the bank: two long, low swells.
     for x0, x1, y in WAVES:
         b.line(curve(*((x0 + (x1 - x0) * i / 6, y + 0.9 * math.sin(i * 1.9)) for i in range(7))),
                part='wave')
-    for strokes, region, _ in s['rocks']:
-        b.wash(k.wash_of(region, dx=1.5, dy=3.0), part='rock')
-    for strokes, _, _ in s['rocks']:
-        for st in strokes:
-            b.line(st, part='rock')
+    strokes, region = s['bank']
+    b.wash(k.wash_of(region, inset=WASH_INSET, dx=WASH_SHIFT[0], dy=WASH_SHIFT[1]), part='rock')
+    b.wash(k.wash_of(s['stone'], inset=WASH_INSET, dx=WASH_SHIFT[0], dy=WASH_SHIFT[1]), part='rock')
+    for st in strokes:
+        b.line(st, part='rock')
+    b.line(s['stone'], part='rock')
     b.line(s['rim'], part='rim')
+    b.line(s['shore'], part='shore')
     b.line(_starfish(*s['star']), part='starfish')
-    b.line(_shell(15.0, 189.0, 1), part='shell:1')
-    b.line(_shell(145.0, 189.0, -1), part='shell:2')
+    for n, (x, y, facing, size) in enumerate(SHELLS, start=1):
+        b.line(_shell(x, y, facing, size), part=f'shell:{n}')
     # Nothing planned: the pool lies still, one line of reflection on it.
     cx, cy = STILL
-    b.line(curve((cx - 22, cy + 1), (cx, cy + 0.2), (cx + 22, cy + 1)), when=(('nothingPlanned',),),
+    b.line(curve((cx - 22, cy + 1), (cx, cy + 0.2), (cx + 22, cy + 1)), when=(('nothingPlanned',), ('idle',)),
            part='still')
     _crab(b, s['crab'])
 
 
 def _crab(b: SketchBuilder, at) -> None:
-    """Everything done: a crab on the right rock, its claws up."""
+    """Everything done: a crab on the bank, its claws up."""
     x, y = at
     when = (('allDone',),)
     b.line(ellipse(x, y, 7.0, 4.2, n=10), when=when, part='crab')
@@ -396,10 +350,25 @@ def _crab(b: SketchBuilder, at) -> None:
 
 
 def _seaweed(b: SketchBuilder, s: dict, when: tuple) -> None:
-    """A strand of seaweed hung over the right rock's top edge."""
-    x, top = s['weed']
-    pts = [(x + 1.6 * math.sin(i * 1.3) * min(1.0, i / 2), top + i * 5.4) for i in range(6)]
-    b.line(curve(*pts), when=when, part='seaweed')
+    """Three strands of seaweed draped over the bank's top, down its face
+    toward the water, the middle one to the shore (they are joined): each one
+    long, gentle S, the outer two fanning out toward their feet, each tip
+    curled outward in a small hook. They sway together, in step with the
+    middle strand at each height, so neighbours keep their spacing (only the
+    boil can bring two together, and a tuft of weed may touch)."""
+    _, mid_top, mid_bottom = s['weed'][1]
+    span = mid_bottom - mid_top
+    for j, (x, top, bottom) in enumerate(s['weed']):
+        n = 5
+        lean = WEED_LEAN[j]
+        pts = []
+        for i in range(n + 1):
+            y = top + (bottom - top) * i / n
+            sway = WEED_SWAY * math.sin(2 * math.pi * (y - mid_top) / span) * min(1.0, 2 * i / n)
+            pts.append((x + sway + lean * i / n, y))
+        tx, ty = pts[-1]
+        pts[-1] = (tx + (-1.5 if j == 0 else 1.5), ty - 1.5)
+        b.line(curve(*pts), when=when, part='seaweed')
 
 
 def _ripples(centre):
@@ -425,7 +394,7 @@ def _day(b: SketchBuilder, s: dict, r: Rng) -> None:
     k.stars(b, r.fork('late-stars'), 3, (8, 5, 152, 26),
             avoid=((mx, my, 14), *((x, y, w * 0.6 + 4) for x, y, w in CLOUDS)),
             when=(k.LATE,), part='star')
-    # Overdue work: seaweed on the rock, then a cloud, and a second.
+    # Overdue work: seaweed on the bank, then a cloud, and a second.
     _seaweed(b, s, (('overdue', 1),))
     for level, (x, y, w) in enumerate(CLOUDS, start=2):
         k.cloud(b, x, y, w, when=(('overdue', level),), part=f'cloud:{level - 1}')

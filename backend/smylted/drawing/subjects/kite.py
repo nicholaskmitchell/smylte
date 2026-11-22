@@ -26,6 +26,9 @@ from ..state import DayState, Theme
 from . import _kit as k
 
 HILL = ((1.0, 150.0), (36.0, 139.0), (70.0, 132.0), (116.0, 136.5), (159.0, 146.0))
+# The grass: a soft blob of colour with no outline, under the crest and across
+# the hill line, clear of every edge (centre x, centre y, half-width, half-depth).
+GRASS = (80.0, 144.0, 62.0, 14.0)
 POST_X = 34.0
 POST_TOP = 116.0
 SAG = 2.0
@@ -178,14 +181,14 @@ def _structure(r: Rng) -> dict:
     return {
         'kite': (cx, cy), 'corners': (top, right, bottom, left), 'string': string,
         'tail': tail, 'trace': trace, 'slots': slots, 'hill': hill,
+        'grass': k.blob(*GRASS, r.fork('grass'), n=12, wobble=0.05),
         'moon_spot': (22 + r.uniform(-2, 2), 24 + r.uniform(-2, 2)),
     }
 
 
 def _ground(b: SketchBuilder, s: dict) -> None:
     hill = s['hill']
-    region = poly(*[(x, y) for x, y in hill[::8]], (159.0, 147.0), (156.0, 192.0), (2.0, 192.0))
-    b.wash(k.wash_of(region, dx=1.5, dy=3.0), part='hill')
+    b.wash(s['grass'], part='hill')
     b.line(curve(*HILL), part='hill')
     foot = _hill_y(POST_X, hill)
     b.line(line((POST_X - 2.4, foot + 1.2), (POST_X - 2.3, POST_TOP), (POST_X + 2.7, POST_TOP + 0.2),

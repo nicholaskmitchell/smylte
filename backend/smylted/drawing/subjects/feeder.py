@@ -30,6 +30,11 @@ from ..state import DayState, Theme
 from . import _kit as k
 
 GROUND = 168.0
+# The grass: a low bank resting on the ground line, a soft wash with no
+# outline, most of it above the line and its lower lip just below, off to the
+# left of the feeder and well inside the picture: (centre x, centre y, half
+# width, half height).
+BANK = (74.0, 161.0, 54.0, 11.0)
 FX = 86.0                       # the feeder's middle
 APEX = 76.0                     # the roof's peak
 EAVE = 90.0                     # the roof's foot and the box's top
@@ -43,14 +48,17 @@ MOTH_HALO = 11.0
 MOON_R = 6.5
 PLANNED = (('planned',),)
 # Where the birds come, by their feet: on the branch (y from the branch), on
-# the dowel's ends, on the ground line, and in front on the grass; each with
-# the way it faces.
+# the dowel's ends, on the ground line, and in front of it, below the ground
+# line; each with the way it faces.
 BRANCH_BIRDS = ((20.0, 1), (50.0, -1), (97.0, -1), (125.0, 1))
 PERCH_BIRDS = ((57.0, 1), (115.0, 1))
 GROUND_BIRDS = ((18.0, 1), (50.0, -1), (118.0, 1), (146.0, -1))
 FRONT_BIRDS = ((34.0, 187.0, -1), (132.0, 187.0, 1))
-SEEDS = ((70.5, 164.5), (76.0, 162.6), (97.5, 163.0), (101.5, 165.2))
-HUSKS = ((83.5, 164.2), (89.5, 163.4))
+# Spilled seed lying on the ground at the feeder's foot, each dot's ink at
+# least 2 clear of the ground line's; the husks, under the falling seed, sit
+# as low as its last step lets them.
+SEEDS = ((70.5, 160.9), (76.0, 159.8), (97.5, 159.9), (101.5, 160.8))
+HUSKS = ((83.5, 163.2), (89.5, 163.0))
 # Overdue weather by day, clear of every sun and the birds' heads: (x, y, width).
 DAY_CLOUDS = ((45.0, 15.0, 24.0), (111.0, 14.0, 24.0))
 
@@ -162,6 +170,7 @@ def _structure(r: Rng) -> dict:
               ((106.0, 47.6), 10.0, math.radians(112 + r.uniform(-6, 6)))]
 
     ground = curve((0.0, GROUND + 0.6), (80.0, GROUND - 0.6), (160.0, GROUND + 0.4))
+    bank = k.blob(*BANK, r.fork('bank'), n=12, wobble=0.12)
 
     # The birds are placed only by the day, which draws them, from their own
     # fork of this stream.
@@ -188,7 +197,7 @@ def _structure(r: Rng) -> dict:
     owl_by = _branch_top(bs, owl_x) + 0.3
     return {
         'branch': branch, 'twigs': twigs, 'leaves': leaves,
-        'ground': ground, 'slots': slots,
+        'ground': ground, 'bank': bank, 'slots': slots,
         'owl': (owl_x, owl_by - 15.0, owl_by),
         'moon_spot': (20.0 + r.uniform(-2, 2), 17.5 + r.uniform(-0.5, 0.5)),
     }
@@ -222,9 +231,8 @@ def _scene(b: SketchBuilder, s: dict) -> None:
         b.line(line((x - 0.5, y), (x + 0.5, y + 0.2)), when=PLANNED, part='seed')
 
 
-def _ground_wash(b: SketchBuilder) -> None:
-    region = poly((1.0, GROUND + 1.0), (80.0, GROUND), (158.0, GROUND + 1.0), (157.0, 187.0), (2.0, 187.0))
-    b.wash(k.wash_of(region, inset=1.0, dx=0.5, dy=2.0), part='ground')
+def _ground_wash(b: SketchBuilder, s: dict) -> None:
+    b.wash(s['bank'], part='ground')
 
 
 # ── day ─────────────────────────────────────────────────────────────────────
@@ -257,7 +265,7 @@ def _fall(frame: int, child: SketchBuilder) -> None:
 
 
 def _day(b: SketchBuilder, s: dict, r: Rng) -> None:
-    _ground_wash(b)
+    _ground_wash(b, s)
     _sky_day(b, s, r)
     _scene(b, s)
     # Everything done: the feeder is full, a heap of seed in its opening, and
@@ -329,7 +337,7 @@ def _head(s: dict, turn: float, child: SketchBuilder, when: tuple, part: str, *,
 
 
 def _night(b: SketchBuilder, s: dict, r: Rng) -> None:
-    _ground_wash(b)
+    _ground_wash(b, s)
     mx, my = s['moon_spot']
     # The clouds beside the moon: the first beside it, the second a step
     # further on and lower, still above the branch.

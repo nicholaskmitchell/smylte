@@ -4,16 +4,25 @@ Everything here is geometry. Paint is a role chosen at the call site (line,
 wash, glow, accent); motion is the client's. The canvas is the builder's
 viewBox, 160 x 200, portrait, y growing downward.
 
-Rules for a subject. The tests hold every subject to four of them, over a week
+Rules for a subject. The tests hold every subject to five of them, over a week
 of days under two salts, both themes and every hour (tests/test_drawing.py): it
 stays in its frame; every reward is at least 10 units across and 60 units^2 of
 coral; ink touches ink only where JOINS says, measured at the pen's own width
 (PEN) on every boil frame and every frame of the focus loop, and two rewards
 never touch at all; and the night is its own picture: at most 90% of its marks
 where a day mark is, at least four of its own (checks.is_own_night), and a glow
-of at least 600 units^2 that is always on. The rest are this kit's conventions, which the
-tests cannot see:
+of at least 600 units^2 that is always on; and every wash closes inside the
+picture, at least checks.WASH_MARGIN (6) units from each edge. The rest are
+this kit's conventions, which the tests cannot see:
 
+* Ground is a line, as the tree's sill, the desk's floor and the washing line's
+  ground are: an ink line that may run close to the edges, as a horizon does.
+  Colour goes on things that close (a canopy, a pane, a rock, a bush:
+  wash_of(outline)) or is a soft blob with no outline (blob()), behind them or
+  across the line, as the washing line's hedge is by day and its ground by
+  night. Never a band across the
+  width, and never an outlined slab of land under the ground line: cut by the
+  frame it shows the frame, and closed inside it, it floats like an island.
 * Fill the frame, as the mockup's tree does: the subject is the picture, not a
   vignette in a corner of sky. Nothing leaves the frame.
 * The wash is the subject's own outline, shifted down and right like a print

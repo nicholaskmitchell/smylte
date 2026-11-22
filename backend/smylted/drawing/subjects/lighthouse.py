@@ -26,11 +26,16 @@ from ..state import DayState, Theme
 from . import _kit as k
 
 SEA = 96.0                # the sea line, across the frame
-# The point: up from the left edge to its top under the tower, down to the
-# sea, and its shore on down to the bottom of the frame.
-POINT = ((0.0, 130.0), (16.0, 126.0), (32.0, 122.6), (50.0, 120.0), (66.0, 123.4),
-         (78.0, 131.0), (87.0, 141.0), (92.0, 150.0), (89.0, 166.0), (84.0, 182.0), (80.5, 199.0))
-TOE = 7                   # the index of the point's toe in the sea, where the shore turns
+# The point: a headland standing in the sea, closed inside the picture. Up a
+# low cliff from its foot at the left, over its top under the tower, down to
+# its toe in the sea, and back along the waterline at its foot.
+POINT = ((9.5, 161.0), (10.0, 149.0), (11.6, 137.0), (20.0, 130.0), (34.0, 123.4), (50.0, 120.0),
+         (66.0, 123.4), (78.0, 131.0), (87.0, 141.0), (92.0, 150.0),
+         (84.0, 155.2), (74.0, 158.8), (63.0, 159.6), (52.0, 162.4), (40.0, 162.0), (28.0, 164.0),
+         (18.0, 162.8))
+FOOT_L, BROW, TOE = 0, 2, 9  # the cliff's foot and brow, and the toe in the sea
+# The sea lapping at the point's foot: short ripples just below its waterline.
+LAP = ((24.0, 171.0, 7.0), (50.0, 169.6, 8.0), (74.0, 165.4, 6.0))
 # The tower tapers from its base to the gallery.
 BASE_Y, BASE = 122.0, (38.0, 62.0)
 GALLERY_Y, TOP = 52.0, (42.0, 58.0)
@@ -110,7 +115,7 @@ def _structure(r: Rng) -> dict:
     tall = {(x, y): r.uniform(15.0, 16.0) for x, y, _ in boats}
     order = k.spread([(x, y) for x, y, _ in boats], (100.0, SEA))
     scale = {(x, y): sc for x, y, sc in boats}
-    land = k.samples(curve(*POINT, corners=(TOE,)), step=1.0)
+    land = k.samples(loop(*POINT, corners=(FOOT_L, BROW, TOE)), step=1.0)
     return {
         'boats': [(x, y, scale[(x, y)], facing[(x, y)], tall[(x, y)]) for x, y in order],
         'land': [p for p in land if p[1] <= 150.5],
@@ -121,10 +126,12 @@ def _structure(r: Rng) -> dict:
 # ── the headland and the lighthouse ─────────────────────────────────────────
 
 def _point(b: SketchBuilder, s: dict) -> None:
-    outline = curve(*POINT, corners=(TOE,))
-    region = poly(*k.samples(outline, step=6.0), (1.0, 199.0))
-    b.wash(k.wash_of(region, inset=0.95, dx=3.0, dy=3.0), part='point')
+    outline = loop(*POINT, corners=(FOOT_L, BROW, TOE))
+    b.wash(k.wash_of(outline, inset=0.95, dx=3.0, dy=3.0), part='point')
     b.line(outline, part='point')
+    for x, y, h in LAP:
+        b.line(curve((x - h, y + 0.4), (x - h / 3, y - 0.5), (x + h / 3, y + 0.5), (x + h, y - 0.3)),
+               part='point')
 
 
 def _tower(b: SketchBuilder, s: dict) -> None:

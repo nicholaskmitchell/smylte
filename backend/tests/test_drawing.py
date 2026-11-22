@@ -43,6 +43,7 @@ from smylted.drawing.checks import (
     night_overlap,
     night_own,
     reward_sizes,
+    wash_edge_errors,
 )
 from smylted.drawing.pen import WOBBLE, Pen, hand
 from smylted.drawing.scene import Mark, Sketch
@@ -1199,6 +1200,32 @@ def test_subject_stays_in_its_frame(subject):
             for where, sketch in _renders(subject, state, theme):
                 errors = bounds_errors(sketch)
                 assert not errors, f"{subject.id} {theme} {where} hour {state.hour}: {errors[:5]}"
+
+
+@pytest.mark.parametrize("subject", _roster_params()
+                         + [pytest.param(v, id=f"view-{k}") for k, v in _subjects.VIEW_DRAWINGS.items()])
+def test_washes_close_inside_the_frame(subject):
+    # A wash cut by the frame shows the frame: a straight, jagged edge nobody
+    # drew. Ground is an ink line, and colour is a soft blob or the plate of a
+    # closed thing, never a band. A render returns every mark whatever the
+    # state, so the sample is by day: a blob that reaches the frame one day in
+    # fifteen needs more days than a week to show.
+    for theme in ('light', 'dark'):
+        for d in range(40):
+            for salt in ('contract-salt', 'second-salt'):
+                day = date(2026, 11, 16) + timedelta(days=d)
+                sketch = subject.render(_DayState(), theme, _Rng.for_day(day, salt, f'subject|{subject.id}'))
+                errors = wash_edge_errors(sketch)
+                assert not errors, f"{subject.id} {theme} {day} {salt}: {errors[:3]}"
+
+
+def test_a_wash_near_the_frame_is_named():
+    inside = _mark("m0", "M 20 20 L 140 20 L 140 180 L 20 180 Z", role="wash")
+    banded = _mark("m1", "M 0 150 L 160 150 L 160 200 L 0 200 Z", role="wash", part="ground")
+    edge_line = _mark("m2", "M 0 150 L 160 150", part="sill")
+    assert wash_edge_errors(_sketch(inside, edge_line)) == []
+    errors = wash_edge_errors(_sketch(inside, banded))
+    assert len(errors) == 1 and "ground" in errors[0]
 
 
 @pytest.mark.parametrize("subject", _roster_params())

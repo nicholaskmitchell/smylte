@@ -28,22 +28,47 @@ from ..state import DayState, Theme
 from . import _kit as k
 
 GROUND = ((0.0, 153.4), (40.0, 151.2), (84.0, 150.4), (124.0, 151.0), (160.0, 154.2))
-APEX = (84.0, 90.0)
-BASE = (58.0, 110.0)          # the tent's feet on the ground
-DOOR_TOP = (84.0, 104.0)
-DOOR = (70.0, 98.0)           # the door opening's feet
+# The clearing's colour: a soft blob across the ground line, no outline, its
+# lower edge uneven (centre, half-width, half-depth).
+CLEARING = (81.0, 168.0, 66.0, 23.0)
+APEX = (77.0, 90.0)
+BASE = (51.0, 103.0)          # the tent's feet on the ground
+DOOR_TOP = (77.0, 104.0)
+DOOR = (63.0, 91.0)           # the door opening's feet
 GUY_AT = 0.4                  # how far down each slope the guy lines are tied
-PEGS = (51.5, 116.5)
-STOVE = (121.5, 135.5, 143.0)  # its sides and its top
-POT = (124.0, 133.0, 135.0)    # its sides and its rim
+PEGS = (44.5, 109.0)
+STOVE = (114.0, 128.0, 143.0)  # its sides and its top
+POT = (116.5, 125.5, 135.0)    # its sides and its rim
 # Each pine: its middle, its tip, the foot of its branches, its half-width.
-PINES = ((20.0, 30.0, 124.0, 19.0), (143.5, 40.0, 109.0, 16.0))
+PINES = ((27.5, 30.0, 124.0, 19.0), (135.9, 40.0, 109.0, 16.0))
 TRUNK = 2.5
-CONE_R = 6.5                  # a cone's reach from its middle
+CONE_JITTER = 0.5             # how far a cone's place moves with the day
+# Where the cones lie: on the clearing below the ground line, each clear of
+# the line, the pegs and the other cones by a pen and the wobble of both, with
+# over half a unit to spare, however it turns and wherever its jitter puts it.
+# A random scatter cannot find room for all twelve every day, so their places
+# are fixed: a loose lens of two uneven rows that follows the clearing's
+# colour, so every cone lies mostly on it (at least 50% of each, on every day
+# measured) rather than rolling off onto bare paper; each moves a little and
+# turns with the day.
+CONES = ((21.4, 170.1), (40.4, 165.3), (60.0, 167.4), (79.3, 163.0), (98.6, 166.6), (117.9, 163.4),
+         (140.2, 165.0), (48.4, 183.3), (68.2, 185.7), (87.8, 182.9), (107.4, 184.5), (128.0, 180.2))
 EMBER_R = 5.5
+EMBER_JITTER = 0.5            # how far an ember's place moves with the day
+# Where the embers rise, in spread order from the fire: above the ground and
+# below the sky, each clear of the tent's, the pines', the fire's, the stove's
+# and the pot's ink by a pen and the wobble of both with over half a unit to
+# spare, of the moon and its clouds on either side, wherever the day puts
+# them, and of the other embers (the closest pair is 20.1 apart, the floor
+# 15.75), wherever its jitter puts it. A random scatter could not find room
+# for all twelve on some nights, so their places are fixed.
+EMBERS = ((109.5, 124.1), (52.7, 55.4), (53.1, 110.4), (105.1, 55.8), (89.5, 88.8), (63.6, 90.8),
+          (111.2, 93.0), (68.9, 68.8), (89.3, 68.5), (49.8, 75.4), (97.5, 107.9), (115.2, 73.2))
 MOON_R = 7.0
-FIRE_X = 85.0
-FIRE_GAP = (74.0, 96.0)       # at night the ground line stops behind the flames
+FIRE_X = 78.0
+# At night the ground line stops under the fire: its ends tucked under the
+# crossed logs' upper ends, the gap no wider than the logs.
+FIRE_GAP = (FIRE_X - 7.5, FIRE_X + 7.5)
 # Clear of a mark's ink by a pen and the wobble of both.
 CLEAR = PEN + 2 * WOBBLE
 PLANNED = (('planned',),)
@@ -116,49 +141,43 @@ def _structure(r: Rng) -> dict:
         guys.append(line(at, top))
         pegs.append(line((px + side * 0.2, gy + 2.0), top))
     panels = [poly(APEX, left_foot, door_l, DOOR_TOP), poly(APEX, DOOR_TOP, door_r, right_foot)]
-    tent_ink = [*slopes, *door, *guys, *pegs]
-    pine_ink = [*pines, *(t for pair in trunks for t in pair)]
 
     # The ground's ink, the stove and the pegs, for what lies on the ground.
     sx0, sx1, stop = STOVE
     stove = poly((sx0, g(sx0) + 0.4), (sx0, stop), (sx1, stop), (sx1, g(sx1) + 0.4))
+    px0, px1, rim = POT
+    pot = [line((px0, rim), (px0 + 0.4, stop), (px1 - 0.4, stop), (px1, rim)),
+           line((px0 - 1.2, rim), (px1 + 1.2, rim)),
+           line((px0, rim + 1.6), (px0 - 4.0, rim + 0.8))]
 
     boots = _boots(g)
     flames = [_flames(i) for i in range(3)]
     logs = _logs()
 
-    # Everything else stands on the ground line or above it: the cones keep
-    # clear of the line (and the pegs' points just under it), and so of all of it.
-    cone_avoid = tuple((x, y, CONE_R + CLEAR + 0.6)
-                       for st in (curve(*GROUND), *pegs) for x, y in k.samples(st, 3.0))
-
+    # Everything else stands on the ground line or above it: the cones lie
+    # below it, at CONES, clear of the line (and the pegs' points just under
+    # it), and so of all of it.
     def cones() -> list:
         cr = r.fork('cones')
-        # The ellipse holds the whole strip, so its corners hold cones too.
-        pts = k.scatter_all(cr, k.REWARDS, 85, 176, 93, 22, k.apart(CONE_R), avoid=cone_avoid,
-                            ok=lambda p: 20 <= p[0] <= 150 and p[1] <= 190,
-                            floor=k.apart(CONE_R))
         tilt = cr.fork('tilt')
-        return [(p, math.radians(tilt.uniform(-80, 80))) for p in k.spread(pts, (84, 160))]
+        return [((x + cr.uniform(-CONE_JITTER, CONE_JITTER), y + cr.uniform(-CONE_JITTER, CONE_JITTER)),
+                 math.radians(tilt.uniform(-80, 80))) for x, y in k.spread(CONES, (DOOR_TOP[0], 160))]
 
     side = r.choice([-1, 1])
     moon_spot = (80 + side * (40 + r.uniform(-3, 3)), 22 + r.uniform(-2, 2))
 
     def embers() -> list:
-        clouds = _moon_clouds(moon_spot)
-        avoid = (*((x, y, EMBER_R + CLEAR + 0.6)
-                   for st in (*tent_ink, *pine_ink, *flames) for x, y in k.samples(st, 3.0)
-                   if 38 <= x <= 134 and y <= 152),
-                 *((x, y, rr + EMBER_R) for x, y, rr in clouds))
-        pts = k.scatter_all(r.fork('embers'), k.REWARDS, FIRE_X, 100, 40, 44, k.apart(EMBER_R), avoid=avoid,
-                            ok=lambda p: 50 <= p[0] <= 120 and 60 <= p[1] <= 140,
-                            floor=k.apart(EMBER_R))
-        return k.spread(pts, (FIRE_X, 140))
+        er = r.fork('embers')
+        return [(x + er.jitter(EMBER_JITTER), y + er.jitter(EMBER_JITTER))
+                for x, y in k.spread(EMBERS, (FIRE_X, 136))]
+
+    cx, cy, rx, ry = CLEARING
+    clearing = k.blob(cx, cy, rx, ry, r.fork('clearing'), n=14, wobble=0.07)
 
     return {
-        'ground': ground, 'g': g, 'pines': pines, 'trunks': trunks,
+        'ground': ground, 'clearing': clearing, 'g': g, 'pines': pines, 'trunks': trunks,
         'slopes': slopes, 'door': door, 'guys': guys, 'pegs': pegs,
-        'panels': panels, 'stove': stove, 'boots': boots, 'flames': flames, 'logs': logs,
+        'panels': panels, 'stove': stove, 'pot': pot, 'boots': boots, 'flames': flames, 'logs': logs,
         'cones': cones, 'embers': embers, 'moon_spot': moon_spot,
         'door_glow': poly(DOOR_TOP, door_l, door_r),
     }
@@ -193,10 +212,11 @@ def _boots(g) -> list:
 
 
 def _logs() -> list:
-    """Three logs crossed under the fire."""
+    """Three logs crossed under the fire, lying across the ground line: the
+    crossed pair's upper ends rest on it, where the line stops."""
     x = FIRE_X
-    return [line((x - 10.5, 165.0), (x + 8.0, 158.2)), line((x + 10.5, 165.0), (x - 8.0, 158.2)),
-            line((x - 9.0, 162.0), (x + 9.0, 162.4))]
+    return [line((x - 10.5, 157.0), (x + 7.0, 150.0)), line((x + 10.5, 157.0), (x - 7.0, 150.0)),
+            line((x - 9.0, 154.0), (x + 9.0, 154.4))]
 
 
 def _flames(shape: int):
@@ -205,20 +225,20 @@ def _flames(shape: int):
     x = FIRE_X
     (l1, h1), (l2, h2) = (((0.0, 0.0), (0.0, 0.0)), ((-1.2, -1.0), (0.8, 1.2)),
                           ((0.9, 1.0), (-0.6, -1.4)))[shape]
-    return loop((x, 160.4), (x - 5.4, 158.0), (x - 6.4, 154.2), (x - 3.6 + l1, 148.6 + h1),
-                (x + 0.6, 153.2), (x + 3.8 + l2, 149.8 + h2), (x + 6.4, 154.6), (x + 5.4, 158.2),
+    return loop((x, 152.4), (x - 5.4, 150.0), (x - 6.4, 146.2), (x - 3.6 + l1, 140.6 + h1),
+                (x + 0.6, 145.2), (x + 3.8 + l2, 141.8 + h2), (x + 6.4, 146.6), (x + 5.4, 150.2),
                 corners=(3, 4, 5))
 
 
 # ── the shared picture ──────────────────────────────────────────────────────
 
 def _ground(b: SketchBuilder, s: dict, *, gap: tuple[float, float] | None = None) -> None:
-    ground = s['ground']
-    region = poly(*[(x, y) for x, y in ground[::8]], (159.0, 155.0), (157.0, 194.0), (3.0, 194.0))
-    b.wash(k.wash_of(region, dx=1.5, dy=3.0), part='ground')
+    # The clearing: a soft blob across the line, no outline, clear of the frame.
+    b.wash(s['clearing'], part='ground')
     if gap is None:
         b.line(curve(*GROUND), part='ground')
         return
+    ground = s['ground']
     x0, x1 = gap
     for lo, hi in ((0.0, x0), (x1, 160.0)):
         pts = [p for p in ground if lo <= p[0] <= hi]
@@ -247,10 +267,10 @@ def _tent(b: SketchBuilder, s: dict) -> None:
 
 def _bundle(b: SketchBuilder, s: dict) -> None:
     """Nothing planned: the tent is packed, a rolled bundle lying on the ground
-    at the left of its pitch, two straps round it."""
+    at the left of its pitch, two straps round it, clear of the night's fire."""
     when = (('nothingPlanned',),)
     g = s['g']
-    x0, x1 = 42.0, 72.0
+    x0, x1 = 36.0, 66.0
     foot = g((x0 + x1) / 2) + 0.4
     top = foot - 11.0
     b.line(loop((x0 + 3, foot), (x0, foot - 5.5), (x0 + 3, top), (x1 - 3, top), (x1, foot - 5.5),
@@ -263,10 +283,8 @@ def _stove(b: SketchBuilder, s: dict) -> None:
     b.line(s['stove'], part='stove')
     sx0, sx1, stop = STOVE
     b.line(k.ring((sx0 + sx1) / 2, stop + 3.6, 1.1, 6), part='stove')
-    px0, px1, rim = POT
-    b.line(line((px0, rim), (px0 + 0.4, stop), (px1 - 0.4, stop), (px1, rim)), part='pot')
-    b.line(line((px0 - 1.2, rim), (px1 + 1.2, rim)), part='pot')
-    b.line(line((px0, rim + 1.6), (px0 - 4.0, rim + 0.8)), part='pot')
+    for st in s['pot']:
+        b.line(st, part='pot')
 
 
 def _steam(frame: int, child: SketchBuilder) -> None:
@@ -349,19 +367,22 @@ def _night(b: SketchBuilder, s: dict, r: Rng) -> None:
     _pines(b, s)
     mx, my = s['moon_spot']
     clouds = k.moon(b, mx, my, MOON_R, clouds=2)
-    k.stars(b, r.fork('stars'), 3, (8, 5, 152, 50), avoid=((mx, my, 20), *clouds),
+    # The embers fan up into the sky above the ridge: the stars keep clear of them.
+    embers = s['embers']()
+    k.stars(b, r.fork('stars'), 3, (8, 5, 152, 50),
+            avoid=((mx, my, 20), *clouds, *((x, y, EMBER_R + CLEAR) for x, y in embers)),
             ok=lambda p: _clear_of_pines(p, 6.0), part='star')
     _tent(b, s)
     _bundle(b, s)
     _stove(b, s)
     # The campfire in front of the tent: its light is the night's.
-    b.glow(k.ring(FIRE_X, 154.0, 32.0, 12), part='fire')
+    b.glow(k.ring(FIRE_X, 150.0, 32.0, 12), part='fire')
     b.glow(k.wash_of(s['door_glow'], inset=0.84, dx=0.0, dy=1.0), when=(('allDone',), *PLANNED),
            part='door')
     for log in s['logs']:
         b.line(log, part='fire')
     _fire(b, 0, when=(('idle',),))
-    for i, (x, y) in enumerate(s['embers']()):
+    for i, (x, y) in enumerate(embers):
         k.glow_dot(b, x, y, EMBER_R, halo=10, when=(('reward', i), *PLANNED), part=f'ember:{i}',
                    glass=False)
         b.anchor(i, x, y)

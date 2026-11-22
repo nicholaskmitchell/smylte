@@ -55,4 +55,12 @@ at the pen's own width (2.25 units) on every boil frame and every frame of the
 focus loop, and two rewards never touch at all; and the night is its own
 picture, not the day recoloured (at most 90% of its marks where a day mark is,
 allowing for both boils' wobble, and at least four marks of its own), with a
-light that is always on (a glow of 600 units² or more with no condition).
+light that is always on (a glow of 600 units² or more with no condition). And every
+wash closes inside the picture, at least 6 units from each edge: a wash the
+frame cuts shows the frame as a straight, jagged edge nobody drew. So ground is
+an ink line (it may run near the edges, as a horizon does), and colour goes on
+things that close (a canopy, a rock, a bush) or is a soft blob with no outline
+(blob()), behind them or across the line, as the washing line's hedge is by day
+and its ground by night. Never a band across the
+width, and never an outlined slab of land under the ground line, which floats
+like an island once it is closed inside the picture.

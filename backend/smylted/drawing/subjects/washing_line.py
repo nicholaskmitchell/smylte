@@ -177,7 +177,7 @@ def _day(b: SketchBuilder, s: dict, r: Rng) -> None:
 
 def _night(b: SketchBuilder, s: dict, r: Rng) -> None:
     # The far hill and the house on it: its lit window is the light the line hangs by.
-    b.wash(k.blob(96, 168, 56, 13, r.fork('ground'), n=12, wobble=0.05), part='ground')
+    b.wash(k.blob(93, 168, 54, 13, r.fork('ground'), n=12, wobble=0.05), part='ground')
     b.line(curve((70, 154), (98, 148.4), (122, 149), (134, 151)), part='hill')
     hx, hy = 120.0, 149.0
     b.line(line((hx - 11, hy), (hx - 11, hy - 13), (hx, hy - 21), (hx + 11, hy - 13), (hx + 11, hy)), part='house')
