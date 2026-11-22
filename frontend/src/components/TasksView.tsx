@@ -409,11 +409,12 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
     const p = parentOf(t)
     return p && shownKeys.has(taskKey(p))
       && (showCompleted || showsOpen(p)) && !isParked(p)
-      // A parent on its way out takes its finished subtasks with it: open work
-      // moves to the top level as the fold starts rather than fading away with
-      // it, unfinished, and coming back as a new row; and a subtask ticked after
-      // it moved out stays out until it has gone (its own exit outlasts the
-      // parent's), while a subtask leaving with it (the server closed both in
+      // A parent on its way out takes with it the subtasks that leave with it:
+      // open work moves to the top level as the fold starts rather than fading
+      // away with it, unfinished, and coming back as a new row; and a finished
+      // subtask whose own exit outlasts the parent's goes its own way too (one
+      // ticked after it moved out, or one the server closed just after the
+      // parent was ticked), while one leaving with it (the server closed both in
       // one climb) stays inside. With completed tasks shown the parent's next
       // place is "Completed", under which its subtasks hang anyway, so there
       // they all travel with it rather than jumping twice.
