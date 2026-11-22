@@ -401,6 +401,10 @@ describe('the Today header the phone rules aim at', () => {
     expect(src, 'the open/done count lost `today-count`, so the browser test '
       + 'that measures the header\'s rows is measuring markup the app no '
       + 'longer renders').toMatch(/className="content-sub today-count"/)
+    expect(src, 'the Field notes Today line lost `fn-head-text`, `fn-head-tools` or '
+      + '`fn-plan`, so the browser test that measures where Plan my day sits is '
+      + 'measuring markup the app no longer renders')
+      .toMatch(/className="fn-head-text"[\s\S]*?className="fn-head-tools"[\s\S]*?className="today-linkish fn-plan"/)
   })
 
   it('wraps the cells after the title in `today-meta`, as the browser fixtures do', () => {

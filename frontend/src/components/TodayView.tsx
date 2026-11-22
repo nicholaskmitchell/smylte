@@ -2917,14 +2917,22 @@ export function TodayView({
               rev={rev} onOpen={onStartWorking} onRunning={setFocusRunning} />
           )}
           <div className="fn-list-head">
-            <span className="content-title">{isToday ? tr('today.title') : tr('today.lookBack')}</span>
-            {entries !== null && (
-              <span className="content-sub today-count">
-                {tr('today.countDone', { done: entries.length - openCount, total: entries.length })}
-              </span>
-            )}
-            <span className="spacer" />
-            {acts}
+            <div className="fn-head-text">
+              <span className="content-title">{isToday ? tr('today.title') : tr('today.lookBack')}</span>
+              {entries !== null && (
+                <span className="content-sub today-count">
+                  {tr('today.countDone', { done: entries.length - openCount, total: entries.length })}
+                </span>
+              )}
+            </div>
+            <div className="fn-head-tools">
+              {nudging && (
+                <button type="button" className="today-linkish fn-plan" onClick={() => setRitual(true)}>
+                  {tr('today.planMyDay')}
+                </button>
+              )}
+              {acts}
+            </div>
           </div>
         </>
       ) : (
@@ -3129,8 +3137,9 @@ export function TodayView({
 
           So the strip paints when EITHER holds, and a day with a capacity but
           no offer, or an offer but no capacity, is a normal state rather than a
-          missing one. */}
-      {(hasLoad || nudging) && (
+          missing one. Under Field notes the offer lives on the Today line
+          (.fn-head-tools), so there the strip paints only for a figure. */}
+      {(hasLoad || (nudging && !fieldNotes)) && (
         <div className={`today-load ${over ? 'over' : ''}`}>
           <div className="today-load-line">
             {hasLoad ? (
@@ -3158,31 +3167,21 @@ export function TodayView({
               // NO CAPACITY, so no figure and no bar — a sentence instead, in
               // the band's own voice and size. This is the one thing the strip
               // can honestly say about a day nobody has sized.
-              //
-              // Field notes leaves the sentence out: the Plan my day control
-              // beside it already says the day is unplanned.
-              !fieldNotes && (
-                <span className="today-load-say">{tr('today.bandNoCapacity')}</span>
-              )
+              <span className="today-load-say">{tr('today.bandNoCapacity')}</span>
             )}
-            {nudging && (
+            {nudging && !fieldNotes && (
               // The band's `today.bandCapacity` string is gone from both
               // locales with this merge. It read "Plan your day — 6h to work
               // with", which beside a figure already saying "4h30 of 6h" is
               // the same fact twice on one line. When there IS no figure,
               // `today.bandNoCapacity` above carries it instead.
               <>
-                <button type="button"
-                  className={fieldNotes ? 'today-linkish today-load-plan' : 'btn ghost today-load-plan'}
+                <button type="button" className="btn ghost today-load-plan"
                   onClick={() => setRitual(true)}>
                   {tr('today.planMyDay')}
                 </button>
-                {/* Field notes has no dismiss: Plan my day stays, as a quiet link,
-                    until the day is planned. */}
-                {!fieldNotes && (
-                  <button type="button" className="icon-btn today-load-x"
-                    aria-label={tr('today.notNow')} onClick={() => setBandOff(day)}>✕</button>
-                )}
+                <button type="button" className="icon-btn today-load-x"
+                  aria-label={tr('today.notNow')} onClick={() => setBandOff(day)}>✕</button>
               </>
             )}
           </div>

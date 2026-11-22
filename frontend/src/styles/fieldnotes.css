@@ -183,23 +183,29 @@
 }
 [data-surface="app"] .day-drawing .dm-cond.on { opacity: 1; }
 
-/* The focus loop: one frame of --n at a time, at the design system's ambient
-   rate, while Start is on. The loop's length is --n / --ambient-fps seconds,
-   written from the boil's own cycle (3 frames at 8fps) so no time is a
-   literal. */
+/* The focus loop: one frame of its frames at a time, at the design system's ambient
+   rate, while Start is on. */
 [data-surface="app"] .day-drawing .dm-ambient { display: none; }
 [data-surface="app"] .day-drawing .dm-ambient.on { display: inline; }
-[data-surface="app"] .day-drawing .amb {
-  visibility: hidden;
-  animation: fn-ambient calc(var(--boil-cycle) * 8 / 3 * var(--n) / var(--ambient-fps)) steps(1, end) infinite;
-  animation-delay: calc(var(--boil-cycle) * -8 / 3 * var(--k) / var(--ambient-fps));
-}
-@keyframes fn-ambient {
-  0% { visibility: visible; }
-  16.66%, 100% { visibility: hidden; }
-}
-[data-surface="app"] .day-drawing[data-paused] .boil,
-[data-surface="app"] .day-drawing[data-paused] .amb { animation-play-state: paused; }
+/* The boil and the focus loop are stepped by one clock per drawing (DayDrawing.tsx writes
+   data-frame 1-3 at the boil's rate and data-amb 0-5 at --ambient-fps), not by an animation on every
+   path. Per-path animations, each switching on its own delay, left an instant at every frame change
+   when no frame was showing, and a repaint landing there drew the picture blank: the flicker. With
+   one clock exactly one frame is drawn at a time. Without it (before the first tick, or under
+   reduced motion) frame one shows. */
+[data-surface="app"] .day-drawing .boil { animation: none; }
+[data-surface="app"] .day-drawing[data-frame] .boil { visibility: hidden; }
+[data-surface="app"] .day-drawing[data-frame="1"] .boil.f1,
+[data-surface="app"] .day-drawing[data-frame="2"] .boil.f2,
+[data-surface="app"] .day-drawing[data-frame="3"] .boil.f3 { visibility: visible; }
+[data-surface="app"] .day-drawing .amb { visibility: hidden; }
+[data-surface="app"] .day-drawing:not([data-amb]) .amb:first-child,
+[data-surface="app"] .day-drawing[data-amb="0"] .amb:nth-child(1),
+[data-surface="app"] .day-drawing[data-amb="1"] .amb:nth-child(2),
+[data-surface="app"] .day-drawing[data-amb="2"] .amb:nth-child(3),
+[data-surface="app"] .day-drawing[data-amb="3"] .amb:nth-child(4),
+[data-surface="app"] .day-drawing[data-amb="4"] .amb:nth-child(5),
+[data-surface="app"] .day-drawing[data-amb="5"] .amb:nth-child(6) { visibility: visible; }
 @media (prefers-reduced-motion: reduce) {
   [data-surface="app"] .day-drawing .amb { visibility: hidden !important; }
   [data-surface="app"] .day-drawing .amb:first-child { visibility: visible !important; }
@@ -299,7 +305,6 @@
 [data-surface="app"] .strike-ink.on path { opacity: 1; }
 
 [data-surface="app"] .fn-date .today-nav { align-self: flex-start; }
-[data-surface="app"] .fn-list-head { flex-wrap: wrap; row-gap: 8px; }
 [data-surface="app"] .fn-list-head .today-count { border: 0; padding: 0; margin: 0; white-space: nowrap; }
 
 /* Calm rows: a row's unset estimate and its remove button stay out of sight
@@ -330,13 +335,24 @@
   }
 }
 
-/* Plan my day as a link (the band keeps no sentence and no ✕ under Field
-   notes). The band's line is set at a caption size for its figures, and a link
-   at that size is a 13px-tall target; the control the day is planned from takes
-   the app's small text and a full 44px tap box instead. */
-[data-surface="app"] .today-load .today-load-plan.today-linkish {
+/* Plan my day sits on the Today line, beside ⋯: on a row of its own it left a gap between "Today"
+   and the list. Its 44px tap box is a centred, transparent ::after, as the Today row's controls
+   have (app.css), so it adds no height to the line. The title and the count are one group that
+   wraps inside itself: when the line is too narrow the count drops under the title as a line of
+   text, and the link and ⋯ stay on the title's line rather than dropping to an empty row of
+   their own. The head keeps `align-items: baseline`, so the tools sit on the title's first line. */
+[data-surface="app"] .fn-head-text {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; row-gap: 2px;
+}
+[data-surface="app"] .fn-head-tools { flex: none; display: flex; align-items: center; gap: 10px; margin-left: auto; }
+[data-surface="app"] .fn-list-head .fn-plan {
   font-size: calc(var(--fs-app-small) * var(--fs-scale));
-  min-height: 44px; display: inline-flex; align-items: center;
+  position: relative; display: inline-flex; align-items: center;
+}
+[data-surface="app"] .fn-list-head .fn-plan::after {
+  content: ''; position: absolute; left: 0; right: 0; top: 50%;
+  height: 44px; transform: translateY(-50%);
 }
 
 /* ==== cp3 · shared ==== */

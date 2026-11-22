@@ -40,6 +40,12 @@
 /* On a phone the frame stacks: the view, then the tab bar under it. */
 @media (max-width: 720px) {
   .frame { flex-direction: column; }
+  /* `.frame-main` is a flex item, so `z-index` orders it without positioning
+     it. The view, and any dialog drawn inside it, now paints above the bar
+     beside it: the bar's children are positioned, and without this they drew
+     over a dialog's scrim and sheet. Settings' own sheet is the frame's last
+     child with its own z-index 100 and stays on top. */
+  .frame-main { z-index: 1; }
 }
 
 /* ---- the app sidebar --------------------------------------------------- */

@@ -30,21 +30,89 @@ afterEach(async () => {
   }
 })
 
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const frames = async (n: number) => { for (let i = 0; i < n; i++) await new Promise(requestAnimationFrame) }
+/** Wait, a frame at a time and for at most `ms`, until `ok` holds. */
+async function until(ok: () => boolean, ms = 1000) {
+  const end = performance.now() + ms
+  while (!ok() && performance.now() < end) await new Promise(requestAnimationFrame)
+  return ok()
+}
+const visibleIn = (el: Element, sel: string) =>
+  [...el.querySelectorAll(sel)].filter((x) => getComputedStyle(x).visibility === 'visible').length
+
 describe('motion', () => {
-  it('boils: three frames of each line, shown one at a time', async () => {
+  // The flicker this guards: each path used to run its own animation, and at
+  // every frame change there was an instant with no frame visible, so a repaint
+  // landing there drew the picture blank. One clock writes the frame on the svg,
+  // and at every change it writes, exactly one frame of each line is drawn.
+  it('boils: one clock, exactly one frame of each line drawn at every change', async () => {
+    const el = host()
+    flushSync(() => createRoot(el).render(<DayDrawing drawing={drawing} state={state({ focusActive: true })} />))
+    const svg = el.querySelector('svg')!
+    expect(await until(() => svg.hasAttribute('data-frame')), 'the clock starts').toBe(true)
+    const lines = [...el.querySelectorAll('g.dm-line')]
+    expect(lines.length, 'the fixture has boiling lines').toBeGreaterThan(0)
+    expect(el.querySelector('.dm-ambient.on'), 'the fixture\'s focus loop is on').not.toBeNull()
+    const seen = new Set<string>()
+    const wrong: string[] = []
+    const check = () => {
+      const f = svg.getAttribute('data-frame') ?? ''
+      seen.add(f)
+      lines.forEach((g, i) => {
+        const n = visibleIn(g, 'path')
+        if (n !== 1) wrong.push(`frame ${f}: line ${i} shows ${n} paths`)
+      })
+      el.querySelectorAll('.dm-ambient.on').forEach((a) => {
+        const n = visibleIn(a, ':scope > .amb')
+        if (n !== 1) wrong.push(`amb ${svg.getAttribute('data-amb')}: ${n} loop frames`)
+      })
+    }
+    const mo = new MutationObserver(check)
+    mo.observe(svg, { attributes: true, attributeFilter: ['data-frame', 'data-amb'] })
+    check()
+    await wait(600)
+    mo.disconnect()
+    expect(wrong, 'a change drew other than one frame').toEqual([])
+    expect([...seen].sort(), 'the frames seen').toEqual(['1', '2', '3'])
+    const animated = document.getAnimations()
+      .map((a) => (a.effect as KeyframeEffect | null)?.target)
+      .filter((t) => t instanceof Element && t.matches('.boil, .amb'))
+    expect(animated, 'a boil path or loop frame is animated').toEqual([])
+  })
+
+  it('holds its frame offscreen, and boils again on screen', async () => {
     const el = host()
     flushSync(() => createRoot(el).render(<DayDrawing drawing={drawing} state={state({})} />))
-    const line = el.querySelector('g.dm-line')!
-    const visible = [...line.querySelectorAll('path')].filter((p) => getComputedStyle(p).visibility === 'visible')
-    expect(visible.length, 'one frame of three at a time').toBe(1)
-    expect(document.getAnimations().length).toBeGreaterThan(0)
+    const svg = el.querySelector('svg')!
+    expect(await until(() => svg.hasAttribute('data-frame')), 'the clock starts').toBe(true)
+    let changes = 0
+    const mo = new MutationObserver((records) => { changes += records.length })
+    mo.observe(svg, { attributes: true, attributeFilter: ['data-frame'] })
+    try {
+      el.style.position = 'absolute'
+      el.style.top = '4000px'
+      await wait(400)
+      expect(svg.hasAttribute('data-paused'), 'offscreen is paused').toBe(true)
+      const held = svg.getAttribute('data-frame')
+      changes = 0
+      await wait(300)
+      expect(changes, 'the frame changed offscreen').toBe(0)
+      expect(svg.getAttribute('data-frame'), 'the frame is held').toBe(held)
+      el.style.top = '0px'
+      expect(await until(() => changes > 0), 'the frame changes again on screen').toBe(true)
+      expect(svg.hasAttribute('data-paused')).toBe(false)
+    } finally {
+      mo.disconnect()
+    }
   })
 
   it.skipIf(!chromium)('holds still under reduced motion: frame one, and nothing animating', async () => {
     await devtools().send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
     const el = host()
     flushSync(() => createRoot(el).render(<DayDrawing drawing={drawing} state={state({ rewards: 3, focusActive: true })} />))
-    await new Promise(requestAnimationFrame)
+    await frames(5)
+    expect(el.querySelector('svg')!.hasAttribute('data-frame'), 'the clock runs').toBe(false)
     expect(document.getAnimations(), 'something still animates').toEqual([])
     const line = el.querySelector('g.dm-line')!
     const [f1, f2, f3] = [...line.querySelectorAll('path')].map((p) => getComputedStyle(p).visibility)

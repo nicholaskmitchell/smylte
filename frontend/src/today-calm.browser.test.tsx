@@ -5,8 +5,8 @@
 // `.today-drop` rules (which show the ✕ on hover and on every touchscreen) is a
 // question about the cascade that jsdom cannot answer.
 
-import { describe, expect, it, beforeEach } from 'vitest'
-import { mount } from './test/browser-measure'
+import { afterEach, describe, expect, it, beforeEach } from 'vitest'
+import { box, mount, viewport } from './test/browser-measure'
 
 beforeEach(() => {
   document.body.innerHTML = ''
@@ -103,5 +103,79 @@ describe('Field notes rows keep their tools out of sight until asked', () => {
     const est = host.querySelector('.today-est')!
     await settle(est)
     expect(getComputedStyle(est).opacity).toBe('1')
+  })
+})
+
+/** The list head as TodayView renders it under Field notes, with Plan my day on
+ *  the line beside ⋯ (held to the real JSX by `TodayView.fieldnotes.test.tsx`).
+ *  `key` makes the ids unique so a head with the link and one without can share a
+ *  page; `link` leaves the link out and nothing else. */
+const head = (key: string, count: string, link = true) => `
+  <div class="shell"><div class="content today-pane">
+    <div class="fn-list-head" id="head-${key}">
+      <div class="fn-head-text">
+        <span class="content-title" id="title-${key}">Today</span>
+        <span class="content-sub today-count" id="count-${key}">${count}</span>
+      </div>
+      <div class="fn-head-tools" id="tools-${key}">
+        ${link ? `<button type="button" class="today-linkish fn-plan" id="plan-${key}">Plan my day</button>` : ''}
+        <div class="today-acts"><button type="button" class="btn ghost today-menu-btn mono" id="more-${key}" aria-label="More actions">···</button></div>
+      </div>
+    </div>
+  </div></div>`
+
+describe('Plan my day on the Today line under Field notes', () => {
+  const mid = (el: Element) => { const b = box(el); return b.top + b.h / 2 }
+  afterEach(() => { document.documentElement.style.removeProperty('--fs-scale') })
+
+  const ONE = '1 done · 7 on the day'
+  const TEN = '0 done · 10 on the day'
+  const cases: [number, string, number][] = [
+    ...[320, 375, 390, 430].flatMap((w) => [ONE, TEN].map((c) => [w, c, 1] as [number, string, number])),
+    [430, ONE, 1.2], [430, TEN, 1.2],
+  ]
+
+  it.each(cases)(
+    'keeps the link and ⋯ on the title’s line and adds no row (%ipx, "%s", --fs-scale %f)',
+    async (w, count, scale) => {
+      await viewport(w)
+      document.documentElement.style.setProperty('--fs-scale', String(scale))
+      const host = await mount(head('with', count) + head('without', count, false))
+      const q = (id: string) => host.querySelector(`#${id}`)!
+      const withH = box(q('head-with')).h
+      const withoutH = box(q('head-without')).h
+      expect(withH, 'no layout').toBeGreaterThan(0)
+      const plan = box(q('plan-with'))
+      expect(plan.h, 'no layout').toBeGreaterThan(0)
+      const title = box(q('title-with'))
+      const tools = box(q('tools-with'))
+      const at = `at ${w}px, "${count}", --fs-scale ${scale}`
+      // (a) the link and ⋯ share a line.
+      expect(Math.abs(mid(q('plan-with')) - mid(q('more-with'))), `link and ⋯ share a line ${at}`).toBeLessThanOrEqual(2)
+      // (b) the tools are on the title's line.
+      expect(tools.top, `tools start above the title's bottom ${at}`).toBeLessThan(title.bottom)
+      expect(tools.bottom, `tools end below the title's top ${at}`).toBeGreaterThan(title.top)
+      // (c) no row of their own: adding the link may at most push the count under the title.
+      const countH = box(q('count-with')).h
+      expect(withH - withoutH, `the link adds a row ${at}`).toBeLessThanOrEqual(countH + 3)
+      // (d) where the count has room beside the title, the link adds nothing.
+      if ((w === 390 || w === 430) && count === ONE && scale === 1) {
+        expect(withH - withoutH, `the link adds height ${at}`).toBeLessThanOrEqual(1)
+      }
+    })
+
+  it('gives the link a 44px tap box that adds no height', async () => {
+    await viewport(390)
+    const host = await mount(head('with', ONE))
+    const plan = host.querySelector('#plan-with')!
+    const b = box(plan)
+    expect(b.h, 'no layout').toBeGreaterThan(0)
+    const x = b.left + b.w / 2
+    const y = b.top + b.h / 2
+    const hit = (dy: number) => document.elementFromPoint(x, y + dy)?.closest('.fn-plan') ?? null
+    expect(hit(-20), '20px above the centre is the link').toBe(plan)
+    expect(hit(20), '20px below the centre is the link').toBe(plan)
+    expect(hit(-24), '24px above the centre is not').toBeNull()
+    expect(hit(24), '24px below the centre is not').toBeNull()
   })
 })

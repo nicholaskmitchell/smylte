@@ -56,8 +56,9 @@ export async function mount(html: string): Promise<HTMLElement> {
   // surface, and an edge measured then is a few pixels low. What every test in
   // this project pins is the layout the user reads, which is the one after the
   // entrance, so the entrances are finished before anything is measured.
-  // An infinite animation (the Today drawing's line boil) has no end to finish
-  // at, and `finish()` throws on one; it is ambient and never changes a box.
+  // An infinite animation has no end to finish at, and `finish()` throws on
+  // one; it is ambient and never changes a box. (The Today drawing's line boil
+  // is not one: DayDrawing.tsx steps it with a clock, not an animation.)
   for (const a of document.getAnimations()) {
     if (a.effect?.getComputedTiming().endTime === Infinity) continue
     a.finish()

@@ -11,11 +11,15 @@
 // costs a few dozen condition checks and a class or two, which keeps it inside
 // the 2ms budget on slow hardware too.
 //
-// Motion is CSS only (fieldnotes.css), so the reduced-motion rule in
-// ds/app-motion.css stops all of it: the line boil (three frames at 8fps, the
-// one thing on screen that moves at rest), the focus loop at 6fps, and the
-// reward's grow. An offscreen drawing stops boiling, and a hidden tab stops all
-// CSS animation by itself.
+// The line boil (three frames at 8fps, the one thing on screen that moves at
+// rest) and the focus loop at 6fps are stepped by one clock per drawing, here:
+// it writes the frame on the svg and fieldnotes.css shows that frame's paths.
+// One clock rather than an animation on every path, because per-path
+// animations left an instant at each frame change with no frame showing, and a
+// repaint there drew the picture blank. The clock does not run under reduced
+// motion (frame one holds), stops while the drawing is offscreen, and a hidden
+// tab stops it by itself. The reward's grow and the conditions' fades stay CSS,
+// so the reduced-motion rule in ds/app-motion.css stops them.
 //
 // `aria-hidden`: everything the drawing shows is also said in text beside it.
 //
@@ -55,6 +59,12 @@ function Mark({ m, cond }: { m: DrawMark; cond?: number }) {
 
 const ROLES = ['wash', 'glow', 'accent', 'line'] as const
 
+/** A CSS time ("0.375s" or "375ms") in milliseconds; NaN if it is neither. */
+function parseTime(v: string): number {
+  const m = /^(\d*\.?\d+)(ms|s)$/.exec(v.trim())
+  return m ? Number(m[1]) * (m[2] === 's' ? 1000 : 1) : Number.NaN
+}
+
 /** The whole picture for a drawing: every mark, in paint order (by role, as
  *  the server sends them), and the focus loop's frames. Memoised on the
  *  drawing alone, so a change of state never re-renders it. Each conditional
@@ -69,11 +79,12 @@ const Picture = memo(function Picture({ drawing, cond }: { drawing: DrawingPaylo
           {drawing.marks.filter((m) => m.role === role).map((m) => <Mark key={m.id} m={m} cond={index.get(m)} />)}
         </g>
       ))}
-      {/* The loop's keyframes are written for six frames (one second at 6fps). */}
+      {/* The loop is stepped by the clock's data-amb (0-5) and six nth-child rules in
+          fieldnotes.css, so it has at most six frames. */}
       {amb && amb.frames.length === 6 && (
-        <g className="dm-ambient" style={{ ['--n' as string]: amb.frames.length }}>
+        <g className="dm-ambient">
           {amb.frames.map((frame, f) => (
-            <g key={f} className="amb" style={{ ['--k' as string]: f }}>
+            <g key={f} className="amb">
               {frame.map((m) => <Mark key={m.id} m={m} />)}
             </g>
           ))}
@@ -90,16 +101,75 @@ export const DayDrawing = memo(function DayDrawing({ drawing, state, className =
 }) {
   const ref = useRef<SVGSVGElement>(null)
 
-  // Boil only while on screen. A drawing scrolled away costs nothing.
+  // The drawing's one clock: it writes the boil's frame (data-frame, 1-3) and
+  // the focus loop's (data-amb, 0-5) on the svg, and fieldnotes.css shows the
+  // paths of that frame alone. It runs only while the drawing is on screen (a
+  // drawing scrolled away costs nothing and holds its frame) and never under
+  // reduced motion, where the attributes are absent and frame one shows.
   useEffect(() => {
     const el = ref.current
-    if (!el || typeof IntersectionObserver !== 'function') return
-    const io = new IntersectionObserver(([e]) => {
-      if (e.isIntersecting) delete el.dataset.paused
-      else el.dataset.paused = ''
-    })
-    io.observe(el)
-    return () => io.disconnect()
+    if (!el) return
+    const reduce = typeof window.matchMedia === 'function'
+      ? window.matchMedia('(prefers-reduced-motion: reduce)') : null
+    let onScreen = true
+    let raf = 0
+    let start = -1
+    let cycle = 375
+    let fps = 6
+    let frame = ''
+    let amb = ''
+    const tick = (now: number) => {
+      if (start < 0) start = now
+      const elapsed = now - start
+      const f = String(Math.floor(elapsed / (cycle / 3)) % 3 + 1)
+      const a = String(Math.floor(elapsed * fps / 1000) % 6)
+      if (f !== frame) { el.setAttribute('data-frame', f); frame = f }
+      if (a !== amb) { el.setAttribute('data-amb', a); amb = a }
+      raf = requestAnimationFrame(tick)
+    }
+    const update = () => {
+      const still = !!reduce?.matches
+      if (onScreen && !still && !raf) {
+        // The tokens are the source of truth; 375ms and 6fps (their values in
+        // ds/app-motion.css) only stand in when one is missing or unreadable.
+        const cs = getComputedStyle(el)
+        const c = parseTime(cs.getPropertyValue('--boil-cycle'))
+        const r = Number.parseFloat(cs.getPropertyValue('--ambient-fps'))
+        cycle = c > 0 ? c : 375
+        fps = r > 0 ? r : 6
+        start = -1
+        raf = requestAnimationFrame(tick)
+      } else if ((!onScreen || still) && raf) {
+        cancelAnimationFrame(raf)
+        raf = 0
+      }
+      if (still) {
+        el.removeAttribute('data-frame')
+        el.removeAttribute('data-amb')
+        frame = ''
+        amb = ''
+      }
+    }
+    const io = typeof IntersectionObserver === 'function'
+      ? new IntersectionObserver((entries) => {
+        // The last entry is the current state: a quick scroll out and back can deliver both in one
+        // callback.
+        const e = entries[entries.length - 1]
+        onScreen = e.isIntersecting
+        if (onScreen) delete el.dataset.paused
+        else el.dataset.paused = ''
+        update()
+      })
+      : null
+    io?.observe(el)
+    reduce?.addEventListener('change', update)
+    update()
+    return () => {
+      cancelAnimationFrame(raf)
+      raf = 0
+      io?.disconnect()
+      reduce?.removeEventListener('change', update)
+    }
   }, [])
 
   const cond = useMemo(() => drawing.marks.filter((m) => m.when.length > 0), [drawing])

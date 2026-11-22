@@ -110,14 +110,32 @@ describe('<TodayView> under Field notes', () => {
     expect(screen.queryByRole('button', { name: 'Review' })).not.toBeInTheDocument()
   })
 
-  it('nudges with Plan my day alone when the day has no capacity', async () => {
+  it('nudges with Plan my day on the Today line, with no band, when the day has no capacity', async () => {
     m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })]))
+    const user = setup()
+    await dayList()
+
+    const head = document.querySelector('.fn-list-head') as HTMLElement
+    await user.click(within(head).getByRole('button', { name: 'Plan my day' }))
+    expect(await screen.findByRole('dialog', { name: 'Plan your day' })).toBeInTheDocument()
+    expect(document.querySelector('.today-load')).toBeNull()
+    expect(screen.queryByText('Today isn’t planned yet.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Not now' })).not.toBeInTheDocument()
+  })
+
+  it('keeps the band for the figure alone when the day has a capacity', async () => {
+    m.openDay.mockResolvedValue(plan([entry({ title: 'Water the plants' })], {
+      capacity: 300, capacity_minutes: 300,
+    }))
     setup()
     await dayList()
 
-    expect(screen.getByRole('button', { name: 'Plan my day' })).toBeInTheDocument()
-    expect(screen.queryByText('Today isn’t planned yet.')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Not now' })).not.toBeInTheDocument()
+    const band = document.querySelector('.today-load') as HTMLElement
+    expect(band).not.toBeNull()
+    expect(band.querySelector('.today-load-fig')).not.toBeNull()
+    expect(within(band).queryByRole('button', { name: 'Plan my day' })).not.toBeInTheDocument()
+    const head = document.querySelector('.fn-list-head') as HTMLElement
+    expect(within(head).getByRole('button', { name: 'Plan my day' })).toBeInTheDocument()
   })
 
   it('names the day only when a Habits section is above it, and drops the habits hint', async () => {
