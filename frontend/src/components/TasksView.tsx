@@ -18,12 +18,13 @@ import { WasDue } from './WasDue'
 import { dateOut, TaskModal } from './TaskModal'
 import { Sidebar } from './Sidebar'
 import { SuggestionsPane } from './SuggestionsPane'
-import { CheckInk, StrikeInk } from './Marks'
+import { CheckInk, IconInk, StrikeInk, TabInk } from './Marks'
 import { ViewDrawing } from './DayDrawing'
 import { EMPTY_DAY } from '../drawing'
 import { useMailSuggestions } from '../mail'
 import { useI18n } from '../i18n'
 import { useT } from '../i18n'
+import { InkSelect } from './InkSelect'
 
 // Catalogue keys for the labels, like `TAB_LABELS` — the pairing of mode to
 // label is data, and data in this repo holds identities rather than text.
@@ -812,13 +813,13 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
             <div className="range-nav">
               <button className="icon-btn" title={fieldNotes ? undefined : tr('tasks.earlier')}
                 aria-label={tr('tasks.earlier')}
-                onClick={() => setAnchor(addDays(days[0], -span))}>‹</button>
+                onClick={() => setAnchor(addDays(days[0], -span))}>‹<IconInk icon="left" /></button>
               <button className="btn ghost" onClick={() => setAnchor(new Date())}>
                 {tr('tasks.today')}
               </button>
               <button className="icon-btn" title={fieldNotes ? undefined : tr('tasks.later')}
                 aria-label={tr('tasks.later')}
-                onClick={() => setAnchor(addDays(days[0], span))}>›</button>
+                onClick={() => setAnchor(addDays(days[0], span))}>›<IconInk icon="right" /></button>
             </div>
           )}
           {!completedOnly && !parkedOnly && !suggestedOnly && (
@@ -833,7 +834,7 @@ export function TasksView({ onExpire, view, onView, sideCollapsed, onToggleSide,
               {VIEWS.map(([v, label]) => (
                 <button key={v} role="tab" aria-selected={view === v}
                   className={`view-tab ${view === v ? 'active' : ''}`}
-                  onClick={() => onView(v)}>{tr(label)}</button>
+                  onClick={() => onView(v)}>{tr(label)}<TabInk /></button>
               ))}
             </div>
           )}
@@ -1549,12 +1550,12 @@ function QuickAdd({ onSubmit, onExpand, defaultList, lists, fieldNotes }: {
         onChange={(e) => setV(e.target.value)}
         onKeyDown={(e: KeyboardEvent) => { if (e.key === 'Enter') go() }} />
       {lists && lists.length > 1 && (
-        <select className="input quickadd-list" value={listId}
+        <InkSelect className="input quickadd-list" value={listId}
           title={fieldNotes ? undefined : tr('tasks.quickAddList')}
           aria-label={fieldNotes ? tr('tasks.quickAddList') : undefined}
           onChange={(e) => setListId(e.target.value)}>
           {lists.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-        </select>
+        </InkSelect>
       )}
       {/* Labelled with an ellipsis because it opens the form rather than
           creating outright — Enter in the field is the instant path. */}

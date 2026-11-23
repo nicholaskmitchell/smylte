@@ -1069,6 +1069,14 @@ function headerRows(head: Element): { top: number; bottom: number; n: number }[]
 }
 
 describe('the Today header keeps its actions together on a phone', () => {
+  // This header (title, day nav, date, week, count and three actions in one
+  // .content-head) is what the presets render. Field notes renders its own
+  // (.fn-head, TodayView.tsx) and never this one, and its 40px icon squares
+  // (fieldnotes.css, "controls") would wrap a header it never draws, so these
+  // run under the Sep 2026 design. today-scroll.browser.test.tsx measures
+  // Field notes' own.
+  beforeEach(() => { applyDesign(document.documentElement, 'refined') })
+
   const actions = (host: Element) =>
     ['.today-review', '.today-focus', '.today-menu-btn']
       .map((sel) => ({ sel, ...box(host.querySelector(sel)!) }))

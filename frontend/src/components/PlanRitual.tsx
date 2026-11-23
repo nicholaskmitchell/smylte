@@ -36,6 +36,7 @@ import { textDir } from '../util'
 import { fmtDuration } from '../time'
 import { capacityInput, parseCapacity } from '../capacity'
 import { useT, useTx } from '../i18n'
+import { IconInk } from './Marks'
 
 /** A suggestion group as `TodayView` builds it. */
 export interface SuggestGroup {
@@ -111,7 +112,7 @@ export function PlanRitual({
             {tr('plan.stepOf', { n: step + 1, total: STEPS.length })}
           </span>
           <button className="icon-btn" onClick={onClose}
-            aria-label={tr('common.close')}>✕</button>
+            aria-label={tr('common.close')}>✕<IconInk icon="close" /></button>
         </div>
 
         {step === 0 && (

@@ -29,6 +29,8 @@ import { useTimeFormat } from '../timeformat'
 import { makeGuard } from '../util'
 import { useUnsent } from '../layers'
 import { Hint } from './Hint'
+import { CheckInk } from './Marks'
+import { InkSelect } from './InkSelect'
 
 type Check = { ok: boolean; detail: string }
 type ImapCheck = Check & { data: MailImapTest | null }
@@ -212,7 +214,7 @@ export function MailSection({ onExpire, mailRev }: {
       <label htmlFor={id}>{tr(labelKey)}</label>
       <button className="menu-toggle" id={id} aria-pressed={on}
         onClick={() => { void save(patch(!on)) }}>
-        {tr(on ? 'mail.on' : 'mail.off')}
+        <CheckInk seed={id} />{tr(on ? 'mail.on' : 'mail.off')}
       </button>
     </div>
   )
@@ -257,7 +259,7 @@ export function MailSection({ onExpire, mailRev }: {
     key: 'task_list' | 'event_calendar') => (
     <div className="menu-row">
       <label htmlFor={id}>{tr(labelKey)}</label>
-      <select className="menu-toggle mail-select" id={id} value={value}
+      <InkSelect className="menu-toggle mail-select" id={id} value={value}
         onChange={(e) => { void save({ [key]: e.target.value || null }) }}>
         <option value="">{tr(firstKey)}</option>
         {/* A saved choice that no longer exists stays visible as what it is,
@@ -265,7 +267,7 @@ export function MailSection({ onExpire, mailRev }: {
             that still says otherwise. */}
         {value && !items.some((l) => l.id === value) && <option value={value}>{value}</option>}
         {items.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-      </select>
+      </InkSelect>
     </div>
   )
 
@@ -328,7 +330,7 @@ export function MailSection({ onExpire, mailRev }: {
       <div className="menu-row">
         <label htmlFor="mail-model">{tr('mail.model')}</label>
         {models ? (
-          <select className="menu-toggle mail-select" id="mail-model" value={modelSelect ?? ''}
+          <InkSelect className="menu-toggle mail-select" id="mail-model" value={modelSelect ?? ''}
             onChange={(e) => {
               if (e.target.value === OTHER) { setOtherModel(true); return }
               setOtherModel(false)
@@ -338,7 +340,7 @@ export function MailSection({ onExpire, mailRev }: {
               <option key={m.id} value={m.id}>{`${m.display_name} — ${m.id}`}</option>
             ))}
             <option value={OTHER}>{tr('mail.model.other')}</option>
-          </select>
+          </InkSelect>
         ) : (
           <Draft id="mail-model" className="input" value={s.model}
             onCommit={(raw) => commitText(raw, s.model, (model) => save({ model }))} />
@@ -401,22 +403,22 @@ export function MailSection({ onExpire, mailRev }: {
 
       <div className="menu-row">
         <label htmlFor="mail-imap-tls">{tr('mail.imap.tls')}</label>
-        <select className="menu-toggle mail-select" id="mail-imap-tls" value={s.imap_tls}
+        <InkSelect className="menu-toggle mail-select" id="mail-imap-tls" value={s.imap_tls}
           onChange={(e) => { void save({ imap_tls: e.target.value as 'starttls' | 'ssl' }) }}>
           <option value="starttls">{tr('mail.imap.tls.starttls')}</option>
           <option value="ssl">{tr('mail.imap.tls.ssl')}</option>
-        </select>
+        </InkSelect>
       </div>
       <div className="menu-row">
         <label htmlFor="mail-imap-cert">{tr('mail.imap.cert')}</label>
-        <select className="menu-toggle mail-select" id="mail-imap-cert" value={s.imap_cert_mode}
+        <InkSelect className="menu-toggle mail-select" id="mail-imap-cert" value={s.imap_cert_mode}
           onChange={(e) => {
             void save({ imap_cert_mode: e.target.value as typeof s.imap_cert_mode })
           }}>
           <option value="system">{tr('mail.cert.system')}</option>
           <option value="pinned">{tr('mail.cert.pinned')}</option>
           <option value="insecure_localhost">{tr('mail.cert.insecure')}</option>
-        </select>
+        </InkSelect>
       </div>
       {s.imap_cert_mode === 'pinned' && (
         <>
@@ -497,26 +499,26 @@ export function MailSection({ onExpire, mailRev }: {
       {checkLine(jevCheck)}
       <div className="menu-row">
         <label htmlFor="mail-kind-decider">{tr('mail.kindDecider')}</label>
-        <select className="menu-toggle mail-select" id="mail-kind-decider" value={s.kind_decider}
+        <InkSelect className="menu-toggle mail-select" id="mail-kind-decider" value={s.kind_decider}
           onChange={(e) => {
             void save({ kind_decider: e.target.value as typeof s.kind_decider })
           }}>
           <option value="model">{tr('mail.kindDecider.model')}</option>
           <option value="jev">{tr('mail.kindDecider.jev')}</option>
           <option value="rules">{tr('mail.kindDecider.rules')}</option>
-        </select>
+        </InkSelect>
       </div>
       {s.kind_decider === 'rules' && listField('mail-kind-rules', 'mail.kindRules', 'kind_rules',
         'mail.kindRules.hint', false)}
       <div className="menu-row">
         <label htmlFor="mail-dedup-decider">{tr('mail.dedupDecider')}</label>
-        <select className="menu-toggle mail-select" id="mail-dedup-decider" value={s.dedup_decider}
+        <InkSelect className="menu-toggle mail-select" id="mail-dedup-decider" value={s.dedup_decider}
           onChange={(e) => {
             void save({ dedup_decider: e.target.value as typeof s.dedup_decider })
           }}>
           <option value="jev">{tr('mail.dedupDecider.jev')}</option>
           <option value="model">{tr('mail.dedupDecider.model')}</option>
-        </select>
+        </InkSelect>
       </div>
 
       <div className="menu-head">{tr('mail.head.where')}</div>

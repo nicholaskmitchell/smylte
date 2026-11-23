@@ -156,7 +156,27 @@ describe('the settings menu', () => {
 
   it('keeps the phone sheet\'s own icon buttons their size', async () => {
     // `.tabbar .icon-btn` once reached the sheet's Back and Close and made
-    // them 44px, borderless and wider than the slot that stands in for Back.
+    // them 44px, wider than the slot that stands in for Back. Under Field
+    // notes they are the controls' own --control-h square (40px), with no
+    // edge (fieldnotes.css, "controls"), and the slot is as wide as Back, so
+    // the title stays centred; the bar's 44px must still not reach them.
+    await viewport(390, 844)
+    const host = await mount(phone(VIEWS_EN, { after: `
+      <div class="overlay set-overlay"><div class="settings-menu set-sheet" data-view="panel">
+        <div class="set-head"><button class="icon-btn set-back">‹</button>
+          <span class="set-title">Appearance</span><button class="icon-btn set-close">✕</button></div>
+      </div></div>` }))
+    for (const sel of ['.set-back', '.set-close']) {
+      const b = box(host.querySelector(sel)!)
+      expect(b.w, sel).toBeCloseTo(40, 0)
+      expect(b.h, sel).toBeCloseTo(40, 0)
+    }
+    expect(host.querySelector('.tabbar > .icon-btn')!.getBoundingClientRect().width,
+      'vacuity: the bar\'s own gear is 44px').toBeCloseTo(44, 0)
+  })
+
+  it('and under a preset keeps them bordered and narrower than 40px', async () => {
+    applyDesign(document.documentElement, 'refined')
     await viewport(390, 844)
     const host = await mount(phone(VIEWS_EN, { after: `
       <div class="overlay set-overlay"><div class="settings-menu set-sheet" data-view="panel">

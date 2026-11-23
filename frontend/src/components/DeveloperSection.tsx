@@ -17,6 +17,7 @@
 import { useMemo, useState } from 'react'
 import { useI18n } from '../i18n'
 import { Hint } from './Hint'
+import { CheckInk } from './Marks'
 
 type Mode = 'calendar' | 'habits' | 'now'
 const MODES: readonly Mode[] = ['calendar', 'habits', 'now']
@@ -103,8 +104,8 @@ export function DeveloperSection() {
       {mode === 'habits' ? (
         <div className="menu-row">
           <label>{tr('dev.hideDone')}</label>
-          <button className="menu-toggle" onClick={() => setHideDone((v) => !v)}>
-            {tr(hideDone ? 'disp.on' : 'disp.off')}
+          <button className="menu-toggle" aria-pressed={hideDone} onClick={() => setHideDone((v) => !v)}>
+            <CheckInk seed="dev-hide-done" />{tr(hideDone ? 'disp.on' : 'disp.off')}
           </button>
         </div>
       ) : null}

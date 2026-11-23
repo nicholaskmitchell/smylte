@@ -314,12 +314,13 @@ import { DateTimeInput } from './DateTimeInput'
 import { WasDue } from './WasDue'
 import { PlanRitual } from './PlanRitual'
 import { ShutdownRitual } from './ShutdownRitual'
-import { CheckInk, StrikeInk } from './Marks'
+import { CheckInk, HomeInk, IconInk, StrikeInk } from './Marks'
 import { useAddAction } from '../addaction'
 import { ViewDrawing } from './DayDrawing'
 import { FocusCard } from './FocusCard'
 import type { DayState } from '../drawing'
 import { useT } from '../i18n'
+import { InkSelect } from './InkSelect'
 
 /** How far ahead the "next 7 days" suggestions reach. Same horizon as the Home
  *  dashboard's Upcoming module, so the two never disagree about what is soon. */
@@ -2659,13 +2660,13 @@ export function TodayView({
             // what is being made. The box is still ONE input on the fast
             // path — this appears beside a line already typed, it is never
             // a field to fill in first.
-            <select className="input quickadd-list" value={listId}
+            <InkSelect className="input quickadd-list" value={listId}
               aria-label={tr('today.listForNewTask')}
               onChange={(e) => setListId(e.target.value)}>
               {taskLists.map((l) => (
                 <option key={l.id} value={l.id}>{l.name}</option>
               ))}
-            </select>
+            </InkSelect>
           )}
         </div>
       )}
@@ -2682,23 +2683,26 @@ export function TodayView({
   // The day nav and the header's actions, shared by both compositions.
   const nav = (
     <div className="today-nav">
-      <button type="button" className="icon-btn" aria-label={tr('today.prevDay')}
+      <button type="button" className="icon-btn day-step" aria-label={tr('today.prevDay')}
         // The floor is LOOKBACK_DAYS back from TODAY, and it stays there as
         // the view moves. It is NOT the same window as the one range read
         // behind this screen, which is anchored to `day` and so reaches
         // further back than this floor the moment the picker steps — on
         // purpose, so the oldest reachable day still has a whole week to
         // count its habits over. See LOOKBACK_DAYS.
-        disabled={!prevDay} onClick={() => prevDay && setDay(prevDay)}>‹</button>
-      <button type="button" className="icon-btn" aria-label={tr('today.nextDay')}
+        disabled={!prevDay} onClick={() => prevDay && setDay(prevDay)}>‹<IconInk icon="left" /></button>
+      <button type="button" className="icon-btn day-step" aria-label={tr('today.nextDay')}
         // No future days, ever. Not a safety rule — `api.day` would read one
         // harmlessly — but a product one: only today can be opened, so a
         // future day could show nothing and accept nothing, and the Today
         // tab is not a planner for next month.
-        disabled={!nextDay} onClick={() => nextDay && setDay(nextDay)}>›</button>
+        disabled={!nextDay} onClick={() => nextDay && setDay(nextDay)}>›<IconInk icon="right" /></button>
       {!isToday && (
-        <button type="button" className="btn ghost"
-          onClick={() => setDay(today)}>{tr('today.title')}</button>
+        // Field notes: the word in coral ink and a drawn arrow, with no box
+        // (fieldnotes.css, "Today's day arrows"). The presets keep the ghost
+        // button, and app.css hides the arrow there.
+        <button type="button" className={fieldNotes ? 'day-home' : 'btn ghost'}
+          onClick={() => setDay(today)}>{tr('today.title')}<HomeInk /></button>
       )}
     </div>
   )
@@ -2776,7 +2780,7 @@ export function TodayView({
           // the same size, which is a character of a different width and
           // weight sitting in a row of mono controls. U+00B7 is in the
           // font, and the app already writes it in the day's own count.
-          onClick={() => setMenu((m) => !m)}>···</button>
+          onClick={() => setMenu((m) => !m)}>···<IconInk icon="more" /></button>
         {menu && (
           // No scrim. A popover is dismissed by Escape, by an outside
           // mousedown and by choosing something (see the handlers below),
@@ -3185,7 +3189,7 @@ export function TodayView({
                   {tr('today.planMyDay')}
                 </button>
                 <button type="button" className="icon-btn today-load-x"
-                  aria-label={tr('today.notNow')} onClick={() => setBandOff(day)}>✕</button>
+                  aria-label={tr('today.notNow')} onClick={() => setBandOff(day)}>✕<IconInk icon="close" /></button>
               </>
             )}
           </div>
@@ -3479,7 +3483,7 @@ export function TodayView({
                         onClick={() => void reschedule(t, day)}>
                         {tr('today.triage.today')}
                       </button>
-                      <DateTimeInput type="date" className="input today-triage-date"
+                      <DateTimeInput plain type="date" className="input today-triage-date"
                         lang={inputLang(tf, lang)}
                         aria-label={tr('today.triage.newDate',
                           { task: t.summary || tr('common.untitled') })}
@@ -4498,7 +4502,7 @@ function HabitsSheet({ rev, guard, onClose }: {
         <div className="modal-head">
           <span className="modal-title">{tr('today.habits')}</span>
           <button className="icon-btn" onClick={onClose}
-            aria-label={tr('common.close')}>✕</button>
+            aria-label={tr('common.close')}>✕<IconInk icon="close" /></button>
         </div>
         {!fieldNotes && <p className="habit-blurb">{tr('habit.sheet.blurb')}</p>}
         {habits !== null && habits.length === 0 && (

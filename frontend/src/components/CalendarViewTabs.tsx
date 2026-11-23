@@ -1,6 +1,7 @@
 import { useEffect, useRef, type CSSProperties } from 'react'
 import { useSegmentThumb } from '../hooks'
 import { useI18n } from '../i18n'
+import { TabInk } from './Marks'
 import type { CalView } from '../tabs'
 
 const VIEWS: [CalView, string][] = [
@@ -34,7 +35,7 @@ export function CalendarViewTabs({ view, onView, takeFocus }: {
         <button key={v} type="button" role="tab" aria-selected={view === v}
           ref={view === v ? activeRef : undefined}
           className={'view-tab ' + (view === v ? 'active' : '')}
-          onClick={() => onView(v)}>{tr(label)}</button>
+          onClick={() => onView(v)}>{tr(label)}<TabInk /></button>
       ))}
     </div>
   )

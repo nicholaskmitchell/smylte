@@ -7,6 +7,8 @@ import { cssColor } from '../util'
 import { useEscape, useFieldNotes, useIsMobile } from '../hooks'
 import { UnsentInput, useLayer, useUnsent, useUnsentCount } from '../layers'
 import { useT } from '../i18n'
+import { IconInk } from './Marks'
+import { InkSelect } from './InkSelect'
 
 // Preset collection colors — muted, editorial, distinct from the accent.
 export const SWATCHES = [
@@ -629,10 +631,10 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
                   )}
                   <button className="icon-btn" title={fieldNotes ? undefined : tr(words.new)}
                     aria-label={tr(words.new)}
-                    onClick={() => setAdding(true)}>+</button>
+                    onClick={() => setAdding(true)}>+<IconInk icon="plus" /></button>
                   <button className="icon-btn" title={fieldNotes ? undefined : tr('side.drawerDone')}
                     aria-label={tr('common.close')}
-                    onClick={closeDrawer}>✕</button>
+                    onClick={closeDrawer}>✕<IconInk icon="close" /></button>
                 </span>
               </div>
               {canToggle && !fieldNotes && (
@@ -663,7 +665,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
             button that does the same thing twice over, one row apart. */}
         {onToggle && (
           <button className="icon-btn side-toggle" title={fieldNotes ? undefined : tr('side.expand')}
-            aria-label={tr('side.expand')} onClick={onToggle}>»</button>
+            aria-label={tr('side.expand')} onClick={onToggle}>»<IconInk icon="foldRight" /></button>
         )}
         <div className="side-rail">
           {allLabel && items.length > 1 && (
@@ -694,7 +696,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
               ? tr('side.backToTasksShort') : tr('side.viewCompletedShort')}
             aria-label={completedActive
               ? tr('side.backToTasksShort') : tr('side.viewCompletedShort')}
-            aria-pressed={completedActive} onClick={onToggleCompleted}>✓</button>
+            aria-pressed={completedActive} onClick={onToggleCompleted}>✓<IconInk icon="check" /></button>
         )}
         {onToggleParked && (
           <button className={`icon-btn side-completed-rail ${parkedActive ? 'active' : ''}`}
@@ -702,7 +704,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
               ? tr('side.backToTasksShort') : tr('side.viewParkedShort')}
             aria-label={parkedActive
               ? tr('side.backToTasksShort') : tr('side.viewParkedShort')}
-            aria-pressed={parkedActive} onClick={onToggleParked}>⏸</button>
+            aria-pressed={parkedActive} onClick={onToggleParked}>⏸<IconInk icon="pause" /></button>
         )}
       </div>
     )
@@ -728,10 +730,10 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
                 last-resort step of the accessible-name algorithm. */}
             <button className="icon-btn" title={fieldNotes ? undefined : tr(words.new)}
               aria-label={tr(words.new)}
-              onClick={() => setAdding(true)}>+</button>
+              onClick={() => setAdding(true)}>+<IconInk icon="plus" /></button>
             {onToggle && (
               <button className="icon-btn side-toggle" title={fieldNotes ? undefined : tr('side.collapse')}
-                aria-label={tr('side.collapse')} onClick={onToggle}>«</button>
+                aria-label={tr('side.collapse')} onClick={onToggle}>«<IconInk icon="foldLeft" /></button>
             )}
           </span>
         </div>
@@ -1013,7 +1015,7 @@ function EditModal({ item, placeholder, wide, groups, groupId, onSetGroup, onClo
         aria-label={placeholder} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <span className="modal-title">{placeholder}</span>
-          <button className="icon-btn" onClick={onClose} aria-label={tr('common.close')}>✕</button>
+          <button className="icon-btn" onClick={onClose} aria-label={tr('common.close')}>✕<IconInk icon="close" /></button>
         </div>
         <div className="field">
           <label className="label">{tr('side.name')}</label>
@@ -1028,11 +1030,11 @@ function EditModal({ item, placeholder, wide, groups, groupId, onSetGroup, onClo
         {groups && onSetGroup && (
           <div className="field">
             <label className="label">{tr('side.group')}</label>
-            <select className="input" value={groupId ?? ''}
+            <InkSelect className="input" value={groupId ?? ''}
               onChange={(e) => onSetGroup(e.target.value || null)}>
               <option value="">{tr('side.noGroup')}</option>
               {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-            </select>
+            </InkSelect>
           </div>
         )}
         <div className="modal-actions">

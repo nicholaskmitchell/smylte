@@ -19,6 +19,7 @@ import { useTimeFormat } from '../timeformat'
 import { blankValues, bodyFrom, FIELDS, type RowValues } from './AddMultipleModal'
 import { useI18n, useT } from '../i18n'
 import { NO_REMINDER, ReminderField } from './ReminderField'
+import { IconInk, TabInk } from './Marks'
 
 /**
  * A date+time pair as the wire should carry it.
@@ -254,7 +255,7 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
         onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <span className="modal-title">{creating ? tr('taskModal.add') : tr('taskModal.edit')}</span>
-          <button className="icon-btn" onClick={onClose} aria-label={tr('common.close')}>✕</button>
+          <button className="icon-btn" onClick={onClose} aria-label={tr('common.close')}>✕<IconInk icon="close" /></button>
         </div>
         {/* Title and notes are the two controls FIELDS doesn't render, so they
             carry their own htmlFor/id pair — only one form is ever open. */}
@@ -325,11 +326,11 @@ export function TaskModal({ task, lists, defaultList, initialTitle, onClose, onC
                 style={{ '--n': 2, '--i': why.moved ? 1 : 0 } as CSSProperties}>
                 <button type="button" className={`view-tab ${why.moved ? '' : 'active'}`}
                   aria-pressed={!why.moved} onClick={() => choose(false)}>
-                  {tr('taskModal.dueLate')}
+                  {tr('taskModal.dueLate')}<TabInk />
                 </button>
                 <button type="button" className={`view-tab ${why.moved ? 'active' : ''}`}
                   aria-pressed={why.moved} onClick={() => choose(true)}>
-                  {tr('taskModal.dueMovedChoice')}
+                  {tr('taskModal.dueMovedChoice')}<TabInk />
                 </button>
               </div>
             )}

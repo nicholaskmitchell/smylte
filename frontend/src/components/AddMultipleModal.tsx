@@ -9,6 +9,8 @@ import { useEscape, useFieldNotes } from '../hooks'
 import { useLayer } from '../layers'
 import { DateTimeInput } from './DateTimeInput'
 import { useI18n, useT } from '../i18n'
+import { CheckInk, IconInk } from './Marks'
+import { InkSelect } from './InkSelect'
 
 // Each create is a CalDAV PUT plus a re-read GET behind a single server-side
 // lock, so a batch this size is already a slow half-minute. It also bounds what
@@ -116,7 +118,7 @@ export function TagInput({ label, value, disabled, onChange }: {
         <span key={t} className="chip">
           #{t}
           <button type="button" className="chip-x" aria-label={tr('tags.remove', { tag: t })} disabled={disabled}
-            onClick={() => onChange(value.filter((x) => x !== t))}>×</button>
+            onClick={() => onChange(value.filter((x) => x !== t))}>×<IconInk icon="close" /></button>
         </span>
       ))}
       <input className="input" aria-label={label} placeholder={tr('tags.placeholder')}
@@ -148,10 +150,10 @@ export const FIELDS: readonly FieldSpec[] = [
   {
     key: 'list', label: 'field.list', slots: ['listId'],
     render: (v, set, { lists, disabled, t, scope }) => (
-      <select className="input" aria-label={scope(t('field.list'))} value={v.listId} disabled={disabled}
+      <InkSelect className="input" aria-label={scope(t('field.list'))} value={v.listId} disabled={disabled}
         onChange={(e) => set({ listId: e.target.value })}>
         {lists.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-      </select>
+      </InkSelect>
     ),
   },
   {
@@ -187,14 +189,14 @@ export const FIELDS: readonly FieldSpec[] = [
   {
     key: 'priority', label: 'field.priority', slots: ['priority'],
     render: (v, set, { disabled, t, scope }) => (
-      <select className="input" aria-label={scope(t('field.priority'))} value={v.priority} disabled={disabled}
+      <InkSelect className="input" aria-label={scope(t('field.priority'))} value={v.priority} disabled={disabled}
         onChange={(e) => set({ priority: e.target.value })}>
         {/* The VALUE stays the wire vocabulary; the TEXT comes from the
             catalogue, like every other fixed-vocabulary select in the app. The
             raw strings read "none / low / medium / high" under German, beside
             a label that said "Priorität". */}
         {PRIORITIES.map((p) => <option key={p} value={p}>{t(`priority.${p}`)}</option>)}
-      </select>
+      </InkSelect>
     ),
   },
   {
@@ -455,7 +457,7 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
         <div className="modal-head">
           <span className="modal-title">{tr('bulk.title')}</span>
           <button className="icon-btn" onClick={onClose} disabled={busy}
-            aria-label={tr('common.close')}>✕</button>
+            aria-label={tr('common.close')}>✕<IconInk icon="close" /></button>
         </div>
 
         {/* A plain field with a micro-label heading, exactly like the weekly
@@ -467,8 +469,11 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
               <div key={f.key}
                 className={`task-prop prop-${f.key} ${sharedOn[f.key] ? '' : 'off'}`}>
                 <label className="bulk-toggle">
-                  <input type="checkbox" checked={sharedOn[f.key]} disabled={busy}
-                    onChange={() => toggleShared(f)} />
+                  <span className="box-ink">
+                    <input type="checkbox" checked={sharedOn[f.key]} disabled={busy}
+                      onChange={() => toggleShared(f)} />
+                    <CheckInk seed={`bulk-${f.key}`} />
+                  </span>
                   <span>{tr(f.label)}</span>
                 </label>
                 {sharedOn[f.key] && (
@@ -527,7 +532,7 @@ export function AddMultipleModal({ lists, defaultList, initialTitle, onSubmit, o
               ))}
               <button className="icon-btn bulk-x" disabled={busy}
                 aria-label={tr('bulk.removeRow', { n: i + 1 })}
-                onClick={() => removeRow(row.key)}>✕</button>
+                onClick={() => removeRow(row.key)}>✕<IconInk icon="close" /></button>
             </div>
           ))}
         </div>

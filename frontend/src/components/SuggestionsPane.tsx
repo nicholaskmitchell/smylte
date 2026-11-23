@@ -20,6 +20,7 @@ import { fmtClock, fmtDue, fmtWhen, inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { dayKey, makeGuard } from '../util'
 import { DateTimeInput } from './DateTimeInput'
+import { InkSelect } from './InkSelect'
 
 export function SuggestionsPane({ onExpire, lists, items, loaded, error, onApprove, onReject }: {
   onExpire: () => void
@@ -195,7 +196,7 @@ function Row({ s, lists, calendars, fieldNotes, onApprove, onReject }: {
 
       <div className="mail-sug-actions">
         {s.kind === 'task' && (
-          <select className="input mail-sug-pick" value={list}
+          <InkSelect className="input mail-sug-pick" value={list}
             aria-label={tr('mail.sug.listAria')}
             onChange={(e) => setListEdit(e.target.value)}>
             {!suggested && (
@@ -204,15 +205,15 @@ function Row({ s, lists, calendars, fieldNotes, onApprove, onReject }: {
               </option>
             )}
             {lists.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-          </select>
+          </InkSelect>
         )}
         {isEvent && (
-          <select className="input mail-sug-pick" value={calendar}
+          <InkSelect className="input mail-sug-pick" value={calendar}
             aria-label={tr('mail.sug.calendarAria')}
             onChange={(e) => setCalendar(e.target.value)}>
             <option value="">{tr('mail.sug.defaultCalendar')}</option>
             {calendars.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+          </InkSelect>
         )}
         <button className="btn ghost" disabled={busy}
           onClick={() => { void run(() => onReject(s.id)) }}>

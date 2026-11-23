@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { useT } from '../i18n'
 import { useFieldNotes } from '../hooks'
 import { readState, setIcon, setTitleBar, platformOf, type DesktopState, type IconChoice } from '../desktop'
+import { CheckInk } from './Marks'
+import { InkSelect } from './InkSelect'
 
 // The desktop-only half of Appearance.
 //
@@ -76,19 +78,22 @@ export function DesktopSection() {
       <div className="menu-head">{tr('settings.desktopApp')}</div>
       <div className="menu-row">
         <label htmlFor="desktop-icon">{tr('settings.icon')}</label>
-        <select id="desktop-icon" className="menu-toggle" value={state.choice}
+        <InkSelect id="desktop-icon" className="menu-toggle" value={state.choice}
           onChange={e => apply({ choice: e.target.value as IconChoice })}>
           {/* Only `Auto` names an operating system; the other four name
               colours and read the same everywhere. */}
           {CHOICES.map(c => <option key={c.id} value={c.id}>
             {tr(c.id === 'Auto' ? k(c.key) : c.key)}</option>)}
-        </select>
+        </InkSelect>
       </div>
 
       <div className="menu-row">
         <label htmlFor="desktop-shortcut">{tr(k('settings.icon.shortcut'))}</label>
-        <input id="desktop-shortcut" type="checkbox" checked={state.startMenuShortcut}
-          onChange={e => apply({ shortcut: e.target.checked })} />
+        <span className="box-ink">
+          <input id="desktop-shortcut" type="checkbox" checked={state.startMenuShortcut}
+            onChange={e => apply({ shortcut: e.target.checked })} />
+          <CheckInk seed="desktop-shortcut" />
+        </span>
       </div>
 
       {/* Absent from an older client's answer, and that absence is the feature
@@ -98,8 +103,11 @@ export function DesktopSection() {
       {state.systemTitleBar !== undefined && (
         <div className="menu-row">
           <label htmlFor="desktop-titlebar">{tr('settings.titlebar')}</label>
-          <input id="desktop-titlebar" type="checkbox" checked={state.systemTitleBar}
-            onChange={e => applyTitleBar(e.target.checked)} />
+          <span className="box-ink">
+            <input id="desktop-titlebar" type="checkbox" checked={state.systemTitleBar}
+              onChange={e => applyTitleBar(e.target.checked)} />
+            <CheckInk seed="desktop-titlebar" />
+          </span>
         </div>
       )}
 

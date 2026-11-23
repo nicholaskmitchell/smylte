@@ -26,6 +26,7 @@ import { CheckInk, StrikeInk } from './Marks'
 import { readCachedDayPlan } from '../cache'
 import { useI18n, useT } from '../i18n'
 import { weekdayNames } from '../names'
+import { InkSelect } from './InkSelect'
 import {
   COLS, DEFAULT_LAYOUT, GAP, MODULE_KINDS, MODULE_SPECS, ROW_H, addModule, fitLayout, layoutRows,
   moveModule, pxToCellDelta, removeModule, resizeModule, sanitizeLayout,
@@ -969,7 +970,7 @@ function SharesModule({ sharesRev, onExpire, onOpenSettings }: {
             <button type="button" className="menu-toggle" aria-pressed={isOn(d)}
               aria-label={tr('home.shareToggle', { name: d.name })}
               disabled={patching.current.has(d.id)} onClick={() => { void toggle(d) }}>
-              {tr(isOn(d) ? 'shares.on' : 'shares.off')}
+              <CheckInk seed={`home-share-${d.id}`} />{tr(isOn(d) ? 'shares.on' : 'shares.off')}
             </button>
           </li>
         ))}
@@ -1401,10 +1402,10 @@ function QuickAddModule({ lists, create }: { lists: List[]; create: TaskData['cr
       <input className="input" value={text}
         onChange={(e) => { setText(e.target.value); setAdded(null) }}
         placeholder={tr('home.quickAddPlaceholder')} aria-label={tr('home.quickAddAria')} />
-      <select className="input quickadd-list" value={target}
+      <InkSelect className="input quickadd-list" value={target}
         onChange={(e) => setListId(e.target.value)} aria-label={tr('field.list')}>
         {lists.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-      </select>
+      </InkSelect>
       <button className="btn" type="submit" disabled={!text.trim()}>{tr('common.add')}</button>
       {added && (
         <p className="dash-added" role="status">{tr('home.addedTo', { list: added })}</p>

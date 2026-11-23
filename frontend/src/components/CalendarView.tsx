@@ -22,7 +22,7 @@ import { taskKey } from '../order'
 import { useIsMobile } from '../hooks'
 import { NavCollections, useEmbeddedCollections } from '../shell'
 import { AgendaEvent, AgendaTask, DayPopover } from './DayPopover'
-import { CheckInk, StrikeInk } from './Marks'
+import { CheckInk, IconInk, StrikeInk } from './Marks'
 import { ViewDrawing } from './DayDrawing'
 import { EMPTY_DAY } from '../drawing'
 import { Sidebar } from './Sidebar'
@@ -31,6 +31,7 @@ import { DateTimeInput } from './DateTimeInput'
 import { NO_REMINDER, ReminderField } from './ReminderField'
 import { useI18n, useT } from '../i18n'
 import { monthNames, weekdayNames } from '../names'
+import { InkSelect } from './InkSelect'
 
 interface Draft { event?: CalEvent; date?: string }
 
@@ -673,10 +674,10 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
         {viewTabs && <div className="content-switch">{viewTabs}</div>}
         <div className="cal-head">
           <button className="icon-btn" title={fieldNotes ? undefined : tr('cal.prevMonth')} aria-label={tr('cal.prevMonth')}
-            onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}>‹</button>
+            onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}>‹<IconInk icon="left" /></button>
           <button className="btn ghost" onClick={() => { const n = new Date(); setCursor(new Date(n.getFullYear(), n.getMonth(), 1)) }}>{tr('tasks.today')}</button>
           <button className="icon-btn" title={fieldNotes ? undefined : tr('cal.nextMonth')} aria-label={tr('cal.nextMonth')}
-            onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}>›</button>
+            onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}>›<IconInk icon="right" /></button>
           <span className="cal-title">{months[cursor.getMonth()]} {cursor.getFullYear()}</span>
           <span className="spacer" />
           {visibleCals.length > 0 && !isMobile && (
@@ -1026,7 +1027,7 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
             <div className="modal-head">
               <span className="modal-title">{tr('cal.repeatingEvent')}</span>
               <button className="icon-btn" onClick={() => setMoveAsk(null)}
-                aria-label={tr('common.close')}>✕</button>
+                aria-label={tr('common.close')}>✕<IconInk icon="close" /></button>
             </div>
             <div className="scope-choose">
               <p className="scope-q">{tr('cal.applyToWhich')}</p>
@@ -1369,7 +1370,7 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete,
         onClick={(ev) => ev.stopPropagation()}>
         <div className="modal-head">
           <span className="modal-title">{modalTitle}</span>
-          <button className="icon-btn" onClick={onClose} aria-label={tr('common.close')}>✕</button>
+          <button className="icon-btn" onClick={onClose} aria-label={tr('common.close')}>✕<IconInk icon="close" /></button>
         </div>
 
         {scopeAsk ? (
@@ -1393,7 +1394,10 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete,
               <input className="input" id="ev-title" autoFocus value={summary} onChange={(ev) => setSummary(ev.target.value)} />
             </div>
             <label className="chip" style={{ alignSelf: 'flex-start', cursor: 'pointer' }}>
-              <input type="checkbox" checked={allDay} onChange={(ev) => setAllDay(ev.target.checked)} /> {tr('common.allDay')}
+              <span className="box-ink">
+                <input type="checkbox" checked={allDay} onChange={(ev) => setAllDay(ev.target.checked)} />
+                <CheckInk seed="all-day" />
+              </span> {tr('common.allDay')}
             </label>
             <div className="field-row">
               <div className="field">
@@ -1413,10 +1417,10 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete,
             </div>
             <div className="field">
               <label className="label" htmlFor="ev-repeat">{tr('cal.repeat')}</label>
-              <select className="input" id="ev-repeat" value={repeat} onChange={(ev) => setRepeat(ev.target.value)}>
+              <InkSelect className="input" id="ev-repeat" value={repeat} onChange={(ev) => setRepeat(ev.target.value)}>
                 {recurring && <option value="keep">{tr('cal.repeat.keep')}</option>}
                 {REPEATS.map(([v, l]) => <option key={v} value={v}>{tr(l)}</option>)}
-              </select>
+              </InkSelect>
             </div>
             {/* WHAT THIS DOES TO THE OWNER'S AVAILABILITY, said in the words
                 the consequence is about rather than in the property's.
@@ -1437,11 +1441,11 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete,
             </div>
             <div className="field">
               <label className="label" htmlFor="ev-busy">{tr('cal.showAs')}</label>
-              <select className="input" id="ev-busy" value={busy ? 'busy' : 'free'}
+              <InkSelect className="input" id="ev-busy" value={busy ? 'busy' : 'free'}
                 onChange={(ev) => setBusy(ev.target.value === 'busy')}>
                 <option value="busy">{tr('cal.busy')}</option>
                 <option value="free">{tr('cal.free')}</option>
-              </select>
+              </InkSelect>
               {/* Only on the arm that changes something, and only for the
                   half of it a person cannot see: an event that blocks is what
                   every event does, and saying so would be a line of chrome
@@ -1460,9 +1464,9 @@ function EventModal({ draft, cals, initialCal, onClose, onSave, onDelete,
             {cals.length > 1 && (
               <div className="field">
                 <label className="label" htmlFor="ev-cal">{tr('cal.calendarField')}</label>
-                <select className="input" id="ev-cal" value={calPick} onChange={(ev) => setCalPick(ev.target.value)}>
+                <InkSelect className="input" id="ev-cal" value={calPick} onChange={(ev) => setCalPick(ev.target.value)}>
                   {cals.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
+                </InkSelect>
               </div>
             )}
             <div className="field">

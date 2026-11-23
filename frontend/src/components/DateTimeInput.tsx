@@ -22,8 +22,10 @@
 // calendar in this file, and that is the point of it.
 //
 // THE FIELD IS STILL A FIELD. Typing works exactly as before, the segments still
-// accept a keyboard, `min`/`max` still bound the picker, and the browser's own
-// glyph is untouched. This is strictly an added way in, which is why it is bound
+// accept a keyboard, `min`/`max` still bound the picker. The browser's own glyph
+// stays where it was, but under Field notes the field sits in `.ink-field` and
+// the pen's page or clock is drawn over it, the glyph unpainted yet still
+// clickable, unless `plain` is passed. This is strictly an added way in, which is why it is bound
 // to `click` and not to `focus`: reaching a field with Tab is not asking for a
 // popup over it, and a keyboard user who wanted one has Alt+Down and F4 already.
 //
@@ -43,6 +45,7 @@
 // back to.
 
 import type { InputHTMLAttributes } from 'react'
+import { IconInk } from './Marks'
 
 /** The one place that asks. Guarded twice — see the header. */
 function openPicker(el: HTMLInputElement): void {
@@ -63,8 +66,12 @@ function openPicker(el: HTMLInputElement): void {
  * component and is applied by remembering to import it is a rule with a
  * half-life.
  */
-export function DateTimeInput({ onClick, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
-  return (
+export function DateTimeInput({ onClick, plain, ...rest }: InputHTMLAttributes<HTMLInputElement> & {
+  /** Keep the browser's own glyph, with no drawn page or clock: for the two
+   *  dense date fields (Today's triage, the shutdown ritual) too small for one. */
+  plain?: boolean
+}) {
+  const input = (
     <input
       {...rest}
       onClick={(e) => {
@@ -75,5 +82,15 @@ export function DateTimeInput({ onClick, ...rest }: InputHTMLAttributes<HTMLInpu
         onClick?.(e)
       }}
     />
+  )
+  if (plain) return input
+  // Field notes draws a page or a clock over the browser's glyph (as InkSelect
+  // draws a select's caret): the field is in `.ink-field`, which the presets
+  // lay out as no box at all (app.css), so they keep the field as it was.
+  return (
+    <span className="ink-field">
+      {input}
+      <IconInk icon={rest.type === 'time' ? 'time' : 'date'} />
+    </span>
   )
 }

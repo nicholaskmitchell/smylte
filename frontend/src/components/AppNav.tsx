@@ -11,7 +11,7 @@
 import type { Ref, RefObject } from 'react'
 import { useT } from '../i18n'
 import { TAB_LABELS, type Tab } from '../tabs'
-import { AddInk, TabIcon, TabInk } from './Marks'
+import { AddInk, IconInk, TabIcon, TabInk } from './Marks'
 
 interface NavProps {
   tabOrder: Tab[]
@@ -92,7 +92,7 @@ export function AppNav({ collapsed, onToggleCollapsed, slotRef, ...p }: NavProps
         {!collapsed && <span className="brand">Smylte<span className="dot">.</span></span>}
         <button type="button" className="icon-btn appnav-fold" title={fold} aria-label={fold}
           aria-expanded={!collapsed} onClick={onToggleCollapsed}>
-          {collapsed ? '»' : '«'}
+          {collapsed ? '»' : '«'}<IconInk icon={collapsed ? 'foldRight' : 'foldLeft'} />
         </button>
       </div>
       {!collapsed && (

@@ -24,6 +24,7 @@ import { useI18n } from '../i18n'
 import { useFieldNotes } from '../hooks'
 import { Hint } from './Hint'
 import { ShareBody, type Translate } from './SharePage'
+import { CheckInk } from './Marks'
 
 // What the agenda may reach, in days. The server accepts exactly these four and
 // refuses anything else; this is only what the control offers.
@@ -374,7 +375,7 @@ export function SharesSection(
                       <button id={`share-focus-${d.id}`} className="menu-toggle"
                         aria-pressed={d.show_focus}
                         onClick={() => void patch(d.id, { show_focus: !d.show_focus })}>
-                        {tr(d.show_focus ? 'shares.on' : 'shares.off')}
+                        <CheckInk seed={`share-focus-${d.id}`} />{tr(d.show_focus ? 'shares.on' : 'shares.off')}
                       </button>
                     </div>
                     <div className="hintline">{tr('shares.focusHint')}</div>
@@ -388,7 +389,7 @@ export function SharesSection(
                       <button id={`share-enabled-${d.id}`} className="menu-toggle"
                         aria-pressed={isOn(d)}
                         onClick={() => void patch(d.id, { enabled: !isOn(d) })}>
-                        {tr(isOn(d) ? 'shares.on' : 'shares.off')}
+                        <CheckInk seed={`share-enabled-${d.id}`} />{tr(isOn(d) ? 'shares.on' : 'shares.off')}
                       </button>
                     </div>
                     <Hint>{tr('shares.enabledHint')}</Hint>

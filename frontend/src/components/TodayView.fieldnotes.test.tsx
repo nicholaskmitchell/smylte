@@ -110,6 +110,29 @@ describe('<TodayView> under Field notes', () => {
     expect(screen.queryByRole('button', { name: 'Review' })).not.toBeInTheDocument()
   })
 
+  it('draws the day arrows and the way back in the pen, and keeps their names', async () => {
+    const user = setup()
+    const prev = await screen.findByRole('button', { name: 'Previous day' })
+    const next = screen.getByRole('button', { name: 'Next day' })
+    expect(next).toBeDisabled()
+    expect(prev).toHaveClass('icon-btn', 'day-step')
+    expect(prev.querySelector('svg.icon-ink[data-icon="left"][aria-hidden="true"]')).not.toBeNull()
+    expect(next.querySelector('svg.icon-ink[data-icon="right"][aria-hidden="true"]')).not.toBeNull()
+    // The glyph stays as text: presets show it, and the name does not change.
+    expect(prev).toHaveTextContent('‹')
+    expect(screen.queryByRole('button', { name: 'Today' })).not.toBeInTheDocument()
+
+    await user.click(prev)
+    const home = await screen.findByRole('button', { name: 'Today' })
+    expect(home).toHaveClass('day-home')
+    expect(home).not.toHaveClass('btn')
+    expect(home.querySelector('svg.day-home-ink[aria-hidden="true"]')).not.toBeNull()
+
+    await user.click(home)
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Today' })).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Next day' })).toBeDisabled()
+  })
+
   it('brings the ⋯ menu into view as it opens, since the pane scrolls', async () => {
     // jsdom has no scrollIntoView, so one is installed here and the prototype
     // put back afterwards.

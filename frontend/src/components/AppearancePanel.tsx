@@ -6,6 +6,8 @@ import { UnsentInput, useLayer, useUnsent, useUnsentCount } from '../layers'
 import { useT } from '../i18n'
 import { showNotice } from '../util'
 import { Hint } from './Hint'
+import { CheckInk, IconInk, TabInk } from './Marks'
+import { InkSelect } from './InkSelect'
 import {
   DEFAULTS, FONT_CHOICES, GROUPS, MAX_NAME_LEN, MAX_THEMES, PRESETS, SHARED_DEFAULTS,
   GROUP_LABEL, TOKENS, defaultValue, ensureFont, findPreset, isSharedToken, isValidToken,
@@ -250,12 +252,12 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose, w
           aria-label={tr('appear.title')} aria-modal="true">
           <div className="modal-head">
             <span className="modal-title">{tr('appear.title')}</span>
-            <button className="icon-btn" aria-label={tr('common.close')} onClick={onClose}>✕</button>
+            <button className="icon-btn" aria-label={tr('common.close')} onClick={onClose}>✕<IconInk icon="close" /></button>
           </div>
 
           {/* ---- theme ---- */}
           <div className="appear-bar">
-            <select className="input" value={active?.id ?? ''} aria-label={tr('appear.theme')}
+            <InkSelect className="input" value={active?.id ?? ''} aria-label={tr('appear.theme')}
               onChange={(e) => selectTheme(e.target.value)}>
               {/* Outside every group, and first: the way back is never buried. */}
               <option value="">{tr('appear.smylteDefault')}</option>
@@ -267,7 +269,7 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose, w
                   {themes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </optgroup>
               )}
-            </select>
+            </InkSelect>
             <button className="btn ghost" onClick={saveAs} disabled={!active}>
               {tr('appear.duplicate')}
             </button>
@@ -326,7 +328,7 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose, w
                   aria-pressed={wallpaperAccent.on}
                   aria-describedby={fieldNotes ? undefined : 'appear-wallpaper-accent-hint'}
                   onClick={() => wallpaperAccent.onToggle(!wallpaperAccent.on)}>
-                  {tr(wallpaperAccent.on ? 'appear.systemAccentOn' : 'appear.systemAccentOff')}
+                  <CheckInk seed="wallpaper-accent" />{tr(wallpaperAccent.on ? 'appear.systemAccentOn' : 'appear.systemAccentOff')}
                 </button>
               </div>
               <Hint as="p" id="appear-wallpaper-accent-hint">{tr('appear.systemAccentHint')}</Hint>
@@ -341,7 +343,7 @@ export function AppearancePanel({ appearance, onChange, mode, onMode, onClose, w
               {(['light', 'dark'] as Mode[]).map((m) => (
                 <button key={m} className={`view-tab ${mode === m ? 'active' : ''}`}
                   aria-pressed={mode === m} onClick={() => onMode(m)}>
-                  {m === 'light' ? tr('appear.light') : tr('appear.dark')}
+                  {m === 'light' ? tr('appear.light') : tr('appear.dark')}<TabInk />
                 </button>
               ))}
             </div>
@@ -490,7 +492,7 @@ function FontControl({ id, token, value, onChange }: {
   // sit on, rather than silently snapping to the default.
   const known = choices.some((c) => c.stack === value)
   return (
-    <select id={`tok${id}`} className="input" value={known ? value : ''}
+    <InkSelect id={`tok${id}`} className="input" value={known ? value : ''}
       onChange={(e) => { ensureFont(e.target.value); onChange(e.target.value) }}>
       {!known && (
         <option value="">
@@ -498,7 +500,7 @@ function FontControl({ id, token, value, onChange }: {
         </option>
       )}
       {choices.map((c) => <option key={c.label} value={c.stack}>{c.label}</option>)}
-    </select>
+    </InkSelect>
   )
 }
 
@@ -509,14 +511,14 @@ function KeywordControl({ id, spec, value, onChange }: {
   const tr = useT()
   const choices = spec.values ?? []
   return (
-    <select id={`tok${id}`} className="input" value={value}
+    <InkSelect id={`tok${id}`} className="input" value={value}
       onChange={(e) => onChange(e.target.value)}>
       {choices.map((v) => (
         <option key={v} value={v}>
           {spec.valueLabels?.[v] ? tr(spec.valueLabels[v]) : v}
         </option>
       ))}
-    </select>
+    </InkSelect>
   )
 }
 

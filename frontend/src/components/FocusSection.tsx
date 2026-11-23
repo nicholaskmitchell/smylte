@@ -19,6 +19,7 @@ import { useT } from '../i18n'
 import { notifyPermission, requestNotify } from '../notify'
 import { useFieldNotes } from '../hooks'
 import { Hint } from './Hint'
+import { CheckInk } from './Marks'
 
 export function FocusSection({ value, onChange }: {
   value: FocusSettings
@@ -54,7 +55,7 @@ export function FocusSection({ value, onChange }: {
       <div className="menu-head">{tr('settings.focus.end')}</div>
       <div className="menu-row">
         <label htmlFor="focus-auto">{tr('settings.focus.end')}</label>
-        <button className="menu-toggle" id="focus-auto" aria-pressed={value.autoContinue}
+        <button className="menu-toggle" id="focus-auto" aria-pressed={value.autoContinue} data-value=""
           onClick={() => onChange({ autoContinue: !value.autoContinue })}>
           {tr(value.autoContinue ? 'settings.focus.end.roll' : 'settings.focus.end.wait')}
         </button>
@@ -63,7 +64,7 @@ export function FocusSection({ value, onChange }: {
 
       <div className="menu-row">
         <label htmlFor="focus-cap">{tr('settings.focus.cap')}</label>
-        <button className="menu-toggle" id="focus-cap" aria-pressed={value.capDefault}
+        <button className="menu-toggle" id="focus-cap" aria-pressed={value.capDefault} data-value=""
           onClick={() => onChange({ capDefault: !value.capDefault })}>
           {tr(value.capDefault ? 'settings.focus.cap.capped' : 'settings.focus.cap.open')}
         </button>
@@ -75,14 +76,14 @@ export function FocusSection({ value, onChange }: {
         <label htmlFor="focus-chime">{tr('settings.focus.chime')}</label>
         <button className="menu-toggle" id="focus-chime" aria-pressed={value.chime}
           onClick={() => onChange({ chime: !value.chime })}>
-          {tr(value.chime ? 'settings.focus.on' : 'settings.focus.off')}
+          <CheckInk seed="focus-chime" />{tr(value.chime ? 'settings.focus.on' : 'settings.focus.off')}
         </button>
       </div>
       <div className="menu-row">
         <label htmlFor="focus-notify">{tr('settings.focus.notify')}</label>
         <button className="menu-toggle" id="focus-notify" aria-pressed={value.notify}
           onClick={() => onChange({ notify: !value.notify })}>
-          {tr(value.notify ? 'settings.focus.on' : 'settings.focus.off')}
+          <CheckInk seed="focus-notify" />{tr(value.notify ? 'settings.focus.on' : 'settings.focus.off')}
         </button>
       </div>
       {value.notify && (

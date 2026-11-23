@@ -250,7 +250,6 @@
   font-family: var(--serif); font-size-adjust: none; font-weight: 500; line-height: 1; letter-spacing: -0.025em;
   font-size: calc(var(--fs-app-display) * var(--fs-scale)); color: var(--fg);
 }
-[data-surface="app"] .fn-date .today-nav { margin-top: 12px; }
 /* The drawing is 160 x 200; it is never drawn below 160px tall. */
 [data-surface="app"] .fn-drawing { flex: none; width: 128px; height: 160px; }
 @media (min-width: 721px) {
@@ -322,7 +321,6 @@
 [data-surface="app"] .tab.active .tab-ink path,
 [data-surface="app"] .strike-ink.on path { opacity: 1; }
 
-[data-surface="app"] .fn-date .today-nav { align-self: flex-start; }
 [data-surface="app"] .fn-list-head .today-count { border: 0; padding: 0; margin: 0; white-space: nowrap; }
 
 /* Calm rows: a row's unset estimate and its remove button stay out of sight
@@ -404,23 +402,10 @@
 
 /* ==== cp3 · shared ==== */
 
-/* Control edges at 3:1: --rule is a 1.3:1 hairline (contrast-table.test.ts names --rule-strong, via --edge-control, as the control edge). */
-[data-surface="app"] .menu-toggle,
-[data-surface="app"] .content-head > .view-tab,
-[data-surface="app"] .col-add,
-[data-surface="app"] .sched-add-range,
-[data-surface="app"] .bulk-add-row,
-[data-surface="app"] .booking-day:not(.active),
-[data-surface="app"] .slot-btn,
-[data-surface="app"] .habit-day:not(.on) { border-color: var(--edge-control); }
 /* A view header's count is a margin note, as Today's is. */
 [data-surface="app"] .content-head > .content-sub {
   font-family: var(--serif); font-size-adjust: none; font-style: italic; text-transform: none; letter-spacing: 0;
   font-variant-numeric: tabular-nums; font-size: calc(var(--fs-app-note) * var(--fs-scale)); color: var(--fg-muted);
-}
-/* ‹ › beside a view's Today: square, not a sliver. Desktop only: .cal-title has min-width 220px, and 44px buttons overflow a 320px phone. */
-@media (min-width: 721px) {
-  [data-surface="app"] :is(.cal-head, .range-nav) > .icon-btn { min-width: var(--control-h); }
 }
 
 /* ==== cp3 · Tasks ==== */
@@ -484,7 +469,6 @@
   text-transform: none; letter-spacing: 0; font-size: calc(var(--fs-app-section) * var(--fs-scale)); color: var(--fg);
 }
 [data-surface="app"] .sched-switch ~ .scroll > .section-label + .empty { padding: 8px var(--gutter); }
-[data-surface="app"] :is(.sched-toggle, .sched-check, .sched-day-name) input[type="checkbox"] { accent-color: var(--accent); }
 [data-surface="app"] .agenda-task .tick { margin-inline-end: 6px; }   /* the space the glyph's text carried */
 
 /* ==== cp3 · Focus ==== */
@@ -576,3 +560,324 @@
 @media (max-height: 759px) { [data-surface="app"] .settings-menu:not(.set-sheet) .set-nav-drawing { display: none; } }
 /* Phone sheet: after the last row, centred. */
 @media (max-width: 720px) { [data-surface="app"] .set-sheet .set-nav-drawing { margin: 24px auto 8px; padding-top: 0; } }
+
+/* ==== controls ==== */
+/* Everything you press that is not the screen's one action: the owner's pick
+   of 22 Nov ("Paper and pen"), built as its paper first. Values from tokens
+   only; --ctl-face and --ctl-on are in tokens.css's Field notes lever block.
+   - A secondary control (a ghost button, a settings toggle, the lone view tab,
+     a pick, an add) is a face: --ctl-face, the ink at 8% over whatever ground
+     it sits on, at the button corner. It has NO edge at rest; its
+     --edge-control edge (3:1) shows under the pointer and on press. That
+     reverses the 3:1 edge at rest these controls had, and the owner accepted
+     it on 22 Nov: WCAG 1.4.11 asks for no boundary where the label identifies
+     the control, and every one here carries a --fg or --warn word. Fields
+     keep their 3:1 edge. fieldnotes-edges.browser.test.tsx holds both.
+   - A face carries --fg or --warn text only: --fg-muted on a face falls
+     under 4.5:1 (contrast-table.test.ts).
+   - Anything on or chosen wears the highlighter (--ctl-on) behind --fg text,
+     as the focus card's running Start does.
+   - An icon button is its glyph in a --control-h square, with no edge.
+   - Fields sit on --bg-elev, the design system's input surface; a select
+     shows a caret.
+   - Destructive is one style: --warn on the face, a --warn edge under the
+     pointer. */
+[data-surface="app"] :is(.btn.ghost, .menu-toggle, .content-head > .view-tab, .slot-btn, .booking-day, .habit-day, .col-add, .sched-add-range, .bulk-add-row) {
+  background-color: var(--ctl-face); border-color: transparent; border-radius: var(--r-control);
+  color: var(--fg);
+}
+/* button only: select.menu-toggle keeps app.css's 16px iOS floor (backlog.sep03.browser.test.tsx). */
+[data-surface="app"] button.menu-toggle { font-size: calc(var(--fs-app-ui) * var(--fs-scale)); padding-inline: 14px; }
+[data-surface="app"] select.menu-toggle { padding-left: 14px; }
+/* The adds were dashed: their edge, when it shows, is the same solid one. */
+[data-surface="app"] :is(.col-add, .sched-add-range, .bulk-add-row) { border-style: solid; }
+@media (hover: hover) {
+  [data-surface="app"] :is(.btn.ghost, .menu-toggle, .content-head > .view-tab, .slot-btn, .booking-day, .habit-day, .col-add, .sched-add-range, .bulk-add-row):not(:disabled):hover {
+    background-color: var(--ctl-face); border-color: var(--edge-control); color: var(--fg);
+  }
+}
+[data-surface="app"] :is(.btn.ghost, .menu-toggle, .content-head > .view-tab):active { background-color: var(--ctl-face); border-color: var(--edge-control); }
+
+/* On, chosen, active: the highlighter. A toggle that is on, and the lone view
+   tab while it is on, get a swipe behind the word (the focus card's mark,
+   smaller); a small pick (a booking day, a habit day, a display chip) is
+   filled. Off keeps the face, and its word stays --fg: --fg-muted on a face
+   is under 4.5:1 on --paper in light (contrast-table.test.ts). A toggle whose
+   word names its value (`data-value`: Shown, Roll straight on) gets no swipe. */
+[data-surface="app"] :is(.menu-toggle[aria-pressed="true"]:not([data-value]), .content-head > .view-tab.active) { position: relative; isolation: isolate; }
+[data-surface="app"] :is(.menu-toggle[aria-pressed="true"]:not([data-value]), .content-head > .view-tab.active)::before {
+  content: ''; position: absolute; z-index: -1; left: 9px; right: 9px; bottom: 26%; height: 40%;
+  border-radius: var(--r-xs); background: var(--ctl-on); transform: skewX(-8deg);
+}
+[data-surface="app"] :is(.booking-day.active, .habit-day.on, .disp-picks .chip[aria-pressed="true"]) {
+  background-color: var(--ctl-on); color: var(--fg); border-color: transparent;
+}
+/* The highlighter takes --fg text only: a chosen day's weekday too. */
+[data-surface="app"] .booking-day.active .dow { color: var(--fg); }
+@media (hover: hover) {
+  [data-surface="app"] :is(.booking-day.active, .habit-day.on):not(:disabled):hover {
+    background-color: var(--ctl-on); border-color: transparent;
+  }
+}
+
+/* The segmented switch: no track; the swipe slides under the chosen word. */
+[data-surface="app"] .view-tabs { background: none; padding: 0; gap: 4px; }
+[data-surface="app"] .view-tabs::before {
+  top: auto; bottom: 22%; height: 40%; z-index: 0;
+  width: calc(var(--thumb-w, calc(100% / var(--n, 1))) - 20px);
+  translate: calc(var(--thumb-x, calc((100% + 20px) * var(--i, 0))) + 10px) 0;
+  background: var(--ctl-on); box-shadow: none; border-radius: var(--r-xs); transform: skewX(-8deg);
+}
+[data-surface="app"] .view-tabs > .view-tab {
+  border-radius: var(--r-sm); padding: 8px 14px; color: var(--fg-muted);
+  font-size: calc(var(--fs-app-ui) * var(--fs-scale));
+}
+[data-surface="app"] .view-tabs > .view-tab.active { color: var(--fg); }
+@media (hover: hover) {
+  [data-surface="app"] .view-tabs > .view-tab:not(.active):hover { background: var(--ctl-face); color: var(--fg); }
+}
+
+/* Icon buttons: a glyph in a square, no edge. Not the bars' own gear (.topbar,
+   .tabbar), which keeps its box and 44px tap area; not the column's fold, a
+   glyph beside the wordmark; not the collapsed rail's footers, which are
+   full-width and square (app.css). :where() keeps this at (0,3,0). */
+[data-surface="app"] .icon-btn:not(.appnav-fold, .side-completed-rail):where(:not(:is(.topbar, .tabbar) .icon-btn)) {
+  border-color: transparent; border-radius: var(--r-control); color: var(--fg-muted);
+  min-width: var(--control-h); min-height: var(--control-h); padding: 0;
+  font-size: calc(var(--fs-app-section) * var(--fs-scale)); line-height: 1;
+}
+[data-surface="app"] :is(.day-pop-head, .sched-range, .bulk-row, .toast) .icon-btn { min-width: 32px; min-height: 32px; font-size: calc(var(--fs-app-ui) * var(--fs-scale)); }
+[data-surface="app"] .tab-order-row .icon-btn { font-size: calc(var(--fs-app-ui) * var(--fs-scale)); }
+/* The month and range arrows are 32px squares on a phone, or "September 2026"
+   is cut off at 320px; a centred 44px `::after` is their tap box (as app.css
+   gives Today's row controls). The 6px it adds each side fits the headers' gaps. */
+@media (max-width: 720px) {
+  [data-surface="app"] :is(.cal-head > .icon-btn, .range-nav .icon-btn) { min-width: 32px; min-height: 32px; position: relative; }
+  [data-surface="app"] :is(.cal-head > .icon-btn, .range-nav .icon-btn)::after {
+    content: ''; position: absolute; top: 50%; left: 50%;
+    width: 44px; height: 44px; transform: translate(-50%, -50%);
+  }
+}
+@media (hover: hover) {
+  [data-surface="app"] .icon-btn:not(.active, .appnav-fold, .side-completed-rail, :disabled):hover { background: var(--ctl-face); border-color: transparent; color: var(--fg); }
+}
+[data-surface="app"] .icon-btn:not(.active, .side-completed-rail):active { background: var(--ctl-face); border-color: transparent; }
+/* A disabled icon button looks disabled: no rule said so (the day arrows'
+   finding), and the hover above skips it. */
+[data-surface="app"] .icon-btn:disabled { color: var(--fg-faint); background: none; border-color: transparent; cursor: default; }
+[data-surface="app"] .set-sheet .set-back-slot { width: var(--control-h); }
+
+/* Native parts follow the theme. Nothing declared color-scheme, so at night a
+   date field's calendar glyph was drawn black on the dark field (1.36:1), an
+   unticked checkbox was a white square and a select's list opened white. */
+:root[data-surface="app"][data-theme="dark"] { color-scheme: dark; }
+
+/* Fields on the design system's input surface; a select shows its caret. */
+[data-surface="app"] :is(.input, .tag-input) { background-color: var(--bg-elev); }
+[data-surface="app"] .tag-input .input { background: none; }
+[data-surface="app"] :is(select.input, select.menu-toggle) {
+  appearance: none; -webkit-appearance: none; padding-right: 34px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--fg-muted) 50%), linear-gradient(135deg, var(--fg-muted) 50%, transparent 50%);
+  background-position: right 19px center, right 14px center; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
+}
+[data-surface="app"] select.menu-toggle { border-color: transparent; }
+[data-surface="app"] input[type="checkbox"] { accent-color: var(--accent); width: 18px; height: 18px; }
+
+/* Destructive: one style. */
+[data-surface="app"] :is(.btn.danger, .btn.ghost.danger) { background-color: var(--ctl-face); color: var(--warn); border-color: transparent; }
+@media (hover: hover) {
+  [data-surface="app"] :is(.btn.danger, .btn.ghost.danger):hover { background-color: var(--ctl-face); color: var(--warn); border-color: var(--warn); }
+}
+[data-surface="app"] :is(.btn.danger, .btn.ghost.danger):active { background-color: var(--ctl-face); color: var(--warn); border-color: var(--warn); }
+[data-surface="app"] :is(.disp-url .btn, .booking-picked .btn) { border-radius: var(--r-sm); }
+
+/* ---- the pen's icons (Marks.tsx: IconInk, HomeInk) ---------------------------
+   24px on their 24-unit grid, so the pen is exactly --stroke-pen, with round
+   caps, in the colour of the control that carries them; the three dots at
+   --stroke-tick. app.css hides them under the presets. */
+[data-surface="app"] .icon-ink {
+  display: block; flex: none; width: 24px; height: 24px; overflow: visible; pointer-events: none;
+  fill: none; stroke: currentColor; stroke-width: var(--stroke-pen); stroke-linecap: round; stroke-linejoin: round;
+}
+[data-surface="app"] .icon-ink[data-icon="more"] { stroke-width: var(--stroke-tick); }
+[data-surface="app"] .day-home-ink {
+  display: block; flex: none; width: 21px; height: 14px; overflow: visible; pointer-events: none;
+  fill: none; stroke: currentColor; stroke-width: var(--stroke-pen); stroke-linecap: round; stroke-linejoin: round;
+}
+
+/* ---- Today's day arrows (the owner's pick of 22 Nov: "Ink chevrons") ---------
+   ‹ and › are the pen's chevrons (IconInk) on bare squares: 44px on a touch
+   screen, --control-h with a pointer, no edge, the ink; a disabled one is
+   --fg-faint. The way back from a past day is the word "Today" in coral ink
+   with a drawn arrow (HomeInk), boxless and as tall as the arrows, so the row
+   is one height whichever day is open and the date above it never moves. The
+   first chevron's stroke lines up with the date: the row starts half a square
+   minus half an icon to the left. At 320px the word goes alone, so the row
+   fits beside the 128px drawing. */
+[data-surface="app"] .fn-date .today-nav {
+  --day-step: var(--control-h);
+  align-self: flex-start; gap: 0; height: var(--day-step);
+  margin-top: 10px; margin-left: calc((24px - var(--day-step)) / 2);
+}
+@media (pointer: coarse) { [data-surface="app"] .fn-date .today-nav { --day-step: 44px; } }
+[data-surface="app"] .fn-date .today-nav > .day-step {
+  width: var(--day-step); height: var(--day-step); min-width: 0; min-height: 0; padding: 0;
+  border: 0; border-radius: var(--r-md); color: var(--fg); font-size: 0;
+}
+[data-surface="app"] .fn-date .today-nav > .day-step:disabled { color: var(--fg-faint); background: none; cursor: default; }
+[data-surface="app"] .day-home {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  height: var(--day-step, 44px); margin-left: 4px; padding: 0 10px;
+  border: 0; border-radius: var(--r-md); background: none; cursor: pointer;
+  font-family: var(--sans); font-size-adjust: none; font-weight: 600; font-size: calc(var(--fs-app-ui) * var(--fs-scale));
+  color: var(--accent);
+  transition: color var(--dur-fast) var(--ease), background var(--dur) var(--ease), scale var(--dur) var(--ease-press);
+}
+@media (hover: hover) { [data-surface="app"] .day-home:hover { color: var(--fg); background: var(--ctl-face); } }
+[data-surface="app"] .day-home:active { scale: var(--press-scale); }
+@media (max-width: 359px) { [data-surface="app"] .fn-date .today-nav > .day-home .day-home-ink { display: none; } }
+
+/* ---- icon buttons draw their icons --------------------------------------------
+   A control that carries the pen's icon (IconInk) shows the icon, not its
+   glyph: the glyph stays in the DOM at no size, as the check's ✓ does, so the
+   name, the tests that find it and the presets are unchanged. The ⋯ on the
+   Today line becomes an icon button too, with no face; a chip's × a small icon. */
+[data-surface="app"] :is(.icon-btn, .today-menu-btn, .chip-x):has(> .icon-ink) { font-size: 0; }
+[data-surface="app"] .btn.today-menu-btn:has(> .icon-ink) {
+  display: inline-grid; place-items: center; min-width: var(--control-h); min-height: var(--control-h); padding: 0;
+  background: none; border-color: transparent; color: var(--fg-muted);
+}
+@media (hover: hover) {
+  [data-surface="app"] .btn.today-menu-btn:has(> .icon-ink):not(:disabled):hover { background: var(--ctl-face); border-color: transparent; color: var(--fg); }
+}
+[data-surface="app"] .btn.today-menu-btn:has(> .icon-ink):active { background: var(--ctl-face); border-color: transparent; }
+/* Dense rows keep their 32px squares, with an 18px icon. */
+[data-surface="app"] :is(.day-pop-head, .sched-range, .bulk-row, .toast, .tab-order-row) .icon-ink { width: 18px; height: 18px; }
+[data-surface="app"] .chip-x > .icon-ink { width: 14px; height: 14px; }
+/* The column's fold sits beside the wordmark, a glyph's size rather than a square's. */
+[data-surface="app"] .appnav-fold > .icon-ink { width: 20px; height: 20px; }
+/* These heads align on the baseline, and a button with no text has none. */
+[data-surface="app"] :is(.modal-head, .set-head, .day-pop-head) > .icon-btn:has(> .icon-ink) { align-self: center; }
+
+/* ---- on and off: the drawn check ----------------------------------------------
+   A setting that is on or off is a drawn checkbox beside its word. The toggle
+   keeps its <button aria-pressed> and its word; CheckInk draws the box, and
+   its tick shows while aria-pressed is true, drawing itself on as a row's
+   check does. No face and no swipe: the box, in ink, is the control's edge
+   (12.9:1). A setting that cycles keeps its face, and so does one whose words
+   name its value ("Shown" / "Hidden", data-value): a check beside a value word
+   would read as its negation. Off says so in --fg-muted,
+   which is 4.5:1 or more on every ground with no face under it. */
+[data-surface="app"] .menu-toggle:has(> .check-ink) {
+  display: inline-flex; align-items: center; gap: 8px; padding-inline: 4px 2px;
+  background: none; border-color: transparent; color: var(--fg-muted);
+}
+[data-surface="app"] .menu-toggle[aria-pressed="true"]:has(> .check-ink) { color: var(--fg); }
+[data-surface="app"] .menu-toggle[aria-pressed]:has(> .check-ink)::before { content: none; }
+[data-surface="app"] .menu-toggle > .check-ink { position: static; translate: none; width: 26px; height: 26px; }
+[data-surface="app"] .menu-toggle[aria-pressed="true"] > .check-ink .check-tick { stroke-dashoffset: 0; opacity: 1; }
+[data-surface="app"] .menu-toggle:not([aria-pressed="true"]) > .check-ink .check-tick {
+  opacity: 0; transition: stroke-dashoffset var(--dur-ink) var(--ease-ink), opacity var(--dur-ink) step-end;
+}
+[data-surface="app"] .menu-toggle:disabled > .check-ink .check-frame { stroke: var(--rule-strong); }
+@media (hover: hover) {
+  [data-surface="app"] .menu-toggle:has(> .check-ink):not(:disabled):hover { background: none; border-color: transparent; color: var(--fg); }
+  [data-surface="app"] .menu-toggle:not(:disabled):hover > .check-ink .check-frame { stroke: var(--accent); }
+}
+[data-surface="app"] .menu-toggle:has(> .check-ink):active { background: none; border-color: transparent; }
+
+/* A checkbox: the native input, unpainted, under the drawn frame and tick. The
+   input keeps its box, its focus, its label and its keyboard; app.css makes
+   the wrapper no box at all under the presets, which keep the browser's. */
+[data-surface="app"] .box-ink {
+  position: relative; display: inline-grid; place-items: center; flex: none;
+  width: 22px; height: 22px; vertical-align: middle;
+}
+[data-surface="app"] .box-ink > input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none; margin: 0; width: 22px; height: 22px;
+  border: 0; border-radius: var(--r-xs); background: none; cursor: pointer;
+}
+[data-surface="app"] .box-ink > .check-ink { width: 26px; height: 26px; }
+[data-surface="app"] .box-ink > input:checked + .check-ink .check-tick { stroke-dashoffset: 0; opacity: 1; }
+[data-surface="app"] .box-ink > input:not(:checked) + .check-ink .check-tick {
+  opacity: 0; transition: stroke-dashoffset var(--dur-ink) var(--ease-ink), opacity var(--dur-ink) step-end;
+}
+[data-surface="app"] .box-ink > input:disabled { cursor: default; }
+[data-surface="app"] .box-ink > input:disabled + .check-ink .check-frame { stroke: var(--rule-strong); }
+@media (hover: hover) {
+  [data-surface="app"] .box-ink > input:not(:disabled):hover + .check-ink .check-frame { stroke: var(--accent); }
+}
+
+/* ---- the segmented switch: words, and the drawn underline ---------------------
+   No track and no thumb: the segments are words, and the chosen one carries the
+   nav's own drawn underline (TabInk), which draws on as it is chosen, as a tab's
+   does. This withdraws the swipe "controls" gave the switch above. */
+[data-surface="app"] .view-tabs { gap: 2px; }
+[data-surface="app"] .view-tabs::before { content: none; }
+[data-surface="app"] .view-tabs > .view-tab {
+  display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  padding: 6px 12px 2px; font-weight: 500;
+}
+[data-surface="app"] .view-tabs > .view-tab.active { font-weight: 600; }
+[data-surface="app"] .view-tabs > .view-tab > .tab-ink { width: 30px; }
+[data-surface="app"] .view-tabs > .view-tab.active > .tab-ink path { stroke-dashoffset: 0; opacity: 1; transition-duration: var(--dur-stroke); }
+[data-surface="app"] .view-tabs > .view-tab:not(.active) > .tab-ink path {
+  opacity: 0; transition: stroke-dashoffset var(--dur-ink) var(--ease-ink), opacity var(--dur-ink) step-end;
+}
+@media (hover: hover) {
+  [data-surface="app"] .view-tabs > .view-tab:not(.active):hover { color: var(--fg); background: none; }
+}
+
+/* ---- fields draw their glyph: a select's caret --------------------------------
+   A select carries the pen's caret (InkSelect: the select and an IconInk in
+   `.ink-field`). The wrapper is the select's box in its row and the select
+   fills it, so what sized a select in app.css now sizes its wrapper: one line
+   for each such rule below, named beside it. ink-fields.browser.test.tsx holds
+   every one to the box the bare select had. The gradient caret "controls" drew
+   is withdrawn wherever the drawn one is. */
+[data-surface="app"] .ink-field {
+  display: inline-grid; grid-template-columns: minmax(0, 1fr); align-items: center;
+  min-width: 0; vertical-align: middle;
+}
+[data-surface="app"] .ink-field > :is(select.input, select.menu-toggle, input.input) {
+  grid-area: 1 / 1; width: 100%; max-width: none; min-width: 0; margin: 0;
+}
+[data-surface="app"] .ink-field > select { background-image: none; }
+[data-surface="app"] .ink-field > .icon-ink {
+  grid-area: 1 / 1; justify-self: end; margin-inline-end: 10px; width: 20px; height: 20px; color: var(--fg-muted);
+}
+[data-surface="app"] :is(.bulk-row, .sched-range) .ink-field > .icon-ink { width: 16px; height: 16px; margin-inline-end: 6px; }
+[data-surface="app"] .ink-field > :disabled + .icon-ink { color: var(--fg-faint); }
+[data-surface="app"] .set-panel .menu-row > .ink-field:has(> .input) { max-width: min(220px, 60%); }                    /* .set-panel .menu-row .input */
+[data-surface="app"] .set-panel .menu-row > .ink-field:has(> .mail-select) { max-width: 60%; }                         /* .set-panel .menu-row select.mail-select */
+[data-surface="app"] .ink-field:has(> .reminder-field) { max-width: 200px; }                                           /* .reminder-field */
+/* .quickadd .input, .dash-quickadd .input, .quickadd-list. The basis is the select's own padding and border
+   (--input-pad's 14px, the caret's 34px, 1px a side), which a border-box flex item keeps as its least size: without
+   it the list took 25px less of a phone's composer than the bare select did. */
+[data-surface="app"] :is(.quickadd, .dash-quickadd) > .ink-field:has(> .quickadd-list) { flex: 1 1 50px; max-width: 160px; }
+[data-surface="app"] .today-add-opts > .ink-field:has(> .quickadd-list) { flex: none; max-width: 160px; }              /* .today-add-opts .input, .quickadd-list */
+[data-surface="app"] :is(.bulk-cell, .task-prop-controls) > .ink-field { flex: 1; }                                    /* .bulk-cell .input, .task-prop-controls .input */
+[data-surface="app"] .mail-sug .ink-field:has(> .mail-sug-pick) { max-width: 12rem; margin-right: auto; }              /* .mail-sug .mail-sug-pick */
+[data-surface="app"] .appear-bar > .ink-field { flex: 1; min-width: 140px; }                                           /* .appear-bar .input */
+[data-surface="app"] .appear-control > .ink-field { flex: 1; }                                                         /* .appear-control .input */
+
+/* ---- fields draw their glyph: a date's page, a time's clock --------------------
+   DateTimeInput puts its field in `.ink-field` with the pen's page or clock
+   drawn over the browser's own glyph, which stays where it was, unpainted, so
+   a press there still opens the picker. The two dense date fields (Today's
+   triage, the shutdown ritual's) are too small for it and keep the browser's
+   glyph (`plain`). As for a select, app.css's sizes move to the wrapper. */
+[data-surface="app"] .ink-field > input::-webkit-calendar-picker-indicator { opacity: 0; }
+[data-surface="app"] .ink-field > input + .icon-ink { margin-inline-end: 12px; }
+/* Firefox draws its own calendar button inside a date field and has no
+   pseudo-element to hide it: show its glyph there and not ours. It draws none
+   in a time field, so the drawn clock stays. */
+@supports (-moz-appearance: none) {
+  [data-surface="app"] .ink-field > input:not([type="time"]) + .icon-ink { display: none; }
+}
+[data-surface="app"] .bulk-cell > .ink-field:has(> input[type="date"]) { flex: 1.4 1 14px; min-width: 92px; }        /* .bulk-cell .input[type="date"] */
+[data-surface="app"] .bulk-cell > .ink-field:has(> input[type="time"]) { flex: 1 1 14px; min-width: 76px; }          /* .bulk-cell .input[type="time"] */
+[data-surface="app"] .task-prop-controls > .ink-field:has(> input[type="date"]) { flex: 1.4 1 30px; min-width: 92px; } /* .task-prop-controls .input[type="date"] */
+[data-surface="app"] .task-prop-controls > .ink-field:has(> input[type="time"]) { flex: 1 1 30px; min-width: 76px; }   /* .task-prop-controls .input[type="time"] */
+[data-surface="app"] .set-panel .menu-row > .ink-field:has(> .notif-time) { max-width: 140px; }                     /* .set-panel .menu-row .notif-time */
+[data-surface="app"] .mail-sug-head > .ink-field:has(> .mail-sug-due) { flex: none; }                                /* .mail-sug .mail-sug-due */

@@ -36,13 +36,14 @@ import { TabsSection } from './TabsSection'
 import { CapacitySection } from './CapacitySection'
 import { FocusSection } from './FocusSection'
 import { Hint } from './Hint'
-import { TabInk } from './Marks'
+import { CheckInk, IconInk, TabInk } from './Marks'
 import { ViewDrawing } from './DayDrawing'
 import { EMPTY_DAY } from '../drawing'
 import type { FocusSettings } from '../focus'
 import { NotificationsSection } from './NotificationsSection'
 import { MailSection } from './MailSection'
 import type { Trigger } from '../notifications'
+import { InkSelect } from './InkSelect'
 
 // The nav, in order. `label` is the accessible name of both the nav item and,
 // on a phone, the title bar — Søren's test asserts they agree.
@@ -349,7 +350,7 @@ export function SettingsMenu({
                   list will grow past two, and a control you press repeatedly to
                   find the language you read is the wrong shape for the one
                   setting whose labels a reader may not be able to read. */}
-              <select className="menu-toggle" id="set-language" value={language}
+              <InkSelect className="menu-toggle" id="set-language" value={language}
                 aria-label={tr('settings.language.aria')}
                 onChange={(e) => onLanguageChange(e.target.value as Language)}>
                 {LANGUAGES.map((l) => (
@@ -357,7 +358,7 @@ export function SettingsMenu({
                   // would choose it — see `LANGUAGE_LABEL`.
                   <option key={l} value={l}>{languageLabel(l)}</option>
                 ))}
-              </select>
+              </InkSelect>
             </div>
             <Hint>
               {withDefault(tr('settings.language.hint'), languageLabel(DEFAULT_LANGUAGE))}
@@ -489,7 +490,7 @@ export function SettingsMenu({
             <div className="menu-row">
               <label>{tr('settings.completedTasks')}</label>
               <button className="menu-toggle" onClick={onToggleShowCompleted}
-                aria-pressed={showCompleted}>
+                aria-pressed={showCompleted} data-value="">
                 {tr(showCompleted
                   ? 'settings.completedTasks.shown' : 'settings.completedTasks.hidden')}
               </button>
@@ -501,7 +502,7 @@ export function SettingsMenu({
               <label htmlFor="set-autoclose">{tr('settings.autoCloseParents')}</label>
               <button className="menu-toggle" id="set-autoclose"
                 onClick={onToggleAutoCloseParents} aria-pressed={autoCloseParents}>
-                {tr(autoCloseParents
+                <CheckInk seed="set-autoclose" />{tr(autoCloseParents
                   ? 'settings.autoCloseParents.on' : 'settings.autoCloseParents.off')}
               </button>
             </div>
@@ -556,7 +557,7 @@ export function SettingsMenu({
               <label htmlFor="set-plan-on-due-today">{tr('settings.planOnDueToday')}</label>
               <button className="menu-toggle" id="set-plan-on-due-today"
                 onClick={onTogglePlanOnDueToday} aria-pressed={planOnDueToday}>
-                {tr(planOnDueToday
+                <CheckInk seed="set-plan-on-due-today" />{tr(planOnDueToday
                   ? 'settings.planOnDueToday.on' : 'settings.planOnDueToday.off')}
               </button>
             </div>
@@ -684,11 +685,11 @@ export function SettingsMenu({
     <>
       <div className="menu-head set-head">
         {canGoBack ? (
-          <button className="icon-btn set-back" onClick={back} aria-label={tr('app.back')}>‹</button>
+          <button className="icon-btn set-back" onClick={back} aria-label={tr('app.back')}>‹<IconInk icon="left" /></button>
         ) : <span className="set-back-slot" />}
         <span className="set-title">{title}</span>
         <button className="icon-btn set-close" onClick={onClose}
-          aria-label={tr('app.closeSettings')}>✕</button>
+          aria-label={tr('app.closeSettings')}>✕<IconInk icon="close" /></button>
       </div>
       <div className="set-body">
         {nav}

@@ -9,6 +9,8 @@ import { useLayer } from '../layers'
 import { DateTimeInput } from './DateTimeInput'
 import { useI18n } from '../i18n'
 import { weekdayNames } from '../names'
+import { CheckInk, IconInk } from './Marks'
+import { InkSelect } from './InkSelect'
 
 // Owner side of client scheduling: manage booking links (availability, target
 // calendar, redacted-busy toggle) and see who booked. The public counterpart
@@ -205,8 +207,11 @@ export function SchedulingView({ rev, onExpire, viewTabs }: {
                     title={fieldNotes ? undefined : l.calendar_missing
                       ? tr('sched.calendarGone')
                       : l.enabled ? tr('sched.linkLive') : tr('sched.linkOff')}>
-                    <input type="checkbox" checked={l.enabled} disabled={l.calendar_missing}
-                      onChange={() => toggleEnabled(l)} />
+                    <span className="box-ink">
+                      <input type="checkbox" checked={l.enabled} disabled={l.calendar_missing}
+                        onChange={() => toggleEnabled(l)} />
+                      <CheckInk seed={`sched-${l.token}`} />
+                    </span>
                     <span>
                       {l.calendar_missing
                         ? tr('sched.noCalendar') : l.enabled ? tr('sched.live') : tr('sched.off')}
@@ -471,7 +476,7 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
         <div className="modal-head">
           <span className="modal-title">{modalTitle}</span>
           <button className="icon-btn" onClick={onClose}
-            aria-label={tr('common.close')}>✕</button>
+            aria-label={tr('common.close')}>✕<IconInk icon="close" /></button>
         </div>
         <div className="field">
           <label className="label" htmlFor="sched-title">{tr('sched.titleField')}</label>
@@ -488,9 +493,9 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
         <div className="field-row">
           <div className="field">
             <label className="label" htmlFor="sched-calendar">{tr('sched.calendarField')}</label>
-            <select className="input" id="sched-calendar" value={calendar} onChange={(e) => setCalendar(e.target.value)}>
+            <InkSelect className="input" id="sched-calendar" value={calendar} onChange={(e) => setCalendar(e.target.value)}>
               {cals.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            </InkSelect>
           </div>
           <div className="field">
             <label className="label" htmlFor="sched-duration">{tr('sched.duration')}</label>
@@ -523,8 +528,11 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
             {weekdayNames(locale, 'short').map((name, i) => (
               <div key={name} className={`sched-day ${days[i].on ? '' : 'off'}`}>
                 <label className="sched-day-name">
-                  <input type="checkbox" checked={days[i].on}
-                    onChange={(e) => patchDay(i, { on: e.target.checked })} />
+                  <span className="box-ink">
+                    <input type="checkbox" checked={days[i].on}
+                      onChange={(e) => patchDay(i, { on: e.target.checked })} />
+                    <CheckInk seed={`day-${i}`} />
+                  </span>
                   {/* The platform's own abbreviation, not the first three
                       letters of the long name: German shortens Mittwoch to
                       "Mi.", and slicing would have given "Mit". */}
@@ -546,7 +554,7 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
                           <button className="icon-btn" title={fieldNotes ? undefined : tr('sched.removeRange')}
                             aria-label={tr('sched.removeRange')}
                             onClick={() => patchDay(i, { ranges: days[i].ranges.filter((_, j) => j !== k) })}>
-                            ✕
+                            ✕<IconInk icon="close" />
                           </button>
                         )}
                       </span>
@@ -566,7 +574,10 @@ function LinkModal({ link, cals, onClose, onSave, onDelete }: {
         </div>
         <div className="field">
           <label className="sched-check">
-            <input type="checkbox" checked={showBusy} onChange={(e) => setShowBusy(e.target.checked)} />
+            <span className="box-ink">
+              <input type="checkbox" checked={showBusy} onChange={(e) => setShowBusy(e.target.checked)} />
+              <CheckInk seed="show-busy" />
+            </span>
             <span>{tr('sched.showBusy')}</span>
           </label>
           {!fieldNotes && (

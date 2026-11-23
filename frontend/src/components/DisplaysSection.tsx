@@ -26,6 +26,7 @@ import { useTimeFormat } from '../timeformat'
 import { useI18n } from '../i18n'
 import { useFieldNotes } from '../hooks'
 import { Hint } from './Hint'
+import { CheckInk } from './Marks'
 
 // What a display may be set to refresh at, by palette.
 //
@@ -385,7 +386,7 @@ export function DisplaysSection(
                       aria-label={tr('disp.switchable')}
                       aria-pressed={d.switchable}
                       onClick={() => void patch(d.token, { switchable: !d.switchable })}>
-                      {tr(d.switchable ? 'disp.on' : 'disp.off')}
+                      <CheckInk seed={`disp-switch-${d.token}`} />{tr(d.switchable ? 'disp.on' : 'disp.off')}
                     </button>
                   </div>
                   <Hint>{tr('disp.switchableHint')}</Hint>
@@ -429,19 +430,19 @@ export function DisplaysSection(
                     <>
                       <div className="menu-row">
                         <label>{tr('disp.hideDoneHabits')}</label>
-                        <button className="menu-toggle"
+                        <button className="menu-toggle" aria-pressed={d.hide_done_habits}
                           onClick={() => void patch(d.token,
                             { hide_done_habits: !d.hide_done_habits })}>
-                          {tr(d.hide_done_habits ? 'disp.on' : 'disp.off')}
+                          <CheckInk seed={`disp-habits-${d.token}`} />{tr(d.hide_done_habits ? 'disp.on' : 'disp.off')}
                         </button>
                       </div>
                       <Hint>{tr('disp.hideDoneHabitsHint')}</Hint>
                       <div className="menu-row">
                         <label>{tr('disp.hideDoneTasks')}</label>
-                        <button className="menu-toggle"
+                        <button className="menu-toggle" aria-pressed={d.hide_done_tasks}
                           onClick={() => void patch(d.token,
                             { hide_done_tasks: !d.hide_done_tasks })}>
-                          {tr(d.hide_done_tasks ? 'disp.on' : 'disp.off')}
+                          <CheckInk seed={`disp-tasks-${d.token}`} />{tr(d.hide_done_tasks ? 'disp.on' : 'disp.off')}
                         </button>
                       </div>
                     </>
@@ -525,9 +526,9 @@ export function DisplaysSection(
 
                   <div className="menu-row">
                     <label>{tr('disp.enabled')}</label>
-                    <button className="menu-toggle"
+                    <button className="menu-toggle" aria-pressed={d.enabled}
                       onClick={() => void patch(d.token, { enabled: !d.enabled })}>
-                      {tr(d.enabled ? 'disp.on' : 'disp.off')}
+                      <CheckInk seed={`disp-enabled-${d.token}`} />{tr(d.enabled ? 'disp.on' : 'disp.off')}
                     </button>
                   </div>
                   <Hint>{tr('disp.enabledHint')}</Hint>

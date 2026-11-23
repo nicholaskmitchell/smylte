@@ -28,7 +28,7 @@ import { fmtClock, fmtDuration } from '../time'
 import { taskKey } from '../order'
 import { textDir } from '../util'
 import { DateTimeInput } from './DateTimeInput'
-import { CheckInk } from './Marks'
+import { CheckInk, IconInk } from './Marks'
 import { useI18n } from '../i18n'
 import { useT } from '../i18n'
 
@@ -139,7 +139,7 @@ export function ShutdownRitual({
             {tr('plan.stepOf', { n: step + 1, total: STEPS.length })}
           </span>
           <button className="icon-btn" onClick={onClose}
-            aria-label={tr('common.close')}>✕</button>
+            aria-label={tr('common.close')}>✕<IconInk icon="close" /></button>
         </div>
 
         {step === 0 && (
@@ -359,7 +359,7 @@ function FollowsStep({ day, unfinished, titleOf, decided, onRoll, onDrop }: {
                         all (picking a day IS the whole of it), so before the
                         picker opened on a tap there was nothing on screen to
                         aim at but the glyph. */}
-                    <DateTimeInput type="date" className="input shut-date"
+                    <DateTimeInput plain type="date" className="input shut-date"
                       aria-label={tr('shut.moveToDay', { task: name })}
                       min={tomorrow} max={max} value=""
                       onChange={(ev) => { if (ev.target.value) onRoll(e, ev.target.value) }} />

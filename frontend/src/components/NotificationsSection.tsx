@@ -24,6 +24,7 @@ import {
 import { DateTimeInput } from './DateTimeInput'
 import { Fold } from './SettingsFold'
 import { Hint } from './Hint'
+import { CheckInk } from './Marks'
 
 export function NotificationsSection({
   enabled, onEnabledChange,
@@ -124,7 +125,7 @@ export function NotificationsSection({
             aria-pressed={on}
             aria-label={tr('notif.trigger.aria', { rule: tr(TRIGGER_LABELS[t]) })}
             onClick={() => toggle(t)}>
-            {tr(on ? 'notif.on' : 'notif.off')}
+            <CheckInk seed={`notif-${t}`} />{tr(on ? 'notif.on' : 'notif.off')}
           </button>
         </div>
         {!fieldNotes && <div className="hintline">
@@ -152,7 +153,7 @@ export function NotificationsSection({
         <label htmlFor="notif-enabled">{tr('notif.enabled')}</label>
         <button className="menu-toggle" id="notif-enabled" aria-pressed={enabled}
           onClick={() => onEnabledChange(!enabled)}>
-          {tr(enabled ? 'notif.on' : 'notif.off')}
+          <CheckInk seed="notif-enabled" />{tr(enabled ? 'notif.on' : 'notif.off')}
         </button>
       </div>
       <Hint>{withDefault(tr('notif.enabled.hint'), tr('notif.off'))}</Hint>

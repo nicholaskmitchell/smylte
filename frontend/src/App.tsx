@@ -60,6 +60,7 @@ import { SettingsMenu, type SettingsSection } from './components/SettingsMenu'
 import { AppNav, TabBar } from './components/AppNav'
 import { DisplayModeFrame } from './components/DisplayModeFrame'
 import { readDisplayMode, writeDisplayMode } from './displaymode'
+import { IconInk } from './components/Marks'
 
 // 'offline' is NOT 'out'. A server that cannot be reached is not a session that
 // has gone away — the rule `api.ts`'s SSE loop already states and enforces ("a
@@ -1732,7 +1733,7 @@ export function App() {
         <div className="toast" role="alert">
           <span>{toast}</span>
           <button className="icon-btn" aria-label={tr('app.dismiss')}
-            onClick={() => setToast(null)}>✕</button>
+            onClick={() => setToast(null)}>✕<IconInk icon="close" /></button>
         </div>
       )}
     </div>

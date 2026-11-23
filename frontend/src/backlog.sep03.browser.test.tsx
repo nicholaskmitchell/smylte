@@ -24,7 +24,7 @@
  * the fix, in the comment above it.
  */
 import { describe, expect, it, beforeEach } from 'vitest'
-import { box, mount, viewport } from './test/browser-measure'
+import { box, mount, paint, viewport } from './test/browser-measure'
 import { applyDesign } from './appearance'
 
 beforeEach(() => { document.body.innerHTML = '' })
@@ -60,11 +60,12 @@ function declaring(el: Element, prop: string): string[] {
 }
 
 type RGBA = { r: number; g: number; b: number; a: number }
+/** Any computed colour, read back from the browser's own paint
+ *  (browser-measure.ts): Field notes' control face is a color-mix(), which
+ *  computes to oklab(), and the rgb() regex this replaced threw on it. */
 const rgba = (s: string): RGBA => {
-  const m = /rgba?\(([^)]+)\)/.exec(s)
-  if (!m) throw new Error(`not an rgb() colour: ${s}`)
-  const [r, g, b, a = '1'] = m[1].split(/[\s,/]+/).filter(Boolean)
-  return { r: +r, g: +g, b: +b, a: +a }
+  const [r, g, b, a] = paint(s)
+  return { r, g, b, a }
 }
 /** `fg` over `bg`, sRGB source-over. */
 const over = (fg: RGBA, bg: RGBA): RGBA => ({

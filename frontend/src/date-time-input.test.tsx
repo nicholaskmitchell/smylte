@@ -194,3 +194,19 @@ describe('every date and time field', () => {
     expect(pickeredTags('<input onChange={(e) => set(e)} type="time" />')).toEqual(['input'])
   })
 })
+
+describe('<DateTimeInput> under Field notes', () => {
+  it('carries the pen\'s page or clock beside the field, unless it is plain', () => {
+    const { container, rerender } = render(<DateTimeInput type="date" aria-label="Due date" />)
+    expect(container.querySelector('.ink-field > input[type="date"] + svg.icon-ink[data-icon="date"][aria-hidden="true"]'))
+      .not.toBeNull()
+    rerender(<DateTimeInput type="time" aria-label="Due time" />)
+    expect(container.querySelector('.ink-field > input[type="time"] + svg.icon-ink[data-icon="time"]')).not.toBeNull()
+    rerender(<DateTimeInput type="datetime-local" aria-label="Start" />)
+    expect(container.querySelector('svg.icon-ink[data-icon="date"]')).not.toBeNull()
+    rerender(<DateTimeInput plain type="date" aria-label="Due date" />)
+    expect(container.querySelector('.ink-field')).toBeNull()
+    expect(container.firstElementChild?.tagName).toBe('INPUT')
+    expect(container.firstElementChild).not.toHaveAttribute('plain')
+  })
+})

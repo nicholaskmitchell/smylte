@@ -211,3 +211,68 @@ export function AddInk() {
     </svg>
   )
 }
+
+// ── icons ──────────────────────────────────────────────────────────────────
+// The pen's icon set: what Field notes draws where a control carries a
+// typographic ‹ › ✕ × + ↑ ↓ « » ✓ ⏸ or ···, and a select's caret and a date
+// or time field's page and clock. One set, so Today's day arrows, the
+// calendar's month arrows, a dialog's close and the list column's fold are
+// the same hand. The 24-unit grid of the tab icons; stroke, size and colour
+// are CSS (fieldnotes.css, "the pen's icons").
+//
+// A control that carries one keeps its glyph as text beside it. Under Field
+// notes the glyph is set at no size (as the check's ✓ is), so the control's
+// accessible name, the tests that find it by its text and the presets, which
+// hide the icon (app.css) and show the glyph, are all unchanged.
+export type Icon =
+  | 'left' | 'right' | 'close' | 'plus' | 'up' | 'down' | 'foldLeft' | 'foldRight'
+  | 'check' | 'pause' | 'more' | 'caret' | 'date' | 'time'
+
+const ICON: Record<Icon, string[]> = {
+  left: ['M14.6 6.2C12.6 8.2 10.6 10.2 9 12.1C10.7 13.9 12.7 15.9 14.8 17.9'],
+  right: ['M9.4 6.1C11.4 8.1 13.4 10.1 15 12C13.3 13.9 11.3 15.9 9.2 17.8'],
+  close: ['M6.6 6.4C9.8 9.4 14.2 14 17.6 17.4', 'M17.4 6.5C14.3 9.6 9.9 14.2 6.5 17.5'],
+  plus: ['M12 5.6C12.1 9.8 12 14.2 11.9 18.4', 'M5.6 12.1C9.8 11.9 14.2 12 18.4 11.9'],
+  up: ['M12.1 19.2C12 14.6 11.9 9.4 12 5.2', 'M7.2 9.6C8.8 8 10.4 6.4 12 4.9C13.6 6.5 15.2 8.1 16.8 9.7'],
+  down: ['M11.9 4.8C12 9.4 12.1 14.6 12 18.8', 'M16.8 14.4C15.2 16 13.6 17.6 12 19.1C10.4 17.5 8.8 15.9 7.2 14.3'],
+  foldLeft: [
+    'M12.4 6.6C10.8 8.4 9.2 10.2 7.8 12C9.3 13.8 10.9 15.6 12.6 17.4',
+    'M17.6 6.6C16 8.4 14.4 10.2 13 12C14.5 13.8 16.1 15.6 17.8 17.4',
+  ],
+  foldRight: [
+    'M11.5 6.7C13.2 8.4 14.8 10.3 16.3 12.1C14.7 13.8 13.1 15.5 11.4 17.3',
+    'M6.3 6.5C8 8.3 9.6 10.2 11.1 11.9C9.5 13.8 7.9 15.6 6.2 17.5',
+  ],
+  check: ['M5.6 12.9C7.2 14.4 8.7 16.1 9.9 17.8C12.3 13.3 15.3 9.4 18.6 6.1'],
+  pause: ['M9.2 6.4C9.1 10.2 9.2 13.9 9.3 17.6', 'M14.8 6.5C14.9 10.2 14.8 13.9 14.7 17.5'],
+  // Three dots: a pen touched down, drawn at --stroke-tick so they read.
+  more: ['M6.2 12.1h.1', 'M12 12h.1', 'M17.8 11.9h.1'],
+  caret: ['M7.4 10.1C8.9 11.6 10.4 13.1 12 14.6C13.6 13.1 15.1 11.6 16.6 10'],
+  date: TAB_ICON.calendar,
+  time: [
+    'M12 4.6c4.1-.1 7.5 3.3 7.4 7.4.1 4.1-3.3 7.5-7.4 7.4-4.1.1-7.5-3.3-7.4-7.4-.1-4.1 3.3-7.5 7.4-7.4z',
+    'M12 8.2c0 1.4 0 2.8.1 4.1 1 .6 2 1.2 3 1.7',
+  ],
+}
+
+/** One of the pen's icons, inside the control it draws. `className` is added
+ *  to `icon-ink` for a place that sizes it on its own. */
+export function IconInk({ icon, className }: { icon: Icon; className?: string }) {
+  return (
+    <svg className={className ? `icon-ink ${className}` : 'icon-ink'} data-icon={icon}
+      viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      {ICON[icon].map((d, i) => <path key={i} d={d} />)}
+    </svg>
+  )
+}
+
+/** The drawn arrow after Today's "Today", the way back from a past day: a
+ *  short stroke and its head, wider than tall, to sit after a word. */
+export function HomeInk() {
+  return (
+    <svg className="day-home-ink" viewBox="0 0 21 14" aria-hidden="true" focusable="false">
+      <path d="M1.6 7.4c5.8-.5 11.9-.4 17.6.2" />
+      <path d="M14.4 2.6c1.8 1.6 3.5 3.1 5 4.9-1.6 1.6-3.3 3.1-5.1 4.6" />
+    </svg>
+  )
+}

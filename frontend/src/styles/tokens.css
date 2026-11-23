@@ -456,7 +456,7 @@
    the same scope, so it is inert under a preset (applyDesign takes the
    attribute off while one is active).
 
-   Three kinds of value live here, and nothing else:
+   Four kinds of value live here, and nothing else:
 
    - The radius scale, still derived from --radius so the Appearance editor's
      one slider moves every corner. The design system writes --r-xs: 3px and
@@ -467,6 +467,9 @@
    - The role levers above, pointed at the design system's roles.
    - Values the design system states in tokens.json but not as CSS: the app type
      scale and the pen. These are gaps, listed in docs/fieldnotes-gaps.md.
+   - Two control roles the design system implies but does not name: a
+     secondary control's face and what is on or chosen (--ctl-face, --ctl-on).
+     Also gaps, listed there.
 
    After the dark block above, so that at equal specificity this wins in both
    themes. */
@@ -484,6 +487,15 @@
   --edge-control: var(--rule-strong);
   --ghost-hover-edge: var(--rule-strong);
   --thumb-edge: var(--rule-strong);
+  /* A secondary control's face and its "on" mark (fieldnotes.css, "controls").
+     The face is the ink, a little of it, over whatever ground the control sits
+     on, so it reads the same on the page, a card, a sheet and the sidebar:
+     1.16:1 in light at 8%, and 1.17:1 in dark at 6% (the block after this one),
+     where 8% put a --warn word on a sheet at 4.3:1. No edge at rest: the
+     owner's call, 22 Nov. A gap: the design system names neither
+     (docs/fieldnotes-gaps.md). */
+  --ctl-face: color-mix(in oklab, var(--fg) 8%, transparent);
+  --ctl-on: var(--highlight);
   --float-bg: var(--bg-float);
   --scrim-bg: var(--scrim);
 
@@ -519,6 +531,16 @@
      the 23 Appearance tokens, so appearance.ts's SHARED_DEFAULTS says 8px too,
      and a saved theme's inline value still outranks this. */
   --row-y: 8px;
+}
+
+/* The control face at night: 6% of the ink, not 8%. The dark ink is light, so
+   its face lightens the ground under the word; at 8% a --warn word on a sheet
+   or dialog (--bg-float) fell to 4.3:1 (measured; contrast-table.test.ts
+   holds 4.5:1). At 6% the face shows as much as the light one does (1.17:1
+   against 1.16:1). Three attributes, after the design system's dark block,
+   which declares nothing of this name. */
+:root[data-surface="app"][data-theme="dark"] {
+  --ctl-face: color-mix(in oklab, var(--fg) 6%, transparent);
 }
 
 /* A saved theme that moves its surfaces or its accent away from Field notes'

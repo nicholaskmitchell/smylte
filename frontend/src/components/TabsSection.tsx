@@ -12,6 +12,8 @@ import { TAB_LABELS, moveTab, type Tab, type TabStart } from '../tabs'
 import { useT } from '../i18n'
 import type { Layout } from '../layout'
 import { Hint } from './Hint'
+import { IconInk } from './Marks'
+import { InkSelect } from './InkSelect'
 
 export function TabsSection({ order, start, layout, onOrderChange, onStartChange }: {
   order: Tab[]
@@ -46,7 +48,7 @@ export function TabsSection({ order, start, layout, onOrderChange, onStartChange
       aria-label={tr(dir === -1 ? 'tabs.moveLeft' : 'tabs.moveRight',
         { tab: tr(TAB_LABELS[t]) })}
       onClick={() => move(t, dir)}>
-      {dir === -1 ? '↑' : '↓'}
+      {dir === -1 ? '↑' : '↓'}<IconInk icon={dir === -1 ? 'up' : 'down'} />
     </button>
   )
 
@@ -65,11 +67,11 @@ export function TabsSection({ order, start, layout, onOrderChange, onStartChange
 
       <div className="menu-row">
         <label htmlFor="start-tab">{tr('tabs.opensOn')}</label>
-        <select id="start-tab" className="input" value={start}
+        <InkSelect id="start-tab" className="input" value={start}
           onChange={(e) => onStartChange(e.target.value as TabStart)}>
           {order.map((x) => <option key={x} value={x}>{tr(TAB_LABELS[x])}</option>)}
           <option value="last">{tr('tabs.lastUsed')}</option>
-        </select>
+        </InkSelect>
       </div>
 
       <Hint as="p">{tr(layout === 'sidebar' ? 'tabs.hint.sidebar' : 'tabs.hint')}</Hint>

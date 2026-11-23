@@ -11,6 +11,7 @@
 
 import { useT } from '../i18n'
 import type { Vars } from '../i18n/index'
+import { InkSelect } from './InkSelect'
 
 /** The value meaning "no reminder". Sent to the server as -1, which is the
  *  clear sentinel every duration in this app uses — 0 is a real lead, so the
@@ -39,7 +40,7 @@ export function ReminderField({ value, onChange, id = 'reminder', disabled = fal
     : [...REMINDER_CHOICES]
 
   return (
-    <select className="menu-toggle reminder-field" id={id} disabled={disabled}
+    <InkSelect className="menu-toggle reminder-field" id={id} disabled={disabled}
       value={value === null ? '' : String(value)}
       aria-label={tr('reminder.aria')}
       onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}>
@@ -47,7 +48,7 @@ export function ReminderField({ value, onChange, id = 'reminder', disabled = fal
       {choices.map((m) => (
         <option key={m} value={String(m)}>{reminderLabel(m, tr)}</option>
       ))}
-    </select>
+    </InkSelect>
   )
 }
 

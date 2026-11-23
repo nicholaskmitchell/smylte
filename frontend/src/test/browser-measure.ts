@@ -76,3 +76,51 @@ export const box = (el: Element) => {
     left: +r.left.toFixed(1), right: +r.right.toFixed(1), bottom: +r.bottom.toFixed(1),
   }
 }
+
+/** A colour as the browser paints it: r, g, b in 0–255 and alpha in 0–1.
+ *
+ *  `getComputedStyle` hands a colour back in whatever space it was written
+ *  in, and a `color-mix()` (Field notes' control face, `--ctl-face`) computes
+ *  to `oklab(…)` or `color(…)`, which no `rgb()` regex reads. So the browser
+ *  itself draws the value on a one-pixel canvas and the pixel is read back. A
+ *  value the browser cannot parse throws: a test must fail loudly rather than
+ *  measure a colour it never read. */
+export type Paint = [number, number, number, number]
+let pixel: CanvasRenderingContext2D | null = null
+export function paint(css: string): Paint {
+  if (!CSS.supports('color', css)) throw new Error(`not a colour: ${JSON.stringify(css)}`)
+  if (!pixel) {
+    const c = document.createElement('canvas')
+    c.width = 1
+    c.height = 1
+    pixel = c.getContext('2d', { willReadFrequently: true })!
+  }
+  pixel.clearRect(0, 0, 1, 1)
+  pixel.fillStyle = css
+  pixel.fillRect(0, 0, 1, 1)
+  const [r, g, b, a] = pixel.getImageData(0, 0, 1, 1).data
+  return [r, g, b, a / 255]
+}
+
+/** `fg` laid over an opaque `bg`, sRGB source-over, as the browser composites. */
+export const over = (fg: Paint, bg: Paint): Paint =>
+  [0, 1, 2].map((i) => fg[i] * fg[3] + bg[i] * (1 - fg[3])).concat(1) as Paint
+
+/** The WCAG 2.x contrast of two opaque paints. */
+export function ratio(a: Paint, b: Paint): number {
+  const lin = (c: number) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4 }
+  const lum = (p: Paint) => 0.2126 * lin(p[0]) + 0.7152 * lin(p[1]) + 0.0722 * lin(p[2])
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x)
+  return (hi + 0.05) / (lo + 0.05)
+}
+
+/** Finish every transition and finite animation, then wait a frame: a colour
+ *  read mid-transition (a hover's edge fades in over --dur-fast) is neither
+ *  the old one nor the new one. */
+export async function settle(): Promise<void> {
+  for (const a of document.getAnimations()) {
+    if (a.effect?.getComputedTiming().endTime === Infinity) continue
+    a.finish()
+  }
+  await new Promise(requestAnimationFrame)
+}

@@ -28,6 +28,7 @@ import { useFieldNotes, useSegmentThumb } from '../hooks'
 import { daysBetween, shiftIso } from '../calendar'
 import { DISPLAY_MODES, canFullscreen, isFullscreen, toggleFullscreen } from '../displaymode'
 import { DisplayActionsProvider, DisplayFaces, type DisplayActions } from './DisplayView'
+import { IconInk, TabInk } from './Marks'
 
 /** How long the open bar waits for another tap before folding away. */
 export const BAR_IDLE_MS = 10_000
@@ -214,7 +215,7 @@ export function DisplayModeFrame({ mode, onMode, onExit, onExpire, rev = 0 }: {
                 <button key={m} className={`view-tab ${m === mode ? 'active' : ''}`}
                   aria-pressed={m === mode}
                   onClick={() => { onMode(m); poke() }}>
-                  {tr(MODE_LABELS[m])}
+                  {tr(MODE_LABELS[m])}<TabInk />
                 </button>
               ))}
             </div>
@@ -239,7 +240,7 @@ export function DisplayModeFrame({ mode, onMode, onExit, onExpire, rev = 0 }: {
             {tr('dmode.exit')}
           </button>
           <button className="icon-btn dmode-bar__close" aria-label={tr('dmode.hideControls')}
-            onClick={() => setOpen(false)}>✕</button>
+            onClick={() => setOpen(false)}>✕<IconInk icon="close" /></button>
         </div>
       ) : (
         <button className="dmode-handle" aria-label={tr('dmode.controls')}

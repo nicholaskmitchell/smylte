@@ -13,7 +13,7 @@ import { useTimeFormat } from '../timeformat'
 import { useEscape, useFieldNotes } from '../hooks'
 import { useLayer } from '../layers'
 import { useI18n, type I18n } from '../i18n'
-import { CheckInk, StrikeInk } from './Marks'
+import { CheckInk, IconInk, StrikeInk } from './Marks'
 
 /** The time label for an event as it appears on `day`: a continuation day shows
  *  the end time if the span finishes that day, and otherwise reads as all day. */
@@ -120,7 +120,7 @@ export function DayPopover({ day, x, y, events, tasks = [], styleOf, taskStyleOf
               { weekday: 'short', month: 'short', day: 'numeric' })}
           </span>
           <button className="icon-btn" title={fieldNotes ? undefined : tr('common.close')}
-            aria-label={tr('common.close')} onClick={onClose}>✕</button>
+            aria-label={tr('common.close')} onClick={onClose}>✕<IconInk icon="close" /></button>
         </div>
         {events.map((e) => (
           <AgendaEvent key={eventKey(e)} ev={e} day={day} style={styleOf(e)} onOpen={onOpen} />

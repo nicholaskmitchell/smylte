@@ -16,6 +16,31 @@ states elsewhere (`tokens.json`), and the gap is listed here.
 | The day's drawing: its wobble | The Today drawing's boil | 1.25 drawing units: 1px on the phone (the design system's `--wobble`), 1.5px on the desktop, in proportion to the larger drawing | `--wobble` is a pixel limit for 24px icons; at 0.8 units the boil was half the mockup's |
 | Light at night | The dark drawings: the moon, a lamp, lit windows, fireflies, bulbs | A `glow` role: `--wash` in a radial gradient fading to nothing, drawn by the client (`DayDrawing.tsx`) | The design system has a wash but no soft light; flat sage blobs read as stains, not light |
 | Light at night, in the dark theme | The glow's colour on dark paper | `color-mix(in oklab, var(--wash) 70%, var(--fg))`: the sage lifted 30% toward the ink, 3:1 on the ground and 2:1 over the wash (`fieldnotes.css`). **Needs the owner's sign-off**: it changes a colour role's value in dark | The dark `--wash` (#3D4233) is 1.5:1 on `--bg`, and over the sage wash a glow of it vanishes: a lit window read as unlit |
+| A secondary control's face | Ghost buttons, settings toggles that cycle, the lone view tab, booking days and slots, habit days, the dashed adds, destructive buttons (`fieldnotes.css`, "controls") | `--ctl-face`: `color-mix(in oklab, var(--fg) 8%, transparent)`, and 6% in the dark theme (`tokens.css`). No edge at rest; `--edge-control` (`--rule-strong`, 3:1) under the pointer and on press. A face carries `--fg` or `--warn` words only | The design system has no token for a control's resting face. `--paper` measured 1.06:1 on a dark card and vanishes on the `--paper` sidebar; the ink at 8% reads 1.16:1 on every ground in light, and at 6% 1.17:1 in dark, where 8% put a `--warn` word on a sheet at 4.3:1. A derived colour, chosen with Buttons C (22 Nov); the 6% at night was found while planning it |
+| On or chosen | A setting that is on (until it is drawn as a check), Home's Arrange while on, a chosen booking day, habit day or display chip | `--ctl-on`: `var(--highlight)`, behind `--fg` text only | The design system names the highlighter for marking text, not a control's state |
+| Native parts at night | Date and time glyphs, an unticked native checkbox, a select's open list, in the dark theme | `color-scheme: dark` on `:root[data-surface="app"][data-theme="dark"]` (`fieldnotes.css`) | The design system declares no `color-scheme`; without it the date glyph drew black on the dark field (1.36:1) |
+| The pen's icon set | Icon buttons, the Today line's ⋯, a chip's ×, Today's day arrows, a select's caret, a date or time field's page and clock | `IconInk` (`Marks.tsx`): 14 icons on the 24-unit grid at `--stroke-pen`, round caps, the control's colour; 24px, 18px in dense rows. The way back to today is `HomeInk`, a drawn arrow after the word | The design system says icons are hand-inked plain glyphs on the pen's grid but ships no set; these were drawn for the controls job (22 Nov), the chevrons shared with Today's day arrows |
+
+## Secondary controls with no edge at rest: a deviation the owner chose
+
+The design system's colour table gives `--rule-strong` as "Control and checkbox
+borders (3:1 or better)", and until 22 Nov every secondary control here wore
+that edge at rest (`fieldnotes-edges.browser.test.tsx` held it). The owner chose
+Buttons C ("Paper and pen") knowing it drops that edge: a ghost button, a
+settings toggle that cycles, a pick or an add is now a face (`--ctl-face`) under
+its word, and its 3:1 edge shows under the pointer. WCAG 1.4.11 asks for no
+boundary where the word identifies the control, and every one of them carries a
+`--fg` or `--warn` word at 4.5:1 or more on its face (`docs/contrast.md`).
+Fields keep their 3:1 edge at rest, and a setting that is on or off is a drawn
+checkbox whose frame is the pen (12.9:1); one whose words name its value
+("Shown" / "Hidden") keeps the face, since a check beside a value word would
+read as its negation.
+
+The sentence to amend in the design system's colour table, if the owner wants
+the system to say so: "`--rule-strong`: field and checkbox borders, and a
+secondary control's edge under the pointer (3:1 or better). A secondary control
+has no edge at rest: it is a face, the ink at 8% (6% at night) over its ground,
+under a `--fg` or `--warn` word."
 
 ## The desk unit's e-paper: a deviation the owner chose
 
@@ -41,6 +66,26 @@ system to say so: "Colour roles become ink weights: accent marks are solid ink
 and accent fills in an illustration a 40% pen hatch inside their ink outline
 (solid below 8 units), the highlighter is a 25% hatch, the wash and glows are
 dropped."
+
+## The app icon: a deviation the owner chose
+
+The design system draws an app's favicon as its wordmark's letter ("Wordmark,
+favicon: Newsreader italic 500, accent period"), and Smylte's icon was that: an
+italic S and a coral period. On 22 Nov the owner chose the drawn check instead:
+the app's own CheckInk frame in `--fg` and its tick in `--accent`, on a `--bg`
+plate (`brand/app-icon.svg`, made into every platform's file by
+`backend/dev/build_app_icon.py`). It is the gesture the app is used for, the
+design system keeps ticks and strikes at small sizes, and in a 16px tab 53 of
+its 256 pixels clear 3:1 against the plate, where the S had 15. From 40px down
+the pen is heavier (4.8 and 6.4 units of 64, against 3.2 and 4.4), so the frame
+stays a device pixel wide. The in-app wordmark, "Smylte." in Newsreader italic
+with its accent period, is unchanged.
+
+The sentence to amend in the design system's README, if the owner wants the
+system to say so: "Wordmark: Newsreader italic 500, accent period. Favicon and
+app icon: the wordmark's letter and its period, unless the app has a signature
+mark; Smylte's is its drawn check, the CheckInk frame in --fg and its tick in
+--accent on a --bg plate, with a heavier pen from 40px down."
 
 ## Drawing a new subject
 

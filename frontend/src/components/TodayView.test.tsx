@@ -529,6 +529,17 @@ describe('<TodayView> the day picker', () => {
     expect(m.day).not.toHaveBeenCalledWith(inDays(-15))
     expect(screen.getByRole('button', { name: 'Previous day' })).toBeDisabled()
   })
+
+  it('keeps its own ‹ › and a ghost Today under the presets', async () => {
+    const user = setup()
+    await screen.findByLabelText('Add to today')
+    const prev = screen.getByRole('button', { name: 'Previous day' })
+    expect(prev).toHaveTextContent('‹')
+    await back(user)
+    const home = await screen.findByRole('button', { name: 'Today' })
+    expect(home).toHaveClass('btn', 'ghost')
+    expect(home).not.toHaveClass('day-home')
+  })
 })
 
 describe('<TodayView> midnight with a past day on screen', () => {
