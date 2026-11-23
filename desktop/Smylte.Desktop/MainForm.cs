@@ -291,7 +291,7 @@ public sealed class MainForm : Form, IDesktopBridge
     private void ApplyIcon()
     {
         // Cosmetic, all the way down: a missing or unreadable icon costs the
-        // monogram, never the window.
+        // app's mark, never the window.
         try { Icon = IconLibrary.Load(IconLibrary.Parse(_settings.IconChoice)) ?? Icon; }
         catch (Exception) { /* cosmetic */ }
         // The Start-menu shortcut carries the same icon as a FILE, resolved at

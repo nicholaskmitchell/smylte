@@ -69,7 +69,7 @@ internal sealed class MainWindow : IDesktopBridge
     /// have to know which title bar this window is wearing.
     private readonly Gtk.Widget _setupHost;
 
-    /// The monogram, at the left of the header bar.
+    /// The icon, at the left of the header bar.
     ///
     /// GTK puts NO icon in a header bar: `gtk_window_set_icon_name` feeds the
     /// window manager, and with client-side decorations the window manager is

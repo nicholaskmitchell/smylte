@@ -9,13 +9,14 @@ public enum IconChoice
 {
     /// Follow the system theme: the plate that contrasts with it.
     Auto,
-    /// Cream plate, ink letter, accent period — the web favicon's colours.
+    /// Paper plate, ink frame, coral-ink tick: the web favicon's colours. Also
+    /// the compiled default.
     Paper,
-    /// Near-black plate, paper letter, accent period.
+    /// The dark theme's plate, frame and tick.
     Ink,
-    /// Burnt-orange plate, paper letter, ink period. Also the compiled default.
+    /// Coral plate, ink frame, paper tick.
     Accent,
-    /// The letter alone on transparency, in accent. No plate.
+    /// The frame and tick alone on transparency, in coral ink and coral. No plate.
     Mark,
 }
 

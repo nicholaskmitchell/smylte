@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Smylte's app icon, the drawn check, and the one place it is authored.
+       backend/dev/build_app_icon.py makes every platform's icon from this file:
+       the favicon, the Apple touch icon, the Windows .ico files, the Linux PNGs
+       and SVGs, and the Android launcher layers. Edit this, then run it.
+
+       The frame and the tick are CheckInk's first hand (Marks.tsx, FRAMES[0]
+       and TICKS[0], on its 28 grid) scaled 1.72 and moved by (4.4, 7.4). The
+       tick's last point is carried out past the frame's corner, as a quick pen
+       does. stroke-width is the full cut, for 48 px and up; data-small-width is
+       the small cut, for 40 px and down, heavier so the pen survives a 16 px tab.
+
+       The colours are Field notes light (styles/ds/themes.css): the plate is bg,
+       the frame fg, the tick accent. The generator refuses to run if they and
+       the tokens differ, and reads every other variant's colours from the
+       tokens itself. -->
+  <rect class="plate" width="64" height="64" fill="#F3EDE1"/>
+  <path class="frame" d="M13.34 15.31C21.60 14.45 36.05 14.80 44.13 16.34C45.34 24.60 44.99 38.88 43.79 47.30C35.36 48.16 21.26 48.51 12.83 47.13C11.80 39.05 11.97 23.91 13.34 15.31Z" fill="none" stroke="#2A2622" stroke-width="3.2" data-small-width="4.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path class="tick" d="M19.19 32.51C21.60 34.58 24.01 37.67 25.73 40.08C29.51 32.17 36.74 21.85 50.15 11.53" fill="none" stroke="#A3432A" stroke-width="4.4" data-small-width="6.4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -43,15 +43,26 @@ public sealed class AppIconTests
     private static readonly int[] Expected =
         [16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 80, 96, 128, 256];
 
-    private static readonly byte[] Accent = [0xC7, 0x5A, 0x26];
+    /// Each icon's tick colour, by resource name. Straight out of `VARIANTS`
+    /// in `backend/dev/build_app_icon.py` (Field notes tokens), restated here
+    /// rather than derived so that a swap in the generator fails against this
+    /// file instead of agreeing with itself.
+    private static readonly Dictionary<string, byte[]> Tick = new()
+    {
+        ["app.ico"] = [0xA3, 0x43, 0x2A],          // paper: light --accent
+        ["icon-ink.ico"] = [0xF0, 0x9C, 0x7E],     // ink: dark --accent
+        ["icon-accent.ico"] = [0xFB, 0xF8, 0xF1],  // accent: light --bg-elev on the coral plate
+        ["icon-mark.ico"] = [0xE2, 0x7B, 0x5B],    // mark: light --accent-fill
+    };
 
     /// Every icon the exe carries, by resource name. `app.ico` is the one
     /// <ApplicationIcon> stamps into the PE and the only one Explorer, a pinned
-    /// entry or a desktop shortcut can ever show; the other three are the
-    /// alternates IconLibrary switches between at runtime. All four have to hold
-    /// the same floors, because any of them can end up on the taskbar.
+    /// entry or a desktop shortcut can ever show, and it is the paper variant;
+    /// the other three are the alternates IconLibrary switches between at
+    /// runtime. All four have to hold the same floors, because any of them can
+    /// end up on the taskbar.
     public static TheoryData<string> Icons() =>
-        new() { "app.ico", "icon-paper.ico", "icon-ink.ico", "icon-mark.ico" };
+        new() { "app.ico", "icon-accent.ico", "icon-ink.ico", "icon-mark.ico" };
 
     internal static byte[] Bytes(string name)
     {
@@ -205,17 +216,17 @@ public sealed class AppIconTests
     }
 
     [Theory, MemberData(nameof(Icons))]
-    public void The_accent_period_survives_at_every_size(string icon)
+    public void The_tick_survives_at_every_size(string icon)
     {
-        // The brand rule turned into a gate: the terminal period in --accent is
-        // the signature, and a naive downscale of the 256px art smears it into a
-        // grey blur long before 16px. Deliberately a distance test rather than an
-        // exact match — a visually identical orange can land a channel off, and a
-        // gate that fails on a good regeneration gets deleted rather than fixed.
-        // True of all four for different reasons: the accent is the period on
-        // the cream and ink plates, the plate itself on the accent one, and the
-        // whole mark on the bare one.
+        // The mark's one stroke of colour, and the first thing a naive
+        // downscale smears into a tint. The generator draws 40px and down with
+        // a heavier pen for exactly this; measured, the 16px frame keeps seven
+        // whole pixels of its tick in all four. Deliberately a distance test
+        // rather than an exact match: a visually identical colour can land a
+        // channel off, and a gate that fails on a good regeneration gets
+        // deleted rather than fixed.
         var ico = Bytes(icon);
+        var tick = Tick[icon];
         foreach (var e in Directory(ico))
         {
             var px = Decode(ico.AsSpan(e.Offset, e.Length).ToArray(), e.Size);
@@ -223,10 +234,10 @@ public sealed class AppIconTests
             for (int i = 0; i < px.Length && !found; i += 4)
             {
                 if (px[i + 3] < 250) continue;
-                int dr = px[i] - Accent[0], dg = px[i + 1] - Accent[1], db = px[i + 2] - Accent[2];
+                int dr = px[i] - tick[0], dg = px[i + 1] - tick[1], db = px[i + 2] - tick[2];
                 found = dr * dr + dg * dg + db * db <= 100;   // Euclidean distance <= 10
             }
-            Assert.True(found, $"{icon} {e.Size}px frame has no opaque pixel near #C75A26");
+            Assert.True(found, $"{icon} {e.Size}px frame has no opaque pixel of its tick colour");
         }
     }
 

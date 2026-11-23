@@ -209,7 +209,7 @@ jobs:
       - name: Unit tests, lint and the release build
         # The unit tests cover the request split and traversal guard, the CSP
         # port's hashing, the web build's staging and swap, the update
-        # decisions, and the launcher icon against the favicon. Lint fails on
+        # decisions, and the launcher icon against brand/app-icon.svg. Lint fails on
         # errors, which is where a missing permission or a wrong API level shows.
         run: ./gradlew --no-daemon test lint assembleRelease
 

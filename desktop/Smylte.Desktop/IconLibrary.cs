@@ -19,16 +19,17 @@ namespace Smylte.Desktop;
 ///
 /// **Why Auto is possible at all.** A .ico holds one image per size and has no
 /// light/dark variant mechanism outside MSIX, which is why the compiled default
-/// has to be the one colour that clears 3:1 against both taskbars. A running
-/// process has no such limit: it can read the theme and choose. That is the
-/// whole reason the plated variants exist.
+/// has to read on both taskbars. It is the paper variant: on a light taskbar its
+/// ink frame is the edge, on a dark one its plate is. A running process has no
+/// such limit: it can read the theme and choose. That is the whole reason the
+/// other variants exist.
 public static class IconLibrary
 {
     private static readonly Dictionary<IconChoice, string> Resources = new()
     {
-        [IconChoice.Paper] = "icon-paper.ico",
+        [IconChoice.Paper] = "app.ico",
         [IconChoice.Ink] = "icon-ink.ico",
-        [IconChoice.Accent] = "app.ico",
+        [IconChoice.Accent] = "icon-accent.ico",
         [IconChoice.Mark] = "icon-mark.ico",
     };
 
@@ -64,13 +65,13 @@ public static class IconLibrary
     /// The icon for `choice`, or null if it cannot be loaded.
     ///
     /// Null rather than a throw because every caller treats the icon as
-    /// cosmetic: a missing resource should cost you the monogram, never the
+    /// cosmetic: a missing resource should cost you the icon, never the
     /// window. Falls back to the compiled default before giving up, so a typo in
     /// a persisted choice degrades to the shipped icon rather than to none.
     public static Icon? Load(IconChoice choice)
     {
         var resolved = Resolve(choice);
-        return Read(Resources[resolved]) ?? Read(Resources[IconChoice.Accent]);
+        return Read(Resources[resolved]) ?? Read(Resources[IconChoice.Paper]);
     }
 
     private static Icon? Read(string resource)

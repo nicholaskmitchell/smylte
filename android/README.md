@@ -415,7 +415,7 @@ The JVM unit tests run without a device. They cover:
   version, with a provider's own numbering let through; that the frontend keeps
   Vite 7's default target, and that start-up checks the WebView first (the
   frontend's `webview-floor.test.ts` checks the page against the same floor);
-- the launcher icon against `frontend/public/favicon.svg`.
+- the launcher icon against `brand/app-icon.svg`.
 
 `backend/tests/test_csp.py` fails if `Csp.kt`'s directives drift from the
 server's.

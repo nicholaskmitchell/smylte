@@ -145,6 +145,9 @@ or a cream, ink, accent or unplated mark.
 | Taskbar button | With the **Start menu shortcut** toggle, or "Combine taskbar buttons: Never" |
 | Explorer, desktop, pinned entry, Start | No, these use the compiled icon |
 
+The compiled icon is the cream plate: on a light taskbar its ink frame is the
+edge, on a dark one the plate is.
+
 | Linux surface | Follows the setting |
 | --- | --- |
 | Window, Alt-Tab, window switcher | Yes, immediately |
@@ -154,10 +157,12 @@ or a cream, ink, accent or unplated mark.
 stops matching the app background. On Linux the window manager draws it, with
 your decoration theme and buttons, and the change takes effect after a restart.
 
-To regenerate the icons after changing `frontend/public/favicon.svg`:
+The icons are drawn once, in `brand/app-icon.svg`. To regenerate them after
+changing it, or the Field notes colours:
 
 ```bash
-cd backend && python -m dev.build_app_icon   # needs Pillow
+cd backend && python -m dev.build_app_icon           # needs Pillow
+cd backend && python -m dev.build_app_icon --check   # are the committed icons current?
 ```
 
 ## The floating window

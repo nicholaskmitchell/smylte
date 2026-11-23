@@ -25,8 +25,6 @@ public sealed class LinuxIconTests
     /// against this one rather than agreeing with itself.
     private static readonly int[] Expected = [16, 24, 32, 48, 64, 128, 256];
 
-    private static readonly byte[] Accent = [0xC7, 0x5A, 0x26];
-
     public static TheoryData<string> Variants() => new() { "accent", "paper", "ink", "mark" };
 
     private static byte[] Png(string stem, int size) =>
@@ -78,91 +76,101 @@ public sealed class LinuxIconTests
     }
 
     /// The palette, and which role each variant gives each colour. Straight out
-    /// of `VARIANTS` in `backend/dev/build_app_icon.py`, restated here rather
-    /// than derived so that a swap in the generator fails against this file
-    /// instead of agreeing with itself.
-    private static readonly byte[] Paper = [0xF4, 0xF1, 0xE8];
-    private static readonly byte[] Fg = [0x0E, 0x0E, 0x0C];
-    private static readonly byte[] Cream = [0xF3, 0xED, 0xE2];
-    private static readonly byte[] Ink = [0x1A, 0x18, 0x14];
+    /// of `VARIANTS` in `backend/dev/build_app_icon.py` (Field notes tokens),
+    /// restated here rather than derived so that a swap in the generator fails
+    /// against this file instead of agreeing with itself.
+    private static readonly byte[] Paper = [0xF3, 0xED, 0xE1];       // light --bg
+    private static readonly byte[] Elevated = [0xFB, 0xF8, 0xF1];    // light --bg-elev
+    private static readonly byte[] Ink = [0x2A, 0x26, 0x22];         // light --fg
+    private static readonly byte[] CoralInk = [0xA3, 0x43, 0x2A];    // light --accent
+    private static readonly byte[] Coral = [0xE2, 0x7B, 0x5B];       // light --accent-fill
+    private static readonly byte[] Night = [0x27, 0x24, 0x20];       // dark --bg
+    private static readonly byte[] NightInk = [0xEF, 0xE8, 0xDC];    // dark --fg
+    private static readonly byte[] NightCoral = [0xF0, 0x9C, 0x7E];  // dark --accent
+
+    /// Each variant's tick: its coral, or on the coral plate a paper tick.
+    private static byte[] TickOf(string stem) => stem switch
+    {
+        "paper" => CoralInk,
+        "ink" => NightCoral,
+        "accent" => Elevated,
+        "mark" => Coral,
+        _ => throw new ArgumentOutOfRangeException(nameof(stem), stem, "not a variant"),
+    };
 
     public static TheoryData<string, byte[], byte[], byte[]> Roles()
     {
         var data = new TheoryData<string, byte[], byte[], byte[]>();
-        //                plate   letter  period
-        data.Add("accent", Accent, Paper, Fg);
-        data.Add("paper", Cream, Ink, Accent);
-        data.Add("ink", Fg, Paper, Accent);
+        //                plate   frame   tick
+        data.Add("paper", Paper, Ink, CoralInk);
+        data.Add("ink", Night, NightInk, NightCoral);
+        data.Add("accent", Coral, Ink, Elevated);
         return data;
     }
 
     [Theory]
     [MemberData(nameof(Roles))]
     public void Each_variant_paints_its_three_parts_the_colours_it_is_meant_to(
-        string stem, byte[] plate, byte[] letter, byte[] period)
+        string stem, byte[] plate, byte[] frame, byte[] tick)
     {
-        // **What this replaced, and why.** The old test asked only whether an
-        // opaque pixel within 10 of #C75A26 existed anywhere in the raster —
-        // and for `accent` the PLATE is that colour and for `mark` the LETTER
-        // is, so for two of the four variants it could not fail. A generator
-        // that swapped letter and period, or painted the wrong plate, shipped
-        // green.
-        //
-        // Stated as areas instead, which is what actually distinguishes the
-        // three parts: the plate is most of the tile, the letter is a large
-        // minority of it, and the period is a few pixels. 128 only — big
-        // enough that the period is unambiguously more than a rounding error
-        // and the reduce has not yet blended anything away.
+        // Stated as areas, which is what distinguishes the three parts: the
+        // plate is most of the tile, the frame is the longer stroke and the
+        // tick the shorter, heavier one. 128 only: big enough that neither
+        // stroke is a rounding error, and the reduce has not yet blended
+        // anything away. A presence-only test could not fail on a variant that
+        // swapped frame and tick, or painted the wrong plate.
         var counts = Counts(Png(stem, 128), 128);
 
         var plateArea = Near(counts, plate);
-        var letterArea = Near(counts, letter);
-        var periodArea = Near(counts, period);
+        var frameArea = Near(counts, frame);
+        var tickArea = Near(counts, tick);
 
-        // Measured on the shipped art: plate 80.1%, letter 13.3%, period 1.7%,
+        // Measured on the generated art: plate 81.7%, frame 7.9%, tick 4.8%,
         // for all three variants to within a tenth of a point. The bounds sit
         // well clear of those rather than against them.
-        Assert.True(plateArea > 0.50, $"{stem}: the plate covers {plateArea:P1}, not most of the tile");
-        Assert.True(letterArea > 0.05, $"{stem}: the letter covers {letterArea:P1}; is it the wrong colour?");
-        Assert.True(periodArea is > 0.0005 and < 0.08,
-            $"{stem}: the period covers {periodArea:P2}; is it the wrong colour?");
+        Assert.True(plateArea > 0.60, $"{stem}: the plate covers {plateArea:P1}, not most of the tile");
+        Assert.True(frameArea is > 0.04 and < 0.14,
+            $"{stem}: the frame covers {frameArea:P1}; is it the wrong colour?");
+        Assert.True(tickArea is > 0.02 and < 0.09,
+            $"{stem}: the tick covers {tickArea:P1}; is it the wrong colour?");
 
-        // The ordering is the part a swap breaks: the S is several times the
-        // area of the period beside it, so letter and dot exchanged inverts
-        // this even though both colours are still somewhere in the tile — which
-        // is exactly what the presence-only test this replaced could not see.
-        Assert.True(letterArea > periodArea * 3,
-            $"{stem}: the letter ({letterArea:P1}) is not clearly larger than the period ({periodArea:P2})");
+        // The ordering is the part a swap breaks: frame and tick exchanged
+        // inverts this even though both colours are still in the tile.
+        Assert.True(frameArea > tickArea * 1.2,
+            $"{stem}: the frame ({frameArea:P1}) is not clearly larger than the tick ({tickArea:P1})");
     }
 
     [Fact]
-    public void The_bare_mark_is_accent_on_nothing()
+    public void The_bare_mark_is_coral_on_nothing()
     {
-        // `mark` has no plate and paints letter and period the same colour, so
-        // it cannot be asserted by role the way the three plated variants are.
-        // What is true of it, and of none of the others: its opaque pixels are
-        // ALL accent.
+        // `mark` has no plate, so it cannot be asserted by role the way the
+        // three plated variants are. What is true of it, and of none of the
+        // others: its opaque pixels are all coral, the frame in coral ink and
+        // the tick in coral, and the frame is still the larger of the two.
         var counts = Counts(Png("mark", 128), 128);
-        var accent = Near(counts, Accent);
+        var frame = Near(counts, CoralInk);
+        var tick = Near(counts, Coral);
         var opaque = counts.Sum(c => c.Value) / (128.0 * 128.0);
 
-        Assert.True(opaque > 0.10, "mark-128.png is blank");
-        Assert.True(accent / opaque > 0.95,
-            $"only {accent / opaque:P0} of mark-128.png's opaque pixels are accent");
+        // Measured: 12.7% opaque, 99.5% of it one of the two corals.
+        Assert.True(opaque > 0.08, "mark-128.png is blank");
+        Assert.True((frame + tick) / opaque > 0.95,
+            $"only {(frame + tick) / opaque:P0} of mark-128.png's opaque pixels are coral");
+        Assert.True(frame > tick * 1.2,
+            $"mark: the coral-ink frame ({frame:P1}) is not clearly larger than the coral tick ({tick:P1})");
     }
 
     [Theory]
     [MemberData(nameof(Variants))]
-    public void The_accent_period_survives_at_every_size(string stem)
+    public void The_tick_survives_at_every_size(string stem)
     {
-        // The one coloured thing in the mark, and the smallest. Below 24 the
-        // generator replaces the disc with a whole-pixel square precisely
-        // because a reduced disc washes out — so this is the assertion that
-        // says the hinting worked, at the sizes where it had to.
-        //
-        // Kept as a presence check across all seven sizes, on top of the role
+        // The mark's one stroke of colour. Below 48 the generator draws a
+        // heavier pen precisely because a reduced tick washes out, so this is
+        // the assertion that says the small cut worked, at the sizes where it
+        // had to. A presence check across all seven sizes, on top of the role
         // assertions above: those run at 128 only, and washing out is a
         // small-size failure.
+        var tick = TickOf(stem);
         foreach (var size in Expected)
         {
             var pixels = AppIconTests.Decode(Png(stem, size), size);
@@ -171,20 +179,20 @@ public sealed class LinuxIconTests
             {
                 if (pixels[i + 3] < 250) continue;
                 var distance = Math.Sqrt(
-                    Math.Pow(pixels[i] - Accent[0], 2) +
-                    Math.Pow(pixels[i + 1] - Accent[1], 2) +
-                    Math.Pow(pixels[i + 2] - Accent[2], 2));
+                    Math.Pow(pixels[i] - tick[0], 2) +
+                    Math.Pow(pixels[i + 1] - tick[1], 2) +
+                    Math.Pow(pixels[i + 2] - tick[2], 2));
                 found = distance <= 10;
             }
-            Assert.True(found, $"{stem}-{size}.png has no opaque pixel within 10 of #C75A26");
+            Assert.True(found, $"{stem}-{size}.png has no opaque pixel within 10 of its tick colour");
         }
     }
 
     public static TheoryData<string, string> Containers()
     {
         var data = new TheoryData<string, string>();
-        data.Add("accent", "app.ico");
-        data.Add("paper", "icon-paper.ico");
+        data.Add("paper", "app.ico");
+        data.Add("accent", "icon-accent.ico");
         data.Add("ink", "icon-ink.ico");
         data.Add("mark", "icon-mark.ico");
         return data;
@@ -200,7 +208,7 @@ public sealed class LinuxIconTests
         // tier and resizes with the same call and the same arguments for both,
         // which is stated in a comment and was asserted nowhere — so a Linux
         // pass that drifted (a different tier offset, LANCZOS instead of BOX, a
-        // swapped letter and dot) would have shipped with the whole suite
+        // swapped frame and tick) would have shipped with the whole suite
         // green, and the symptom would be an icon that looks subtly wrong in
         // the dash and right in Explorer.
         //
@@ -246,7 +254,7 @@ public sealed class LinuxIconTests
     [MemberData(nameof(Variants))]
     public void Nothing_is_pure_black_or_pure_white(string stem)
     {
-        // The design system's inks are #0E0E0C and #F4F1E8, never #000000 or
+        // Field notes' inks are #2A2622 and #EFE8DC, never #000000 or
         // #FFFFFF, and the generator goes out of its way to keep the reduce
         // from producing either — a transparent ground filled with black drags
         // every edge toward it. Alpha >= 250 only: a fringe pixel is allowed to
@@ -297,17 +305,18 @@ public sealed class LinuxIconTests
 
         Assert.Equal("0 0 256 256", root.Attribute("viewBox")?.Value);
 
-        // One letter, one period, and a plate for everything but the bare mark.
+        // The frame, the tick, and a plate for everything but the bare mark.
         // Cheap to check and it catches the failure that matters: an emitter
-        // that wrote the plate for every variant, or none.
-        Assert.Single(root.Elements(), e => e.Name.LocalName == "polygon");
-        Assert.Single(root.Elements(), e => e.Name.LocalName == "circle");
+        // that wrote the plate for every variant, or none, or dropped a stroke.
+        Assert.Equal(2, root.Elements().Count(e => e.Name.LocalName == "path"));
         Assert.Equal(stem == "mark" ? 0 : 1,
             root.Elements().Count(e => e.Name.LocalName == "rect"));
+        Assert.Equal(stem == "mark" ? 2 : 3, root.Elements().Count());
 
-        // The accent is somewhere in every variant — as the plate, as the
-        // period, or as the mark itself.
-        Assert.Contains("#c75a26", svg.ToString(), StringComparison.OrdinalIgnoreCase);
+        // The tick is drawn last, over the frame, in the variant's tick colour.
+        var tick = root.Elements().Last(e => e.Name.LocalName == "path");
+        Assert.Equal("#" + Convert.ToHexString(TickOf(stem)), tick.Attribute("stroke")?.Value,
+            ignoreCase: true);
     }
 
     /// What fraction of the raster is fully opaque.

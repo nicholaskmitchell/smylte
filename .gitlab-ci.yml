@@ -165,7 +165,7 @@ android:
         - android/**/*
         # Read by the Android unit tests (CspTest, IconDriftTest).
         - frontend/index.html
-        - frontend/public/favicon.svg
+        - brand/app-icon.svg
         - .gitlab-ci.yml
   variables:
     ANDROID_HOME: $CI_PROJECT_DIR/.cache/android-sdk
