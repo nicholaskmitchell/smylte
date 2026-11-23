@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { ShareEvent, ShareFocus, ShareView } from './api'
 import { bucketByDay } from './calendar'
 import {
-  agendaDays, fmtDayLabel, fmtTime, isStale, localState, nextPollDelay, ongoingEvent,
-  progress, remainingS, skewOf, toBucket,
+  agendaDays, fmtDayLabel, fmtTime, isOverdue, isStale, localState, nextPollDelay, ongoingEvent,
+  progress, remainingS, shareDayState, skewOf, toBucket,
 } from './share'
 import { ymd } from './util'
 
@@ -369,4 +369,57 @@ describe('the agenda in the viewer\'s own zone', () => {
     return bucketByDay(events.map(toBucket), days.map(d => new Date(`${d}T00:00`)))
   }
   function keys(m: Map<string, unknown>) { return [...m.keys()].sort() }
+})
+
+describe('isOverdue', () => {
+  const today = ymd(new Date(T0))
+  it('is false without a due date', () => {
+    expect(isOverdue({ due: null, all_day: false }, today, T0)).toBe(false)
+  })
+  it('takes an all-day task as overdue from the day after its date', () => {
+    expect(isOverdue({ due: '2026-10-26', all_day: true }, today, T0)).toBe(false)
+    expect(isOverdue({ due: '2026-10-25', all_day: true }, today, T0)).toBe(true)
+  })
+  it('takes a timed task as overdue from its moment', () => {
+    expect(isOverdue({ due: '2026-10-26T09:59:00.000Z', all_day: false }, today, T0)).toBe(true)
+    expect(isOverdue({ due: '2026-10-26T10:01:00.000Z', all_day: false }, today, T0)).toBe(false)
+  })
+})
+
+describe('shareDayState', () => {
+  const row = (key: string, done = false) =>
+    ({ key, title: key, done, list: 0, due: null, all_day: false, private: false })
+  const idle = (rows: ReturnType<typeof row>[]) =>
+    focus({ state: 'idle', phase: null, ends_at: null, today: { rows, now: null, next: [] } })
+
+  it('is nothing planned without the focus card', () => {
+    expect(shareDayState(view(), T0, 0)).toEqual({
+      progress: 0, rewards: 0, focusActive: false, allDone: false, nothingPlanned: true, overdue: 0, hour: 6,
+    })
+  })
+  it('gives one reward per shared row done, and the progress of those rows', () => {
+    expect(shareDayState(view({ focus: idle([row('a', true), row('b'), row('c')]) }), T0, 0))
+      .toMatchObject({ progress: 1 / 3, rewards: 1, allDone: false, nothingPlanned: false })
+    expect(shareDayState(view({ focus: idle([row('a', true), row('b', true)]) }), T0, 0))
+      .toMatchObject({ progress: 1, rewards: 2, allDone: true })
+  })
+  it('is focusing while a focus or break clock runs, and not once it has run out', () => {
+    expect(shareDayState(view({ focus: focus() }), T0, 0).focusActive).toBe(true)
+    expect(shareDayState(view({ focus: focus({ state: 'break', phase: 'break' }) }), T0, 0).focusActive).toBe(true)
+    expect(shareDayState(view({ focus: focus({ state: 'paused', ends_at: null, remaining_s: 300 }) }), T0, 0).focusActive).toBe(false)
+    // ends_at is 10:10Z; at 10:11Z the phase reads as 'between'.
+    expect(shareDayState(view({ focus: focus() }), T0 + 11 * 60_000, 0).focusActive).toBe(false)
+  })
+  it('counts the overdue tasks in the shared lists', () => {
+    const task = (due: string | null, all_day: boolean) => ({ title: 't', due, all_day, depth: 0, private: false })
+    const v = view({ lists: [
+      { name: 'A', color: null, more: 0, tasks: [task('2026-10-25', true), task('2026-10-26', true)] },
+      { name: 'B', color: null, more: 0, tasks: [task('2026-10-26T09:00:00.000Z', false), task(null, false)] },
+    ] })
+    expect(shareDayState(v, T0, 0).overdue).toBe(2)
+  })
+  it('reads the viewer’s hour on the server’s clock', () => {
+    expect(shareDayState(view(), T0, 0).hour).toBe(6)
+    expect(shareDayState(view(), T0, 3 * HOUR).hour).toBe(9)
+  })
 })

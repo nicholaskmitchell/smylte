@@ -10,8 +10,9 @@
 
 import type { BucketEvent } from './calendar'
 import { shiftYmd } from './calendar'
-import type { ShareEvent, ShareFocus, ShareFocusState, ShareView } from './api'
-import { parseDate } from './util'
+import type { ShareEvent, ShareFocus, ShareFocusState, ShareTask, ShareView } from './api'
+import type { DayState } from './drawing'
+import { parseDate, ymd } from './util'
 
 /** How long one fetch may take before the page gives up and backs off. A
  *  half-open socket never rejects, and a page nobody is looking at cannot tell
@@ -145,4 +146,37 @@ export function fmtDayLabel(ymdStr: string, todayYmd: string, locale: string): '
   if (ymdStr === shiftYmd(todayYmd, 1)) return 'tomorrow'
   return parseDate(ymdStr).toLocaleDateString(locale,
     { weekday: 'long', month: 'long', day: 'numeric' })
+}
+
+/** Whether a shared task is past due, on the server's clock (`serverNowMs`)
+ *  and the viewer's day (`todayYmd`): an all-day task from the day after its
+ *  date, a timed one from its moment. */
+export function isOverdue(t: Pick<ShareTask, 'due' | 'all_day'>, todayYmd: string, serverNowMs: number): boolean {
+  if (!t.due) return false
+  return t.all_day ? ymd(parseDate(t.due)) < todayYmd : parseDate(t.due).getTime() < serverNowMs
+}
+
+/** What the owner's drawing reacts to on this page. It is built from what the
+ *  page shows and nothing else, so the picture never says what the text does
+ *  not: one reward per shared row done today; those rows for the progress,
+ *  "all done" and "nothing planned"; a running clock for focus (a running break
+ *  too, as on Today); the overdue tasks in the shared lists; and the VIEWER's
+ *  hour, on the server's clock. */
+export function shareDayState(view: ShareView, nowMs: number, skewMs: number): DayState {
+  const rows = view.focus?.today.rows ?? []
+  const done = rows.filter((r) => r.done).length
+  const state = view.focus ? localState(view.focus, nowMs, skewMs) : 'idle'
+  const serverNow = nowMs + skewMs
+  const today = ymd(new Date(serverNow))
+  let overdue = 0
+  for (const list of view.lists) for (const t of list.tasks) if (isOverdue(t, today, serverNow)) overdue++
+  return {
+    progress: rows.length ? done / rows.length : 0,
+    rewards: done,
+    focusActive: state === 'focusing' || state === 'break',
+    allDone: rows.length > 0 && done === rows.length,
+    nothingPlanned: rows.length === 0,
+    overdue,
+    hour: new Date(serverNow).getHours(),
+  }
 }

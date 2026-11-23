@@ -881,3 +881,133 @@
 [data-surface="app"] .task-prop-controls > .ink-field:has(> input[type="time"]) { flex: 1 1 30px; min-width: 76px; }   /* .task-prop-controls .input[type="time"] */
 [data-surface="app"] .set-panel .menu-row > .ink-field:has(> .notif-time) { max-width: 140px; }                     /* .set-panel .menu-row .notif-time */
 [data-surface="app"] .mail-sug-head > .ink-field:has(> .mail-sug-due) { flex: none; }                                /* .mail-sug .mail-sug-due */
+
+
+/* The share page in Today's hand (SharePage under Field notes; a preset keeps
+   its cards). The header is Today's: what the page is as a margin note, the
+   weekday in italic, the date at the display size. Nothing is set under the
+   13px floor, so the 11px micro labels become margin notes. */
+[data-surface="app"] .share-wrap { padding-top: 28px; }
+[data-surface="app"] .share-head { gap: 0; padding: 0 2px 6px; }
+[data-surface="app"] .share-head__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+[data-surface="app"] .share-head__title {
+  font-family: var(--serif); font-size-adjust: none; font-style: italic; font-weight: 400; letter-spacing: 0;
+  font-size: calc(var(--fs-app-note) * var(--fs-scale)); color: var(--fg-muted);
+}
+[data-surface="app"] .share-head__day { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; color: var(--fg); }
+[data-surface="app"] .share-head__weekday {
+  font-family: var(--serif); font-size-adjust: none; font-style: italic;
+  font-size: calc(var(--fs-app-section) * var(--fs-scale)); color: var(--fg-muted);
+}
+[data-surface="app"] .share-head__date {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500; line-height: 1; letter-spacing: -0.025em;
+  font-size: calc(var(--fs-app-display) * var(--fs-scale)); color: var(--fg);
+}
+[data-surface="app"] .share-head__meta { margin-top: 12px; gap: 8px; }
+[data-surface="app"] :is(.share-live, .share-stale, .share-readonly, .share-sep) {
+  font-family: var(--sans); font-size-adjust: none; text-transform: none; letter-spacing: 0;
+  font-size: calc(var(--fs-app-meta) * var(--fs-scale)); color: var(--fg-muted);
+}
+[data-surface="app"] .share-stale { color: var(--warn); }
+[data-surface="app"] .share-readonly { border: 0; padding: 0; border-radius: 0; }
+/* The small words are margin notes; the section heads are Today's ("Today" at
+   the section size, its count an italic note). */
+[data-surface="app"] :is(.share-presence__eyebrow, .share-now__label, .share-then__label) {
+  font-family: var(--serif); font-size-adjust: none; font-style: italic; text-transform: none; letter-spacing: 0;
+  font-size: calc(var(--fs-app-note) * var(--fs-scale)); color: var(--fg-muted);
+}
+[data-surface="app"] .share-presence[data-state="focusing"] .share-presence__eyebrow { color: var(--accent); }
+[data-surface="app"] :is(.share-today__head .share-label, .share-agenda > .share-label) {
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500; text-transform: none; letter-spacing: 0;
+  font-size: calc(var(--fs-app-section) * var(--fs-scale)); color: var(--fg);
+}
+[data-surface="app"] .share-today__head { justify-content: flex-start; }
+[data-surface="app"] :is(.share-today__count, .share-list__count) {
+  font-family: var(--serif); font-size-adjust: none; font-style: italic; font-variant-numeric: tabular-nums;
+  font-size: calc(var(--fs-app-note) * var(--fs-scale)); color: var(--fg-muted);
+}
+/* The focus card is Today's: the title at the headline size with the
+   highlighter behind it, and the interval a pen line with the coral ink run
+   along it as far as it has gone. */
+[data-surface="app"] .share-presence { border-color: var(--rule); }
+[data-surface="app"] .share-now__title { font-size: calc(var(--fs-app-headline) * var(--fs-scale)); letter-spacing: -0.012em; }
+[data-surface="app"] .share-now__ink {
+  box-shadow: inset 0 -0.42em var(--highlight); -webkit-box-decoration-break: clone; box-decoration-break: clone;
+}
+[data-surface="app"] .share-then { font-size: calc(var(--fs-app-ui) * var(--fs-scale)); }
+[data-surface="app"] .share-line { display: block; width: 100%; height: 10px; overflow: visible; fill: none; }
+[data-surface="app"] .share-line path { stroke-linecap: round; }
+[data-surface="app"] .share-line__rule { stroke: var(--rule); stroke-width: var(--stroke-pen); }
+[data-surface="app"] .share-line__ink { stroke: var(--accent); stroke-width: var(--stroke-strike); stroke-dasharray: 1; }
+[data-surface="app"] .share-presence:is([data-state="break"], [data-state="paused"]) .share-line__ink { stroke: var(--fg-muted); }
+/* Today, the agenda and the lists lie on the paper, as Today's list does: no
+   box and no hairlines between rows. The row being worked on gets the
+   highlighter where the presets draw a coral edge. */
+[data-surface="app"] .share-today.share-section { border-top: 0; padding: 14px 2px 0; }
+[data-surface="app"] .share-row { border-left: 0; border-bottom: 0; padding: 6px 0; }
+[data-surface="app"] .share-row.is-now .share-row__name { box-shadow: inset 0 -0.42em var(--highlight); }
+[data-surface="app"] :is(.share-row__due, .share-task__due, .share-more, .share-foot) {
+  font-size: calc(var(--fs-app-meta) * var(--fs-scale));
+}
+/* The agenda: days as italic heads, times in Hanken's tabular figures at the
+   meta size, a past event in the muted tier rather than faded below it. */
+[data-surface="app"] .share-agenda .share-day + .share-day { margin-top: 10px; }
+[data-surface="app"] .share-day__label {
+  font-family: var(--serif); font-size-adjust: none; font-style: italic; font-weight: 400;
+  font-size: calc(var(--fs-app-reading) * var(--fs-scale)); color: var(--fg-muted);
+}
+[data-surface="app"] .share-ev { grid-template-columns: minmax(8.5em, max-content) auto minmax(0, 1fr) auto; padding: 5px 0; }
+[data-surface="app"] .share-ev__time {
+  font-family: var(--sans); font-size-adjust: none; font-variant-numeric: tabular-nums;
+  font-size: calc(var(--fs-app-meta) * var(--fs-scale)); color: var(--fg-muted);
+}
+[data-surface="app"] .share-ev.is-past { opacity: 1; }
+[data-surface="app"] .share-ev.is-past .share-ev__title { color: var(--fg-muted); }
+[data-surface="app"] .share-ev.is-now .share-ev__time { color: var(--fg); }
+[data-surface="app"] .share-ev.is-now .share-ev__title { justify-self: start; box-shadow: inset 0 -0.42em var(--highlight); }
+[data-surface="app"] .share-ev__now {
+  font-family: var(--serif); font-size-adjust: none; font-style: italic; text-transform: none; letter-spacing: 0;
+  font-size: calc(var(--fs-app-note) * var(--fs-scale)); color: var(--accent);
+}
+/* A list is a fold, and says so with a drawn chevron that turns when open. */
+[data-surface="app"] .share-list__name { font-size: calc(var(--fs-app-section) * var(--fs-scale)); }
+[data-surface="app"] .share-list__sum { min-height: 44px; }
+[data-surface="app"] .share-list__chev {
+  flex: none; width: 24px; height: 24px; fill: none; stroke: var(--fg); stroke-width: var(--stroke-pen);
+  stroke-linecap: round; stroke-linejoin: round; transition: rotate var(--dur) var(--ease);
+}
+[data-surface="app"] .share-list[open] .share-list__chev { rotate: 90deg; }
+[data-surface="app"] .share-task { border-bottom: 0; padding: 5px 0; }
+/* The owner's drawing of the day sits beside the date, as on their Today. On a
+   wide screen the page is a board: their day on the left (the drawing, the
+   date, the focus card), what they are doing on the right. Only SharePage
+   renders the board's classes; the Settings preview shows the same body in one
+   column. */
+[data-surface="app"] .share-head--drawn { flex-direction: row; align-items: flex-end; justify-content: space-between; gap: 12px; }
+[data-surface="app"] .share-head--drawn .share-head__text { padding-bottom: 14px; }
+/* The drawing is 160 x 200 and, as on Today, never drawn below 160px tall. */
+[data-surface="app"] .share-drawing { flex: none; width: 128px; height: 160px; }
+@media (min-width: 721px) {
+  [data-surface="app"] .share-drawing { width: 192px; height: 240px; }
+}
+[data-surface="app"] :is(.share-side, .share-main) { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+@media (min-width: 1024px) {
+  [data-surface="app"] main.share--board {
+    max-width: 1120px; display: grid; grid-template-columns: 400px minmax(0, 1fr); column-gap: 64px; align-items: start;
+  }
+  [data-surface="app"] .share--board .share-main { padding-top: 4px; }
+  /* Here the drawing stands over the date, the cover of their day. */
+  [data-surface="app"] .share--board .share-head--drawn { flex-direction: column-reverse; align-items: flex-start; gap: 18px; }
+  [data-surface="app"] .share--board .share-head--drawn .share-head__text { padding-bottom: 0; }
+  [data-surface="app"] .share--board .share-drawing { width: 224px; height: 280px; margin-left: -8px; }
+  [data-surface="app"] .share--board .share-today.share-section { padding-top: 0; }
+  [data-surface="app"] .share--board .share-presence__clock { font-size: calc(96px * var(--fs-scale)); }
+}
+/* The left column stays in view while the right one scrolls, where the column
+   fits the window; on a shorter window it would hide the foot of the focus
+   card. .share-wrap grows with the page and scrolls nothing, but its overflow
+   would make it the scroller a sticky child holds to, so it lets go of it. */
+@media (min-width: 1024px) and (min-height: 860px) {
+  [data-surface="app"] .share-wrap--board { overflow-y: visible; }
+  [data-surface="app"] .share--board .share-side { position: sticky; top: 28px; }
+}

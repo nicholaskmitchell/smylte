@@ -129,3 +129,32 @@ describe('the owner\'s share calls', () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ horizon_days: 14 })
   })
 })
+
+describe('publicShareDrawing', () => {
+  it('asks for the drawing in the theme given, with nothing about the visitor', async () => {
+    const fetchMock = stubFetch(200, { view: 'today' })
+    const ctl = new AbortController()
+    expect(await api.publicShareDrawing(TOKEN, 'dark', ctl.signal)).toEqual({ view: 'today' })
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe(`/api/public/share/${TOKEN}/drawing?theme=dark`)
+    expect(init.method).toBe('GET')
+    expect(init.headers).toBeUndefined()
+    expect(init.credentials).toBe('omit')
+    expect(init.cache).toBe('no-store')
+    expect(init.referrerPolicy).toBe('no-referrer')
+    expect(init.signal).toBe(ctl.signal)
+  })
+
+  it('escapes the token in the path', async () => {
+    const fetchMock = stubFetch(200, {})
+    await api.publicShareDrawing('a/b?c', 'light')
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/public/share/a%2Fb%3Fc/drawing?theme=light')
+  })
+
+  it('turns a 404 into HttpError(404)', async () => {
+    stubFetch(404, { detail: 'unknown share' })
+    const err = await api.publicShareDrawing(TOKEN, 'light').catch((e) => e) as HttpError
+    expect(err).toBeInstanceOf(HttpError)
+    expect(err.status).toBe(404)
+  })
+})

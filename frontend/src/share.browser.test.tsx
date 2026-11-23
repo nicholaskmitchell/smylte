@@ -10,10 +10,13 @@
 // Class-for-class from `SharePage.tsx`, held to the real JSX by
 // `SharePage.test.tsx`, so this file stays a measurement harness rather than a
 // second source of truth about what the page renders.
+//
+// This is the preset page (no `data-surface`), which is the markup below. The
+// Field notes page is measured by `share-fieldnotes.browser.test.tsx`.
 import { describe, expect, it, beforeEach } from 'vitest'
 import { box, mount, viewport } from './test/browser-measure'
 
-beforeEach(() => { document.body.innerHTML = '' })
+beforeEach(() => { document.body.innerHTML = ''; delete document.documentElement.dataset.surface })
 
 const LONG = 'W'.repeat(200)
 
@@ -94,6 +97,10 @@ describe.each([320, 390])('the share page at %ipx', (width) => {
     expect(box(host.querySelector('#clock')!).h, 'no layout — this is not a browser').toBeGreaterThan(0)
     const family = getComputedStyle(host.querySelector('#clock')!).fontFamily
     expect(family.split(',')[0].replace(/["']/g, '').trim()).toBe('Newsreader')
+    // Without `data-surface` nothing in the fixture has asked for the face
+    // before `mount()` settles, so the roman latin file may still be arriving
+    // (Chromium reports it `loading`); the page is asked for it here.
+    await document.fonts.load('500 12px "Newsreader"')
     expect(document.fonts.check('12px "Newsreader"'), 'Newsreader did not load').toBe(true)
   })
 

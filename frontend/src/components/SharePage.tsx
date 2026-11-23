@@ -1,17 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, HttpError, type ShareEvent, type ShareFocus, type ShareList, type ShareRow, type ShareTask, type ShareView } from '../api'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { api, HttpError, type ShareEvent, type ShareFocus, type ShareList, type ShareRow, type ShareView } from '../api'
 import { syncThemeColor } from '../appearance'
 import { bucketByDay, shiftYmd } from '../calendar'
+import { EMPTY_DAY, sanitizeDrawing, type DrawingPayload } from '../drawing'
 import { deviceLanguage, localeFor } from '../lang'
 import { translate, type Vars } from '../i18n/index'
 import {
-  agendaDays, fmtDayLabel, fmtTime, FETCH_TIMEOUT_MS, isStale, localState, nextPollDelay,
-  ongoingEvent, progress, remainingS, skewOf, toBucket,
+  agendaDays, fmtDayLabel, fmtTime, FETCH_TIMEOUT_MS, isOverdue, isStale, localState, nextPollDelay,
+  ongoingEvent, progress, remainingS, shareDayState, skewOf, toBucket,
 } from '../share'
 import { fmtCountdown } from '../time'
-import { useFieldNotes } from '../hooks'
+import { useFieldNotes, useThemeName } from '../hooks'
+import { DayDrawing } from './DayDrawing'
 import { Hint } from './Hint'
-import { CheckInk, StrikeInk } from './Marks'
+import { CheckInk, IconInk, StrikeInk } from './Marks'
 import { parseDate, textDir, ymd } from '../util'
 
 // The public page at /share/<token>: somebody else's tasks, events and focus
@@ -276,6 +278,31 @@ export function SharePage({ token }: { token: string }) {
     }
   }, [awake])
 
+  // The owner's drawing of the day, under Field notes, while the page shows
+  // their Today: the focus card is on and a list is shared, and the server
+  // refuses the drawing otherwise. It is fetched once per day and theme, kept
+  // in memory only (never in storage), and dropped the moment the link stops
+  // working. A failed fetch, a 404 included, costs the page its drawing and
+  // nothing else: only the data route says whether the link is gone.
+  const theme = useThemeName()
+  const drawDay = fieldNotes && phase === 'ready' && view?.focus && view.lists.length > 0 ? view.day : null
+  const [drawing, setDrawing] = useState<DrawingPayload | null>(null)
+  useEffect(() => {
+    setDrawing(null)
+    if (!drawDay) return
+    let live = true
+    const ctl = new AbortController()
+    api.publicShareDrawing(token, theme, ctl.signal)
+      .then((raw) => {
+        const d = sanitizeDrawing(raw)
+        if (live && d && d.view === 'today' && d.day === drawDay && d.theme === theme) setDrawing(d)
+      })
+      .catch(() => { /* no drawing: the text beside it says everything it would */ })
+    return () => { live = false; ctl.abort() }
+  }, [token, drawDay, theme])
+  // What the drawing reacts to, from what the page shows (share.ts).
+  const dayState = useMemo(() => (view ? shareDayState(view, now, skewMs) : EMPTY_DAY), [view, now, skewMs])
+
   if (phase === 'loading') {
     // Not `null`: a blank white document for the whole round trip looks broken
     // to a stranger who was sent a link. The card is empty on purpose, because
@@ -314,6 +341,59 @@ export function SharePage({ token }: { token: string }) {
   const stale = isStale(fetchedAt, view, now)
   const canWake = typeof navigator !== 'undefined' && 'wakeLock' in navigator
 
+  const weekday = parseDate(view.day).toLocaleDateString(locale, { weekday: 'long' })
+  const monthDay = parseDate(view.day).toLocaleDateString(locale, { month: 'short', day: 'numeric' })
+  const live = stale
+    ? <span className="share-stale">{tr('share.stale')}</span>
+    : <span className="share-live"><span className="share-live__dot" aria-hidden="true" />{tr('share.live')}</span>
+  const foot = (!fieldNotes || canWake) && (
+    <footer className="share-foot">
+      {!fieldNotes && <span>{tr('share.footer')}</span>}
+      {canWake && (
+        <button className="btn ghost" aria-pressed={awake} onClick={() => setAwake((a) => !a)}>
+          {awake ? tr('share.keepAwakeOn') : tr('share.keepAwake')}
+        </button>
+      )}
+    </footer>
+  )
+
+  if (fieldNotes) {
+    // Field notes: the owner's day on the left (their drawing over the date,
+    // then the focus card) and what they are doing on the right, from 1024px
+    // wide. Below that it is one column, with the drawing beside the date as
+    // on Today.
+    return (
+      <div className="share-wrap share-wrap--board">
+        <main className="share share--board">
+          <div className="share-side">
+            <header className={`share-head${drawing ? ' share-head--drawn' : ''}`}>
+              <div className="share-head__text">
+                <h1 className="share-head__title">{tr('share.heading')}</h1>
+                <div className="share-head__day">
+                  <span className="share-head__weekday">{weekday}</span>{' '}
+                  <span className="share-head__date">{monthDay}</span>
+                </div>
+                <div className="share-head__meta">
+                  {live}
+                  <span className="share-sep" aria-hidden="true">·</span>
+                  <span className="share-readonly">{tr('share.readOnly')}</span>
+                </div>
+              </div>
+              {drawing && <DayDrawing drawing={drawing} state={dayState} className="share-drawing" />}
+            </header>
+            <ShareBody view={view} nowMs={now} skewMs={skewMs} tr={tr} locale={locale}
+              justDone={justDone} slot="focus" />
+          </div>
+          <div className="share-main">
+            <ShareBody view={view} nowMs={now} skewMs={skewMs} tr={tr} locale={locale}
+              justDone={justDone} slot="rest" />
+            {foot}
+          </div>
+        </main>
+      </div>
+    )
+  }
+
   return (
     <div className="share-wrap">
       <main className="share">
@@ -324,23 +404,12 @@ export function SharePage({ token }: { token: string }) {
               { weekday: 'long', month: 'long', day: 'numeric' })}
           </div>
           <div className="share-head__meta">
-            {stale
-              ? <span className="share-stale">{tr('share.stale')}</span>
-              : <span className="share-live"><span className="share-live__dot" aria-hidden="true" />{tr('share.live')}</span>}
+            {live}
             <span className="share-readonly">{tr('share.readOnly')}</span>
           </div>
         </header>
         <ShareBody view={view} nowMs={now} skewMs={skewMs} tr={tr} locale={locale} justDone={justDone} />
-        {(!fieldNotes || canWake) && (
-          <footer className="share-foot">
-            {!fieldNotes && <span>{tr('share.footer')}</span>}
-            {canWake && (
-              <button className="btn ghost" aria-pressed={awake} onClick={() => setAwake((a) => !a)}>
-                {awake ? tr('share.keepAwakeOn') : tr('share.keepAwake')}
-              </button>
-            )}
-          </footer>
-        )}
+        {foot}
       </main>
     </div>
   )
@@ -386,15 +455,28 @@ function dueLabel(tr: Translate, locale: string, today: string, due: string, all
 /** What the page draws for a share. Presentational, so the owner's preview in
  *  Settings shows exactly what the other person sees. Every time that is
  *  compared with "now" is read on the SERVER's clock (`nowMs + skewMs`): a
- *  device an hour off would otherwise mark the wrong event as under way. */
-export function ShareBody({ view, nowMs, skewMs, tr, locale, justDone }: {
+ *  device an hour off would otherwise mark the wrong event as under way.
+ *
+ *  `slot` picks the part: everything in one column (the default, and the
+ *  Settings preview's), only the focus card, or everything after it. The
+ *  share page's board lays the last two out side by side. */
+export function ShareBody({ view, nowMs, skewMs, tr, locale, justDone, slot = 'all' }: {
   view: ShareView
   nowMs: number
   skewMs: number
   tr: Translate
   locale: string
   justDone: ReadonlySet<string>
+  slot?: 'all' | 'focus' | 'rest'
 }) {
+  const fieldNotes = useFieldNotes()
+  // Under Field notes Today is a section of its own after the card; under a
+  // preset it stays inside the card, as it always was.
+  const focus = slot !== 'rest' && view.focus ? (
+    <Presence view={view} focus={view.focus} nowMs={nowMs} skewMs={skewMs}
+      tr={tr} locale={locale} justDone={justDone} withToday={!fieldNotes} />
+  ) : null
+  if (slot === 'focus') return focus
   if (!view.focus && view.lists.length === 0 && view.calendars.length === 0) {
     return (
       <section className="share-card">
@@ -404,8 +486,9 @@ export function ShareBody({ view, nowMs, skewMs, tr, locale, justDone }: {
   }
   return (
     <>
-      {view.focus && (
-        <Presence view={view} focus={view.focus} nowMs={nowMs} skewMs={skewMs}
+      {focus}
+      {fieldNotes && view.focus && view.lists.length > 0 && (
+        <TodayBlock section focus={view.focus} nowMs={nowMs} skewMs={skewMs}
           tr={tr} locale={locale} justDone={justDone} />
       )}
       {view.calendars.length > 0 && (
@@ -419,7 +502,7 @@ export function ShareBody({ view, nowMs, skewMs, tr, locale, justDone }: {
   )
 }
 
-function Presence({ view, focus, nowMs, skewMs, tr, locale, justDone }: {
+function Presence({ view, focus, nowMs, skewMs, tr, locale, justDone, withToday }: {
   view: ShareView
   focus: ShareFocus
   nowMs: number
@@ -427,12 +510,12 @@ function Presence({ view, focus, nowMs, skewMs, tr, locale, justDone }: {
   tr: Translate
   locale: string
   justDone: ReadonlySet<string>
+  withToday: boolean
 }) {
   const fieldNotes = useFieldNotes()
   const state = localState(focus, nowMs, skewMs)
   const left = remainingS(focus, nowMs, skewMs)
   const showClock = (state === 'focusing' || state === 'break' || state === 'paused') && left !== null
-  const today = ymd(new Date(nowMs + skewMs))
   const { rows, now: nowKey, next } = focus.today
   const byKey = new Map(rows.map((r) => [r.key, r]))
   const rowOf = (key: string | null): ShareRow | undefined => (key ? byKey.get(key) : undefined)
@@ -456,7 +539,6 @@ function Presence({ view, focus, nowMs, skewMs, tr, locale, justDone }: {
   }
 
   const ongoing = state === 'idle' ? ongoingEvent(view.events, nowMs + skewMs) : null
-  const done = rows.filter((r) => r.done).length
   const nowName = nowRow ? rowName(nowRow) : ''
   const thenName = state !== 'idle' && nextRows[0] ? rowName(nextRows[0]) : ''
   // "Then" follows a "Working on" or an "Up next" line. With no row above it to
@@ -471,9 +553,13 @@ function Presence({ view, focus, nowMs, skewMs, tr, locale, justDone }: {
         <>
           <div className="share-presence__clock" aria-live="off">{fmtCountdown(left)}</div>
           <span className="share-sr">{tr('share.left', { count: Math.ceil(left / 60) })}</span>
-          <div className="share-presence__bar" aria-hidden="true">
-            <span style={{ width: `${Math.round(progress(focus, nowMs, skewMs) * 100)}%` }} />
-          </div>
+          {fieldNotes
+            ? <ShareLine through={progress(focus, nowMs, skewMs)} />
+            : (
+              <div className="share-presence__bar" aria-hidden="true">
+                <span style={{ width: `${Math.round(progress(focus, nowMs, skewMs) * 100)}%` }} />
+              </div>
+            )}
         </>
       )}
       {nowRow && (
@@ -481,7 +567,9 @@ function Presence({ view, focus, nowMs, skewMs, tr, locale, justDone }: {
           <div className="share-now__label">
             {state === 'focusing' || state === 'paused' ? tr('share.workingOn') : tr('share.upNext')}
           </div>
-          <h2 className="share-now__title" dir={textDir(nowName)}>{nowName}</h2>
+          <h2 className="share-now__title" dir={textDir(nowName)}>
+            {fieldNotes ? <span className="share-now__ink">{nowName}</span> : nowName}
+          </h2>
         </div>
       )}
       {thenName && (
@@ -499,52 +587,97 @@ function Presence({ view, focus, nowMs, skewMs, tr, locale, justDone }: {
       ) : nextRows.length > 0 && (
         <p className="share-then">
           <span className="share-then__label">{tr('share.upNext')}</span>
-          {nextRows.map((r) => (
+          {nextRows.map((r, i) => fieldNotes ? (
+            <Fragment key={r.key}>
+              {i > 0 ? ' · ' : ' '}
+              <span className="share-then__text" dir={textDir(rowName(r))}>{rowName(r)}</span>
+            </Fragment>
+          ) : (
             <span key={r.key} className="share-then__text" dir={textDir(rowName(r))}>{' '}{rowName(r)}</span>
           ))}
         </p>
       ))}
-      {view.lists.length > 0 && (
-        <div className="share-today">
-          <div className="share-today__head">
-            <span className="share-label">{tr('share.today')}</span>
-            {rows.length > 0 && (
-              <span className="share-today__count">
-                {tr('share.todayCount', { done, total: rows.length })}
-              </span>
-            )}
-          </div>
-          {rows.length === 0 && <p className="share-muted">{tr('share.todayEmpty')}</p>}
-          {rows.length > 0 && done === rows.length && <p className="share-muted">{tr('share.allDone')}</p>}
-          {rows.length > 0 && (
-            <ul className="share-rows">
-              {rows.map((r) => {
-                const name = rowName(r)
-                return (
-                  <li key={r.key}
-                    className={`share-row${r.done ? ' is-done' : ''}${r.key === nowKey && state !== 'idle' ? ' is-now' : ''}${justDone.has(r.key) ? ' just-done' : ''}`}>
-                    <span className="share-row__mark" aria-hidden="true">
-                      {fieldNotes && <CheckInk seed={r.key} />}
-                    </span>
-                    <span className="share-row__text" dir={textDir(name)}>
-                      {fieldNotes
-                        ? <span className="share-row__name">{name}<StrikeInk on={r.done} seed={r.key} /></span>
-                        : name}
-                      {r.done && <span className="share-sr"> {tr('share.done')}</span>}
-                    </span>
-                    {r.due && (
-                      <span className="share-row__due">
-                        {whenLabel(tr, locale, today, r.due, r.all_day)}
-                      </span>
-                    )}
-                  </li>
-                )
-              })}
-            </ul>
-          )}
-        </div>
+      {withToday && view.lists.length > 0 && (
+        <TodayBlock section={false} focus={focus} nowMs={nowMs} skewMs={skewMs}
+          tr={tr} locale={locale} justDone={justDone} />
       )}
     </section>
+  )
+}
+
+/** Today's shared rows under their head. Inside the focus card under a
+ *  preset; under Field notes a section of its own after it, laid on the paper
+ *  as Today's own list is. */
+function TodayBlock({ section, focus, nowMs, skewMs, tr, locale, justDone }: {
+  section: boolean
+  focus: ShareFocus
+  nowMs: number
+  skewMs: number
+  tr: Translate
+  locale: string
+  justDone: ReadonlySet<string>
+}) {
+  const fieldNotes = useFieldNotes()
+  const state = localState(focus, nowMs, skewMs)
+  const today = ymd(new Date(nowMs + skewMs))
+  const { rows, now: nowKey } = focus.today
+  const done = rows.filter((r) => r.done).length
+  const body = (
+    <>
+      <div className="share-today__head">
+        <span className="share-label">{tr('share.today')}</span>
+        {rows.length > 0 && (
+          <span className="share-today__count">
+            {tr('share.todayCount', { done, total: rows.length })}
+          </span>
+        )}
+      </div>
+      {rows.length === 0 && <p className="share-muted">{tr('share.todayEmpty')}</p>}
+      {rows.length > 0 && done === rows.length && <p className="share-muted">{tr('share.allDone')}</p>}
+      {rows.length > 0 && (
+        <ul className="share-rows">
+          {rows.map((r) => {
+            const name = itemTitle(tr, r.title, r.private)
+            return (
+              <li key={r.key}
+                className={`share-row${r.done ? ' is-done' : ''}${r.key === nowKey && state !== 'idle' ? ' is-now' : ''}${justDone.has(r.key) ? ' just-done' : ''}`}>
+                <span className="share-row__mark" aria-hidden="true">
+                  {fieldNotes && <CheckInk seed={r.key} />}
+                </span>
+                <span className="share-row__text" dir={textDir(name)}>
+                  {fieldNotes
+                    ? <span className="share-row__name">{name}<StrikeInk on={r.done} seed={r.key} /></span>
+                    : name}
+                  {r.done && <span className="share-sr"> {tr('share.done')}</span>}
+                </span>
+                {r.due && (
+                  <span className="share-row__due">
+                    {whenLabel(tr, locale, today, r.due, r.all_day)}
+                  </span>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </>
+  )
+  return section
+    ? <section className="share-today share-section">{body}</section>
+    : <div className="share-today">{body}</div>
+}
+
+/** The interval, drawn (Field notes): a pen line in the rule's colour, with
+ *  the coral ink run along it as far as the interval has gone (`through`,
+ *  0..1). The dash is the path's whole length (pathLength 1), so the offset is
+ *  what is left. */
+const LINE = 'M2 5.2C60 4.1 118 6 176 4.9C234 3.9 270 5.6 318 4.8'
+function ShareLine({ through }: { through: number }) {
+  return (
+    <svg className="share-line" viewBox="0 0 320 10" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+      <path className="share-line__rule" d={LINE} />
+      <path className="share-line__ink" pathLength={1} d={LINE} strokeDashoffset={+(1 - through).toFixed(3)} />
+    </svg>
   )
 }
 
@@ -555,6 +688,7 @@ function Agenda({ view, nowMs, skewMs, tr, locale }: {
   tr: Translate
   locale: string
 }) {
+  const fieldNotes = useFieldNotes()
   const serverNow = nowMs + skewMs
   // The VIEWER's local today, on the server's clock. The server sends a window a
   // day wider on each side, so whichever side of the date line this is, every
@@ -568,7 +702,7 @@ function Agenda({ view, nowMs, skewMs, tr, locale }: {
   // that, only days that have something, whatever the horizon.
   const shown = days.filter((d, i) => i < 2 || (buckets.get(d)?.length ?? 0) > 0)
   return (
-    <section className="share-card share-agenda">
+    <section className={fieldNotes ? 'share-agenda share-section' : 'share-card share-agenda'}>
       <div className="share-label">{tr('share.comingUp')}</div>
       {!hasAny ? (
         <p className="share-muted">{tr('share.eventsEmpty')}</p>
@@ -623,19 +757,19 @@ function TaskList({ list, single, nowMs, skewMs, tr, locale }: {
   tr: Translate
   locale: string
 }) {
+  const fieldNotes = useFieldNotes()
   const serverNow = nowMs + skewMs
   const today = ymd(new Date(serverNow))
   const name = list.name || tr('share.untitledList')
-  const overdue = (t: ShareTask) => !!t.due && (t.all_day
-    ? ymd(parseDate(t.due)) < today
-    : parseDate(t.due).getTime() < serverNow)
   return (
-    <details className="share-card share-list" open={single && list.tasks.length <= 8 && list.more === 0}>
+    <details className={fieldNotes ? 'share-list share-section' : 'share-card share-list'}
+      open={single && list.tasks.length <= 8 && list.more === 0}>
       <summary className="share-list__sum">
         <span className="share-list__dot" aria-hidden="true"
           style={list.color ? { background: list.color } : undefined} />
         <span className="share-list__name" dir={textDir(name)}>{name}</span>
         <span className="share-list__count">{list.tasks.length + list.more}</span>
+        {fieldNotes && <IconInk icon="right" className="share-list__chev" />}
       </summary>
       {list.tasks.length > 0 && (
         <ul className="share-tasks">
@@ -645,7 +779,7 @@ function TaskList({ list, single, nowMs, skewMs, tr, locale }: {
               <li key={i} className="share-task" data-depth={t.depth}>
                 <span className="share-task__text" dir={textDir(title)}>{title}</span>
                 {t.due && (
-                  <span className={`share-task__due${overdue(t) ? ' is-late' : ''}`}>
+                  <span className={`share-task__due${isOverdue(t, today, serverNow) ? ' is-late' : ''}`}>
                     {dueLabel(tr, locale, today, t.due, t.all_day)}
                   </span>
                 )}

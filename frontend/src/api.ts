@@ -1741,6 +1741,13 @@ export const api = {
    *  an unchanged page costs a 304 and no body. */
   publicShareView: (token: string, etag: string | null, signal?: AbortSignal) =>
     jPublicIfChanged<ShareView>(`/api/public/share/${encodeURIComponent(token)}`, etag, signal),
+  /** The owner's drawing of the day for a share (drawing.ts validates it), in
+   *  the viewer's theme. The same posture as `publicShareView`: no cookie, no
+   *  referrer, no HTTP cache. A 404 here says nothing about the link. */
+  publicShareDrawing: (token: string, theme: 'light' | 'dark', signal?: AbortSignal) =>
+    jPublicIfChanged<unknown>(
+      `/api/public/share/${encodeURIComponent(token)}/drawing?theme=${theme}`, null, signal)
+      .then((r) => (r.status === 'fresh' ? r.body : null)),
 
   // settings (account-synced UI preferences)
   getSettings: () => j<Settings>('GET', '/api/settings'),
