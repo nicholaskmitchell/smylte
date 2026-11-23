@@ -123,3 +123,130 @@ describe('date and time fields', () => {
     expect(plain.sort()).toEqual(['components/ShutdownRitual.tsx', 'components/TodayView.tsx'])
   })
 })
+
+// A control whose only visible text is one symbol (✕, +, ›, ↺, ◉ …) shows that
+// symbol at no size under Field notes, or as the old sliver, unless it draws
+// the pen's icon or the check. So this holds every <button> in the components
+// whose text is one character that is not a letter or a digit, written as a
+// literal or a ternary of literals: it carries an <IconInk> or a <CheckInk>.
+// The text is the button's own, or, where it has none, its elements' (the
+// carets' glyph sits in a span); an expression that is not a literal is a
+// word, and one that renders an element (a badge) shows nothing of its own.
+describe('glyph controls', () => {
+  /** Buttons that show a symbol as text because the symbol is their value,
+   *  not a control's glyph. Each says why. */
+  const VALUES: { file: string; className: string; why: string }[] = [
+    // "No colour": the ✕ is the colour row's value for none, beside the
+    // swatches that show theirs; it is not the glyph of an action.
+    { file: 'components/Sidebar.tsx', className: 'color-dot none', why: 'the colour row\'s value for no colour' },
+  ]
+
+  /** Index just past the `>` closing the tag that opens at `i`. Braces and the
+   *  strings in them are skipped, so an arrow's `=>` does not close it. */
+  const tagEnd = (s: string, i: number) => {
+    let depth = 0
+    let q: string | null = null
+    for (; i < s.length; i++) {
+      const ch = s[i]
+      if (q) { if (ch === q && s[i - 1] !== '\\') q = null; continue }
+      if (ch === '"' || (depth > 0 && (ch === "'" || ch === '`'))) { q = ch; continue }
+      if (ch === '{') depth++
+      else if (ch === '}') depth--
+      else if (ch === '>' && depth === 0) return i + 1
+    }
+    throw new Error(`unclosed tag: ${s.slice(i, i + 60)}`)
+  }
+  /** Index just past the `}` matching the `{` at `i`. */
+  const braceEnd = (s: string, i: number) => {
+    let depth = 0
+    let q: string | null = null
+    for (; i < s.length; i++) {
+      const ch = s[i]
+      if (q) { if (ch === q && s[i - 1] !== '\\') q = null; continue }
+      if (ch === "'" || ch === '"' || ch === '`') { q = ch; continue }
+      if (ch === '{') depth++
+      else if (ch === '}' && --depth === 0) return i + 1
+    }
+    throw new Error(`unclosed brace: ${s.slice(i, i + 60)}`)
+  }
+  const WORD = '\u0000word'
+  /** What an expression child shows: its literals when it is a literal or a
+   *  ternary of literals, a word when it is anything else, and nothing when
+   *  it renders an element or is a comment. */
+  const shows = (expr: string): string[] => {
+    const e = expr.trim()
+    if (!e || /^\/\*[\s\S]*\*\/$/.test(e) || /</.test(e)) return []
+    const alts = /^[^?]+\?([\s\S]+):([\s\S]+)$/.exec(e)
+    const out: string[] = []
+    for (const p of alts ? [alts[1], alts[2]] : [e]) {
+      const lit = /^(?:'([^']*)'|"([^"]*)"|`([^`$]*)`)$/.exec(p.trim())
+      if (!lit) return [WORD]
+      out.push(lit[1] ?? lit[2] ?? lit[3])
+    }
+    return out
+  }
+  /** The visible text of a button's children: its own, or its elements'. */
+  const text = (inner: string): string[] => {
+    const own: string[] = []
+    const nested: string[] = []
+    let depth = 0
+    let run = ''
+    const flush = () => { if (run.trim()) (depth ? nested : own).push(...run.trim().split(/\s+/)); run = '' }
+    for (let i = 0; i < inner.length;) {
+      if (inner[i] === '<') {
+        flush()
+        const e = tagEnd(inner, i)
+        const tag = inner.slice(i, e)
+        if (tag.startsWith('</')) depth--
+        else if (!tag.endsWith('/>')) depth++
+        i = e
+      } else if (inner[i] === '{') {
+        flush()
+        const e = braceEnd(inner, i);
+        (depth ? nested : own).push(...shows(inner.slice(i + 1, e - 1)))
+        i = e
+      } else run += inner[i++]
+    }
+    flush()
+    return own.length ? own : nested
+  }
+  const SYMBOL = /^[^\p{L}\p{N}\s]$/u
+  // Comments blanked, keeping the lines: one names a `<button>` in backticks.
+  const blank = (c: string) => c.replace(/[^\n]/g, ' ')
+  const found = files.filter((f) => f.startsWith('components/')).flatMap((f) => {
+    const src = readFileSync(resolve(SRC, f), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, blank).replace(/^\s*\/\/.*$/gm, blank)
+    return [...src.matchAll(/<button\b/g)].flatMap((m) => {
+      const end = tagEnd(src, m.index)
+      if (src[end - 2] === '/') return []
+      const inner = src.slice(end, src.indexOf('</button>', end))
+      const shown = text(inner)
+      if (!shown.length || !shown.every((t) => SYMBOL.test(t))) return []
+      const open = src.slice(m.index, end)
+      const className = /className=(?:"([^"]*)"|\{`([^`]*)`\})/.exec(open)
+      return [{
+        f, line: src.slice(0, m.index).split('\n').length, shown,
+        className: (className?.[1] ?? className?.[2] ?? '').replace(/\$\{[^}]*\}/g, '').trim(),
+        drawn: /<IconInk\b|<CheckInk\b/.test(inner),
+      }]
+    })
+  })
+
+  it('finds them', () => {
+    // 55 when this was written, the colour row's ✕ among them.
+    expect(found.length).toBeGreaterThanOrEqual(55)
+  })
+
+  it('each draw the pen\'s icon or the check, or show a value', () => {
+    const value = (b: (typeof found)[number]) => VALUES.some((v) => v.file === b.f && v.className === b.className)
+    const bare = found.filter((b) => !b.drawn && !value(b))
+      .map((b) => `${b.f}:${b.line} .${b.className.split(/\s+/).join('.')} ${b.shown.join('/')}`)
+    expect(bare, 'these show their glyph at no size under Field notes').toEqual([])
+  })
+
+  it('the allowlist names only buttons that are there and show a symbol', () => {
+    for (const v of VALUES) {
+      expect(found.filter((b) => b.f === v.file && b.className === v.className && !b.drawn), v.why).toHaveLength(1)
+    }
+  })
+})

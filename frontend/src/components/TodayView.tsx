@@ -3398,7 +3398,7 @@ export function TodayView({
                     <button type="button" className="today-plus"
                       aria-label={tr('today.addToToday',
                         { task: t.summary || tr('common.untitled') })}
-                      onClick={() => void addTask(day, t)}>+</button>
+                      onClick={() => void addTask(day, t)}>+<IconInk icon="plus" /></button>
                   )}
                   {/* The same column the day's rows keep, in its task face:
                       a suggestion is a task, and one left edge has to run down
@@ -4244,7 +4244,7 @@ function TodayRow({
         {!readOnly && (
           <button type="button" className="today-drop"
             aria-label={tr('today.removeFromToday', { entry: title || tr('today.entry') })}
-            onClick={() => void onDrop(entry)}>✕</button>
+            onClick={() => void onDrop(entry)}>✕<IconInk icon="close" /></button>
         )}
       </span>
     </li>

@@ -759,6 +759,96 @@
 /* These heads align on the baseline, and a button with no text has none. */
 [data-surface="app"] :is(.modal-head, .set-head, .day-pop-head) > .icon-btn:has(> .icon-ink) { align-self: center; }
 
+/* ---- the row controls' icons ---------------------------------------------------
+   The controls that still showed a bare glyph draw the pen's icon too, the
+   glyph kept at no size as above: a token's reset, a group head's caret,
+   rename, delete and cancel, a list's edit, a module's remove, Today's and the
+   plan's add and remove, a task's fold, the Focus float's pin, and the phone
+   bar's switches and add. A group head's show-all is on or off, so it is the
+   drawn check (below). Sized by the row, not the button, since many of these
+   are only as big as their glyph: 24px in the phone bar, 18px in a phone's
+   rows and the float, 16px in a desktop's dense rows, 14px in a task's fold.
+   A button keeps its box, or grows to its icon where the icon is bigger, and
+   no row moves: a caret narrower than its icon gives the row its old width
+   back with a negative margin, so the group's name stays where it was. */
+[data-surface="app"] :is(.appear-clear, .group-caret > .caret, .group-btn, .side-edit, .dash-remove, .today-plus, .today-drop, .twisty, .focus-pin, .side-mobile-completed, .side-mobile-add):has(> .icon-ink) {
+  display: inline-flex; align-items: center; justify-content: center; font-size: 0;
+}
+[data-surface="app"] .group-eye:has(> .check-ink) {
+  display: inline-flex; align-items: center; justify-content: center; font-size: 0; padding: 0;
+  /* Off is the empty box, not a dimmed glyph. */
+  opacity: 1;
+}
+/* 16px in a desktop's dense rows. An icon under 18px keeps the 18px icon's
+   line, 1.35px on screen: the pen times 18/16 in the icon's own units. */
+[data-surface="app"] :is(.appear-clear, .group-caret > .caret, .group-btn, .side-edit, .dash-remove, .today-plus, .today-drop) > .icon-ink {
+  width: 16px; height: 16px; stroke-width: calc(var(--stroke-pen) * 18 / 16);
+}
+[data-surface="app"] .side-edit > .icon-ink[data-icon="more"] { stroke-width: calc(var(--stroke-tick) * 18 / 16); }
+[data-surface="app"] .group-eye > .check-ink { position: static; translate: none; width: 16px; height: 16px; }
+[data-surface="app"] .group-eye > .check-ink .check-frame { stroke-width: calc(var(--stroke-pen) * 18 / 16); }
+[data-surface="app"] .group-eye > .check-ink .check-tick { stroke-width: calc(var(--stroke-tick) * 18 / 16); }
+/* The boxes: each the size it had (5x12 caret, 16x12 rename, 17x13 edit,
+   27.5x24 reset, 18x16 remove, 15x17 and 19x17 on Today), grown to 16px. */
+[data-surface="app"] .group-caret:has(> .caret > .icon-ink) { padding: 0; margin-inline: -5.5px; }
+[data-surface="app"] .cal-tasks .group-caret:has(> .caret > .icon-ink) { margin-inline: -7px; }
+[data-surface="app"] .group-btn:has(> .icon-ink) { padding: 0; }
+[data-surface="app"] .side-edit:has(> .icon-ink) { padding: 0 0.5px; }
+[data-surface="app"] .dash-remove:has(> .icon-ink) { padding: 0 1px; }
+[data-surface="app"] .today-plus:has(> .icon-ink) { padding: 0.5px 0; }
+[data-surface="app"] .today-drop:has(> .icon-ink) { padding: 0.5px 1.5px; }
+/* A token's reset is a secondary control: a face with no edge at rest, its
+   edge under the pointer, --fg on the face. Disabled keeps app.css's fade. */
+[data-surface="app"] .appear-clear:has(> .icon-ink) {
+  padding: 3px 4.75px; background-color: var(--ctl-face); border-color: transparent; color: var(--fg);
+}
+@media (hover: hover) {
+  [data-surface="app"] .appear-clear:has(> .icon-ink):hover:not(:disabled) { background-color: var(--ctl-face); border-color: var(--edge-control); color: var(--fg); }
+}
+[data-surface="app"] .appear-clear:has(> .icon-ink):active:not(:disabled) { background-color: var(--ctl-face); border-color: var(--edge-control); color: var(--fg); }
+/* 14px in a task's fold, which keeps its 14px column and its 17px line, and
+   turns with it (app.css, `.twisty.open`). */
+[data-surface="app"] .twisty > .icon-ink { width: 14px; height: 14px; stroke-width: calc(var(--stroke-pen) * 18 / 14); }
+[data-surface="app"] .twisty:has(> .icon-ink) { padding: 0; }
+/* 18px on the Focus float, as tall as Dock beside it. Pressed, the pin wears
+   the highlighter. */
+[data-surface="app"] .focus-pin > .icon-ink { width: 18px; height: 18px; }
+[data-surface="app"] .focus-head > .btn.focus-pin:has(> .icon-ink) { padding: 0 5px; align-self: stretch; }
+[data-surface="app"] .btn.ghost.focus-pin[aria-pressed="true"]:not(:disabled) { background-color: var(--ctl-on); color: var(--fg); }
+@media (max-width: 720px) {
+  /* 18px in a phone's rows: the drawer's group heads and lists, and Today's
+     and the plan's add and remove, each in the box it had. */
+  [data-surface="app"] :is(.side.drawer :is(.group-caret > .caret, .group-btn, .side-edit), .today-plus, .today-drop) > .icon-ink {
+    width: 18px; height: 18px; stroke-width: var(--stroke-pen);
+  }
+  [data-surface="app"] .side.drawer .side-edit > .icon-ink[data-icon="more"] { stroke-width: var(--stroke-tick); }
+  [data-surface="app"] .side.drawer .group-eye > .check-ink { width: 18px; height: 18px; }
+  [data-surface="app"] .side.drawer .group-eye > .check-ink .check-frame { stroke-width: var(--stroke-pen); }
+  [data-surface="app"] .side.drawer .group-eye > .check-ink .check-tick { stroke-width: var(--stroke-tick); }
+  [data-surface="app"] .side.drawer .group-caret:has(> .caret > .icon-ink) { padding: 1px 0; margin-inline: -4.5px; }
+  [data-surface="app"] .side.drawer .cal-tasks .group-caret:has(> .caret > .icon-ink) { margin-inline: -6px; }
+  [data-surface="app"] .side.drawer :is(.group-btn:has(> .icon-ink), .group-eye:has(> .check-ink)) { padding: 4.5px; }
+  [data-surface="app"] .side.drawer .side-edit:has(> .icon-ink) { padding: 5.5px 7.5px; }
+  [data-surface="app"] .today-plus:has(> .icon-ink) { padding: 5.5px 4.5px; }
+  [data-surface="app"] .today-drop:has(> .icon-ink) { padding: 5.5px 6.5px; }
+  /* 24px in the phone bar, the switches a little narrower than their 16px
+     sides gave the wider glyphs. Pressed, a switch wears the highlighter. The
+     suggested count is its own size: the glyph's 0 must not reach it. */
+  [data-surface="app"] :is(.side-mobile-completed, .side-mobile-add):has(> .icon-ink) { padding: 0 12px; }
+  [data-surface="app"] .side-mobile-completed[aria-pressed="true"] { background: var(--ctl-on); color: var(--fg); }
+  [data-surface="app"] .side-mobile-completed > .side-badge { font-size: calc(11px * var(--fs-scale)); }
+}
+/* A group head's show-all (the sidebar's and the Calendar's Tasks) is on or
+   off: the drawn check at its row's size, ticked while aria-pressed is true,
+   as a settings toggle's is (below). */
+[data-surface="app"] .group-eye[aria-pressed="true"] > .check-ink .check-tick { stroke-dashoffset: 0; opacity: 1; }
+[data-surface="app"] .group-eye:not([aria-pressed="true"]) > .check-ink .check-tick {
+  opacity: 0; transition: stroke-dashoffset var(--dur-ink) var(--ease-ink), opacity var(--dur-ink) step-end;
+}
+@media (hover: hover) {
+  [data-surface="app"] .group-eye:not(:disabled):hover > .check-ink .check-frame { stroke: var(--accent); }
+}
+
 /* ---- on and off: the drawn check ----------------------------------------------
    A setting that is on or off is a drawn checkbox beside its word. The toggle
    keeps its <button aria-pressed> and its word; CheckInk draws the box, and

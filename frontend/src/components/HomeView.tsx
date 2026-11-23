@@ -22,7 +22,7 @@ import { DayPopover } from './DayPopover'
 import type { SettingsSection } from './SettingsMenu'
 import { WasDue } from './WasDue'
 import { entryTitle, orderEntries, rowDone, STALE_OVERDUE_DAYS } from './TodayView'
-import { CheckInk, StrikeInk } from './Marks'
+import { CheckInk, IconInk, StrikeInk } from './Marks'
 import { readCachedDayPlan } from '../cache'
 import { useI18n, useT } from '../i18n'
 import { weekdayNames } from '../names'
@@ -433,7 +433,7 @@ export function HomeView({ rev, onExpire, layout, onLayoutChange,
                     aria-label={tr('home.removeModule',
                       { module: tr(MODULE_SPECS[m.kind].label) })}
                     onPointerDown={(e) => e.stopPropagation()}
-                    onClick={() => commit(removeModule(committed, m.id))}>✕</button>
+                    onClick={() => commit(removeModule(committed, m.id))}>✕<IconInk icon="close" /></button>
                 )}
               </header>
               <div className="dash-mod-body">{body(m)}</div>

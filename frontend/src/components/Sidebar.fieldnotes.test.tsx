@@ -103,6 +103,35 @@ describe('<Sidebar> under Field notes', () => {
     expect(titled()).toHaveLength(0)
   })
 
+  it('draws a group head\'s controls and a list\'s edit in the pen, and keeps their glyphs', async () => {
+    render(sidebar())
+    const drawn = (b: HTMLElement, icon: string, glyph: string) => {
+      expect(b.querySelector(`svg.icon-ink[data-icon="${icon}"][aria-hidden="true"]`), b.getAttribute('aria-label')!)
+        .not.toBeNull()
+      expect(b).toHaveTextContent(glyph)
+    }
+    const caret = screen.getAllByRole('button', { name: 'Collapse' })[0]
+    expect(caret.querySelector('.caret.open > svg.icon-ink[data-icon="right"]')).not.toBeNull()
+    expect(caret).toHaveTextContent('▸')
+    const eye = screen.getAllByRole('button', { name: 'Hide all in group' })[0]
+    expect(eye).toHaveAttribute('aria-pressed', 'true')
+    expect(eye.querySelector(':scope > svg.check-ink[aria-hidden="true"]')).not.toBeNull()
+    expect(eye).toHaveTextContent('◉')
+    drawn(screen.getByRole('button', { name: 'Rename group Focus' }), 'edit', '✎')
+    drawn(screen.getByRole('button', { name: 'Edit Work' }), 'more', '⋯')
+    await userEvent.click(screen.getByRole('button', { name: 'Delete group Focus' }))
+    drawn(screen.getByRole('button', { name: 'Cancel' }), 'close', '✕')
+    // The word that deletes stays a word.
+    expect(screen.getByRole('button', { name: /^delete\? — group Focus/ }).querySelector('svg')).toBeNull()
+  })
+
+  it('draws a group\'s delete in the pen', () => {
+    render(sidebar())
+    const del = screen.getByRole('button', { name: 'Delete group Focus' })
+    expect(del.querySelector('svg.icon-ink[data-icon="close"][aria-hidden="true"]')).not.toBeNull()
+    expect(del).toHaveTextContent('✕')
+  })
+
   it('renders an empty group as an empty drop zone, with no words', () => {
     render(sidebar())
     const zones = document.querySelectorAll('.group-empty')
@@ -113,6 +142,21 @@ describe('<Sidebar> under Field notes', () => {
 
   describe('on a phone', () => {
     beforeEach(() => act(() => setBreakpoint(true)))
+
+    it('draws the bar\'s switches and its add in the pen, and keeps their glyphs and the count', () => {
+      render(sidebar())
+      const drawn = (name: string, icon: string, glyph: string) => {
+        const b = screen.getByRole('button', { name })
+        expect(b.querySelector(`svg.icon-ink[data-icon="${icon}"][aria-hidden="true"]`), name).not.toBeNull()
+        expect(b).toHaveTextContent(glyph)
+        return b
+      }
+      drawn('View completed', 'check', '✓')
+      drawn('View parked', 'pause', '⏸')
+      const sug = drawn('Suggested from email', 'mail', '✉')
+      expect(sug.querySelector('.side-badge')).toHaveTextContent('2')
+      drawn('New list', 'plus', '+')
+    })
 
     it('has no title on the bar, and none in the drawer, and no hint', async () => {
       render(sidebar())

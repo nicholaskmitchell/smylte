@@ -7,7 +7,7 @@ import { cssColor } from '../util'
 import { useEscape, useFieldNotes, useIsMobile } from '../hooks'
 import { UnsentInput, useLayer, useUnsent, useUnsentCount } from '../layers'
 import { useT } from '../i18n'
-import { IconInk } from './Marks'
+import { CheckInk, IconInk } from './Marks'
 import { InkSelect } from './InkSelect'
 
 // Preset collection colors — muted, editorial, distinct from the accent.
@@ -414,7 +414,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
         <span className="count">{countOf(l)}</span>
         <button className="side-edit" title={fieldNotes ? undefined : tr('side.edit')}
           aria-label={tr('side.editItem', { name: l.name })}
-          onClick={(e) => { e.stopPropagation(); setEditing(l) }}>⋯</button>
+          onClick={(e) => { e.stopPropagation(); setEditing(l) }}>⋯<IconInk icon="more" /></button>
       </div>
     )
   }
@@ -579,7 +579,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
                 ? tr('side.backToTasksShort') : tr('side.viewCompletedShort')}
               aria-label={completedActive
                 ? tr('side.backToTasksShort') : tr('side.viewCompletedShort')}
-              aria-pressed={completedActive} onClick={onToggleCompleted}>✓</button>
+              aria-pressed={completedActive} onClick={onToggleCompleted}>✓<IconInk icon="check" /></button>
           )}
           {onToggleParked && (
             <button className={`side-mobile-completed ${parkedActive ? 'active' : ''}`}
@@ -587,7 +587,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
                 ? tr('side.backToTasksShort') : tr('side.viewParkedShort')}
               aria-label={parkedActive
                 ? tr('side.backToTasksShort') : tr('side.viewParkedShort')}
-              aria-pressed={parkedActive} onClick={onToggleParked}>⏸</button>
+              aria-pressed={parkedActive} onClick={onToggleParked}>⏸<IconInk icon="pause" /></button>
           )}
           {onToggleSuggested && (
             <button className={`side-mobile-completed ${suggestedActive ? 'active' : ''}`}
@@ -596,13 +596,13 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
               aria-label={suggestedActive
                 ? tr('side.backToTasksShort') : tr('side.viewSuggestedShort')}
               aria-pressed={suggestedActive} onClick={onToggleSuggested}>
-              ✉
+              ✉<IconInk icon="mail" />
               {!!suggestedCount && <span className="side-badge">{suggestedCount}</span>}
             </button>
           )}
           <button className="side-mobile-add" title={fieldNotes ? undefined : tr(words.new)}
             aria-label={tr(words.new)}
-            onClick={() => { setDrawerOpen(true); setAdding(true) }}>+</button>
+            onClick={() => { setDrawerOpen(true); setAdding(true) }}>+<IconInk icon="plus" /></button>
         </div>
 
         {drawerOpen && (
@@ -796,7 +796,7 @@ function GroupHeader({ group, count, collapsed, canToggle, anyVisible,
         title={fieldNotes ? undefined : collapsed ? tr('side.groupExpand') : tr('side.groupCollapse')}
         aria-label={collapsed ? tr('side.groupExpand') : tr('side.groupCollapse')}
         aria-expanded={!collapsed} onClick={onToggleCollapse}>
-        <span className={`caret ${collapsed ? '' : 'open'}`}>▸</span>
+        <span className={`caret ${collapsed ? '' : 'open'}`}>▸<IconInk icon="right" /></span>
       </button>
       <button className="group-name" onClick={onToggleCollapse}>{group.name}</button>
       <span className="count">{count}</span>
@@ -806,6 +806,7 @@ function GroupHeader({ group, count, collapsed, canToggle, anyVisible,
           aria-label={anyVisible ? tr('side.hideAllInGroup') : tr('side.showAllInGroup')}
           aria-pressed={anyVisible} onClick={onToggleVisible}>
           {anyVisible ? '◉' : '◌'}
+          <CheckInk seed="side-group-shown" />
         </button>
       )}
       {confirming ? (
@@ -824,16 +825,16 @@ function GroupHeader({ group, count, collapsed, canToggle, anyVisible,
             aria-label={tr('side.deleteGroupConfirmAria', { name: group.name })}
             onClick={onDelete}>{tr('side.deleteGroupConfirm')}</button>
           <button className="group-btn" title={fieldNotes ? undefined : tr('side.keepGroup')}
-            aria-label={tr('common.cancel')} onClick={() => setConfirming(false)}>✕</button>
+            aria-label={tr('common.cancel')} onClick={() => setConfirming(false)}>✕<IconInk icon="close" /></button>
         </span>
       ) : (
         <span className="group-actions">
           <button className="group-btn" title={fieldNotes ? undefined : tr('side.renameGroup')}
             aria-label={tr('side.renameGroupOf', { name: group.name })}
-            onClick={() => { setName(group.name); setRenaming(true) }}>✎</button>
+            onClick={() => { setName(group.name); setRenaming(true) }}>✎<IconInk icon="edit" /></button>
           <button className="group-btn" title={fieldNotes ? undefined : tr('side.deleteGroup')}
             aria-label={tr('side.deleteGroupOf', { name: group.name })}
-            onClick={() => setConfirming(true)}>✕</button>
+            onClick={() => setConfirming(true)}>✕<IconInk icon="close" /></button>
         </span>
       )}
     </div>

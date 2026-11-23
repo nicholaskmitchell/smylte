@@ -47,6 +47,7 @@ import { notifyPermission, requestNotify, showNotify } from '../notify'
 import { fmtClock, fmtCountdown, fmtDuration } from '../time'
 import { useTimeFormat } from '../timeformat'
 import { makeGuard, textDir } from '../util'
+import { IconInk } from './Marks'
 import { entryTitle } from './TodayView'
 
 export function FocusView({
@@ -593,6 +594,7 @@ export function FocusView({
                 aria-label={tr(pinned ? 'focus.unpin' : 'focus.pin')}
                 title={fieldNotes ? undefined : tr(pinned ? 'focus.unpin' : 'focus.pin')} onClick={togglePin}>
                 {pinned ? '●' : '○'}
+                <IconInk icon="pin" />
               </button>
             )}
             <button type="button" className="btn ghost focus-back" onClick={dock}>

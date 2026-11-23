@@ -1460,7 +1460,7 @@ function TaskRow({ task, depth = 0, dot, progress, collapsed, onCollapse,
           aria-label={collapsed
             ? tr('tasks.showSubtasks', { task: label })
             : tr('tasks.hideSubtasks', { task: label })}
-          onClick={() => onCollapse?.(!collapsed)}>›</button>
+          onClick={() => onCollapse?.(!collapsed)}>›<IconInk icon="right" /></button>
       )}
       <button className={`check ${task.completed ? 'on' : ''}`}
         title={fieldNotes ? undefined : tr('tasks.toggleComplete')}

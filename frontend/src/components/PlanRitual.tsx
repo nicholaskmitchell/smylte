@@ -329,7 +329,7 @@ function PickStep({ suggestions, colorOf, onAddTask }: {
               <li key={taskKey(t)} className="today-row today-sug">
                 <button type="button" className="today-plus"
                   aria-label={tr('plan.addToToday', { task: t.summary || tr('common.untitled') })}
-                  onClick={() => onAddTask(t)}>+</button>
+                  onClick={() => onAddTask(t)}>+<IconInk icon="plus" /></button>
                 <span className="today-kind-mark" data-kind="task" role="img"
                   aria-label={tr('common.task')}>
                   <span className="today-kind-box" style={colorOf(t.list)

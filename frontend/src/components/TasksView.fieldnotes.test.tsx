@@ -96,6 +96,15 @@ describe('<TasksView> under Field notes', () => {
     expect(pane(container).querySelectorAll('[title]')).toHaveLength(0)
   })
 
+  it('draws a task\'s fold in the pen, and keeps its glyph', async () => {
+    setup()
+    await screen.findByText('Book flight')
+    const fold = screen.getByRole('button', { name: 'Hide subtasks of Trip planning' })
+    expect(fold).toHaveClass('twisty', 'open')
+    expect(fold.querySelector('svg.icon-ink[data-icon="right"][aria-hidden="true"]')).not.toBeNull()
+    expect(fold).toHaveTextContent('›')
+  })
+
   it('has no tooltips in the day view', async () => {
     m.tasks.mockImplementation(async (id: string) => (id === 'l1'
       ? [task({ uid: 'd1', summary: 'Due today', due: today() })]

@@ -226,7 +226,7 @@ export function AddInk() {
 // hide the icon (app.css) and show the glyph, are all unchanged.
 export type Icon =
   | 'left' | 'right' | 'close' | 'plus' | 'up' | 'down' | 'foldLeft' | 'foldRight'
-  | 'check' | 'pause' | 'more' | 'caret' | 'date' | 'time'
+  | 'check' | 'pause' | 'more' | 'caret' | 'date' | 'time' | 'reset' | 'pin' | 'mail' | 'edit'
 
 const ICON: Record<Icon, string[]> = {
   left: ['M14.6 6.2C12.6 8.2 10.6 10.2 9 12.1C10.7 13.9 12.7 15.9 14.8 17.9'],
@@ -252,6 +252,27 @@ const ICON: Record<Icon, string[]> = {
   time: [
     'M12 4.6c4.1-.1 7.5 3.3 7.4 7.4.1 4.1-3.3 7.5-7.4 7.4-4.1.1-7.5-3.3-7.4-7.4-.1-4.1 3.3-7.5 7.4-7.4z',
     'M12 8.2c0 1.4 0 2.8.1 4.1 1 .6 2 1.2 3 1.7',
+  ],
+  // A turn back round, its head at the start: reset to the default.
+  reset: [
+    'M6.1 14.8C6.9 17.4 9.3 19.1 12.1 19C15.9 18.9 18.9 15.8 18.8 12C18.7 8.2 15.6 5.2 11.8 5.3C9.4 5.4 7.5 6.6 6.3 8.5',
+    'M5.6 4.9C5.8 6.2 6 7.4 6.2 8.7C7.5 8.5 8.7 8.3 10 8.1',
+  ],
+  // A drawing pin: keep the window on top.
+  pin: [
+    'M8.6 5C10.9 4.9 13.1 4.9 15.4 5',
+    'M9.9 5.2C10 7.3 9.4 9.1 7.6 10.8C10.5 11 13.5 11 16.4 10.8C14.6 9.1 14 7.3 14.1 5.2',
+    'M12 11C12.1 13.7 11.9 16.5 12 19.2',
+  ],
+  // An envelope: suggested from email.
+  mail: [
+    'M4.9 7.1C9.6 6.9 14.4 7 19.1 7.1C19.2 10.4 19.2 13.6 19.1 16.9C14.4 17.1 9.6 17 4.9 16.9C4.8 13.6 4.8 10.4 4.9 7.1Z',
+    'M5.3 7.6C7.5 9.4 9.7 11.2 12 12.9C14.3 11.2 16.5 9.4 18.7 7.6',
+  ],
+  // A pencil: rename.
+  edit: [
+    'M5.8 18.2C6.1 16.9 6.4 15.6 6.7 14.3C9.6 11.4 12.6 8.4 15.5 5.5C16.5 6.4 17.5 7.4 18.5 8.5C15.6 11.4 12.6 14.3 9.7 17.3C8.4 17.6 7.1 17.9 5.8 18.2Z',
+    'M13.6 7.4C14.6 8.4 15.6 9.4 16.6 10.4',
   ],
 }
 

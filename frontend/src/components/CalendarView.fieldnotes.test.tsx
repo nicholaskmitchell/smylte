@@ -125,6 +125,17 @@ describe('<CalendarView> under Field notes', () => {
     expect(screen.getAllByRole('button', { name: /Standup/ })[0]).toBeInTheDocument()
   })
 
+  it('draws the Tasks group\'s caret in the pen and its switch as the check', async () => {
+    render(withPrompt(<Harness />))
+    const caret = await screen.findByRole('button', { name: 'Hide task lists' })
+    expect(caret.querySelector('.caret > svg.icon-ink[data-icon="right"][aria-hidden="true"]')).not.toBeNull()
+    expect(caret).toHaveTextContent('›')
+    const eye = screen.getByRole('button', { name: 'Take task lists off the calendar' })
+    expect(eye).toHaveAttribute('aria-pressed', 'true')
+    expect(eye.querySelector(':scope > svg.check-ink[aria-hidden="true"]')).not.toBeNull()
+    expect(eye).toHaveTextContent('◉')
+  })
+
   it('keeps no "Doesn’t block slots" line under Free', async () => {
     m.events.mockResolvedValue([ev({ busy: false })])
     render(withPrompt(<Harness />))

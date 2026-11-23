@@ -82,7 +82,9 @@ describe('<HomeView> under Field notes', () => {
     await screen.findByText('Today')
     await userEvent.click(screen.getByRole('button', { name: 'Arrange' }))
 
-    expect(screen.getByRole('button', { name: /remove today/i })).toBeInTheDocument()
+    const remove = screen.getByRole('button', { name: /remove today/i })
+    expect(remove.querySelector('svg.icon-ink[data-icon="close"][aria-hidden="true"]')).not.toBeNull()
+    expect(remove).toHaveTextContent('✕')
     expect(container.querySelector('.content-sub')).toHaveTextContent('5 modules')
     expect(container.querySelectorAll('[title]')).toHaveLength(0)
 

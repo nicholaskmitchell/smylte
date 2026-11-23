@@ -140,6 +140,13 @@ describe('<AppearancePanel> theme management', () => {
     expect(screen.getByRole('button', { name: /reset accent/i })).toBeDisabled()
   })
 
+  it('draws the per-token reset in the pen, and keeps its glyph', () => {
+    setup({ active: 't1', themes: [theme({ light: { '--accent': '#ff0000' } })] })
+    const reset = screen.getByRole('button', { name: /reset accent/i })
+    expect(reset.querySelector('svg.icon-ink[data-icon="reset"][aria-hidden="true"]')).not.toBeNull()
+    expect(reset).toHaveTextContent('↺')
+  })
+
   it('offers no theme-scoped action while the shipped design is active', () => {
     setup()
     expect(screen.getByRole('button', { name: 'Duplicate' })).toBeDisabled()

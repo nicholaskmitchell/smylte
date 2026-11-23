@@ -440,7 +440,7 @@ function TokenRow({ token, spec, fieldNotes, value, isOverride, onChange, onClea
           <RangeControl id={token} token={token} spec={spec} value={value} onChange={onChange} />}
         <button className="appear-clear" onClick={onClear} disabled={!isOverride}
           title={fieldNotes ? undefined : tr('appear.resetToken')}
-          aria-label={tr('appear.resetNamed', { token: tr(spec.label) })}>↺</button>
+          aria-label={tr('appear.resetNamed', { token: tr(spec.label) })}>↺<IconInk icon="reset" /></button>
       </div>
     </div>
   )

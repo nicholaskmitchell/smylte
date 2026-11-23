@@ -23,7 +23,7 @@ states elsewhere (`tokens.json`), and the gap is listed here.
 | A secondary control's face | Ghost buttons, settings toggles that cycle, the lone view tab, booking days and slots, habit days, the dashed adds, destructive buttons (`fieldnotes.css`, "controls") | `--ctl-face`: `color-mix(in oklab, var(--fg) 8%, transparent)`, and 6% in the dark theme (`tokens.css`). No edge at rest; `--edge-control` (`--rule-strong`, 3:1) under the pointer and on press. A face carries `--fg` or `--warn` words only | The design system has no token for a control's resting face. `--paper` measured 1.06:1 on a dark card and vanishes on the `--paper` sidebar; the ink at 8% reads 1.16:1 on every ground in light, and at 6% 1.17:1 in dark, where 8% put a `--warn` word on a sheet at 4.3:1. A derived colour, chosen with Buttons C (22 Nov); the 6% at night was found while planning it |
 | On or chosen | A setting that is on (until it is drawn as a check), Home's Arrange while on, a chosen booking day, habit day or display chip | `--ctl-on`: `var(--highlight)`, behind `--fg` text only | The design system names the highlighter for marking text, not a control's state |
 | Native parts at night | Date and time glyphs, an unticked native checkbox, a select's open list, in the dark theme | `color-scheme: dark` on `:root[data-surface="app"][data-theme="dark"]` (`fieldnotes.css`) | The design system declares no `color-scheme`; without it the date glyph drew black on the dark field (1.36:1) |
-| The pen's icon set | Icon buttons, the Today line's ⋯, a chip's ×, Today's day arrows, a select's caret, a date or time field's page and clock | `IconInk` (`Marks.tsx`): 14 icons on the 24-unit grid at `--stroke-pen`, round caps, the control's colour; 24px, 18px in dense rows. The way back to today is `HomeInk`, a drawn arrow after the word | The design system says icons are hand-inked plain glyphs on the pen's grid but ships no set; these were drawn for the controls job (22 Nov), the chevrons shared with Today's day arrows |
+| The pen's icon set | Icon buttons, the Today line's ⋯, a chip's ×, Today's day arrows, a select's caret, a date or time field's page and clock, a theme token's reset, a list group's caret, rename, delete and cancel, a list's edit, a Home module's remove, Today's and the plan's add and remove, a task's fold, the Focus float's pin, the phone bar's switches and add, and the Calendar's Tasks caret (a group's show-all is the drawn check) | `IconInk` (`Marks.tsx`): 18 icons on the 24-unit grid at `--stroke-pen`, round caps, the control's colour; 24px, 18px in dense rows. The way back to today is `HomeInk`, a drawn arrow after the word | The design system says icons are hand-inked plain glyphs on the pen's grid but ships no set; these were drawn for the controls job (22 Nov), the chevrons shared with Today's day arrows |
 
 ## Secondary controls with no edge at rest: a deviation the owner chose
 
@@ -40,8 +40,8 @@ checkbox whose frame is the pen (12.9:1); one whose words name its value
 ("Shown" / "Hidden") keeps the face, since a check beside a value word would
 read as its negation.
 
-The sentence to amend in the design system's colour table, if the owner wants
-the system to say so: "`--rule-strong`: field and checkbox borders, and a
+On 23 Nov the owner approved amending the design system's colour table to say
+so: "`--rule-strong`: field and checkbox borders, and a
 secondary control's edge under the pointer (3:1 or better). A secondary control
 has no edge at rest: it is a face, the ink at 8% (6% at night) over its ground,
 under a `--fg` or `--warn` word."
@@ -85,8 +85,8 @@ the pen is heavier (4.8 and 6.4 units of 64, against 3.2 and 4.4), so the frame
 stays a device pixel wide. The in-app wordmark, "Smylte." in Newsreader italic
 with its accent period, is unchanged.
 
-The sentence to amend in the design system's README, if the owner wants the
-system to say so: "Wordmark: Newsreader italic 500, accent period. Favicon and
+On 23 Nov the owner approved amending the design system's README to say so:
+"Wordmark: Newsreader italic 500, accent period. Favicon and
 app icon: the wordmark's letter and its period, unless the app has a signature
 mark; Smylte's is its drawn check, the CheckInk frame in --fg and its tick in
 --accent on a --bg plate, with a heavier pen from 40px down."

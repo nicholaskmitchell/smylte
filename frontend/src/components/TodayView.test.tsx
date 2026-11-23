@@ -426,6 +426,18 @@ describe('<TodayView> the day picker', () => {
     expect(await screen.findByText('Yesterday')).toBeInTheDocument()
   })
 
+  it('draws a suggestion\'s add and a row\'s remove in the pen, and keeps their glyphs', async () => {
+    m.tasks.mockResolvedValue([task({ uid: 'a', summary: 'Due today', due: today() })])
+    m.openDay.mockResolvedValue(plan([entry({ entry_id: 'n1', title: 'Water the plants' })]))
+    setup()
+    const add = await screen.findByRole('button', { name: 'Add Due today to today' })
+    expect(add.querySelector('svg.icon-ink[data-icon="plus"][aria-hidden="true"]')).not.toBeNull()
+    expect(add).toHaveTextContent('+')
+    const drop = await screen.findByRole('button', { name: 'Remove Water the plants from today' })
+    expect(drop.querySelector('svg.icon-ink[data-icon="close"][aria-hidden="true"]')).not.toBeNull()
+    expect(drop).toHaveTextContent('✕')
+  })
+
   it('hands out nothing that could change a past day', async () => {
     m.tasks.mockResolvedValue([task({ uid: 'a', summary: 'Due today', due: today() })])
     m.day.mockImplementation(async (d) =>

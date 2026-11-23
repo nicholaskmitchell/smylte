@@ -141,7 +141,7 @@ function CalendarTasksSection({ lists, shown, onShownChange, showDone, onShowDon
         <button className="group-caret" aria-expanded={!collapsed}
           aria-label={collapsed ? tr('cal.showTaskLists') : tr('cal.hideTaskLists')}
           onClick={() => setCollapsed((c) => !c)}>
-          <span className={`caret ${collapsed ? '' : 'open'}`}>›</span>
+          <span className={`caret ${collapsed ? '' : 'open'}`}>›<IconInk icon="right" /></span>
         </button>
         <span className="group-name">{tr('cal.tasksGroup')}</span>
         <button className="group-eye" aria-pressed={anyShown}
@@ -149,6 +149,7 @@ function CalendarTasksSection({ lists, shown, onShownChange, showDone, onShowDon
           aria-label={anyShown ? tr('cal.takeTasksOff') : tr('cal.putTasksOn')}
           onClick={() => onShownChange(anyShown ? [] : lists.map((l) => l.id))}>
           {anyShown ? '◉' : '◌'}
+          <CheckInk seed="cal-tasks-shown" />
         </button>
       </div>
       {!collapsed && (

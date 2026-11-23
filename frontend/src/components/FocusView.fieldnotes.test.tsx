@@ -136,4 +136,16 @@ describe('<FocusView> under Field notes', () => {
     expect(await screen.findByRole('button', { name: 'Let it fall behind' })).toBeInTheDocument()
     expect(document.body.querySelector('[title]')).toBeNull()
   })
+
+  it('draws the float\'s pin in the pen, and keeps its glyph', async () => {
+    vi.mocked(readState).mockResolvedValue({
+      available: true, choice: 'Auto', resolved: 'Ink', systemUsesLightTheme: true,
+      startMenuShortcut: false, captionColour: true, floating: true, pinned: true, nativeDrag: true,
+    })
+    show(DEFAULT_FOCUS, true)
+    const pin = await screen.findByRole('button', { name: 'Let it fall behind' })
+    expect(pin).toHaveAttribute('aria-pressed', 'true')
+    expect(pin.querySelector('svg.icon-ink[data-icon="pin"][aria-hidden="true"]')).not.toBeNull()
+    expect(pin).toHaveTextContent('●')
+  })
 })
