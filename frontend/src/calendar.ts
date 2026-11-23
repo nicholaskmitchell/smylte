@@ -154,6 +154,35 @@ export function lastDayOf(e: BucketEvent): string {
   return last < startDay ? startDay : last
 }
 
+/** Where a day's entry sits in its event's run of days: the day the run starts
+ *  ('start'), a day inside it ('mid'), its last day ('end'), or the whole of a
+ *  one-day event ('one'). Field notes draws an all-day event as one marker
+ *  swipe across its days, cut square where it carries on.
+ *
+ *  `entry` is a `bucketByDay` entry for `day`, so its `cont` already says
+ *  whether an earlier day holds the same event (the grid's first day counts as
+ *  a continuation for a run that began before the grid). A run that goes on
+ *  past the grid's last day is 'start' or 'mid' there: the swipe runs off the
+ *  page. */
+export type SpanPart = 'one' | 'start' | 'mid' | 'end'
+export function spanPart(entry: BucketEvent & { cont?: boolean }, day: string): SpanPart {
+  const goesOn = lastDayOf(entry) > day
+  if (entry.cont) return goesOn ? 'mid' : 'end'
+  return goesOn ? 'start' : 'one'
+}
+
+/** Whether a continuation chip may leave its title unwritten, as a swipe
+ *  writes its title once per week. That holds when the chip continues a run
+ *  (`cont`), is not on the first day of a week row (`index` is its place in the
+ *  42-day grid, Sunday first), and the day before shows the same event's chip,
+ *  so the title is written to its left on the same row. */
+export function quietTitle(entry: DayEv, index: number,
+  shownBefore: readonly Pick<CalEvent, 'calendar' | 'id'>[] | undefined): boolean {
+  if (!entry.cont || index % 7 === 0 || !shownBefore) return false
+  const k = eventKey(entry)
+  return shownBefore.some((p) => eventKey(p) === k)
+}
+
 /** The six-week grid for `cursor`'s month: 42 days, Sunday-first. */
 export function monthGrid(cursor: Date): Date[] {
   const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1)

@@ -526,6 +526,7 @@
   --stroke-tick: 2.6px;
   --stroke-strike: 2px;
   --wobble: 1px;
+  --stroke-rule: 1.1px;    /* the Calendar's ruling nib, finer than the pen: a gap (docs/fieldnotes-gaps.md) */
 
   /* Density: Field notes rows run 8px with a 60px floor (tokens.json). One of
      the 23 Appearance tokens, so appearance.ts's SHARED_DEFAULTS says 8px too,

@@ -121,6 +121,14 @@ describe('motion', () => {
     const reward = el.querySelector('.dm-reward.on')!
     expect(getComputedStyle(reward).scale).toBe('1')
   })
+
+  it("runs no clock for a still drawing (a view's, the month's)", async () => {
+    const still = { ...drawing, ambient: null, marks: drawing.marks.map((m) => ({ ...m, frames: m.frames.slice(0, 1) })) }
+    const el = host()
+    flushSync(() => createRoot(el).render(<DayDrawing drawing={still} state={state({})} />))
+    await frames(10)
+    expect(el.querySelector('svg')!.hasAttribute('data-frame'), 'a still drawing runs the clock').toBe(false)
+  })
 })
 
 describe('ink', () => {

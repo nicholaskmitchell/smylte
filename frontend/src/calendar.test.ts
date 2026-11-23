@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_CALENDAR_FIT, bucketByDay, bucketTasksByDay, calendarFitKey, cellCapacity,
   chipsShown, dragBody, daysBetween, endIsExclusive, isCalendarFit, lastDayOf, monthGrid,
-  nextCalendarFit, shiftIso,
+  nextCalendarFit, quietTitle, shiftIso, spanPart,
 } from './calendar'
 import type { CalEvent, Task } from './api'
 
@@ -484,5 +484,57 @@ describe('chipsShown', () => {
     expect(chipsShown(9, 0, true)).toBe(0)
     expect(chipsShown(9, 1, true)).toBe(0)
     expect(chipsShown(0, 4, true)).toBe(0)
+  })
+})
+
+describe('spanPart', () => {
+  const allDay = (start: string, end: string, o: Partial<CalEvent> = {}) =>
+    ev(start, end, { all_day: true, start_is_date: true, end_is_date: true, ...o })
+
+  it('names the start, the middle and the end of a run', () => {
+    const span = allDay('2026-08-03', '2026-08-06')          // Mon 3 to Wed 5, DTEND exclusive
+    expect(spanPart(span, '2026-08-03')).toBe('start')
+    expect(spanPart({ ...span, cont: true }, '2026-08-04')).toBe('mid')
+    expect(spanPart({ ...span, cont: true }, '2026-08-05')).toBe('end')
+  })
+
+  it('calls a one-day event one', () => {
+    expect(spanPart(allDay('2026-08-03', '2026-08-04'), '2026-08-03')).toBe('one')
+  })
+
+  it('agrees with bucketByDay for a run that began before the grid', () => {
+    const m = bucketByDay([allDay('2026-07-20', '2026-07-30')], grid)
+    expect(m.get('2026-07-28')![0].cont).toBe(true)
+    expect(spanPart(m.get('2026-07-28')![0], '2026-07-28')).toBe('mid')
+    expect(spanPart(m.get('2026-07-29')![0], '2026-07-29')).toBe('end')
+  })
+
+  it('runs off the page where the event goes on past the grid', () => {
+    const m = bucketByDay([allDay('2026-09-06', '2026-09-20')], grid)
+    expect(spanPart(m.get('2026-09-06')![0], '2026-09-06')).toBe('start')
+    expect(spanPart(m.get('2026-09-07')![0], '2026-09-07')).toBe('mid')
+  })
+})
+
+describe('quietTitle', () => {
+  const a = ev('2026-08-03', '2026-08-06', { id: 'a', all_day: true, start_is_date: true, end_is_date: true })
+  const b = { ...a, id: 'b' }
+
+  it('is quiet on a continuation whose chip the day before showed', () => {
+    expect(quietTitle({ ...a, cont: true }, 9, [a])).toBe(true)
+  })
+  it('writes the title again on the first day of a week', () => {
+    expect(quietTitle({ ...a, cont: true }, 14, [a])).toBe(false)
+  })
+  it('writes it where the day before hid the chip or showed another', () => {
+    expect(quietTitle({ ...a, cont: true }, 9, [b])).toBe(false)
+    expect(quietTitle({ ...a, cont: true }, 9, [])).toBe(false)
+    expect(quietTitle({ ...a, cont: true }, 9, undefined)).toBe(false)
+  })
+  it('never quiets the day a run starts', () => {
+    expect(quietTitle(a, 9, [a])).toBe(false)
+  })
+  it('tells two calendars\' copies of one event apart', () => {
+    expect(quietTitle({ ...a, cont: true }, 9, [{ ...a, calendar: 'other' }])).toBe(false)
   })
 })

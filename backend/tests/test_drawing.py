@@ -1351,6 +1351,12 @@ def _month_renders(month, subject, theme, state=None):
         yield salt, subject.render(state or _DayState(), theme, _Rng(f"month|{month}|{salt}"))
 
 
+def test_every_month_has_its_drawing():
+    assert sorted(_subjects.MONTH_DRAWINGS) == list(range(1, 13))
+    ids = [s.id for s in _subjects.MONTH_DRAWINGS.values()]
+    assert len(set(ids)) == 12 and all(i.startswith('month-') for i in ids)
+
+
 @pytest.mark.parametrize("month, subject", _month_params())
 def test_a_month_drawing_is_still_landscape_and_small(month, subject):
     for theme in ('light', 'dark'):

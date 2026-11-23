@@ -95,6 +95,11 @@ export const DayDrawing = memo(function DayDrawing({ drawing, state, className =
   className?: string
 }) {
   const ref = useRef<SVGSVGElement>(null)
+  // A drawing with nothing to step (every line one still frame and no focus
+  // loop: a view's drawing, the month's) runs no clock at all. The month's sits
+  // on the Calendar all day.
+  const boils = useMemo(() => !!drawing.ambient
+    || drawing.marks.some((m) => m.role === 'line' && m.frames.length === 3), [drawing])
 
   // The drawing's one clock: it writes the boil's frame (data-frame, 1-3) and
   // the focus loop's (data-amb, 0-5) on the svg, and fieldnotes.css shows the
@@ -103,7 +108,7 @@ export const DayDrawing = memo(function DayDrawing({ drawing, state, className =
   // reduced motion, where the attributes are absent and frame one shows.
   useEffect(() => {
     const el = ref.current
-    if (!el) return
+    if (!el || !boils) return
     const reduce = typeof window.matchMedia === 'function'
       ? window.matchMedia('(prefers-reduced-motion: reduce)') : null
     let onScreen = true
@@ -165,7 +170,7 @@ export const DayDrawing = memo(function DayDrawing({ drawing, state, className =
       io?.disconnect()
       reduce?.removeEventListener('change', update)
     }
-  }, [])
+  }, [boils])
 
   const cond = useMemo(() => drawing.marks.filter((m) => m.when.length > 0), [drawing])
 
@@ -232,15 +237,17 @@ export function ViewDrawing({ view, day, state, className }: {
   className?: string
 }) {
   const theme = useThemeName()
+  // Today's drawing is the day's; a view's is the same every day; the month's
+  // is its month's, named by the month's first day, as the server names it.
+  const cacheDay = view === 'today' ? day : view === 'month' ? `${day.slice(0, 8)}01` : null
   const [drawing, setDrawing] = useState<DrawingPayload | null>(
-    () => readCachedDrawing(view, view === 'today' ? day : null, theme))
+    () => readCachedDrawing(view, cacheDay, theme))
   useEffect(() => {
     let live = true
-    const cached = readCachedDrawing(view, view === 'today' ? day : null, theme)
-    setDrawing(cached)
-    void fetchDrawing(view, day, theme).then((d) => { if (live && d) setDrawing(d) })
+    setDrawing(readCachedDrawing(view, cacheDay, theme))
+    void fetchDrawing(view, cacheDay ?? day, theme).then((d) => { if (live && d) setDrawing(d) })
     return () => { live = false }
-  }, [view, day, theme])
+  }, [view, cacheDay, day, theme])
   if (!drawing) return null
   return <DayDrawing drawing={drawing} state={state} className={className} />
 }

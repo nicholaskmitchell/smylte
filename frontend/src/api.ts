@@ -1589,7 +1589,7 @@ export const api = {
   focus: (day: string) => j<FocusSession | null>('GET', `/api/focus/${day}`),
   /** The day's drawing (drawing.ts validates it). `day` is the local day the
    *  drawing is for; the static view drawings ignore it. */
-  drawing: (view: 'today' | 'tasks' | 'calendar' | 'settings', day: string, theme: 'light' | 'dark') =>
+  drawing: (view: 'today' | 'tasks' | 'calendar' | 'settings' | 'month', day: string, theme: 'light' | 'dark') =>
     j<unknown>('GET', `/api/drawing?view=${view}&day=${encodeURIComponent(day)}&theme=${theme}`),
   startFocus: (day: string) => j<FocusSession>('POST', `/api/focus/${day}/start`),
   focusClock: (day: string, body: FocusClockBody) =>

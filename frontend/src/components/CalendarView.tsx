@@ -15,7 +15,7 @@ import { fmtClock, inputLang } from '../time'
 import { useTimeFormat } from '../timeformat'
 import {
   bucketByDay, bucketTasksByDay, cellCapacity, chipsShown, dragBody, daysBetween,
-  endFromDuration, eventKey, lastDayOf, monthGrid, shiftYmd, type CalendarFit, type DayEv,
+  endFromDuration, eventKey, lastDayOf, monthGrid, quietTitle, shiftYmd, spanPart, type CalendarFit, type DayEv,
 } from '../calendar'
 import { TagInput } from './AddMultipleModal'
 import { taskKey } from '../order'
@@ -23,6 +23,7 @@ import { useIsMobile } from '../hooks'
 import { NavCollections, useEmbeddedCollections } from '../shell'
 import { AgendaEvent, AgendaTask, DayPopover } from './DayPopover'
 import { CheckInk, IconInk, StrikeInk } from './Marks'
+import { CrossInk, GridInk, MonthInk, TodayInk } from './CalendarInk'
 import { ViewDrawing } from './DayDrawing'
 import { EMPTY_DAY } from '../drawing'
 import { Sidebar } from './Sidebar'
@@ -54,17 +55,22 @@ const CELL_MAX = 4
  * `.cal-ev, .cal-task` is looked up across the whole grid, not inside one cell,
  * because most cells hold no chip to measure; every chip is the same height, so
  * any of them answers for all.
+ *
+ * Exported for calendar-page.browser.test.tsx, which measures it.
  */
-function measureCells(root: HTMLElement | null): number | null {
+export function measureCells(root: HTMLElement | null): number | null {
   const cell = root?.querySelector('.cal-cell') as HTMLElement | null
   const head = cell?.querySelector('.daynum') as HTMLElement | null
   const chip = root?.querySelector('.cal-ev, .cal-task') as HTMLElement | null
   if (!cell || !head || !chip) return null
   const cs = getComputedStyle(cell)
+  const hs = getComputedStyle(head)
   return cellCapacity({
     // clientHeight is the padding box, so the cell's own padding comes off it.
     inner: cell.clientHeight - (parseFloat(cs.paddingTop) || 0) - (parseFloat(cs.paddingBottom) || 0),
-    head: head.getBoundingClientRect().height,
+    // The date's margin box: a margin under it (Field notes keeps 2px there)
+    // is room the chips cannot have.
+    head: head.getBoundingClientRect().height + (parseFloat(hs.marginTop) || 0) + (parseFloat(hs.marginBottom) || 0),
     chip: chip.getBoundingClientRect().height,
     gap: parseFloat(cs.rowGap) || 0,
   })
@@ -642,6 +648,23 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
   // hook; the full grid was the inconsistent one.
   const todayKey = useToday()
   const lastKey = ymd(days[41])            // final visible day, for resize grips (and dropOnDay's clamp)
+  // What each of the 42 cells shows on a desktop, worked out once per render
+  // so a cell can ask what the day before it showed: a marker swipe writes its
+  // title again wherever the day to its left did not show its chip.
+  //
+  // One cap over both kinds, so the "+N more" count is the whole remainder
+  // rather than the events' share of it. Events lead: they hold a span, tasks
+  // are a single deadline on the day.
+  const shownOn = days.map((d) => {
+    const key = ymd(d)
+    const dayEvents = byDay.get(key) ?? []
+    const dayTasks = tasksByDay.get(key) ?? []
+    const total = dayEvents.length + dayTasks.length
+    const room = chipsShown(total, fitted ? capacity : CELL_MAX, fitted)
+    const shownEvents = dayEvents.slice(0, room)
+    const shownTasks = dayTasks.slice(0, Math.max(0, room - shownEvents.length))
+    return { dayEvents, dayTasks, shownEvents, shownTasks, hiddenCount: total - shownEvents.length - shownTasks.length }
+  })
   // Where new events land by default: the first shown (non-hidden) calendar,
   // among those not archived; else the first visible one.
   const defaultCal = visibleCals.find((c) => !hidden.has(c.id))?.id || visibleCals[0]?.id || ''
@@ -651,6 +674,30 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
     onArchivedCalendarsChange([...archivedCalendars, id])
     if (hidden.has(id)) onHiddenCalendarsChange(hiddenCalendars.filter((x) => x !== id))
   }
+
+  // The header's parts, placed below in the order each design reads them.
+  const prevMonth = (
+    <button className="icon-btn" title={fieldNotes ? undefined : tr('cal.prevMonth')} aria-label={tr('cal.prevMonth')}
+      onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}>‹<IconInk icon="left" /></button>
+  )
+  const toToday = (
+    <button className="btn ghost" onClick={() => { const n = new Date(); setCursor(new Date(n.getFullYear(), n.getMonth(), 1)) }}>{tr('tasks.today')}</button>
+  )
+  const nextMonth = (
+    <button className="icon-btn" title={fieldNotes ? undefined : tr('cal.nextMonth')} aria-label={tr('cal.nextMonth')}
+      onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}>›<IconInk icon="right" /></button>
+  )
+  // Field notes writes the month large, underlined in coral, with the year a
+  // margin note beside it. The space between them keeps the heading's text
+  // "March 2026" for a screen reader and for anything that reads it.
+  const monthTitle = fieldNotes ? (
+    <span className="cal-title">
+      <span className="cal-month">{months[cursor.getMonth()]}<MonthInk /></span>{' '}
+      <span className="cal-year">{cursor.getFullYear()}</span>
+    </span>
+  ) : (
+    <span className="cal-title">{months[cursor.getMonth()]} {cursor.getFullYear()}</span>
+  )
 
   return (
     <div className="work">
@@ -673,13 +720,29 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
       <div className="content">
         {viewTabs && <div className="content-switch">{viewTabs}</div>}
         <div className="cal-head">
-          <button className="icon-btn" title={fieldNotes ? undefined : tr('cal.prevMonth')} aria-label={tr('cal.prevMonth')}
-            onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1))}>‹<IconInk icon="left" /></button>
-          <button className="btn ghost" onClick={() => { const n = new Date(); setCursor(new Date(n.getFullYear(), n.getMonth(), 1)) }}>{tr('tasks.today')}</button>
-          <button className="icon-btn" title={fieldNotes ? undefined : tr('cal.nextMonth')} aria-label={tr('cal.nextMonth')}
-            onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}>›<IconInk icon="right" /></button>
-          <span className="cal-title">{months[cursor.getMonth()]} {cursor.getFullYear()}</span>
-          <span className="spacer" />
+          {fieldNotes && !isMobile ? (
+            // Field notes on a desktop: the page's top. The month leads and the
+            // controls follow it, in the DOM as on screen, so the focus order
+            // is the reading order.
+            <>
+              {/* The month's own drawing, the page's one illustration: none on a
+                  phone, and none while the no-calendars state draws its own. */}
+              {visibleCals.length > 0 && (
+                <div className="cal-drawing" aria-hidden="true">
+                  <ViewDrawing view="month" day={`${cursor.getFullYear()}-${pad(cursor.getMonth() + 1)}-01`} state={EMPTY_DAY} />
+                </div>
+              )}
+              {monthTitle}
+              <span className="spacer" />
+              {prevMonth}{toToday}{nextMonth}
+            </>
+          ) : (
+            <>
+              {prevMonth}{toToday}{nextMonth}
+              {monthTitle}
+              <span className="spacer" />
+            </>
+          )}
           {visibleCals.length > 0 && !isMobile && (
             <button className="btn" onClick={() => setDraft({ date: todayKey })}>{tr('cal.newEvent')}</button>
           )}
@@ -729,19 +792,15 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
               {dow.map((d) => (
                 <div key={d} className="cal-dow" role="columnheader">{d}</div>
               ))}
-              {days.map((d) => {
+              {days.map((d, i) => {
                 const key = ymd(d)
                 const inMonth = d.getMonth() === cursor.getMonth()
-                const dayEvents = byDay.get(key) ?? []
-                const dayTasks = tasksByDay.get(key) ?? []
-                // One cap over both kinds, so the "+N more" count is the whole
-                // remainder rather than the events' share of it. Events lead:
-                // they hold a span, tasks are a single deadline on the day.
-                const total = dayEvents.length + dayTasks.length
-                const room = chipsShown(total, fitted ? capacity : CELL_MAX, fitted)
-                const shownEvents = dayEvents.slice(0, room)
-                const shownTasks = dayTasks.slice(0, Math.max(0, room - shownEvents.length))
-                const hiddenCount = total - shownEvents.length - shownTasks.length
+                const { dayEvents, dayTasks, shownEvents, shownTasks, hiddenCount } = shownOn[i]
+                // A phone under Field notes draws an all-day event as a marker
+                // band under the date (three at most; the agenda lists them
+                // all), and only timed events and tasks as dots.
+                const bands = isMobile && fieldNotes ? dayEvents.filter((e) => e.all_day).slice(0, 3) : []
+                const dotEvents = isMobile && fieldNotes ? dayEvents.filter((e) => !e.all_day) : dayEvents
                 return (
                   <div key={key}
                     className={`cal-cell ${inMonth ? '' : 'dim'} ${key === todayKey ? 'today' : ''} ${drag && overDay === key ? 'drag-over' : ''}`}
@@ -765,6 +824,9 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                     data-focus={isMobile && key === focusDay ? '' : undefined}
                     role="gridcell"
                     aria-label={fmtCellLabel(d)}
+                    // Today, for a screen reader, in every design: Field notes
+                    // draws today as a ring, which says nothing to one.
+                    aria-current={key === todayKey ? 'date' : undefined}
                     // THE roving tabindex: exactly one cell is in the tab order
                     // at a time, and the arrows move which. `key === keyDay`
                     // rather than an index so the tab stop survives a month
@@ -782,39 +844,53 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                       if (isMobile && key !== focusDay) setFocusDay(key)
                       else setDraft({ date: key })
                     }}>
-                    <span className="daynum">{d.getDate()}</span>
+                    <span className="daynum">
+                      {d.getDate()}
+                      {fieldNotes && key === todayKey && <TodayInk day={key} />}
+                      {fieldNotes && inMonth && key < todayKey && <CrossInk day={key} />}
+                    </span>
                     {isMobile ? (
-                      (dayEvents.length > 0 || dayTasks.length > 0) && (
-                        <span className="ev-dots">
-                          {dayEvents.slice(0, 6).map((e) => (
-                            <i key={eventKey(e)} className={`ev-dot ${e.all_day ? 'allday' : ''}`} style={evStyle(e)} />
-                          ))}
-                          {/* The kind goes in a DATA ATTRIBUTE, not the class
-                              list. `.task` is a GLOBAL rule — the Tasks pane's
-                              row: `display:flex`, a border and
-                              `padding: var(--row-y) var(--gutter)` — so a dot
-                              wearing the bare class inherited 11px/14px of
-                              padding and rendered as a 28x23 SLAB instead of a
-                              5x5 mark, swamping the day number beside it.
-                              Measured in Chromium, phone width only, because
-                              this branch is the phone's.
+                      <>
+                        {bands.map((e) => {
+                          const part = spanPart(e, key)
+                          return (
+                            <i key={eventKey(e)} className="ev-band" style={evStyle(e)}
+                              data-span={part === 'one' ? undefined : part} />
+                          )
+                        })}
+                        {(dotEvents.length > 0 || dayTasks.length > 0) && (
+                          <span className="ev-dots">
+                            {dotEvents.slice(0, 6).map((e) => (
+                              <i key={eventKey(e)} className={`ev-dot ${e.all_day ? 'allday' : ''}`} style={evStyle(e)} />
+                            ))}
+                            {/* The kind goes in a DATA ATTRIBUTE, not the class
+                                list. `.task` is a GLOBAL rule — the Tasks pane's
+                                row: `display:flex`, a border and
+                                `padding: var(--row-y) var(--gutter)` — so a dot
+                                wearing the bare class inherited 11px/14px of
+                                padding and rendered as a 28x23 SLAB instead of a
+                                5x5 mark, swamping the day number beside it.
+                                Measured in Chromium, phone width only, because
+                                this branch is the phone's.
 
-                              That is the second time this exact collision has
-                              shipped (see `TodayView`'s kind mark, fixed the
-                              same way): `.task` is the one bare class in
-                              app.css carrying layout, and any element given it
-                              as a modifier picks the whole row rule up. */}
-                          {dayTasks.slice(0, Math.max(0, 6 - dayEvents.length)).map((t) => (
-                            <i key={taskKey(t)} className="ev-dot" data-kind="task"
-                              style={taskStyle(t)} />
-                          ))}
-                        </span>
-                      )
+                                That is the second time this exact collision has
+                                shipped (see `TodayView`'s kind mark, fixed the
+                                same way): `.task` is the one bare class in
+                                app.css carrying layout, and any element given it
+                                as a modifier picks the whole row rule up. */}
+                            {dayTasks.slice(0, Math.max(0, 6 - dotEvents.length)).map((t) => (
+                              <i key={taskKey(t)} className="ev-dot" data-kind="task"
+                                style={taskStyle(t)} />
+                            ))}
+                          </span>
+                        )}
+                      </>
                     ) : (
                       <>
                         {shownEvents.map((e) => {
                           const evLast = lastDayOf(e)
                           const resizable = key === (evLast > lastKey ? lastKey : evLast)
+                          const part = e.all_day ? spanPart(e, key) : 'one'
                           return (
                             // Keyed by collection too: `id` is unique per
                             // rendered instance of a SERIES (uid, or
@@ -825,6 +901,12 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                             // the wrong click target to the other.
                             <div key={eventKey(e)}
                               className={`cal-ev ${e.all_day ? 'allday' : ''} ${e.cont ? 'cont' : ''}`}
+                              // Field notes draws an all-day event as one marker
+                              // swipe across its days (fieldnotes.css): where this
+                              // day sits in the run, and whether its title is
+                              // already written to its left this week.
+                              data-span={fieldNotes && part !== 'one' ? part : undefined}
+                              data-quiet={fieldNotes && e.all_day && quietTitle(e, i, shownOn[i - 1]?.shownEvents) ? '' : undefined}
                               style={evStyle(e)}
                               dir={textDir(e.summary)}
                               title={fieldNotes ? undefined : e.is_recurring
@@ -927,6 +1009,11 @@ export function CalendarView({ onExpire, sideCollapsed, onToggleSide,
                   </div>
                 )
               })}
+              {/* Field notes rules the month by hand over the cells: last, so
+                  it takes no grid track, and aria-hidden (CalendarInk.tsx). */}
+              {fieldNotes && (
+                <GridInk seed={`page|${ymd(cursor).slice(0, 7)}`} focus={isMobile ? focusDay : null} />
+              )}
             </div>
             {isMobile && (
               <div className="day-agenda">

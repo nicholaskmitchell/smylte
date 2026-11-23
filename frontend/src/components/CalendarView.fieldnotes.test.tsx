@@ -11,6 +11,7 @@ import { api, type CalEvent, type List, type Task } from '../api'
 import type { DayEv } from '../calendar'
 import { withPrompt } from '../test/back'
 import { setBreakpoint } from '../test/setup'
+import fixture from '../test/drawing-fixture.json'
 
 // The Calendar, its day popup and Scheduling under Field notes, the design that
 // names things and does not explain them. The preset behaviour is
@@ -248,5 +249,198 @@ describe('<SchedulingView> under Field notes', () => {
     expect(add).not.toHaveAttribute('title')
     expect(within(dialog).queryByText(/Shown as unlabeled/)).toBeNull()
     expect(dialog.querySelectorAll('[title]')).toHaveLength(0)
+  })
+})
+
+describe('<CalendarView> under Field notes: the month as a page', () => {
+  const cell = (c: HTMLElement, day: string) => c.querySelector(`.cal-cell[data-day="${day}"]`)!
+
+  it('rules the grid, crosses off the days gone and circles today, all as decoration', async () => {
+    const { container } = render(withPrompt(<Harness />))
+    await waitFor(() => expect(container.querySelectorAll('.cal-cell')).toHaveLength(42))
+    const ink = container.querySelector('.cal-grid')!.lastElementChild!
+    expect(ink.matches('svg.grid-ink')).toBe(true)
+    expect(ink).toHaveAttribute('aria-hidden', 'true')
+    expect(cell(container, '2026-03-05')).toHaveAttribute('aria-current', 'date')
+    expect(container.querySelectorAll('[aria-current="date"]')).toHaveLength(1)
+    expect(cell(container, '2026-03-05').querySelector('.daynum > svg.today-ink[aria-hidden="true"]')).not.toBeNull()
+    for (const d of ['2026-03-01', '2026-03-02', '2026-03-03', '2026-03-04']) {
+      expect(cell(container, d).querySelector('.daynum > svg.cross-ink[aria-hidden="true"]'), d).not.toBeNull()
+    }
+    expect(container.querySelectorAll('.cross-ink')).toHaveLength(4)
+    expect(cell(container, '2026-03-05').querySelector('.cross-ink')).toBeNull()
+    expect(cell(container, '2026-03-05').querySelector('.daynum')!.textContent).toBe('5')
+  })
+
+  it('leaves the presets their grid, and still names today', async () => {
+    document.documentElement.removeAttribute('data-surface')
+    const { container } = render(withPrompt(<Harness />))
+    await waitFor(() => expect(container.querySelectorAll('.cal-cell')).toHaveLength(42))
+    expect(container.querySelector('.grid-ink, .today-ink, .cross-ink')).toBeNull()
+    expect(cell(container, '2026-03-05')).toHaveAttribute('aria-current', 'date')
+  })
+})
+
+describe('<CalendarView> under Field notes: events in pen and marker', () => {
+  // Offsite runs Tue 10 to Thu 12, Cabin Fri 13 to Mon 16 (over a week's
+  // turn: Sun 15 is the grid's index 14), Birthday is the one day of Wed 18,
+  // and the timed Standup is on Mon 2.
+  const events = () => [
+    ev({ uid: 'a', id: 'a', summary: 'Offsite', all_day: true, start: '2026-03-10', end: '2026-03-13', start_is_date: true, end_is_date: true }),
+    ev({ uid: 'b', id: 'b', summary: 'Cabin', all_day: true, start: '2026-03-13', end: '2026-03-17', start_is_date: true, end_is_date: true }),
+    ev({ uid: 'c', id: 'c', summary: 'Birthday', all_day: true, start: '2026-03-18', end: '2026-03-19', start_is_date: true, end_is_date: true }),
+    ev(),
+  ]
+  const cell = (c: HTMLElement, day: string) => c.querySelector(`.cal-cell[data-day="${day}"]`)!
+  const chip = (c: HTMLElement, day: string, title: string) => {
+    const found = [...cell(c, `2026-03-${day}`).querySelectorAll('.cal-ev')]
+      .find((e) => e.querySelector('bdi')?.textContent === title)
+    expect(found, `${title} on the ${day}th`).toBeDefined()
+    return found!
+  }
+
+  it('cuts an all-day run into one swipe and writes its title once a week', async () => {
+    m.events.mockResolvedValue(events())
+    const { container } = render(withPrompt(<Harness />))
+    await waitFor(() => expect(container.querySelectorAll('.cal-ev').length).toBeGreaterThan(0))
+
+    expect(chip(container, '10', 'Offsite')).toHaveAttribute('data-span', 'start')
+    expect(chip(container, '10', 'Offsite')).not.toHaveAttribute('data-quiet')
+    expect(chip(container, '11', 'Offsite')).toHaveAttribute('data-span', 'mid')
+    expect(chip(container, '11', 'Offsite')).toHaveAttribute('data-quiet')
+    expect(chip(container, '12', 'Offsite')).toHaveAttribute('data-span', 'end')
+    expect(chip(container, '12', 'Offsite')).toHaveAttribute('data-quiet')
+
+    expect(chip(container, '13', 'Cabin')).toHaveAttribute('data-span', 'start')
+    expect(chip(container, '14', 'Cabin')).toHaveAttribute('data-span', 'mid')
+    expect(chip(container, '14', 'Cabin')).toHaveAttribute('data-quiet')
+    // A Sunday starts the next row: the title is written again there.
+    expect(chip(container, '15', 'Cabin')).toHaveAttribute('data-span', 'mid')
+    expect(chip(container, '15', 'Cabin')).not.toHaveAttribute('data-quiet')
+    expect(chip(container, '16', 'Cabin')).toHaveAttribute('data-span', 'end')
+    expect(chip(container, '16', 'Cabin')).toHaveAttribute('data-quiet')
+
+    for (const [day, title] of [['18', 'Birthday'], ['02', 'Standup']]) {
+      expect(chip(container, day, title)).not.toHaveAttribute('data-span')
+      expect(chip(container, day, title)).not.toHaveAttribute('data-quiet')
+    }
+  })
+
+  it('draws an all-day run as a marker band on a phone, and only the rest as dots', async () => {
+    act(() => setBreakpoint(true))
+    m.events.mockResolvedValue(events())
+    const { container } = render(withPrompt(<Harness />))
+    await waitFor(() => expect(container.querySelectorAll('.ev-band').length).toBeGreaterThan(0))
+
+    expect(cell(container, '2026-03-11').querySelector('.ev-band[data-span="mid"]')).not.toBeNull()
+    const birthday = cell(container, '2026-03-18').querySelector('.ev-band')
+    expect(birthday).not.toBeNull()
+    expect(birthday).not.toHaveAttribute('data-span')
+    expect(container.querySelector('.ev-dot.allday')).toBeNull()
+    expect(cell(container, '2026-03-02').querySelector('.ev-dots .ev-dot')).not.toBeNull()
+  })
+
+  it('leaves the presets their chips and dots', async () => {
+    document.documentElement.removeAttribute('data-surface')
+    m.events.mockResolvedValue(events())
+    const { container, unmount } = render(withPrompt(<Harness />))
+    await waitFor(() => expect(container.querySelectorAll('.cal-ev').length).toBeGreaterThan(0))
+    expect(container.querySelector('[data-span]')).toBeNull()
+    expect(container.querySelector('[data-quiet]')).toBeNull()
+    expect(container.querySelector('.ev-band')).toBeNull()
+    unmount()
+
+    act(() => setBreakpoint(true))
+    const phone = render(withPrompt(<Harness />)).container
+    await waitFor(() => expect(phone.querySelectorAll('.ev-dot.allday').length).toBeGreaterThan(0))
+    expect(phone.querySelector('[data-span]')).toBeNull()
+    expect(phone.querySelector('.ev-band')).toBeNull()
+  })
+})
+
+describe('<CalendarView> under Field notes: the page\'s top', () => {
+  const kids = (c: HTMLElement) => [...c.querySelector('.cal-head')!.children].map((e) => e.getAttribute('class'))
+
+  it('writes the month first on a desktop, the controls after it', async () => {
+    const { container } = render(withPrompt(<Harness />))
+    await screen.findByRole('button', { name: 'New event' })
+    expect(kids(container)).toEqual(['cal-drawing', 'cal-title', 'spacer', 'icon-btn', 'btn ghost', 'icon-btn', 'btn'])
+    const title = container.querySelector('.cal-title')!
+    expect(title).toHaveTextContent('March 2026')
+    expect(title.textContent).toBe('March 2026')
+    const month = container.querySelector('.cal-month')!
+    expect(month.textContent).toBe('March')
+    expect(month.querySelector('svg.month-ink[aria-hidden="true"]')).not.toBeNull()
+    expect(container.querySelector('.cal-year')!.textContent).toBe('2026')
+    expect(screen.getByRole('button', { name: 'Previous month' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Next month' })).toBeInTheDocument()
+  })
+
+  it('keeps the controls before the month on a phone', async () => {
+    act(() => setBreakpoint(true))
+    const { container } = render(withPrompt(<Harness />))
+    await waitFor(() => expect(container.querySelector('.cal-month')).not.toBeNull())
+    const head = container.querySelector('.cal-head')!
+    expect(head.children[0]).toHaveClass('icon-btn')
+    expect(head.children[1]).toHaveClass('btn', 'ghost')
+    expect(head.children[2]).toHaveClass('icon-btn')
+    expect(head.children[3]).toHaveClass('cal-title')
+    expect(head.children[3].querySelector('.cal-month')).not.toBeNull()
+  })
+
+  it('leaves the presets their order and their plain title', async () => {
+    document.documentElement.removeAttribute('data-surface')
+    const { container } = render(withPrompt(<Harness />))
+    await screen.findByRole('button', { name: 'New event' })
+    expect(container.querySelector('.cal-head')!.children[0]).toHaveClass('icon-btn')
+    expect(container.querySelector('.cal-title')!.textContent).toBe('March 2026')
+    expect(container.querySelector('.cal-month')).toBeNull()
+  })
+})
+
+describe("<CalendarView> under Field notes: the month's drawing", () => {
+  const monthDrawing = (day: string) => ({
+    ...fixture, view: 'month', day, subject: 'month-test', viewBox: [0, 0, 200, 110], ambient: null,
+    marks: (fixture.marks as { reward: number | null; when: unknown[]; frames: string[] }[])
+      .filter((mk) => mk.reward === null && mk.when.length === 0)
+      .map((mk) => ({ ...mk, frames: mk.frames.slice(0, 1) })),
+  })
+  const monthCalls = () => m.drawing.mock.calls.filter((c) => c[0] === 'month')
+
+  it('heads the page on a desktop', async () => {
+    m.drawing.mockResolvedValue(monthDrawing('2026-03-01'))
+    const user = userSetup()
+    const { container } = render(withPrompt(<Harness />))
+    await screen.findByRole('button', { name: 'New event' })
+    const first = container.querySelector('.cal-head')!.firstElementChild!
+    expect(first).toHaveClass('cal-drawing')
+    expect(first).toHaveAttribute('aria-hidden', 'true')
+    await waitFor(() => expect(first.querySelector('svg.day-drawing')).not.toBeNull())
+    expect(m.drawing).toHaveBeenCalledWith('month', '2026-03-01', 'light')
+    await user.click(screen.getByRole('button', { name: 'Next month' }))
+    await waitFor(() => expect(m.drawing).toHaveBeenCalledWith('month', '2026-04-01', 'light'))
+  })
+
+  it('is not drawn on a phone', async () => {
+    act(() => setBreakpoint(true))
+    const { container } = render(withPrompt(<Harness />))
+    await waitFor(() => expect(container.querySelector('.cal-month')).not.toBeNull())
+    expect(container.querySelector('.cal-drawing')).toBeNull()
+    expect(monthCalls()).toHaveLength(0)
+  })
+
+  it('keeps one illustration', async () => {
+    m.calendars.mockResolvedValue([])
+    const { container } = render(withPrompt(<Harness />))
+    await waitFor(() => expect(container.querySelector('.content > .empty .view-drawing')).not.toBeNull())
+    expect(container.querySelector('.cal-drawing')).toBeNull()
+  })
+
+  it('leaves the presets without it', async () => {
+    document.documentElement.removeAttribute('data-surface')
+    const { container } = render(withPrompt(<Harness />))
+    await screen.findByRole('button', { name: 'New event' })
+    expect(container.querySelector('.cal-drawing')).toBeNull()
+    expect(monthCalls()).toHaveLength(0)
   })
 })

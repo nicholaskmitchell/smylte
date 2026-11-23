@@ -883,6 +883,176 @@
 [data-surface="app"] .mail-sug-head > .ink-field:has(> .mail-sug-due) { flex: none; }                                /* .mail-sug .mail-sug-due */
 
 
+/* ==== Calendar · the month as a page ====
+   The month under Field notes is a wall calendar's page (the owner's pick of
+   22 Nov: the Calendar item's option C, with no drawing on a phone). The grid
+   is ruled by hand: CalendarInk.tsx's GridInk is one static SVG laid over
+   .cal-grid as its last child, and the cells keep their borders' widths but
+   paint them transparent, so no cell or chip moves and measureCells reads the
+   same geometry. The dates are written in Newsreader, the days already gone
+   are crossed off with one faint stroke (--fg-faint: decoration, the number
+   stays --fg), today is circled in coral instead of the filled tab, and on a
+   phone the day the agenda follows is boxed in pen. All of it is aria-hidden
+   and none of it moves. A cell stays position: static
+   (calendar.browser.test.tsx): what needs a box positions .daynum, or lives in
+   the grid's SVG. --stroke-rule is the ruling nib, a gap the design system
+   does not have (docs/fieldnotes-gaps.md). */
+[data-surface="app"] .cal-grid { position: relative; border-color: transparent; }
+[data-surface="app"] .cal-grid > .cal-dow,
+[data-surface="app"] .cal-grid > .cal-cell { border-color: transparent; }
+[data-surface="app"] .grid-ink {
+  display: block; position: absolute; left: 0; top: 0; z-index: 0; overflow: visible; pointer-events: none;
+  fill: none; stroke-linecap: round; stroke-linejoin: round;
+}
+[data-surface="app"] .grid-ink .rule { stroke: color-mix(in oklch, var(--fg) 32%, transparent); stroke-width: var(--stroke-rule); }
+[data-surface="app"] .grid-ink .edge { stroke: color-mix(in oklch, var(--fg) 72%, transparent); stroke-width: var(--stroke-pen); }
+[data-surface="app"] .grid-ink .focus { stroke: var(--fg-muted); stroke-width: var(--stroke-pen); }
+/* What is written in a day sits above the ruling. */
+[data-surface="app"] :is(.cal-ev, .cal-task, .cal-more, .ev-band, .ev-dots) { position: relative; z-index: 1; }
+[data-surface="app"] .cal-grid > .cal-dow {
+  background: none; padding: 8px 8px 6px; text-align: start;
+  font-family: var(--serif); font-size-adjust: none; font-style: italic; letter-spacing: 0; text-transform: none;
+  font-size: calc(var(--fs-app-meta) * var(--fs-scale)); color: var(--fg-muted);
+}
+[data-surface="app"] .cal-cell .daynum {
+  position: relative; align-self: flex-start; padding: 0 3px; margin-bottom: 2px;
+  font-family: var(--serif); font-size-adjust: none; font-weight: 500; font-variant-numeric: tabular-nums;
+  font-size: calc(var(--fs-app-note) * var(--fs-scale)); color: var(--fg);
+}
+[data-surface="app"] .cal-cell.dim .daynum { color: var(--fg-muted); font-weight: 400; font-style: italic; }
+[data-surface="app"] .cal-cell.today .daynum { color: var(--fg); background: none; font-weight: 600; }
+[data-surface="app"] .cross-ink {
+  display: block; position: absolute; left: -2px; top: -1px; width: calc(100% + 4px); height: calc(100% + 2px);
+  overflow: visible; pointer-events: none; fill: none;
+  stroke: var(--fg-faint); stroke-width: var(--stroke-strike); stroke-linecap: round;
+}
+[data-surface="app"] .today-ink {
+  display: block; position: absolute; left: -8px; top: -5px; width: calc(100% + 16px); height: calc(100% + 10px);
+  overflow: visible; pointer-events: none;
+  fill: none; stroke: var(--accent); stroke-width: var(--stroke-pen); stroke-linecap: round;
+}
+/* The fixed window's cells clip what leaves them (app.css), so there the ring
+   is drawn a little tighter, inside the cell. */
+[data-surface="app"] .cal-scroll.fixed .today-ink { left: -6px; top: -4px; width: calc(100% + 12px); height: calc(100% + 8px); }
+[data-surface="app"] .cal-cell[data-focus] { box-shadow: none; }
+@media (max-width: 720px) {
+  [data-surface="app"] .cal-cell { align-items: stretch; }
+  [data-surface="app"] .cal-cell .daynum { align-self: center; font-size: calc(var(--fs-app-ui) * var(--fs-scale)); margin-bottom: 0; }
+  [data-surface="app"] .cal-grid > .cal-dow { text-align: center; padding: 6px 2px 4px; }
+  [data-surface="app"] .ev-dots { justify-content: center; }
+}
+
+
+/* ---- events in pen and marker -------------------------------------------------
+   A timed event is a line written in the day: a dot of its calendar's colour,
+   the time as a margin note in tabular figures, the title; no box. An all-day
+   event is a marker swipe in its calendar's colour (36% of it in the paper,
+   which keeps --fg on it at 6.7:1 or more in both themes), one stroke across
+   the days it covers: ragged where the nib went down and lifted, cut square
+   where it carries on into the next day (data-span, set by CalendarView), its
+   title written once per week (data-quiet hides the rest, and its ellipsis). The carry-overs are
+   PHYSICAL margins, left and right: the day axis runs left to right whatever a
+   title's dir, as the resize grip's does (app.css, .ev-resize). Every chip is
+   the same height, which measureCells assumes: an all-day chip takes the timed
+   chip's 1px. Chips are set at the type scale's 13px floor. On a phone an
+   all-day event is a marker band under the date, continuous across its days. */
+[data-surface="app"] .cal-ev,
+[data-surface="app"] .cal-task { font-size: calc(var(--fs-app-small) * var(--fs-scale)); }
+[data-surface="app"] .cal-ev:not(.allday) {
+  background: none; border-inline-start: 0; border-radius: 0; padding-block: 1px; padding-inline: 12px 2px;
+}
+[data-surface="app"] .cal-ev:not(.allday)::before {
+  content: ""; position: absolute; inset-inline-start: 2px; top: 50%; width: 6px; height: 6px; margin-top: -3px;
+  border-radius: var(--r-dot); background: var(--ev-c, var(--accent));
+}
+[data-surface="app"] .cal-ev .t { font-family: var(--sans); font-variant-numeric: tabular-nums; }
+[data-surface="app"] .cal-ev.allday {
+  isolation: isolate; background: none; border-inline-start: 0; border-radius: 0;
+  padding-block: 1px; padding-inline: 7px; overflow: hidden;
+}
+[data-surface="app"] .cal-ev.allday::before {
+  content: ""; position: absolute; inset: 0; z-index: -1;
+  background: color-mix(in oklch, var(--ev-c, var(--ok)) 36%, var(--bg));
+  clip-path: polygon(4px 6%, calc(100% - 2px) 0, 100% 48%, calc(100% - 5px) 100%, 0 94%, 2px 46%);
+}
+[data-surface="app"] .cal-ev.allday[data-span="start"] { margin-right: -7px; }
+[data-surface="app"] .cal-ev.allday[data-span="start"]::before { clip-path: polygon(4px 6%, 100% 2%, 100% 98%, 0 94%, 2px 46%); }
+[data-surface="app"] .cal-ev.allday[data-span="mid"] { margin-left: -7px; margin-right: -7px; }
+[data-surface="app"] .cal-ev.allday[data-span="mid"]::before { clip-path: polygon(0 2%, 100% 0, 100% 100%, 0 98%); }
+[data-surface="app"] .cal-ev.allday[data-span="end"] { margin-left: -7px; }
+[data-surface="app"] .cal-ev.allday[data-span="end"]::before { clip-path: polygon(0 2%, calc(100% - 2px) 0, 100% 48%, calc(100% - 5px) 100%, 0 98%); }
+[data-surface="app"] .cal-ev.allday:is([data-span="mid"], [data-span="end"]) { padding-left: 14px; }
+[data-surface="app"] .cal-ev.allday.cont > .t { display: none; }
+[data-surface="app"] .cal-ev[data-quiet] { text-overflow: clip; }
+[data-surface="app"] .cal-ev[data-quiet] > bdi { color: transparent; }
+[data-surface="app"] .ev-band {
+  display: block; height: 4px; margin-top: 2px;
+  background: var(--ev-c, var(--ok));
+  clip-path: polygon(3px 10%, calc(100% - 1px) 0, 100% 50%, calc(100% - 3px) 100%, 0 90%, 1px 50%);
+}
+[data-surface="app"] .ev-band[data-span="start"] { margin-right: -5px; clip-path: polygon(3px 10%, 100% 0, 100% 100%, 0 90%, 1px 50%); }
+[data-surface="app"] .ev-band[data-span="mid"] { margin-left: -5px; margin-right: -5px; clip-path: none; }
+[data-surface="app"] .ev-band[data-span="end"] { margin-left: -5px; clip-path: polygon(0 0, calc(100% - 1px) 0, 100% 50%, calc(100% - 3px) 100%, 0 100%); }
+
+
+/* ---- the page's top -------------------------------------------------------------
+   The month written large in Newsreader italic and underlined in coral
+   (MonthInk), the year a margin note beside it. On a desktop the month leads
+   and the controls follow it (the month's drawing goes before it), in the DOM
+   as on screen. The header is a size container there: in less than 840px of
+   header (a tablet, or a narrow window beside the sidebar) the month steps
+   down to the title size, and in less than 700px the controls take a row of
+   their own, together, under the month (the title claims the rest of the
+   first row). Wrapping is the last resort beyond that: never over the month. On a phone the
+   controls keep their place before the month, which sits at the right (one size
+   down under 360px); the title clips (app.css), so its padding holds the
+   underline inside it, and an overflow loses the year's end, never the month's
+   start. */
+[data-surface="app"] .cal-head { align-items: flex-end; padding-top: 4px; padding-bottom: 12px; }
+[data-surface="app"] .cal-head .cal-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; margin-bottom: 6px; }
+[data-surface="app"] .cal-month {
+  position: relative; font-family: var(--serif); font-size-adjust: none; font-style: italic; font-weight: 500;
+  font-size: calc(var(--fs-app-display) * var(--fs-scale)); line-height: 1; letter-spacing: -0.01em; color: var(--fg);
+}
+[data-surface="app"] .cal-year {
+  font-family: var(--serif); font-size-adjust: none; font-style: italic; font-weight: 400; font-variant-numeric: tabular-nums;
+  font-size: calc(var(--fs-app-note) * var(--fs-scale)); color: var(--fg-muted);
+}
+[data-surface="app"] .month-ink {
+  display: block; position: absolute; left: 0; bottom: -9px; width: 100%; height: 9px; overflow: visible; pointer-events: none;
+  fill: none; stroke: var(--accent); stroke-width: var(--stroke-strike); stroke-linecap: round;
+}
+[data-surface="app"] .cal-head > .icon-btn,
+[data-surface="app"] .cal-head > .btn { margin-bottom: 8px; }
+@media (min-width: 721px) {
+  [data-surface="app"] .cal-head { container: cal-head / inline-size; flex-wrap: wrap; row-gap: 8px; }
+  [data-surface="app"] .cal-head .cal-title { flex: none; }
+}
+@container cal-head (max-width: 840px) {
+  [data-surface="app"] .cal-month { font-size: calc(var(--fs-app-title) * var(--fs-scale)); }
+}
+@container cal-head (max-width: 700px) {
+  [data-surface="app"] .cal-head .cal-title { flex: 1 0 100%; }
+}
+@media (max-width: 720px) {
+  [data-surface="app"] .cal-head .cal-title { gap: 6px; padding-bottom: 8px; margin-bottom: -4px; }
+  [data-surface="app"] .cal-head .cal-month { margin-inline-start: auto; }
+  [data-surface="app"] .cal-month { font-size: calc(var(--fs-app-headline) * var(--fs-scale)); }
+  [data-surface="app"] .cal-year { font-size: calc(var(--fs-app-meta) * var(--fs-scale)); }
+  [data-surface="app"] .month-ink { bottom: -7px; height: 7px; }
+  [data-surface="app"] .cal-head > .icon-btn,
+  [data-surface="app"] .cal-head > .btn { margin-bottom: 0; }
+  [data-surface="app"] .cal-head { align-items: center; padding-bottom: 14px; }
+}
+/* The narrowest phones leave the title 128px beside ‹ Today ›: there the
+   month steps down one size and the year one more, closer to it, so
+   "September 2026" fits whole with room to spare. */
+@media (max-width: 359px) {
+  [data-surface="app"] .cal-month { font-size: calc(var(--fs-app-section) * var(--fs-scale)); }
+  [data-surface="app"] .cal-head .cal-title { gap: 4px; }
+  [data-surface="app"] .cal-year { font-size: calc(var(--fs-app-small) * var(--fs-scale)); }
+}
+
 /* The share page in Today's hand (SharePage under Field notes; a preset keeps
    its cards). The header is Today's: what the page is as a margin note, the
    weekday in italic, the date at the display size. Nothing is set under the
@@ -1010,4 +1180,21 @@
 @media (min-width: 1024px) and (min-height: 860px) {
   [data-surface="app"] .share-wrap--board { overflow-y: visible; }
   [data-surface="app"] .share--board .share-side { position: sticky; top: 28px; }
+}
+
+/* ---- the month's drawing ----------------------------------------------------------
+   The page's one illustration on a desktop (none on a phone): the month's own
+   drawing, still, from the drawing engine (view 'month'), at the head of the
+   page. Its box is held whether or not the drawing has arrived, so the month
+   never moves sideways when it does; it steps down with the month in a
+   narrow header. */
+[data-surface="app"] .cal-drawing { display: block; flex: none; width: 210px; height: 115.5px; margin-inline-end: 4px; margin-bottom: -6px; }
+[data-surface="app"] .cal-drawing .day-drawing { width: 100%; height: 100%; }
+@container cal-head (max-width: 840px) {
+  [data-surface="app"] .cal-drawing { width: 160px; height: 88px; }
+}
+/* With the drawing beside it, the title claims what the drawing leaves of the
+   first row: 160px, its 4px margin and the header's 12px gap. */
+@container cal-head (max-width: 700px) {
+  [data-surface="app"] .cal-head .cal-drawing + .cal-title { flex-basis: calc(100% - 176px); }
 }

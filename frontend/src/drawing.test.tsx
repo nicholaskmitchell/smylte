@@ -2,10 +2,11 @@
 // it reaches the DOM, the conditions agree with the server's, and the renderer
 // marks exactly the parts the day's state calls for.
 import { render } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import fixture from './test/drawing-fixture.json'
 import { DayDrawing } from './components/DayDrawing'
-import { EMPTY_DAY, evaluate, sanitizeDrawing, type Atom, type DayState } from './drawing'
+import { EMPTY_DAY, cacheDrawing, evaluate, readCachedDrawing, sanitizeDrawing, type Atom, type DayState } from './drawing'
+import { setCacheUser } from './cache'
 
 const day = (over: Partial<DayState>): DayState => ({ ...EMPTY_DAY, nothingPlanned: false, ...over })
 
@@ -163,5 +164,31 @@ describe('<DayDrawing>', () => {
     rerender(<DayDrawing drawing={drawing} state={day({ focusActive: true })} />)
     expect(container.querySelector('.dm-ambient')!.classList.contains('on')).toBe(true)
     expect(container.querySelectorAll('.dm-ambient .amb').length).toBe(6)
+  })
+})
+
+describe("the month's drawing", () => {
+  const month = (day: string) => ({ ...fixture, view: 'month', day })
+  afterEach(() => {
+    setCacheUser('')
+    localStorage.clear()
+  })
+
+  it("is accepted when named by its month's first day", () => {
+    expect(sanitizeDrawing(month('2026-11-01'))).not.toBeNull()
+    expect(sanitizeDrawing(month('2026-11-16'))).toBeNull()
+    expect(sanitizeDrawing({ ...month('2026-11-01'), day: null })).toBeNull()
+  })
+
+  it('is mirrored once per month of the year', () => {
+    setCacheUser('u')
+    const theme = fixture.theme as 'light'
+    cacheDrawing(sanitizeDrawing(month('2026-11-01'))!)
+    cacheDrawing(sanitizeDrawing(month('2026-12-01'))!)
+    expect(readCachedDrawing('month', '2026-11-01', theme)?.day).toBe('2026-11-01')
+    expect(readCachedDrawing('month', '2026-12-01', theme)?.day).toBe('2026-12-01')
+    expect(readCachedDrawing('month', '2027-11-01', theme)).toBeNull()
+    const keys = Object.keys(localStorage).filter((k) => k.startsWith('smylte-cache:drawing:')).sort()
+    expect(keys).toEqual([`smylte-cache:drawing:u:month-11:${theme}`, `smylte-cache:drawing:u:month-12:${theme}`])
   })
 })

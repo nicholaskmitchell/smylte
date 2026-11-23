@@ -55,7 +55,7 @@ export type DrawMark = {
 }
 
 export type DrawingPayload = {
-  view: 'today' | 'tasks' | 'calendar' | 'settings'
+  view: 'today' | 'tasks' | 'calendar' | 'settings' | 'month'
   day: string | null
   subject: string
   theme: 'light' | 'dark'
@@ -152,7 +152,10 @@ function inside(o: [number, number], [x, y, w, h]: number[]): boolean {
 export function sanitizeDrawing(raw: unknown): DrawingPayload | null {
   if (!raw || typeof raw !== 'object') return null
   const p = raw as Record<string, unknown>
-  if (!['today', 'tasks', 'calendar', 'settings'].includes(p.view as string)) return null
+  if (!['today', 'tasks', 'calendar', 'settings', 'month'].includes(p.view as string)) return null
+  // The month's drawing is named by the month's first day, which is what its
+  // place in the mirror is keyed by.
+  if (p.view === 'month' && (typeof p.day !== 'string' || !p.day.endsWith('-01'))) return null
   if (p.day !== null && (typeof p.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(p.day))) return null
   if (typeof p.subject !== 'string' || !/^[\w-]{1,40}$/.test(p.subject)) return null
   if (p.theme !== 'light' && p.theme !== 'dark') return null
@@ -195,13 +198,18 @@ export function sanitizeDrawing(raw: unknown): DrawingPayload | null {
 
 const KEY = 'smylte-cache:drawing'
 
-function keyFor(view: string, theme: string): string | null {
+/** The mirror's key. A view's drawing is one per theme; the month's are one
+ *  per month of the year as well (twelve a theme at most, about 10 KB each),
+ *  so paging between months paints each at once after its first visit. */
+function keyFor(view: string, theme: string, day: string | null): string | null {
   const user = lastCacheUser()
-  return user ? `${KEY}:${user}:${view}:${theme}` : null
+  if (!user) return null
+  const slot = view === 'month' && day ? `month-${day.slice(5, 7)}` : view
+  return `${KEY}:${user}:${slot}:${theme}`
 }
 
 export function readCachedDrawing(view: DrawingPayload['view'], day: string | null, theme: 'light' | 'dark'): DrawingPayload | null {
-  const key = keyFor(view, theme)
+  const key = keyFor(view, theme, day)
   if (!key) return null
   try {
     const raw = localStorage.getItem(key)
@@ -212,7 +220,7 @@ export function readCachedDrawing(view: DrawingPayload['view'], day: string | nu
 }
 
 export function cacheDrawing(d: DrawingPayload): void {
-  const key = keyFor(d.view, d.theme)
+  const key = keyFor(d.view, d.theme, d.day)
   if (!key) return
   try { localStorage.setItem(key, JSON.stringify(d)) } catch { /* private mode / quota */ }
 }
