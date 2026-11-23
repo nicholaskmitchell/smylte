@@ -29,6 +29,10 @@ export const viewport = (width: number, height = 844) => page.viewport(width, he
 export async function mount(html: string): Promise<HTMLElement> {
   const host = document.createElement('div')
   host.innerHTML = html
+  // Any face that finishes loading while this mount waits (see LATE FACES).
+  let landed = false
+  const onLanded = () => { landed = true }
+  document.fonts.addEventListener('loadingdone', onLanded)
   document.body.appendChild(host)
   // SETTLE, rather than await once. The paragraph above is a Chromium
   // observation: there, one `ready` after the mount is enough. WebKit resolves
@@ -48,6 +52,21 @@ export async function mount(html: string): Promise<HTMLElement> {
   for (let i = 0; i < 20 && document.fonts.status !== 'loaded'; i++) {
     await new Promise(requestAnimationFrame)
     await document.fonts.ready
+  }
+  document.fonts.removeEventListener('loadingdone', onLanded)
+  // LATE FACES. Waiting for the faces is not enough for a <select>: Chromium
+  // lays one out once, with the fallback's metrics if its face has not
+  // arrived, and keeps that height when the face lands (at a phone's 16px,
+  // 40px where a select laid out after the load is 43px; WebKit lays it out
+  // again). So the first fixture a file mounts measured a select by the
+  // fallback, which ink-fields.browser.test.tsx caught on CI, where the
+  // fonts arrive more slowly than here. When a face landed during this
+  // mount, the subtree is put back, which lays it out afresh with the faces
+  // in, as a page whose fonts had already loaded lays it out.
+  // browser-measure.browser.test.tsx holds this.
+  if (landed) {
+    host.remove()
+    document.body.appendChild(host)
   }
   // AT REST. Popovers, menus, modals, sheets, toasts and the scrim all enter
   // with a fade and a short rise (app.css, "entrances"), so for a few hundred
