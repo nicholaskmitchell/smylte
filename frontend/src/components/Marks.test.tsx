@@ -5,7 +5,7 @@ import { HomeInk, IconInk, type Icon } from './Marks'
 // The pen's icon set. Geometry only: size, stroke and colour are CSS
 // (fieldnotes.css), and icons.browser.test.tsx measures those.
 const ALL: Icon[] = ['left', 'right', 'close', 'plus', 'up', 'down', 'foldLeft', 'foldRight',
-  'check', 'pause', 'more', 'caret', 'date', 'time', 'reset', 'pin', 'mail', 'edit']
+  'check', 'pause', 'more', 'caret', 'date', 'time', 'reset', 'pin', 'mail', 'edit', 'play']
 
 describe('<IconInk>', () => {
   it.each(ALL)('draws %s on the 24-unit grid, hidden from assistive tech', (icon) => {

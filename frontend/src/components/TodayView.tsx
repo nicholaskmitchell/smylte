@@ -2738,7 +2738,7 @@ export function TodayView({
       <button type="button" className="btn ghost today-focus" onClick={onStartWorking}
         aria-label={tr('today.startWorking')}>
         <span className="today-focus__word">{tr('today.startWorking')}</span>
-        <span className="today-focus__glyph mono" aria-hidden="true">▶</span>
+        <span className="today-focus__glyph mono" aria-hidden="true">▶<IconInk icon="play" /></span>
       </button>
     )}
     {/* THE OVERFLOW, holding the two actions that are not daily.

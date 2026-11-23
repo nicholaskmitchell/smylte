@@ -226,7 +226,7 @@ export function AddInk() {
 // hide the icon (app.css) and show the glyph, are all unchanged.
 export type Icon =
   | 'left' | 'right' | 'close' | 'plus' | 'up' | 'down' | 'foldLeft' | 'foldRight'
-  | 'check' | 'pause' | 'more' | 'caret' | 'date' | 'time' | 'reset' | 'pin' | 'mail' | 'edit'
+  | 'check' | 'pause' | 'more' | 'caret' | 'date' | 'time' | 'reset' | 'pin' | 'mail' | 'edit' | 'play'
 
 const ICON: Record<Icon, string[]> = {
   left: ['M14.6 6.2C12.6 8.2 10.6 10.2 9 12.1C10.7 13.9 12.7 15.9 14.8 17.9'],
@@ -260,9 +260,9 @@ const ICON: Record<Icon, string[]> = {
   ],
   // A drawing pin: keep the window on top.
   pin: [
-    'M8.6 5C10.9 4.9 13.1 4.9 15.4 5',
-    'M9.9 5.2C10 7.3 9.4 9.1 7.6 10.8C10.5 11 13.5 11 16.4 10.8C14.6 9.1 14 7.3 14.1 5.2',
-    'M12 11C12.1 13.7 11.9 16.5 12 19.2',
+    'M7.9 4.7C10.6 4.6 13.4 4.6 16.1 4.7',
+    'M9.6 4.9C9.7 7.4 9 9.6 6.8 11.6C10.3 11.9 13.7 11.9 17.2 11.6C15 9.6 14.3 7.4 14.4 4.9',
+    'M12 11.9C12.1 14.5 11.9 17.1 12 19.6',
   ],
   // An envelope: suggested from email.
   mail: [
@@ -274,6 +274,8 @@ const ICON: Record<Icon, string[]> = {
     'M5.8 18.2C6.1 16.9 6.4 15.6 6.7 14.3C9.6 11.4 12.6 8.4 15.5 5.5C16.5 6.4 17.5 7.4 18.5 8.5C15.6 11.4 12.6 14.3 9.7 17.3C8.4 17.6 7.1 17.9 5.8 18.2Z',
     'M13.6 7.4C14.6 8.4 15.6 9.4 16.6 10.4',
   ],
+  // A solid triangle pointing right, drawn as an outline: start working.
+  play: ['M8.4 5.9C8.2 9.9 8.2 14.1 8.4 18.1C11.7 16.1 15 14.1 18.2 12C15 9.9 11.7 7.9 8.4 5.9Z'],
 }
 
 /** One of the pen's icons, inside the control it draws. `className` is added

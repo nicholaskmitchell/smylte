@@ -571,7 +571,7 @@ export function Sidebar({ kind, items, sel = '', countOf, onSelect, onItems, api
             </svg>
             <span className="mb-title">{tr(words.heading)}</span>
             <span className="mb-summary">{summary}</span>
-            <span className="mb-caret" aria-hidden="true">▾</span>
+            <span className="mb-caret" aria-hidden="true">▾<IconInk icon="caret" /></span>
           </button>
           {onToggleCompleted && (
             <button className={`side-mobile-completed ${completedActive ? 'active' : ''}`}

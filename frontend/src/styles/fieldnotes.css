@@ -791,7 +791,7 @@
 /* The boxes: each the size it had (5x12 caret, 16x12 rename, 17x13 edit,
    27.5x24 reset, 18x16 remove, 15x17 and 19x17 on Today), grown to 16px. */
 [data-surface="app"] .group-caret:has(> .caret > .icon-ink) { padding: 0; margin-inline: -5.5px; }
-[data-surface="app"] .cal-tasks .group-caret:has(> .caret > .icon-ink) { margin-inline: -7px; }
+[data-surface="app"] .cal-tasks .group-caret:has(> .caret > .icon-ink) { margin-inline: -8.5px -5.5px; }
 [data-surface="app"] .group-btn:has(> .icon-ink) { padding: 0; }
 [data-surface="app"] .side-edit:has(> .icon-ink) { padding: 0 0.5px; }
 [data-surface="app"] .dash-remove:has(> .icon-ink) { padding: 0 1px; }
@@ -807,9 +807,11 @@
 }
 [data-surface="app"] .appear-clear:has(> .icon-ink):active:not(:disabled) { background-color: var(--ctl-face); border-color: var(--edge-control); color: var(--fg); }
 /* 14px in a task's fold, which keeps its 14px column and its 17px line, and
-   turns with it (app.css, `.twisty.open`). */
+   turns with it (app.css, `.twisty.open`). The fold sits beside the check,
+   whose centre is --today-line / 2 down the row, and --today-line scales with
+   --fs-scale; so the margin is that centre less half the fold's 17px line. */
 [data-surface="app"] .twisty > .icon-ink { width: 14px; height: 14px; stroke-width: calc(var(--stroke-pen) * 18 / 14); }
-[data-surface="app"] .twisty:has(> .icon-ink) { padding: 0; }
+[data-surface="app"] .twisty:has(> .icon-ink) { padding: 0; margin-top: calc(var(--today-line) / 2 - 8.5px); }
 /* 18px on the Focus float, as tall as Dock beside it. Pressed, the pin wears
    the highlighter. */
 [data-surface="app"] .focus-pin > .icon-ink { width: 18px; height: 18px; }
@@ -826,7 +828,7 @@
   [data-surface="app"] .side.drawer .group-eye > .check-ink .check-frame { stroke-width: var(--stroke-pen); }
   [data-surface="app"] .side.drawer .group-eye > .check-ink .check-tick { stroke-width: var(--stroke-tick); }
   [data-surface="app"] .side.drawer .group-caret:has(> .caret > .icon-ink) { padding: 1px 0; margin-inline: -4.5px; }
-  [data-surface="app"] .side.drawer .cal-tasks .group-caret:has(> .caret > .icon-ink) { margin-inline: -6px; }
+  [data-surface="app"] .side.drawer .cal-tasks .group-caret:has(> .caret > .icon-ink) { margin-inline: -7.5px -4.5px; }
   [data-surface="app"] .side.drawer :is(.group-btn:has(> .icon-ink), .group-eye:has(> .check-ink)) { padding: 4.5px; }
   [data-surface="app"] .side.drawer .side-edit:has(> .icon-ink) { padding: 5.5px 7.5px; }
   [data-surface="app"] .today-plus:has(> .icon-ink) { padding: 5.5px 4.5px; }
@@ -837,6 +839,27 @@
   [data-surface="app"] :is(.side-mobile-completed, .side-mobile-add):has(> .icon-ink) { padding: 0 12px; }
   [data-surface="app"] .side-mobile-completed[aria-pressed="true"] { background: var(--ctl-on); color: var(--fg); }
   [data-surface="app"] .side-mobile-completed > .side-badge { font-size: calc(11px * var(--fs-scale)); }
+  /* The trigger's ▾ is a 16px caret, the glyph kept as text at no size so the
+     trigger's height holds. The ▾ was 6px wide, so the icon gives the summary
+     its old width back with a negative margin. */
+  [data-surface="app"] .side-mobiletrigger .mb-caret:has(> .icon-ink) { display: inline-flex; font-size: 0; }
+  [data-surface="app"] .side-mobiletrigger .mb-caret > .icon-ink {
+    width: 16px; height: 16px; margin-inline: -5px; stroke-width: calc(var(--stroke-pen) * 18 / 16);
+  }
+  /* Today's Start working shows its word, and on a phone the ▶ (app.css): the
+     play icon at 18px, the ▶ kept as text at no size. Inline-flex, so the
+     glyph is still one box on the button's line, and top-aligned, so the
+     button's baseline stays where it was: at no size its line box is empty,
+     the baseline falls to the bottom edge, and the Field notes head, which
+     aligns by baseline, grows and drops its tools. Its box is one line of the
+     button's text tall, with the icon centred in it, so the icon stays in the
+     middle of the button as the text scale grows it. The ▶ was 14px wide, so
+     the icon gives the button its old width back with a negative margin. */
+  [data-surface="app"] .today-focus__glyph:has(> .icon-ink) {
+    display: inline-flex; vertical-align: top; align-items: center; font-size: 0;
+    height: calc(var(--fs-control) * var(--fs-scale) * var(--lh-control));
+  }
+  [data-surface="app"] .today-focus__glyph > .icon-ink { width: 18px; height: 18px; margin-inline: -2px; }
 }
 /* A group head's show-all (the sidebar's and the Calendar's Tasks) is on or
    off: the drawn check at its row's size, ticked while aria-pressed is true,
