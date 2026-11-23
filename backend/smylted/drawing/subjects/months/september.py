@@ -4,9 +4,9 @@ Day: an apple tree left of centre, its round crown hung with coral apples; a
 wooden ladder leaning into the crown from the right; a woven basket on the
 ground at the right with three apples showing over its rim; a sun.
 
-Night: the same tree and basket under a low harvest moon rising over the
-basket, with its glow, and stars. The ladder has been taken down and lies
-along the ground.
+Night: the same tree and basket under a harvest moon in the open sky between
+them, with its glow, and stars. The ladder has been taken down and lies along
+the ground.
 
 A month drawing: still, and the same whatever the day's state (months/_page.py).
 """
@@ -42,7 +42,7 @@ CROP = (150.5, 163.0, 175.5)
 CROP_R = 5.5
 CROP_LIFT = 2.0                          # how far above the rim each apple's centre sits
 SUN = (172.0, 22.0)
-MOON = (166.0, 45.0, 9.5)
+MOON = (140.0, 30.0, 9.5)                 # its glow clears the basket's handle
 
 
 class September:
