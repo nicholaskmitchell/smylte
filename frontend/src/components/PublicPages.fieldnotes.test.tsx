@@ -424,6 +424,17 @@ describe('<SharePage> under Field notes', () => {
     expect(container.querySelector('.share-gone__title')).not.toBeNull()
     expect(container.querySelector('.share-drawing')).toBeNull()
     expect(drawMock).toHaveBeenCalledTimes(1)
+    // The gone card shows no drawing whatever the state holds, so the link
+    // comes back with a drawing still on its way: only one dropped when the
+    // link went leaves the page without one.
+    viewMock.mockResolvedValue(fresh(WITH_ROWS))
+    drawMock.mockReturnValue(new Promise(() => {}))
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
+    await settle()
+    await settle()
+    expect(container.querySelector('.share-presence')).not.toBeNull()
+    expect(container.querySelector('.share-drawing')).toBeNull()
+    expect(drawMock).toHaveBeenCalledTimes(2)
   })
 
   it('draws nothing that fails validation', async () => {
@@ -475,6 +486,38 @@ describe('<SharePage> under Field notes', () => {
       'share-today share-section', 'share-agenda share-section',
       'share-list share-section', 'share-list share-section', 'share-foot',
     ])
+  })
+
+  it('holds the left column in view only where it fits the window, measured', async () => {
+    setSurface(true)
+    const offset = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')!
+    const inner = Object.getOwnPropertyDescriptor(window, 'innerHeight')!
+    let sideHeight = 778
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+      configurable: true, get(this: HTMLElement) { return this.classList.contains('share-side') ? sideHeight : 0 },
+    })
+    const windowAt = (h: number) => Object.defineProperty(window, 'innerHeight', { configurable: true, value: h })
+    const resize = () => act(() => { window.dispatchEvent(new Event('resize')) })
+    try {
+      windowAt(900)
+      viewMock.mockResolvedValue(fresh(RICH))
+      const { container } = render(<SharePage token="tok" />)
+      await settle()
+      await settle()
+      const wrap = () => container.querySelector('.share-wrap')!
+      expect(wrap()).toHaveClass('share-wrap--board')
+      expect(wrap(), '778 under a 900 window').toHaveClass('share-wrap--sticky')
+      windowAt(760)
+      resize()
+      expect(wrap(), '778 under a 760 window').not.toHaveClass('share-wrap--sticky')
+      sideHeight = 900
+      windowAt(900)
+      resize()
+      expect(wrap(), '900 under a 900 window').not.toHaveClass('share-wrap--sticky')
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, 'offsetHeight', offset)
+      Object.defineProperty(window, 'innerHeight', inner)
+    }
   })
 
   it('keeps the Settings preview free of the board and the drawing', () => {

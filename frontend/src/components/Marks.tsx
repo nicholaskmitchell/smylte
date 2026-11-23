@@ -145,7 +145,7 @@ export function StrikeInk({ on, seed = '' }: { on: boolean; seed?: string }) {
   const s = seedOf(seed)
   return (
     <svg ref={ref} className={`strike-ink ${armed && on ? 'on' : ''}`} aria-hidden="true" focusable="false"
-      width={size[0] || undefined} height={size[1] || undefined}
+      width={size[0] || 0} height={size[1] || 0}
       viewBox={size[0] ? `0 0 ${size[0].toFixed(1)} ${size[1].toFixed(1)}` : undefined}>
       {lines.map((l, i) => (
         <path key={i} pathLength={1} d={wave(l, s + i * 7919)} style={{ ['--line' as string]: i }} />

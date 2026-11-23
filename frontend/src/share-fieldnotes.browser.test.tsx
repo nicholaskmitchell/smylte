@@ -245,9 +245,12 @@ describe('the share board', () => {
     expect(offenders).toEqual([])
   })
 
+  // SharePage adds share-wrap--sticky where it measured the column to fit.
+  const STICKY = PAGE.replace('"share-wrap share-wrap--board"', '"share-wrap share-wrap--board share-wrap--sticky"')
+
   it('holds the left column in view while the right one scrolls, on a window tall enough', async () => {
     await viewport(1440, 900)
-    const host = await mount(PAGE)
+    const host = await mount(STICKY)
     host.querySelector('.share-main')!.insertAdjacentHTML('beforeend', '<div style="height: 1600px"></div>')
     await frame()
     document.scrollingElement!.scrollTop = 300
@@ -255,6 +258,20 @@ describe('the share board', () => {
     expect(document.scrollingElement!.scrollTop, 'the page did not scroll').toBe(300)
     expect(Math.abs(box(host.querySelector('.share-side')!).top - 28)).toBeLessThanOrEqual(1)
     expect(getComputedStyle(host.querySelector('.share-wrap')!).overflowY).toBe('visible')
+    document.scrollingElement!.scrollTop = 0
+  })
+
+  it('lets the left column scroll away where it was not measured to fit', async () => {
+    await viewport(1440, 900)
+    const host = await mount(PAGE)
+    host.querySelector('.share-main')!.insertAdjacentHTML('beforeend', '<div style="height: 1600px"></div>')
+    await frame()
+    document.scrollingElement!.scrollTop = 300
+    await frame()
+    expect(document.scrollingElement!.scrollTop, 'the page did not scroll').toBe(300)
+    const side = host.querySelector('.share-side')!
+    expect(getComputedStyle(side).position).toBe('static')
+    expect(box(side).top).toBeLessThan(0)
     document.scrollingElement!.scrollTop = 0
   })
 

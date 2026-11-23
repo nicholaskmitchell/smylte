@@ -216,6 +216,8 @@ describe('events in pen and marker', () => {
   })
 
   it('draws one swipe across a run, left to right whatever the title\'s direction', async () => {
+    // Offsite repeats: its repeat mark is written once, with its title.
+    m.events.mockResolvedValue([{ ...events[0], is_recurring: true }, ...events.slice(1)])
     await mountAt(1440, 900)
     for (const [title, from] of [['Offsite', 0], ['שלום עולם', 3]] as const) {
       const [start, mid, end] = [0, 1, 2].map((n) => chip(from + n, title))
@@ -225,6 +227,12 @@ describe('events in pen and marker', () => {
       expect(Math.abs(e.left - mi.right), `${title}: mid to end`).toBeLessThanOrEqual(1.5)
       expect(getComputedStyle(mid.querySelector('bdi')!).color).toBe('rgba(0, 0, 0, 0)')
       expect(getComputedStyle(mid).textOverflow).toBe('clip')
+      if (from === 0) {
+        const recur = [start, mid, end].map((c) => c.querySelector('.recur'))
+        for (const r of recur) expect(r, `${title} has no repeat mark`).not.toBeNull()
+        expect(getComputedStyle(recur[0]!).color, 'the first day\'s repeat mark').not.toBe('rgba(0, 0, 0, 0)')
+        for (const r of recur.slice(1)) expect(getComputedStyle(r!).color, 'a quiet day\'s repeat mark').toBe('rgba(0, 0, 0, 0)')
+      }
     }
   })
 
@@ -258,6 +266,38 @@ describe('events in pen and marker', () => {
       expect(c.scrollHeight, `${c.getAttribute('data-day')} clips what it holds`).toBeLessThanOrEqual(c.clientHeight + 1)
     }
     expect(document.querySelector('.cal-cell.today .cal-more'), 'no "+N more" on today').not.toBeNull()
+  })
+
+  it('meets the swipe across every day boundary in the fixed window, cells as wide inside as ever', async () => {
+    m.events.mockResolvedValue([allDay('r', 'Retreat', 1, 4)])
+    const content = () => [...document.querySelectorAll<HTMLElement>('.cal-cell')].map((c) => {
+      const s = getComputedStyle(c)
+      return c.getBoundingClientRect().width - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight)
+        - parseFloat(s.borderLeftWidth) - parseFloat(s.borderRightWidth)
+    })
+    await mountAt(1024, 768)
+    const dynamic = content()
+    root?.unmount(); host?.remove(); root = null; host = null
+    await mountAt(1024, 768, { fit: 'fixed' })
+    expect(document.querySelector('.cal-scroll.fixed'), 'not the fixed window').not.toBeNull()
+    const fixed = content()
+    expect(fixed).toHaveLength(dynamic.length)
+    fixed.forEach((w, i) => expect(Math.abs(w - dynamic[i]), `cell ${i}'s content width`).toBeLessThanOrEqual(0.01))
+    // What paints is the chip as its cell clips it (overflow: hidden, at the
+    // padding box).
+    const visible = (d: number) => {
+      const c = chip(d, 'Retreat').getBoundingClientRect()
+      const cell = document.querySelector(`.cal-cell[data-day="${day(d)}"]`)!
+      const r = cell.getBoundingClientRect()
+      const s = getComputedStyle(cell)
+      return {
+        left: Math.max(c.left, r.left + parseFloat(s.borderLeftWidth)),
+        right: Math.min(c.right, r.right - parseFloat(s.borderRightWidth)),
+      }
+    }
+    const [mon, tue, wed] = [1, 2, 3].map(visible)
+    expect(Math.abs(tue.left - mon.right), `Mon ends at ${mon.right}, Tue starts at ${tue.left}`).toBeLessThanOrEqual(0.5)
+    expect(Math.abs(wed.left - tue.right), `Tue ends at ${tue.right}, Wed starts at ${wed.left}`).toBeLessThanOrEqual(0.5)
   })
 })
 

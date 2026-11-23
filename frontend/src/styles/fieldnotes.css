@@ -934,6 +934,11 @@
 /* The fixed window's cells clip what leaves them (app.css), so there the ring
    is drawn a little tighter, inside the cell. */
 [data-surface="app"] .cal-scroll.fixed .today-ink { left: -6px; top: -4px; width: calc(100% + 12px); height: calc(100% + 8px); }
+/* The same clip stops at the padding box, so a cell's 1px right border (clear
+   here) would cut every all-day swipe at the day's edge. The border's pixel
+   becomes padding: the clip reaches the next day and the content box keeps its
+   width. */
+[data-surface="app"] .cal-scroll.fixed .cal-cell { border-right-width: 0; padding-right: 7px; }
 [data-surface="app"] .cal-cell[data-focus] { box-shadow: none; }
 @media (max-width: 720px) {
   [data-surface="app"] .cal-cell { align-items: stretch; }
@@ -950,7 +955,7 @@
    which keeps --fg on it at 6.7:1 or more in both themes), one stroke across
    the days it covers: ragged where the nib went down and lifted, cut square
    where it carries on into the next day (data-span, set by CalendarView), its
-   title written once per week (data-quiet hides the rest, and its ellipsis). The carry-overs are
+   title written once per week (data-quiet hides the rest, its ellipsis and its repeat mark). The carry-overs are
    PHYSICAL margins, left and right: the day axis runs left to right whatever a
    title's dir, as the resize grip's does (app.css, .ev-resize). Every chip is
    the same height, which measureCells assumes: an all-day chip takes the timed
@@ -985,6 +990,7 @@
 [data-surface="app"] .cal-ev.allday.cont > .t { display: none; }
 [data-surface="app"] .cal-ev[data-quiet] { text-overflow: clip; }
 [data-surface="app"] .cal-ev[data-quiet] > bdi { color: transparent; }
+[data-surface="app"] .cal-ev[data-quiet] > .recur { color: transparent; }
 [data-surface="app"] .ev-band {
   display: block; height: 4px; margin-top: 2px;
   background: var(--ev-c, var(--ok));
@@ -1167,19 +1173,28 @@
   }
   [data-surface="app"] .share--board .share-main { padding-top: 4px; }
   /* Here the drawing stands over the date, the cover of their day. */
-  [data-surface="app"] .share--board .share-head--drawn { flex-direction: column-reverse; align-items: flex-start; gap: 18px; }
+  [data-surface="app"] .share--board .share-head--drawn { flex-direction: column-reverse; align-items: flex-start; gap: 6px; }
   [data-surface="app"] .share--board .share-head--drawn .share-head__text { padding-bottom: 0; }
-  [data-surface="app"] .share--board .share-drawing { width: 224px; height: 280px; margin-left: -8px; }
+  [data-surface="app"] .share--board .share-drawing { width: 224px; height: 280px; margin-left: 0; }
   [data-surface="app"] .share--board .share-today.share-section { padding-top: 0; }
   [data-surface="app"] .share--board .share-presence__clock { font-size: calc(96px * var(--fs-scale)); }
 }
-/* The left column stays in view while the right one scrolls, where the column
-   fits the window; on a shorter window it would hide the foot of the focus
-   card. .share-wrap grows with the page and scrolls nothing, but its overflow
-   would make it the scroller a sticky child holds to, so it lets go of it. */
-@media (min-width: 1024px) and (min-height: 860px) {
-  [data-surface="app"] .share-wrap--board { overflow-y: visible; }
-  [data-surface="app"] .share--board .share-side { position: sticky; top: 28px; }
+/* From 1164px the drawing stands 8px out into the margin; below that, the 8px
+   would pull its box out of the page's 16px gutter (the board is 1120px wide
+   between 16px gutters and centred, so the 8px fits from 1164 on, measured). */
+@media (min-width: 1164px) {
+  [data-surface="app"] .share--board .share-drawing { margin-left: -8px; }
+}
+/* The left column stays in view while the right one scrolls, where it fits the
+   window, measured (SharePage, share-wrap--sticky): a long "Working on" title
+   makes it taller than any fixed window height assumes, and a taller column
+   would stick with the foot of the focus card below the window. .share-wrap
+   grows with the page and scrolls nothing, but its overflow would make it the
+   scroller a sticky child holds to, so it lets go of it. The 28px is
+   SharePage's SIDE_STICKY_TOP_PX. */
+@media (min-width: 1024px) {
+  [data-surface="app"] .share-wrap--sticky { overflow-y: visible; }
+  [data-surface="app"] .share-wrap--sticky .share--board .share-side { position: sticky; top: 28px; }
 }
 
 /* ---- the month's drawing ----------------------------------------------------------

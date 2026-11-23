@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api, HttpError, type ShareEvent, type ShareFocus, type ShareList, type ShareRow, type ShareView } from '../api'
 import { syncThemeColor } from '../appearance'
 import { bucketByDay, shiftYmd } from '../calendar'
@@ -51,6 +51,10 @@ const TICK_FAST_MS = 1_000
 const TICK_SLOW_MS = 30_000
 
 const NONE: ReadonlySet<string> = new Set()
+
+/** How far below the window's top the board's left column sticks: the same
+ *  28px is the `top` of fieldnotes.css's `.share-wrap--sticky .share-side`. */
+const SIDE_STICKY_TOP_PX = 28
 
 /** Keys of today's rows that were open in `prev` and are done in `next`. */
 function flippedKeys(prev: ShareView | null, next: ShareView): ReadonlySet<string> {
@@ -303,6 +307,26 @@ export function SharePage({ token }: { token: string }) {
   // What the drawing reacts to, from what the page shows (share.ts).
   const dayState = useMemo(() => (view ? shareDayState(view, now, skewMs) : EMPTY_DAY), [view, now, skewMs])
 
+  // The board's left column stays in view while the right one scrolls only
+  // where it fits the window, and that is measured, not assumed: a long
+  // "Working on" title makes it taller than any fixed window height allows for,
+  // and a taller column would stick with its foot below the window. Measured
+  // again when the column or the window changes size, and whenever the board
+  // comes back (`board`).
+  const board = fieldNotes && phase === 'ready' && view !== null
+  const sideRef = useRef<HTMLDivElement>(null)
+  const [fits, setFits] = useState(false)
+  useLayoutEffect(() => {
+    const side = sideRef.current
+    if (!side) return
+    const measure = () => setFits(side.offsetHeight + SIDE_STICKY_TOP_PX <= window.innerHeight)
+    measure()
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null
+    ro?.observe(side)
+    window.addEventListener('resize', measure)
+    return () => { ro?.disconnect(); window.removeEventListener('resize', measure) }
+  }, [board])
+
   if (phase === 'loading') {
     // Not `null`: a blank white document for the whole round trip looks broken
     // to a stranger who was sent a link. The card is empty on purpose, because
@@ -363,9 +387,9 @@ export function SharePage({ token }: { token: string }) {
     // wide. Below that it is one column, with the drawing beside the date as
     // on Today.
     return (
-      <div className="share-wrap share-wrap--board">
+      <div className={`share-wrap share-wrap--board${fits ? ' share-wrap--sticky' : ''}`}>
         <main className="share share--board">
-          <div className="share-side">
+          <div className="share-side" ref={sideRef}>
             <header className={`share-head${drawing ? ' share-head--drawn' : ''}`}>
               <div className="share-head__text">
                 <h1 className="share-head__title">{tr('share.heading')}</h1>
