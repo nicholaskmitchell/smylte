@@ -6,10 +6,14 @@ real subjects are separate modules that plug into this engine.
 """
 from __future__ import annotations
 
+import calendar
 import dataclasses
+import hashlib
+import hmac
 import json
 import math
 import pathlib
+import random
 import re
 import time
 from datetime import date, timedelta
@@ -986,6 +990,16 @@ class _Sprig:
         return b.build(state)
 
 
+@dataclasses.dataclass
+class _Page:
+    id: str = "test-page"
+
+    def render(self, state, theme, rng):
+        b = SketchBuilder(self.id, theme, rng, view_box=(0, 0, 200, 110), still=True)
+        b.line(pen.line((10, 98), (190, 98 + rng.jitter(2))), part="ground")
+        return b.build(state)
+
+
 def test_the_test_subject_is_declarative():
     assert_declarative(_Sprig())
 
@@ -1035,6 +1049,49 @@ def test_view_drawings_are_the_same_every_day():
     assert drawing_payload(DAY, "light", "salt", view="calendar", views=views) is None
 
 
+def test_a_month_drawing_is_its_months_whatever_the_day():
+    months = {11: _Page()}
+    a = drawing_payload(date(2026, 11, 1), "light", "salt", view="month", months=months)
+    b = drawing_payload(date(2026, 11, 30), "light", "salt", view="month", months=months)
+    assert a == b and a["view"] == "month" and a["day"] == "2026-11-01"
+    assert a["viewBox"] == [0, 0, 200, 110]
+    assert drawing_payload(date(2026, 12, 1), "light", "salt", view="month", months=months) is None
+
+
+def test_each_month_has_its_own_hand_and_keeps_it_every_year():
+    salt = "f00dfeedcafe1234beadfacedeed5678"
+    page = _Page()
+    months = {10: page, 11: page}
+    oct_ = drawing_payload(date(2026, 10, 1), "light", salt, view="month", months=months)
+    nov = drawing_payload(date(2026, 11, 1), "light", salt, view="month", months=months)
+    assert oct_["marks"] != nov["marks"]
+    again = drawing_payload(date(2027, 11, 9), "light", salt, view="month", months=months)
+    assert again["marks"] == nov["marks"] and again["day"] == "2027-11-01"
+    assert salt not in json.dumps(nov)
+
+
+def test_a_share_drawing_is_the_days_subject_from_a_seed_the_salt_only_derives():
+    salt = "f00dfeedcafe1234beadfacedeed5678"
+    roster = [_Sprig(id=f"test-sprig-{i}") for i in range(5)]
+    own = drawing_payload(DAY, "light", salt, roster=roster)
+    share = drawing.share_drawing_payload(DAY, "light", salt, roster=roster)
+    assert set(share) == {"view", "day", "subject", "theme", "viewBox", "marks", "ambient"}
+    assert (share["view"], share["day"], share["theme"]) == ("today", "2026-11-16", "light")
+    assert share["subject"] == own["subject"]
+    assert share["marks"] != own["marks"]
+    seed = drawing.share_seed(salt)
+    assert seed == hmac.new(salt.encode(), b"share-drawing", hashlib.sha256).hexdigest()[:32]
+    assert re.fullmatch(r"[0-9a-f]{32}", seed) and seed != salt
+    text = json.dumps(share)
+    assert salt not in text and seed not in text
+    # Drawn in the default state: nothing in it is the owner's day.
+    subject = next(s for s in roster if s.id == share["subject"])
+    drawn = subject.render(DayState(), "light", Rng.for_day(DAY, seed, f"subject|{subject.id}"))
+    assert share == {"view": "today", "day": "2026-11-16", **drawn.to_json()}
+    assert drawing.share_drawing_payload(DAY, "light", salt, roster=roster) == share
+    assert drawing.share_drawing_payload(DAY, "light", salt, roster=[]) is None
+
+
 # -- the route ----------------------------------------------------------------
 
 @pytest.fixture
@@ -1042,6 +1099,7 @@ def api(tmp_path, monkeypatch):
     monkeypatch.setattr(
         subjects, "ROSTER", [_Sprig(id=f"test-sprig-{i}") for i in range(5)])
     monkeypatch.setattr(subjects, "VIEW_DRAWINGS", {})
+    monkeypatch.setattr(subjects, "MONTH_DRAWINGS", {})
     drawing._cached_payload.cache_clear()
     # The DAV URL points at a closed port: the drawing never reaches the wire.
     settings = dataclasses.replace(
@@ -1072,6 +1130,16 @@ def test_the_route_refuses_bad_input(api):
     r = api.get("/api/drawing?day=2026-11-16&view=tasks")
     assert r.status_code == 404
     assert r.json() == {"detail": "no drawing"}
+
+
+def test_the_route_draws_the_month(api, monkeypatch):
+    monkeypatch.setattr(subjects, "MONTH_DRAWINGS", {11: _Page()})
+    r = api.get("/api/drawing?day=2026-11-16&view=month&theme=dark")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["view"] == "month" and body["day"] == "2026-11-01"
+    assert body["subject"] == "test-page" and body["theme"] == "dark"
+    assert api.get("/api/drawing?day=2026-12-16&view=month").status_code == 404
 
 
 def test_the_route_needs_a_session(api):
@@ -1264,3 +1332,88 @@ def test_the_night_is_its_own_picture(subject):
             f"{subject.id} {where}: {night_overlap(light, dark):.2f} reused, "
             f"{night_own(light, dark)} of its own")
         assert has_standing_light(dark), f"{subject.id} {where}"
+
+
+# ── the month drawings ──────────────────────────────────────────────────────
+# The Calendar's page top (subjects/months/_page.py): still and stateless like a
+# view's drawing, landscape, and held to every geometry rule of the roster, on
+# the seeds the route uses.
+_MONTH_SALTS = ('contract-salt', 'second-salt', 'a', 'b', 'c', 'd')
+_MONTH_FULL = _DayState(progress=1, rewards=12, focus_active=True, all_done=True, overdue=3, hour=21)
+
+
+def _month_params():
+    return [pytest.param(m, s, id=f"{m:02d}-{s.id}") for m, s in sorted(_subjects.MONTH_DRAWINGS.items())]
+
+
+def _month_renders(month, subject, theme, state=None):
+    for salt in _MONTH_SALTS:
+        yield salt, subject.render(state or _DayState(), theme, _Rng(f"month|{month}|{salt}"))
+
+
+@pytest.mark.parametrize("month, subject", _month_params())
+def test_a_month_drawing_is_still_landscape_and_small(month, subject):
+    for theme in ('light', 'dark'):
+        for (salt, sketch), (_, full) in zip(_month_renders(month, subject, theme),
+                                             _month_renders(month, subject, theme, _MONTH_FULL)):
+            where = f"{subject.id} {theme} {salt}"
+            assert tuple(sketch.view_box) == (0, 0, 200, 110), where
+            assert sketch.ambient is None, f"{where}: a month drawing has no loop"
+            for m in sketch.marks:
+                assert len(m.frames) == 1, f"{where}: {m.id} ({m.part}) boils"
+                assert not m.when and m.reward is None, f"{where}: {m.id} ({m.part}) is conditional"
+            assert full.to_json() == sketch.to_json(), f"{where}: it depends on the day's state"
+            assert 'accent' in {m.role for m in sketch.marks}, f"{where}: no coral note"
+            size = len(json.dumps(sketch.to_json(), separators=(',', ':')))
+            assert size <= 24000, f"{where}: {size} bytes"
+            assert sum(len(m.frames) for m in sketch.marks) <= 200, where
+
+
+@pytest.mark.parametrize("month, subject", _month_params())
+def test_a_month_drawing_keeps_the_geometry_rules(month, subject):
+    drawn = {}
+    for theme in ('light', 'dark'):
+        for salt, sketch in _month_renders(month, subject, theme):
+            where = f"{subject.id} {theme} {salt}"
+            assert not bounds_errors(sketch), f"{where}: {bounds_errors(sketch)[:5]}"
+            assert not wash_edge_errors(sketch), f"{where}: {wash_edge_errors(sketch)[:3]}"
+            found = crossings(sketch, joins_of(subject))
+            assert not found, f"{where}: ink crosses at " + ", ".join(f"{a} x {b}" for a, b, _ in found[:10])
+            drawn[theme, salt] = sketch
+    for salt in _MONTH_SALTS:
+        light, dark = drawn['light', salt], drawn['dark', salt]
+        assert is_own_night(light, dark), (
+            f"{subject.id} {salt}: {night_overlap(light, dark):.2f} reused, {night_own(light, dark)} of its own")
+        assert has_standing_light(dark), f"{subject.id} {salt}: the night has no standing light"
+
+
+# The 40 seeded salts are a regression guard, not the proof: the geometry was
+# cleared against 1000 random salts in both themes when this was written, and
+# 40 keeps the test to about 30 seconds, because `crossings` costs about 30 ms
+# a sketch.
+_month_guard = random.Random(20261123)
+_MONTH_GUARD_SALTS = tuple('%032x' % _month_guard.getrandbits(128) for _ in range(40))
+
+
+@pytest.mark.parametrize("month, subject", [
+    pytest.param(m, s, id=calendar.month_name[m]) for m, s in sorted(_subjects.MONTH_DRAWINGS.items())])
+def test_a_month_drawing_keeps_clear_on_any_install(month, subject):
+    for theme in ('light', 'dark'):
+        for salt in _MONTH_GUARD_SALTS:
+            sketch = subject.render(_DayState(), theme, _Rng(f"month|{month}|{salt}"))
+            where = f"{subject.id} {theme} {salt}"
+            found = crossings(sketch, joins_of(subject))
+            assert not found, f"{where}: ink crosses at " + ", ".join(f"{a} x {b}" for a, b, _ in found[:10])
+            assert not bounds_errors(sketch), f"{where}: {bounds_errors(sketch)[:5]}"
+            assert not wash_edge_errors(sketch), f"{where}: {wash_edge_errors(sketch)[:3]}"
+
+
+@pytest.mark.parametrize("month, subject", _month_params())
+def test_a_month_drawing_is_fast(month, subject):
+    for theme in ('light', 'dark'):
+        best = math.inf
+        for _ in range(3):
+            t = _time.perf_counter()
+            subject.render(_DayState(), theme, _Rng(f"month|{month}|speed"))
+            best = min(best, _time.perf_counter() - t)
+        assert best < 0.05, f"{subject.id} {theme}: {best * 1000:.1f}ms"

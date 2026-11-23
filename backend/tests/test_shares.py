@@ -6,10 +6,10 @@ it cannot be read, a token column that cannot hold a short credential, a prune
 that rides on the caller's transaction, and a task reader that answers exactly
 as `list_tasks` would without loading what `list_tasks` loads.
 
-The service is the security boundary: `share_view` is the one call a token
-reaches, and the tests there pin what a stranger can and cannot be sent — the
-exact key set, the canary that nothing private gets out, the day that is never
-opened, and the one answer for every refusal.
+The service is the security boundary: `share_view` and `share_drawing` are
+the two calls a token reaches, and the tests there pin what a stranger can and
+cannot be sent — the exact key set, the canary that nothing private gets out,
+the day that is never opened, and the one answer for every refusal.
 
 It ends at HTTP, where that one answer has to stay one answer: the same 404
 body and headers for every refusal, the privacy headers on everything a stranger
@@ -36,12 +36,14 @@ from test_day_plan import DAY, LIST_A, LIST_B, _seed_task, _settings
 from test_displays import CAL_A, CAL_B, _seed_event
 from test_focus import clock  # noqa: F401
 
+from smylted import drawing as drawing_mod
 from smylted import service as service_mod
 from smylted import share as share_mod
 from smylted.app import create_app
 from smylted.config import Settings
 from smylted.dav.client import CollectionInfo, Item
 from smylted.db import store
+from smylted.drawing import drawing_payload, share_drawing_payload, share_seed
 from smylted.ical import extract_from_raw
 from smylted.mcp.api import McpApi
 from smylted.mcp.tools import build_tools
@@ -1434,6 +1436,88 @@ def test_a_share_switched_off_by_hand_is_not_off_by_password(svc):
     assert svc.update_share(made["id"], {"enabled": True})["enabled"] is True
 
 
+# ── the service: the owner's drawing, for a share ───────────────────────────
+
+def test_a_share_drawing_is_the_owners_subject_from_a_derived_seed(svc):
+    made = _make(svc, lists=["work"], show_focus=True)
+    salt = svc.drawing_salt()
+    day = date.fromisoformat(DAY)
+    got = svc.share_drawing(made["token"], "dark")
+    own = drawing_payload(day, "dark", salt)
+    assert got == share_drawing_payload(day, "dark", salt)
+    assert got["subject"] == own["subject"] and got["marks"] != own["marks"]
+    text = json.dumps(got)
+    assert salt not in text and share_seed(salt) not in text
+
+
+@pytest.mark.parametrize("fields", [
+    {"lists": ["work"]},                                    # the focus card off
+    {"show_focus": True},                                   # nothing shared
+    {"show_focus": True, "calendars": ["cal-a"]},           # no list, so no Today
+    {"show_focus": True, "lists": ["work"], "enabled": False},
+])
+def test_a_share_drawing_needs_a_live_share_that_shows_the_day(svc, fields):
+    svc.drawing_salt()
+    assert svc.share_drawing(_make(svc, **fields)["token"], "light") is None
+
+
+def test_a_share_drawing_refuses_what_share_view_refuses(svc, monkeypatch):
+    on = _make(svc, lists=["work"], show_focus=True)
+    rotated = _make(svc, lists=["work"], show_focus=True)
+    deleted = _make(svc, lists=["work"], show_focus=True)
+    svc.rotate_share_token(rotated["id"])
+    svc.delete_share(deleted["id"])
+    assert svc.share_drawing(on["token"], "light") is not None
+
+    looked_up: list[str] = []
+    real = store.get_share_by_token
+    monkeypatch.setattr(store, "get_share_by_token",
+                        lambda conn, token: looked_up.append(token) or real(conn, token))
+    for t in (rotated["token"], deleted["token"], "u" * 43):
+        assert svc.share_drawing(t, "light") is None
+    assert len(looked_up) == 3
+    looked_up.clear()
+    for bad in ("a" * 42, "a" * 44, "../x", "", None, 43):
+        assert svc.share_drawing(bad, "light") is None
+    for theme in ("blue", "", None, "Light"):
+        assert svc.share_drawing(on["token"], theme) is None
+    # Refused on their shape, before the database was asked.
+    assert looked_up == []
+    # A password change switches it off, as it does the view.
+    svc.credential_version = lambda: "gen-2"
+    assert svc.share_drawing(on["token"], "light") is None
+
+
+def test_a_share_drawing_reads_no_day_and_writes_nothing(svc, clock, monkeypatch):
+    ids = _plan_today(svc)
+    _session_on(svc, ids["a"])
+    made = _make(svc, lists=["work"], show_focus=True)
+    svc.drawing_salt()
+
+    def forbidden(*_a, **_k):
+        raise AssertionError("the drawing read the owner's day")
+
+    for name in ("_build_share_view", "_resolved_day_rows", "_focus_load",
+                 "open_day", "preview_day"):
+        monkeypatch.setattr(svc, name, forbidden)
+    before = _snapshot(svc._conn)
+    first = svc.share_drawing(made["token"], "light")
+    drawing_mod._cached_share_payload.cache_clear()
+    clock.tick(90)
+    assert svc.share_drawing(made["token"], "light") == first
+    assert _snapshot(svc._conn) == before
+    assert svc.get_share(made["id"])["last_seen_at"] is None
+
+
+def test_a_share_drawing_makes_the_salt_its_owner_never_made(svc):
+    made = _make(svc, lists=["work"], show_focus=True)
+    assert store.get_meta(svc._conn, "drawing_salt") is None
+    got = svc.share_drawing(made["token"], "light")
+    salt = store.get_meta(svc._conn, "drawing_salt")
+    assert salt is not None
+    assert got == share_drawing_payload(date.fromisoformat(DAY), "light", salt)
+
+
 def test_with_authentication_off_a_share_works(svc):
     # The service's own default: no credentials, so nothing to rotate away from.
     assert svc.credential_version() == ""
@@ -1904,6 +1988,134 @@ def test_the_share_route_never_reaches_the_wire(api):
     assert [e["title"] for e in view["events"]] == ["Standup"]
 
 
+def _drawing(c: TestClient, token: str, theme: str = "light", **kw):
+    return c.get(f"/api/public/share/{token}/drawing?theme={theme}", **kw)
+
+
+def _focus_share(c: TestClient, **fields) -> dict:
+    return c.post("/api/shares", json={"name": "Sam", "lists": ["work"],
+                                       "show_focus": True, **fields}).json()
+
+
+def test_the_drawing_route_draws_the_owners_subject_for_a_stranger(api):
+    made = _focus_share(api)
+    own = api.get(f"/api/drawing?day={DAY}&theme=light").json()
+    api.cookies.clear()
+    r = _drawing(api, made["token"])
+    assert r.status_code == 200
+    _privacy_headers(r)
+    body = r.json()
+    assert set(body) == {"view", "day", "subject", "theme", "viewBox", "marks", "ambient"}
+    assert (body["view"], body["day"], body["theme"]) == ("today", DAY, "light")
+    assert body["subject"] == own["subject"] and body["marks"] != own["marks"]
+    assert _drawing(api, made["token"], "dark").json()["theme"] == "dark"
+    salt = api.app.state.service.drawing_salt()
+    assert salt not in r.text and share_seed(salt) not in r.text
+
+
+def test_the_drawing_takes_nothing_but_the_theme_from_the_url(api):
+    token = _focus_share(api)["token"]
+    api.cookies.clear()
+    base = _drawing(api, token).content
+    for extra in ("&day=2027-01-01", "&day=2026-08-22&view=tasks&state=all&salt=x"):
+        assert api.get(f"/api/public/share/{token}/drawing?theme=light{extra}").content == base
+    assert json.loads(base)["day"] == DAY
+
+
+def test_every_drawing_refusal_is_the_one_404(api):
+    live = _focus_share(api)
+    off = _focus_share(api, enabled=False)
+    rotated = _focus_share(api)
+    deleted = _focus_share(api)
+    no_focus = api.post("/api/shares", json={"name": "Sam", "lists": ["work"]}).json()
+    no_list = api.post("/api/shares", json={"name": "Sam", "show_focus": True,
+                                            "calendars": ["cal-a"]}).json()
+    api.post(f"/api/shares/{rotated['id']}/rotate")
+    api.delete(f"/api/shares/{deleted['id']}")
+    api.cookies.clear()
+
+    def shape(r):
+        headers = {k: v for k, v in r.headers.items() if k not in ("date", "content-length")}
+        return r.status_code, r.content, headers
+
+    first = shape(_public(api, "u" * 43))
+    assert first[0] == 404
+    answers = [_drawing(api, t) for t in (
+        "u" * 43, off["token"], rotated["token"], deleted["token"],
+        no_focus["token"], no_list["token"], "a" * 42, "nope")]
+    answers += [_drawing(api, live["token"], theme) for theme in ("blue", "", "Light")]
+    for r in answers:
+        assert shape(r) == first, r.url
+    assert _drawing(api, live["token"]).status_code == 200
+
+
+def test_the_drawing_route_answers_every_other_method_with_the_404(built):
+    token = built.post("/api/shares", json={"name": "Sam"}).json()["token"]
+    built.cookies.clear()
+    for method in ("HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"):
+        for t in (token, "u" * 43):
+            r = built.request(method, f"/api/public/share/{t}/drawing?theme=light")
+            assert r.status_code == 404, (method, t)
+            _privacy_headers(r)
+            if method != "HEAD":
+                assert r.content == b'{"detail":"unknown share"}', (method, t)
+
+
+def test_the_drawing_shares_the_data_routes_rate_limit(api):
+    token = _focus_share(api)["token"]
+    api.cookies.clear()
+    for _ in range(150):
+        assert _public(api, token).status_code == 200
+        assert _drawing(api, token).status_code == 200
+    for r in (_drawing(api, token), _public(api, token)):
+        assert r.status_code == 429
+        assert int(r.headers["retry-after"]) > 0
+        _privacy_headers(r)
+
+
+def test_drawing_misses_lock_out_guessing_on_both_routes(api):
+    token = _focus_share(api)["token"]
+    api.cookies.clear()
+    for i in range(30):
+        assert _drawing(api, f"{i:043d}").status_code == 404
+    for r in (_public(api, token), _drawing(api, token)):
+        assert r.status_code == 429
+        _privacy_headers(r)
+
+
+def test_drawing_errors_are_generic(api, monkeypatch):
+    token = _focus_share(api)["token"]
+
+    def boom(*_a, **_k):
+        raise KeyError("/u/secret-href/")
+
+    monkeypatch.setattr(service_mod, "share_drawing_payload", boom)
+    r = _drawing(api, token)
+    assert r.status_code == 500
+    assert r.json() == {"detail": "share unavailable"}
+    _privacy_headers(r)
+    assert "secret-href" not in r.text and "secret-href" not in str(r.headers)
+
+
+def test_a_drawing_that_cannot_be_serialised_is_the_generic_500(api, monkeypatch):
+    # Starlette's JSONResponse renders with allow_nan=False, so a NaN raises
+    # while the response is built, which has to be inside the route's guard.
+    token = _focus_share(api)["token"]
+    monkeypatch.setattr(SmylteService, "share_drawing", lambda *_a, **_k: {"x": float("nan")})
+    r = _drawing(api, token)
+    assert r.status_code == 500
+    assert r.json() == {"detail": "share unavailable"}
+    _privacy_headers(r)
+
+
+def test_the_drawing_leaves_last_seen_alone(api):
+    made = _focus_share(api)
+    api.cookies.clear()
+    assert _drawing(api, made["token"]).status_code == 200
+    _login(api)
+    assert api.get("/api/shares").json()[0]["last_seen_at"] is None
+
+
 def test_a_new_app_password_switches_every_share_off(tmp_path, monkeypatch):
     """The documented response to a leaked password is to change it. A share
     switched on under the old one is somebody else's window onto the account
@@ -1954,5 +2166,6 @@ def test_no_connector_tool_reaches_shares():
     assert sources
     for path in sources:
         text = path.read_text(encoding="utf-8")
-        for needle in ("share_view", "create_share", "rotate_share_token", "/share"):
+        for needle in ("share_view", "share_drawing", "create_share",
+                       "rotate_share_token", "/share"):
             assert needle not in text, f"{path.name} mentions {needle}"

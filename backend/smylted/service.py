@@ -38,6 +38,7 @@ from .dav.errors import NotFound as DavNotFound
 from .db import store
 from .display import frame as display_frame_mod
 from .display import render as display_render
+from .drawing import share_drawing_payload
 from .ical import (
     PRIORITY, UNSET, EventEdit, TaskEdit, blocks_time, recur, uid_candidates,
 )
@@ -4421,9 +4422,21 @@ class SmylteService:
     # No event above carries a token: SSE reaches every open tab, and the id is
     # all a tab needs to refetch the one share that moved.
 
+    def _share_row(self, token: str) -> sqlite3.Row | None:
+        """The share a well-formed token opens right now, or None. None means
+        unknown, rotated or deleted, switched off, or switched on under an
+        earlier password. Read on every call, with no memo. Caller holds the
+        lock and has already refused a malformed token, so a malformed guess
+        never reaches the lock."""
+        row = store.get_share_by_token(self._conn, token)
+        if row is None or not row["enabled"] or not self._share_cv_current(row):
+            return None
+        return row
+
     def share_view(self, token: str) -> dict[str, Any] | None:
-        """Everything one share shows, right now. THE ONLY CALL A SHARE TOKEN
-        REACHES, and it holds to four things:
+        """Everything one share shows, right now. ONE OF THE TWO CALLS A SHARE TOKEN
+        REACHES (the other is `share_drawing`, behind the same gate), and it
+        holds to four things:
 
           1. An unknown, disabled, rotated, deleted or malformed token, and a
              share switched on under an earlier password, are all ONE answer:
@@ -4444,8 +4457,8 @@ class SmylteService:
             return None
         now = _focus_now()
         with self._lock:
-            row = store.get_share_by_token(self._conn, token)
-            if row is None or not row["enabled"] or not self._share_cv_current(row):
+            row = self._share_row(token)
+            if row is None:
                 return None
             view = self._build_share_view(row, now=now)
             # Last, and inside the lock, as `display_frame` does: a share that
@@ -4455,6 +4468,42 @@ class SmylteService:
                 self._conn, row["id"], now=_stamp_at(now),
                 not_before=_stamp_at(now - timedelta(seconds=60)))
         return view
+
+    def share_drawing(self, token: object, theme: object) -> dict[str, Any] | None:
+        """The owner's drawing of the day, for a share that shows their Today.
+        THE OTHER CALL A SHARE TOKEN REACHES. It keeps `share_view`'s gate, and
+        four rules of its own:
+
+          1. Every refusal is None, the route's one 404. That covers everything
+             `share_view` refuses, plus three more: a share with the focus card
+             off or no live shared list (the page then shows no Today for a
+             drawing to sit beside), and a theme other than light or dark.
+          2. The day is the server's (`_today`), never the caller's. A day from
+             the URL would let a link read the drawings ahead, which is what the
+             salt is secret for.
+          3. It writes nothing to the share: `last_seen_at` is `share_view`'s
+             to keep. The one possible write is the salt itself, on an install
+             that has never drawn a day; `drawing_salt` makes it on first use,
+             as the owner's own drawing does.
+          4. The drawing is `share_drawing_payload`'s: the subject the owner's
+             Today shows, drawn from a seed derived one-way from the salt and in
+             the default state. So nothing in it was drawn from the salt itself,
+             and nothing in it is the owner's day.
+        """
+        if not isinstance(token, str) or not share_mod.TOKEN_RE.fullmatch(token):
+            return None
+        if theme not in ("light", "dark"):
+            return None
+        with self._lock:
+            row = self._share_row(token)
+            if row is None or not row["show_focus"]:
+                return None
+            if not self._share_collections(
+                    "VTODO", frozenset(store.share_id_list(row["lists"]))):
+                return None
+            day = self._today()
+            salt = self.drawing_salt()
+        return share_drawing_payload(date.fromisoformat(day), theme, salt)
 
     def preview_share(self, share_id: str) -> dict[str, Any] | None:
         """What the person sees, for the owner's "See what they see". The same

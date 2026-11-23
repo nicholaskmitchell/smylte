@@ -38,6 +38,7 @@ def _filtered(path: str) -> str:
     (f"/display/{DISPLAY}", "/display/D1sp…"),
     (f"/book/{BOOKING}", "/book/B00k…"),
     (f"/api/public/share/{SHARE}", "/api/public/share/Sh4r…"),
+    (f"/api/public/share/{SHARE}/drawing?theme=dark", "/api/public/share/Sh4r…/drawing?theme=dark"),
     (f"/api/public/display/{DISPLAY}.png?w=800&h=480",
      "/api/public/display/D1sp….png?w=800&h=480"),
     (f"/api/public/booking/{BOOKING}/book", "/api/public/booking/B00k…/book"),

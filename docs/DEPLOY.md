@@ -531,6 +531,7 @@ and these URLs:
 | --- | --- |
 | `/share/<token>` | The page the person opens, in any browser |
 | `/api/public/share/<token>` | The JSON the page polls |
+| `/api/public/share/<token>/drawing` | The owner's drawing of the day, which the page shows beside the date |
 
 - **Set `SMYLTE_PUBLIC_URL`** so Settings copies absolute links. Without it,
   Settings falls back to the address you are using, which is wrong for a link
@@ -548,8 +549,9 @@ and these URLs:
   Booking links need the same: `/book/*` and `/api/public/booking/*`.
   Everything else stays behind Access. These paths are protected by their
   tokens and rate limits, not by a login.
-- **Rate limits** are per client address: 300 requests per 5 minutes, then 429
-  for 5 minutes, and 30 unknown links per hour, then 429 for an hour. A page
+- **Rate limits** are per client address: 300 requests per 5 minutes, the
+  page's data and its drawing together, then 429 for 5 minutes, and 30
+  unknown links per hour, then 429 for an hour. A page
   stops polling on its first 404, so a real viewer comes nowhere near the second.
   This needs `X-Real-IP` set as in step 3, or everyone shares one address.
 - **Every response**, the page shell and every error included, is `no-store`,

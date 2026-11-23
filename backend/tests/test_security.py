@@ -163,6 +163,9 @@ def test_every_api_route_requires_auth(make_app):
         # has no session rather than a screen that cannot have one, and every
         # refusal is the same 404 for the same reason as theirs. One path.
         "/api/public/share/{token}",
+        # The owner's drawing of the day for that share: the same token and gate
+        # as the data, and the same one 404.
+        "/api/public/share/{token}/drawing",
     }
     app = make_app()
     checked = 0

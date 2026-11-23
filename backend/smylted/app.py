@@ -2263,12 +2263,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # the same day under another key.
         day: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}$"),
         theme: Literal["light", "dark"] = "light",
-        view: Literal["today", "tasks", "calendar", "settings"] = "today",
+        view: Literal["today", "tasks", "calendar", "settings", "month"] = "today",
     ):
         """The drawing for `day` (YYYY-MM-DD): its marks and the conditions
         each shows under, so the client toggles them against the day's state
         without asking again. Seeded by the account's salt, which never leaves
-        the server."""
+        the server. With view=month, the drawing for `day`'s month (the
+        Calendar's page top), named by the month's first day."""
         try:
             d = date.fromisoformat(day)
         except ValueError as e:
@@ -3399,9 +3400,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # (SharePage), so this costs it nothing.
     share_miss_limiter = RateLimiter(max_fails=30, window_s=3600, lockout_s=3600)
 
-    # GET only: a HEAD would build the whole payload to send none of it. No
-    # suffix siblings today; a future `{token}.ext` route has to be registered
-    # ABOVE this one, for the reason `public_display_frame` is last of its three.
+    # GET only: a HEAD would build the whole payload to send none of it. Its one
+    # sibling is `/drawing` below, a path segment rather than a suffix. A future
+    # `{token}.ext` route has to be registered ABOVE this one, for the reason
+    # `public_display_frame` is last of its three.
     @app.get("/api/public/share/{token}")
     async def public_share_view(request: Request, token: str):
         key = limiter_key(_client_ip(request))
@@ -3431,6 +3433,43 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         include_in_schema=False,
     )
     async def public_share_other(token: str):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown share", headers=_SHARE_HEADERS)
+
+    # The owner's drawing of the day, which the page shows beside the date, for
+    # a share that shows their Today. Every rule of the data route holds: the
+    # gate (in the service), the one 404 and its headers, both limiters, and a
+    # 500 that says nothing. `theme` is the only parameter; the day is the
+    # server's and no state is taken. It is a sibling route rather than a key in
+    # the polled payload: the drawing is 35-65 KB, the page polls every 15 to 30
+    # seconds and hashes the whole body for its ETag each time, and only the
+    # viewer knows which theme it wants.
+    @app.get("/api/public/share/{token}/drawing")
+    async def public_share_drawing(request: Request, token: str, theme: str = "light"):
+        key = limiter_key(_client_ip(request))
+        _gate(key, share_miss_limiter, _SHARE_HEADERS)
+        _throttle(key, share_limiter, _SHARE_HEADERS)
+        try:
+            payload = await _run(_svc(request).share_drawing, token, theme)
+            # Built here, so a payload that cannot be serialised answers
+            # through the 500 below with its headers, not Starlette's own.
+            answer = None if payload is None else JSONResponse(payload, headers=_SHARE_HEADERS)
+        except Exception:  # noqa: BLE001
+            # As the data route: nothing internal may reach a stranger.
+            log.exception("share drawing failed")
+            raise HTTPException(500, "share unavailable", headers=_SHARE_HEADERS) from None
+        if answer is None:
+            share_miss_limiter.record_failure(key)
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown share", headers=_SHARE_HEADERS)
+        return answer
+
+    # The drawing route's refusal for every other method, for the reason the
+    # data route has `public_share_other`.
+    @app.api_route(
+        "/api/public/share/{token}/drawing",
+        methods=["HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    async def public_share_drawing_other(token: str):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown share", headers=_SHARE_HEADERS)
 
     # -- internal change hook (localhost only, shared secret; NOT behind Access) --
