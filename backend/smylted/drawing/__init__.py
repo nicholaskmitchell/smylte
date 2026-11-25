@@ -16,8 +16,8 @@ from .scene import Sketch, SketchBuilder
 from .schedule import subject_for
 from .state import DayState, Theme
 
-__all__ = ["DayState", "Rng", "Sketch", "SketchBuilder", "drawing_payload",
-           "share_drawing_payload", "share_seed", "subject_for"]
+__all__ = ["DayState", "Rng", "Sketch", "SketchBuilder", "desk_drawing", "desk_seed",
+           "drawing_payload", "share_drawing_payload", "share_seed", "subject_for"]
 
 _VIEWS = ('tasks', 'calendar', 'settings')
 
@@ -105,3 +105,32 @@ def share_drawing_payload(day: date, theme: Theme, salt: str, *,
     if roster is None:
         return _cached_share_payload(day, theme, salt)
     return _share_payload(day, theme, salt, roster)
+
+
+def desk_seed(salt: str) -> str:
+    """The seed the desk unit's drawing is drawn from: HMAC-SHA256 of the salt,
+    one way, as `share_seed` is. The panel's image is served to whoever holds
+    its URL, so nothing in it is drawn from the salt itself; the salt still
+    picks the subject."""
+    return hmac.new(salt.encode("utf-8"), b"desk-drawing", hashlib.sha256).hexdigest()[:32]
+
+
+@functools.lru_cache(maxsize=16)
+def desk_drawing(day: date, salt: str, state: DayState, *,
+                 subject_id: str | None = None) -> Sketch | None:
+    """The day's drawing as the desk unit prints it (`paper.paper_image`), or
+    None when the day has none. The subject is the one the owner's Today shows
+    (`subject_for` with the salt), or the roster's `subject_id` when given
+    (ValueError for one it does not hold). Its marks are drawn from
+    `desk_seed(salt)`, in its 'paper' composition where it has one
+    (`subjects.paper_sketch`)."""
+    if subject_id is None:
+        subject = subject_for(day, salt, subjects.ROSTER)
+        if subject is None:
+            return None
+    else:
+        subject = next((s for s in subjects.ROSTER if s.id == subject_id), None)
+        if subject is None:
+            raise ValueError(f"unknown subject {subject_id!r}")
+    rng = Rng.for_day(day, desk_seed(salt), f"subject|{subject.id}")
+    return subjects.paper_sketch(subject, state, rng)

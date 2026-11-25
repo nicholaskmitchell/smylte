@@ -13,6 +13,12 @@ window, the laundry back in its basket. Each finished task strings a lit bulb
 on the line; everything done empties the basket and lights the house's second
 window, coral; Start sends a moth fluttering by the house; overdue work brings
 a cloud beside the moon, a second a step beyond it at more.
+
+Paper (the desk unit, drawn for ink): the same posts and lines at midday. The
+hedge is a light tone under a leafy top edge in the fine pen; the basket in
+front of it is a mid tone, wicker; the posts are solid. The garments are
+hatched inside their outlines, each with its pegs; with everything done the
+basket is empty and the bird on the post is a solid silhouette.
 """
 from __future__ import annotations
 
@@ -22,7 +28,7 @@ from datetime import date
 from ..pen import curve, line, loop, poly
 from ..rng import Rng
 from ..scene import Sketch, SketchBuilder
-from ..state import DayState, Theme
+from ..state import Composition, DayState
 from . import _kit as k
 
 GROUND = 176.0
@@ -47,18 +53,21 @@ class WashingLine:
     id = 'washing-line'
     since = date(2026, 1, 1)
     until = None
+    PAPER = True
     JOINS = frozenset(frozenset(p) for p in (
         ('post', 'line'), ('post', 'cap'), ('post', 'ground'), ('basket', 'ground'),
         ('tuft', 'ground'), ('garment', 'line'), ('bird', 'cap'), ('heap', 'basket'),
         ('bulb', 'line'), ('house', 'hill'), ('sun', 'hill'),
-        ('bird', 'post'),
+        ('bird', 'post'), ('hedge', 'ground'),
     ))
 
-    def render(self, state: DayState, theme: Theme, rng: Rng) -> Sketch:
+    def render(self, state: DayState, theme: Composition, rng: Rng) -> Sketch:
         b = SketchBuilder(self.id, theme, rng)
         s = _structure(rng.fork('scene'))
         if theme == 'light':
             _day(b, s, rng.fork('day'))
+        elif theme == 'paper':
+            _paper(b, s, rng.fork('paper'))
         else:
             _night(b, s, rng.fork('night'))
         return b.build(state)
@@ -215,3 +224,110 @@ def _night(b: SketchBuilder, s: dict, r: Rng) -> None:
         child.line(loop((mx, my), (mx - 5.5, my - 4), (mx - 6, my + 1.5), corners=(0,)), part='moth')
         child.line(loop((mx, my), (mx + 5.5, my - 4), (mx + 6, my + 1.5), corners=(0,)), part='moth')
     b.ambient(1.0, (('focus',),), moth)
+
+
+# ── paper: the desk unit's composition, drawn for ink ───────────────────────
+
+SHADE_INSET = 3.6         # a tone keeps this far inside the lines round it
+HEDGE = (LEFT + 7, RIGHT - 7)   # the hedge between the posts
+# Its top at the middle, under the longest garment on the lower line, and how
+# much lower it is at the posts.
+HEDGE_TOP = TOPS[1] + SAG + 34.0
+HEDGE_FALL = 10.0
+HEDGE_BUMPS = 7
+POST_W = 2.2              # a solid post's half-width at the foot
+HEDGE_SLIVER = 40.0       # a piece of the hedge's tone smaller than this (square units) is left out
+
+
+def _hedge_height(t: float) -> float:
+    """The hedge's top across its width (t 0 to 1): highest in the middle,
+    lower toward the posts, and down to the ground at either end."""
+    g = GROUND - 1.0
+    top = HEDGE_TOP + HEDGE_FALL * (2 * t - 1) ** 2
+    return g - (g - top) * min(1.0, 5 * t, 5 * (1 - t)) ** 0.5
+
+
+def _hedge_top(r: Rng) -> tuple[list, list]:
+    """The hedge's leafy top: a row of bumps from the ground and back down to
+    it. Its points and the cusps between the bumps."""
+    x0, x1 = HEDGE
+    pts, corners = [], []
+    n = HEDGE_BUMPS
+    for i in range(n + 1):
+        t = i / n
+        corners.append(len(pts))
+        jog = 0.0 if i in (0, n) else r.uniform(-1, 1)
+        pts.append((x0 + (x1 - x0) * t, _hedge_height(t) + jog))
+        if i < n:
+            tm = (i + 0.5) / n
+            pts.append((x0 + (x1 - x0) * tm, _hedge_height(tm) - r.uniform(3.5, 5)))
+    return pts, corners
+
+
+def _clip(pts: list, keep) -> list:
+    """The polygon cut to one side of a line (Sutherland-Hodgman): `keep(p)`
+    is how far p is inside, negative outside, and linear in p."""
+    out = []
+    for a, b in zip(pts, pts[1:] + pts[:1]):
+        da, db = keep(a), keep(b)
+        if da >= 0:
+            out.append(a)
+        if (da >= 0) != (db >= 0):
+            t = da / (da - db)
+            out.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
+    return out
+
+
+def _post(x: float):
+    """A post as a solid, a little narrower at the cap."""
+    w0, w1 = POST_W, POST_W * 0.8
+    mid = (GROUND + CAP) / 2
+    return loop((x - w0, GROUND + 0.5), (x + w0, GROUND + 0.5), (x + 0.3 + (w0 + w1) / 2, mid),
+                (x + 0.6 + w1, CAP + 0.4), (x + 0.6 - w1, CAP + 0.4), (x + 0.3 - (w0 + w1) / 2, mid),
+                corners=(0, 1, 3, 4))
+
+
+def _paper(b: SketchBuilder, s: dict, r: Rng) -> None:
+    """The day at midday, drawn for ink: tone where the hedge and the basket
+    have mass, no wash, no boil, no ambient (the desk unit pins the hour to
+    noon)."""
+    k.sun(b, r.fork('sun-n'), 84, 16, 6.0, when=(k.MIDDAY,))
+    top, corners = _hedge_top(r.fork('hedge'))
+    x0, x1 = HEDGE
+    g = GROUND - SHADE_INSET
+    bx0, bx1 = s['basket']
+    bg = GROUND - 0.4
+    i = SHADE_INSET
+    # The tone comes to the cusps of the leafy top, so its bumps stay paper,
+    # and the hedge stands behind the basket: its tone goes round it, clear of
+    # the laundry heaped in it.
+    hedge = [(x, min(y + i * 0.6, g)) for x, y in top[::2]] + [(x1, g), (x0, g)]
+    over = bg - 22 - i
+    for piece in (_clip(hedge, lambda p: p[0] - (bx1 + i)),
+                  _clip(_clip(hedge, lambda p: (bx1 + i) - p[0]), lambda p: over - p[1])):
+        area = abs(sum(x0 * y1 - x1 * y0 for (x0, y0), (x1, y1) in zip(piece, piece[1:] + piece[:1]))) / 2
+        if area >= HEDGE_SLIVER:
+            b.shade(poly(*piece), 'light', part='hedge')
+    b.shade(poly((bx0 + i, bg - 15 + i), (bx1 - i, bg - 15 + i), (bx1 - 3 - i * 0.8, bg - i * 0.6),
+                 (bx0 + 3 + i * 0.8, bg - i * 0.6)), 'mid', part='basket')
+    # Its leafy top goes behind the basket: the line starts at the first cusp clear of it.
+    j = next(c for c in corners if top[c][0] >= bx1 + k.MIN_GAP)
+    b.line(curve(*top[j:], corners=[c - j for c in corners if c >= j]), part='hedge', weight='fine')
+    for x in (LEFT, RIGHT):
+        b.solid(_post(x), part='post')
+    _frame(b, s)
+    _basket(b, s)
+    b.line(curve((bx0 + 4, bg - 15), (bx0 + 9, bg - 21), (bx0 + 15, bg - 18), (bx1 - 8, bg - 22), (bx1 - 4, bg - 15)),
+           when=(('planned',), ('notAllDone',)), part='heap')
+    for n, ((x, y), kind) in enumerate(zip(s['slots'], s['kinds'])):
+        when = (('reward', n),)
+        b.filled(_garment(kind, x, y + 0.8), when=when, part=f'garment:{n}')
+        _pegs(b, x, y, when=when, part=f'garment:{n}')
+        b.anchor(n, x, y)
+    # Everything done: the bird on the post, a solid silhouette.
+    strokes = k.bird_strokes(RIGHT, CAP - 0.6, facing=-1)
+    done = (('allDone',),)
+    for st in strokes[:2]:
+        b.solid(st, when=done, part='bird')
+    for st in strokes[2:]:
+        b.line(st, when=done, part='bird')

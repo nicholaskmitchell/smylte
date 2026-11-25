@@ -9,6 +9,14 @@ Roles name paint, never a colour; the client applies them:
 
 A `line` mark carries three frames, the boil; `wash`, `glow` and `accent` carry
 one. An ambient is a loop at 6fps whose marks carry one frame each.
+
+The 'paper' composition is the desk unit's (drawing/ink.py prints it): every
+mark is one frame, there is no boil and no ambient, and it has no wash or glow.
+It has roles of its own instead, which a theme refuses, so a client's JSON never
+carries them:
+  * `shade`  a tone on the paper, 'light' or 'mid', no stroke
+  * `solid`  a fill in ink, no stroke
+and a `line` may be drawn with the fine pen (weight 'fine').
 """
 from __future__ import annotations
 
@@ -22,10 +30,13 @@ from . import conditions
 from .checks import endpoints
 from .pen import Pen, Stroke, hand, to_d
 from .rng import Rng
-from .state import MAX_REWARDS, DayState, Theme
+from .state import MAX_REWARDS, Composition, DayState
 
-Role = Literal['line', 'wash', 'glow', 'accent']
+Role = Literal['line', 'wash', 'glow', 'accent', 'shade', 'solid']
 PAPERS = ('auto', 'glint')
+# The paper composition's own: the tones a `shade` takes and the pens a `line` takes.
+TONES = ('light', 'mid')
+WEIGHTS = ('main', 'fine')
 
 FPS = 6
 LINE_FRAMES = 3
@@ -49,6 +60,9 @@ class Mark:
     # travel.
     paper: str = 'auto'
     part: str = ''
+    # The paper composition's alone: a shade's tone and a line's pen.
+    tone: str | None = None
+    weight: str = 'main'
 
     def to_json(self) -> dict:
         out = {
@@ -61,6 +75,10 @@ class Mark:
         }
         if self.origin is not None:
             out["origin"] = [round(self.origin[0], 1), round(self.origin[1], 1)]
+        if self.tone is not None:
+            out["tone"] = self.tone
+        if self.weight != 'main':
+            out["weight"] = self.weight
         return out
 
 
@@ -81,7 +99,7 @@ class Ambient:
 @dataclass
 class Sketch:
     subject: str
-    theme: Theme
+    theme: Composition
     view_box: tuple[int, int, int, int]
     marks: tuple[Mark, ...]
     ambient: Ambient | None
@@ -124,7 +142,7 @@ def _reward_of(when: tuple) -> int | None:
 
 
 class SketchBuilder:
-    def __init__(self, subject: str, theme: Theme, rng: Rng,
+    def __init__(self, subject: str, theme: Composition, rng: Rng,
                  view_box=(0, 0, 160, 200), *, still: bool = False):
         self.subject = subject
         self.theme = theme
@@ -141,17 +159,32 @@ class SketchBuilder:
         # `still=True` is a drawing that never boils (a view's): every mark
         # is one frame, and it has no ambient.
         self._still = still
+        # The desk unit's composition: still, and with its own roles.
+        self._paper = theme == 'paper'
+        if self._paper:
+            self._still = True
+
+    def _paper_only(self, what: str) -> None:
+        if not self._paper:
+            raise ValueError(f"{what} is the paper composition's alone, not the {self.theme} theme's")
+
+    def _not_paper(self, what: str) -> None:
+        if self._paper:
+            raise ValueError(f"the paper composition has no {what}: it is drawn in ink")
 
     def _append(self, mark_id: str, role: Role, frames: tuple[str, ...], points: int,
-                when: tuple, reward: int | None, paper: str, part: str | None) -> None:
+                when: tuple, reward: int | None, paper: str, part: str | None, *,
+                tone: str | None = None, weight: str = 'main') -> None:
         if paper not in PAPERS:
             raise ValueError(f"paper must be one of {PAPERS}, not {paper!r}")
         self._points += points * len(frames)
         self._marks.append(
-            Mark(mark_id, role, frames, when, reward, False, None, paper, part or mark_id))
+            Mark(mark_id, role, frames, when, reward, False, None, paper, part or mark_id,
+                 tone, weight))
 
     def _add(self, role: Role, stroke: Stroke, when, key: str | None, *,
-             part: str | None = None, paper: str = 'auto', still: bool = False) -> None:
+             part: str | None = None, paper: str = 'auto', still: bool = False,
+             tone: str | None = None, weight: str = 'main') -> None:
         when = conditions.validate(when)
         reward = _reward_of(when)
         mark_id = f"{self._prefix}m{len(self._marks)}"
@@ -163,19 +196,44 @@ class SketchBuilder:
             frames = self._pen.frames(stroke, key, LINE_FRAMES)
         else:
             frames = (self._pen.still(stroke, key),)
-        self._append(mark_id, role, frames, len(stroke.points), when, reward, paper, part)
+        self._append(mark_id, role, frames, len(stroke.points), when, reward, paper, part,
+                     tone=tone, weight=weight)
 
     def line(self, stroke: Stroke, *, when=(), key: str | None = None,
-             part: str | None = None) -> None:
-        self._add('line', stroke, when, key, part=part)
+             part: str | None = None, weight: str = 'main') -> None:
+        """A line in the pen. On paper it may be the fine pen, weight 'fine':
+        texture inside a shape (a leaf's scallop, a fold), never an outline."""
+        if weight not in WEIGHTS:
+            raise ValueError(f"weight must be one of {WEIGHTS}, not {weight!r}")
+        if weight != 'main':
+            self._paper_only(f"a {weight} line")
+        self._add('line', stroke, when, key, part=part, weight=weight)
 
     def wash(self, stroke: Stroke, *, when=(), key: str | None = None,
              part: str | None = None) -> None:
+        self._not_paper("wash")
         self._add('wash', stroke, when, key, part=part)
 
     def glow(self, stroke: Stroke, *, when=(), key: str | None = None,
              part: str | None = None) -> None:
+        self._not_paper("glow")
         self._add('glow', stroke, when, key, part=part)
+
+    def shade(self, stroke: Stroke, tone: str = 'light', *, when=(), key: str | None = None,
+              part: str | None = None) -> None:
+        """A tone on the paper where the material needs mass (a crown's shade
+        side, glass, a fold, the ground), in place of the wash: 'light' or
+        'mid'. One frame, under the coral fills and the ink."""
+        self._paper_only("a shade")
+        if tone not in TONES:
+            raise ValueError(f"tone must be one of {TONES}, not {tone!r}")
+        self._add('shade', stroke, when, key, part=part, tone=tone)
+
+    def solid(self, stroke: Stroke, *, when=(), key: str | None = None,
+              part: str | None = None) -> None:
+        """A fill in ink: a small dark thing, a weight the pen alone cannot give."""
+        self._paper_only("a solid")
+        self._add('solid', stroke, when, key, part=part)
 
     def accent(self, stroke: Stroke, *, when=(), key: str | None = None,
                part: str | None = None, paper: str = 'auto') -> None:
@@ -216,6 +274,7 @@ class SketchBuilder:
 
     def ambient(self, seconds: float, when,
                 draw: Callable[[int, SketchBuilder], None]) -> None:
+        self._not_paper("ambient")
         if self._still:
             raise ValueError("a still drawing (or an ambient frame) cannot hold an ambient")
         if self._ambient is not None:
@@ -252,8 +311,9 @@ class SketchBuilder:
         # Paint order is by role, whatever order the subject drew in: washes
         # under everything, glows over them, coral fills over those, ink on
         # top. A fill never covers a line, which is what keeps ink on paper
-        # reading as ink.
-        order = {'wash': 0, 'glow': 1, 'accent': 2, 'line': 3}
+        # reading as ink. On paper, the shades sit where the washes would and
+        # the solids with the ink.
+        order = {'wash': 0, 'glow': 1, 'shade': 2, 'accent': 3, 'solid': 4, 'line': 5}
         origins = self._origins()
         marks = tuple(
             settle(dataclasses.replace(m, origin=origins.get(m.reward)))

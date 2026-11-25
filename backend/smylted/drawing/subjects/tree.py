@@ -12,6 +12,13 @@ side. A lantern hangs under the crown, a pale light. The rewards are fireflies
 about the crown, each a coral spark in a soft glow; Start shakes leaves loose
 as by day; everything done fills the lantern's glass coral; overdue work drops
 a leaf or two by the pot, as by day.
+
+Paper (the desk unit, drawn for ink): the same tree at midday. The crown's
+underside away from the sun is a light tone and its lit side carries leaf
+scallops in the fine pen; the trunk is a solid stroke that tapers into the
+crown; the pot is a mid tone and the sill's front edge a light one. The fruit
+are solid with a glint; the bird that comes with everything done is a solid
+silhouette, and the watering can of a day with nothing planned a light tone.
 """
 from __future__ import annotations
 
@@ -21,7 +28,7 @@ from datetime import date
 from ..pen import PEN, WOBBLE, curve, line, loop, poly
 from ..rng import Rng
 from ..scene import Sketch, SketchBuilder
-from ..state import DayState, Theme
+from ..state import Composition, DayState
 from . import _kit as k
 
 SILL = 190.0
@@ -34,18 +41,22 @@ class PottedTree:
     id = 'tree'
     since = date(2026, 1, 1)
     until = None
+    PAPER = True
     JOINS = frozenset(frozenset(p) for p in (
         ('trunk', 'canopy'), ('trunk', 'branch'), ('branch', 'canopy'), ('trunk', 'soil'),
         ('pot', 'soil'), ('pot', 'rim'), ('pot', 'sill'), ('can', 'sill'), ('fallen', 'sill'),
         ('bird', 'canopy'), ('stir', 'canopy'), ('echo', 'canopy'),
         ('hanger', 'canopy'), ('hanger', 'lantern'), ('rim', 'trunk'), ('rim', 'soil'), ('branch',),
+        ('leaves', 'fruit'),
     ))
 
-    def render(self, state: DayState, theme: Theme, rng: Rng) -> Sketch:
+    def render(self, state: DayState, theme: Composition, rng: Rng) -> Sketch:
         b = SketchBuilder(self.id, theme, rng)
         s = _structure(rng.fork('scene'))
         if theme == 'light':
             _day(b, s, rng.fork('day'))
+        elif theme == 'paper':
+            _paper(b, s, rng.fork('paper'))
         else:
             _night(b, s, rng.fork('night'))
         return b.build(state)
@@ -287,3 +298,163 @@ def _night(b: SketchBuilder, s: dict, r: Rng) -> None:
         k.glow_dot(b, fx, fy, FLY_R, halo=14, when=(('reward', i),), part=f'fly:{i}', glass=False)
         b.anchor(i, fx, fy)
     b.ambient(1.0, (('focus',),), _stir(s))
+
+
+# ── paper: the desk unit's composition, drawn for ink ───────────────────────
+
+TRUNK_BASE = 2.7          # the solid trunk's half-width at the soil
+TRUNK_TOP = 1.5           # and where it enters the crown
+SHADE_INSET = 4.0         # a tone keeps this far inside the line round it
+SHADE_DEPTH = 0.36        # the crown's shade at its widest, a share of the radius
+SHADE_CUPS = 3            # leaf scallops along the shade's inner edge
+CLUSTERS = 6              # clusters of leaf scallops on the lit side
+CUP_W = 5.0               # one scallop's width
+CUP_DIP = 2.8             # and depth
+
+
+def _shade_side(s: dict) -> int:
+    """The crown's shade is on the side away from its echo (-1 left, 1 right),
+    clear of the trunk and the forks; the sun is over the other side."""
+    return -1 if s['echo'].points[-1][0] > s['cx'] else 1
+
+
+def _crown_shade(s: dict) -> tuple[list, list]:
+    """The crown's shade side: a crescent inside its line, from high on that
+    side to low, short of the bottom where the trunk comes in: its outer edge
+    and its inner edge, which is a row of leaf scallops."""
+    cx, cy = s['cx'], s['cy']
+    side = _shade_side(s)
+    edge = k.samples(s['canopy'], step=0.5)
+    # Bearings in image terms (0 to the right, 90 down), mirrored for the left.
+    a0, a1 = math.radians(-40), math.radians(72)
+    n = SHADE_CUPS * 6
+    outer, inner = [], []
+    for i in range(n + 1):
+        u = i / n
+        a = a0 + (a1 - a0) * u
+        a = a if side > 0 else math.pi - a
+        ex, ey = min(edge, key=lambda p: abs(math.remainder(math.atan2(p[1] - cy, p[0] - cx) - a,
+                                                            2 * math.pi)))
+        d = math.hypot(ex - cx, ey - cy)
+        depth = SHADE_DEPTH * math.sin(math.pi * u) ** 0.7
+        cup = 0.12 * abs(math.sin(math.pi * SHADE_CUPS * u)) * math.sin(math.pi * u)
+        out_r = (d - SHADE_INSET) / d
+        in_r = out_r * (1 - depth + cup)
+        outer.append((cx + (ex - cx) * out_r, cy + (ey - cy) * out_r))
+        inner.append((cx + (ex - cx) * in_r, cy + (ey - cy) * in_r))
+    return outer, inner
+
+
+def _clusters(s: dict, r: Rng, shade: list) -> list:
+    """Where the clusters of leaf scallops go on the crown's lit side: clear
+    of the crown's line, the trunk and its forks, the echo, the shade and the
+    bird. Not of the fruit: a fruit hangs in front of the leaves, and its fill
+    covers what is behind it."""
+    reach = 1.5 * CUP_W + 4.5
+    ink = [*k.samples(s['trunk']), *(p for f in s['forks'] for p in k.samples(f)),
+           *k.samples(s['echo']), *k.samples(s['canopy']), *shade]
+    bird = [p for st in k.bird_strokes(*s['bird_at'], facing=s['bird_facing']) for p in k.samples(st)]
+    avoid = (*((x, y, reach) for x, y in ink), *((x, y, reach) for x, y in bird))
+    out: list = []
+    for _ in range(600):
+        if len(out) == CLUSTERS:
+            break
+        a = r.uniform(0, 2 * math.pi)
+        d = math.sqrt(r.random())
+        p = (s['cx'] + s['rx'] * 0.92 * d * math.cos(a), s['cy'] + s['ry'] * 0.92 * d * math.sin(a))
+        if k.clear_of(p, avoid) and all(math.dist(p, q) >= 4 * CUP_W for q in out):
+            out.append(p)
+    return out
+
+
+def _cups(x: float, y: float, r: Rng):
+    """Three leaf scallops side by side, a little uneven, in one stroke."""
+    pts, corners = [], []
+    xx = x - 1.5 * CUP_W
+    for i in range(3):
+        w = CUP_W * r.uniform(0.85, 1.1)
+        corners.append(len(pts))
+        pts.append((xx, y + r.uniform(-0.4, 0.4)))
+        pts.append((xx + w / 2, y + CUP_DIP * r.uniform(0.85, 1.15)))
+        xx += w
+    corners.append(len(pts))
+    pts.append((xx, y + r.uniform(-0.4, 0.4)))
+    return curve(*pts, corners=corners)
+
+
+def _trunk_solid(s: dict):
+    """The trunk as one tapering stroke of ink, soil to crown."""
+    pts = s['trunk'].points
+    left, right = [], []
+    for i, (x, y) in enumerate(pts):
+        a = pts[max(i - 1, 0)]
+        c = pts[min(i + 1, len(pts) - 1)]
+        dx, dy = c[0] - a[0], c[1] - a[1]
+        n = math.hypot(dx, dy)
+        w = TRUNK_BASE + (TRUNK_TOP - TRUNK_BASE) * i / (len(pts) - 1)
+        left.append((x - dy / n * w, y + dx / n * w))
+        right.append((x + dy / n * w, y - dx / n * w))
+    m = len(pts)
+    return loop(*left, *reversed(right), corners=(0, m - 1, m, 2 * m - 1))
+
+
+def _pot_shade(s: dict):
+    """The pot's body under its soil, in from its line."""
+    w, top = s['pot_w'], s['top']
+    x0, x1 = 80 - w / 2, 80 + w / 2
+    y0, y1 = top + 7.5, SILL - SHADE_INSET
+    if s['pot'] == 'belly':
+        return loop((x0 + 2, y0), (x1 - 2, y0), (x1 - 0.5, top + (SILL - top) * 0.45),
+                    (x1 - 9, y1), (x0 + 9, y1), (x0 + 0.5, top + (SILL - top) * 0.45),
+                    corners=(0, 1, 3, 4))
+    if s['pot'] == 'taper':
+        t0, t1 = (y0 - top) / (SILL - top), (y1 - top) / (SILL - top)
+        return poly((x0 + 6 * t0 + SHADE_INSET, y0), (x1 - 6 * t0 - SHADE_INSET, y0),
+                    (x1 - 6 * t1 - SHADE_INSET, y1), (x0 + 6 * t1 + SHADE_INSET, y1))
+    band = top + (SILL - top) * 0.3 + SHADE_INSET
+    return poly((x0 + 1.5 + SHADE_INSET, band), (x1 - 1.5 - SHADE_INSET, band),
+                (x1 - 3 - SHADE_INSET, y1), (x0 + 3 + SHADE_INSET, y1))
+
+
+def _paper(b: SketchBuilder, s: dict, r: Rng) -> None:
+    """The day at midday, drawn for ink: tone where the tree has mass, no
+    wash, no boil, no ambient (the desk unit pins the hour to noon)."""
+    side = _shade_side(s)
+    # Over the lit side; the bird keeps to the right shoulder, clear of either.
+    k.sun(b, r.fork('sun-n'), 148 if side < 0 else 16, 16, 5.4, when=(k.MIDDAY,))
+    outer, inner = _crown_shade(s)
+    b.shade(poly(*outer, *reversed(inner)), 'light', part='canopy')
+    b.shade(_pot_shade(s), 'mid', part='pot')
+    # The sill's front edge, a light tone the width of the sill.
+    half = s['pot_w'] / 2 + 46
+    b.shade(poly((80 - half + 2, SILL + 3.2), (80 + half - 2, SILL + 3.6),
+                 (80 + half - 4, SILL + 7.4), (80 - half + 4, SILL + 7.0)), 'light', part='sill')
+    _sill(b, s)
+    _pot(b, s)
+    b.solid(_trunk_solid(s), part='trunk')
+    for i, f in enumerate(s['forks']):
+        b.line(f, part=f'branch:{i}')
+    b.line(s['canopy'], part='canopy')
+    b.line(s['echo'], part='echo')
+    fruit = s['fruit']()
+    leaves = r.fork('leaves')
+    for j, (x, y) in enumerate(_clusters(s, leaves.fork('spots'), outer + inner)):
+        b.line(_cups(x, y, leaves.fork(f'cups{j}')), part='leaves', weight='fine')
+    _fallen(b, s)
+    idle = (('nothingPlanned',),)
+    can_x = 80 + s['can_side'] * (s['pot_w'] / 2 + 22)
+    inset = SHADE_INSET * 0.8
+    b.shade(poly((can_x - 9 + inset, SILL - inset), (can_x + 9 - inset, SILL - inset),
+                 (can_x + 8 - inset, SILL - 16 + inset), (can_x - 8 + inset, SILL - 16 + inset)),
+            'light', when=idle, part='can')
+    _can(b, s, when=idle)
+    # Everything done: the bird on the crown's shoulder, a solid silhouette.
+    strokes = k.bird_strokes(*s['bird_at'], facing=s['bird_facing'])
+    done = (('allDone',),)
+    for st in strokes[:2]:
+        b.solid(st, when=done, part='bird')
+    for st in strokes[2:]:
+        b.line(st, when=done, part='bird')
+    for i, (x, y) in enumerate(fruit):
+        k.fruit(b, x, y, FRUIT_R, when=(('reward', i),), part=f'fruit:{i}')
+        b.anchor(i, x, y - FRUIT_R)

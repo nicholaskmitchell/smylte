@@ -12,6 +12,13 @@ Night: the same desk with the lamp on. The lamp is the light: it glows out of
 its shade onto the notebook and pools on the desk; the window is dark, with the
 moon in a pane. The notes catch the light; Start steams the kettle; everything
 done closes the notebook and brings the stars out in the panes.
+
+Paper (the desk unit, drawn for ink): the same desk at midday. The window's
+glass is a light tone, all but the pane the sun is in; the kettle and the mug
+take a light tone on their side away from the window; the desk's front edge is
+a solid band over a drawer in a light tone, with its shadow on the floor. The notes are
+hatched, each with its pin; everything done closes the notebook with a solid
+pencil on it, and the kettle has boiled.
 """
 from __future__ import annotations
 
@@ -21,7 +28,7 @@ from datetime import date
 from ..pen import curve, ellipse, line, loop, poly
 from ..rng import Rng
 from ..scene import Sketch, SketchBuilder
-from ..state import DayState, Theme
+from ..state import Composition, DayState
 from . import _kit as k
 
 TOP = 146.0          # the desk's surface
@@ -35,6 +42,7 @@ class DeskWithKettle:
     id = 'desk'
     since = date(2026, 1, 1)
     until = None
+    PAPER = True
     JOINS = frozenset(frozenset(p) for p in (
         ('kettle', 'desk'), ('mug', 'desk'), ('notebook', 'desk'), ('pencil', 'notebook'),
         ('desk', 'leg'), ('leg', 'floor'), ('window', 'ledge'),
@@ -42,12 +50,14 @@ class DeskWithKettle:
         ('drawer', 'desk'), ('notebook', 'writing'),
     ))
 
-    def render(self, state: DayState, theme: Theme, rng: Rng) -> Sketch:
+    def render(self, state: DayState, theme: Composition, rng: Rng) -> Sketch:
         b = SketchBuilder(self.id, theme, rng)
         s = _structure(rng.fork('scene'))
         _common(b, s)
         if theme == 'light':
             _day(b, s, rng.fork('day'))
+        elif theme == 'paper':
+            _paper(b, s, rng.fork('paper'))
         else:
             _night(b, s, rng.fork('night'))
         return b.build(state)
@@ -221,3 +231,50 @@ def _night(b: SketchBuilder, s: dict, r: Rng) -> None:
     _notes(b, s)
     tx, ty = spout_tip(s)
     b.ambient(1.0, (('focus',),), lambda f, child: k.steam(child, tx, ty, f, 6, height=18))
+
+
+# ── paper: the desk unit's composition, drawn for ink ───────────────────────
+
+SHADE_INSET = 3.6         # a tone keeps this far inside the lines round it
+SUN_PANE = 1              # the pane the midday sun is in, left to right, top to bottom
+
+
+def _panes() -> list:
+    x0, y0, x1, y1 = WIN
+    xm, ym = (x0 + x1) / 2, (y0 + y1) / 2
+    i = SHADE_INSET
+    return [(x0 + i, y0 + i, xm - i, ym - i), (xm + i, y0 + i, x1 - i, ym - i),
+            (x0 + i, ym + i, xm - i, y1 - i), (xm + i, ym + i, x1 - i, y1 - i)]
+
+
+def _paper(b: SketchBuilder, s: dict, r: Rng) -> None:
+    """The day at midday, drawn for ink: tone where the room has mass, no
+    wash, no boil, no ambient (the desk unit pins the hour to noon)."""
+    # The glass, but for the pane the sun is in: that one is all glare, paper.
+    for i, (px0, py0, px1, py1) in enumerate(_panes()):
+        if i != SUN_PANE:
+            b.shade(poly((px0, py0), (px1, py0), (px1, py1), (px0, py1)), 'light', part='window')
+    sun = dict(ray_gap=3.4, ray_len=2.6, rays=5)
+    k.sun(b, r.fork('sun-n'), 60, 27, 3.8, when=(k.MIDDAY,), **sun)
+    # The kettle and the mug, lit from the window on the left.
+    x = s['kettle_x']
+    i = SHADE_INSET
+    b.shade(loop((x - 2, TOP - 32 + i), (x + 12 - i, TOP - 32 + i), (x + 21.5 - i, TOP - 17),
+                 (x + 20 - i, TOP - i), (x - 2, TOP - i), corners=(0, 3, 4)), 'light', part='kettle')
+    b.shade(poly((MUG_X + 1, TOP - 25.2 + i), (MUG_X + 10 - i, TOP - 26 + i),
+                 (MUG_X + 9 - i, TOP - i), (MUG_X + 1, TOP - i)), 'light', part='mug')
+    # The drawer's front, a light tone.
+    b.shade(poly((40.4 + i, TOP + 7.6 + i), (120 - i, TOP + 7.9 + i), (120.4 - i, TOP + 21.4 - i),
+                 (40.4 + i, TOP + 21 - i)), 'light', part='drawer')
+    # The desk's front edge, solid, and its shadow on the floor between the legs.
+    b.solid(poly((6, TOP + 2.2), (154, TOP + 2.8), (153, TOP + 6.0), (7, TOP + 5.4)), part='desk')
+    b.shade(poly((15.6 + i, FLOOR - 7.5), (144.4 - i, FLOOR - 7.0), (144.4 - i, FLOOR - 2.6),
+                 (15.6 + i, FLOOR - 3.0)), 'light', part='floor')
+    _notes(b, s)
+    # Everything done: the book closed, a solid pencil on it, and the kettle
+    # has boiled.
+    x0, x1 = BOOK
+    b.solid(poly((x0 + 4, TOP - 6.4), (x0 + 4, TOP - 9.0), (x1 - 9, TOP - 9.0), (x1 - 4, TOP - 7.4),
+                 (x1 - 9, TOP - 6.0)), when=(('allDone',),), part='pencil')
+    tx, ty = spout_tip(s)
+    k.steam(b, tx, ty, 0, 6, height=16, when=(('allDone',),))

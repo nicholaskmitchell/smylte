@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from typing import Literal
 
 Theme = Literal['light', 'dark']
+# What a subject can be asked to draw: a theme, or 'paper', the composition the
+# desk unit prints (drawn for ink; never served to a client).
+Composition = Literal['light', 'dark', 'paper']
 
 MAX_REWARDS = 12
 OVERDUE_LEVELS = 3
