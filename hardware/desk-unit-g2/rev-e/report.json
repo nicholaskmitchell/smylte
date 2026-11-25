@@ -1,0 +1,4731 @@
+{
+ "rev": "E",
+ "form": "short wedge (form A) with both grafts",
+ "sources": [
+  "wedge-spec.md",
+  "wedge-fixes.md (overrides)",
+  "wedge-spec-check.md"
+ ],
+ "parts": {
+  "shell": {
+   "stl": "stl/p1-shell.stl",
+   "bed_mm": [
+    174.8,
+    131.98,
+    61.88
+   ],
+   "fits_175": true,
+   "volume_cm3": 59.76,
+   "petg_g": 75.9,
+   "watertight": {
+    "watertight": true,
+    "winding_consistent": true,
+    "manifold_ok": true,
+    "solids": 1,
+    "ok": true
+   },
+   "min_wall": {
+    "mm": 0.33,
+    "at": [
+     80.9,
+     11.2,
+     18.1
+    ],
+    "samples": 1672,
+    "excluding": "the wordmark's 0.4-deep relief and the boss cone tips (points, not walls)",
+    "mm_excluding": 0.81,
+    "at_excluding": [
+     -86.6,
+     3.6,
+     57.7
+    ],
+    "frame": "unit (assembly position)"
+   },
+   "overhangs": [
+    {
+     "face": 3,
+     "area_mm2": 103.3,
+     "worst_from_vertical": 77.3,
+     "at": [
+      0.0,
+      -57.9,
+      0.1
+     ],
+     "extent": [
+      0.5,
+      174.6
+     ],
+     "bridge": false,
+     "bridge_span": null
+    },
+    {
+     "face": 8,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      69.8,
+      -60.7,
+      10.0
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 9,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      65.4,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 11,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      74.1,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 12,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      57.1,
+      -60.7,
+      10.0
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 13,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      52.8,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 15,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      61.4,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 16,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      44.4,
+      -60.7,
+      10.0
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 17,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      40.1,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 19,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      48.7,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 20,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      31.7,
+      -60.7,
+      10.0
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 21,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      27.4,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 23,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      36.0,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 24,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      19.0,
+      -60.7,
+      10.0
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 25,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      14.7,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 27,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      23.3,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 28,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      6.3,
+      -60.7,
+      10.0
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 29,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      2.0,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 31,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      10.6,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 32,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      69.8,
+      -62.3,
+      14.4
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 33,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      65.4,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 35,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      74.1,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 36,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      57.1,
+      -62.3,
+      14.4
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 37,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      52.8,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 39,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      61.4,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 40,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      44.4,
+      -62.3,
+      14.4
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 41,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      40.1,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 43,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      48.7,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 44,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      69.8,
+      -63.8,
+      18.7
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 45,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      65.4,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 47,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      74.1,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 48,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      57.1,
+      -63.8,
+      18.7
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 49,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      52.8,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 51,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      61.4,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 52,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      44.4,
+      -63.8,
+      18.7
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 53,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      40.1,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 55,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      48.7,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 56,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      31.7,
+      -62.3,
+      14.4
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 57,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      27.4,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 59,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      36.0,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 60,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      19.0,
+      -62.3,
+      14.4
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 61,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      14.7,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 63,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      23.3,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 64,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      6.3,
+      -62.3,
+      14.4
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 65,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      2.0,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 67,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      10.6,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 68,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      31.7,
+      -63.8,
+      18.7
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 69,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      27.4,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 71,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      36.0,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 72,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      19.0,
+      -63.8,
+      18.7
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 73,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      14.7,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 75,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      23.3,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 76,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      6.3,
+      -63.8,
+      18.7
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 77,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      2.0,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 79,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      10.6,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 80,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      -6.3,
+      -60.7,
+      10.0
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 81,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -10.6,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 83,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -2.0,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 84,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      -19.0,
+      -60.7,
+      10.0
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 85,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -23.3,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 87,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -14.7,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 88,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      -31.7,
+      -60.7,
+      10.0
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 89,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -36.0,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 91,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -27.4,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 92,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      -44.4,
+      -60.7,
+      10.0
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 93,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -48.7,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 95,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -40.1,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 96,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      -57.1,
+      -60.7,
+      10.0
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 97,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -61.4,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 99,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -52.8,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 100,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      -69.8,
+      -60.7,
+      10.0
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 101,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -74.1,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 103,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -65.4,
+      -60.6,
+      9.9
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 104,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      -6.3,
+      -62.3,
+      14.4
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 105,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -10.6,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 107,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -2.0,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 108,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      -19.0,
+      -62.3,
+      14.4
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 109,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -23.3,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 111,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -14.7,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 112,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      -31.7,
+      -62.3,
+      14.4
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 113,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -36.0,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 115,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -27.4,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 116,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      -6.3,
+      -63.8,
+      18.7
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 117,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -10.6,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 119,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -2.0,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 120,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      -19.0,
+      -63.8,
+      18.7
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 121,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -23.3,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 123,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -14.7,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 124,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      -31.7,
+      -63.8,
+      18.7
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 125,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -36.0,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 127,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -27.4,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 128,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      -44.4,
+      -62.3,
+      14.4
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 129,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -48.7,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 131,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -40.1,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 132,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      -57.1,
+      -62.3,
+      14.4
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 133,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -61.4,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 135,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -52.8,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 136,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      -69.8,
+      -62.3,
+      14.4
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 137,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -74.1,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 139,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -65.4,
+      -62.2,
+      14.3
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 140,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      -44.4,
+      -63.8,
+      18.7
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 141,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -48.7,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 143,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -40.1,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 144,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      -57.1,
+      -63.8,
+      18.7
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 145,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -61.4,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 147,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -52.8,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 148,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      -69.8,
+      -63.8,
+      18.7
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 149,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -74.1,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    },
+    {
+     "face": 151,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -65.4,
+      -63.8,
+      18.6
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 157,
+     "area_mm2": 1.82,
+     "worst_from_vertical": 69.9,
+     "at": [
+      79.9,
+      43.9,
+      60.8
+     ],
+     "extent": [
+      0.7,
+      8.4
+     ],
+     "bridge": true,
+     "bridge_span": 5.3
+    },
+    {
+     "face": 160,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      70.4,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 164,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      48.4,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 168,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      44.0,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 172,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      62.8,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 176,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      58.4,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 180,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      54.0,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 184,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      49.6,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 188,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      45.2,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 192,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      39.6,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 196,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      35.2,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 200,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      30.8,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 204,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      26.4,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 208,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      22.0,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 212,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      17.6,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 216,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      13.2,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 220,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      8.8,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 224,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      4.4,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 228,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      40.8,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 232,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      36.4,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 236,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      32.0,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 240,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      27.6,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 244,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      23.2,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 248,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      18.8,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 252,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      14.4,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 256,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      79.2,
+      52.2,
+      35.3
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 260,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      74.8,
+      52.2,
+      35.3
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 264,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      70.4,
+      52.2,
+      35.3
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 266,
+     "area_mm2": 1.82,
+     "worst_from_vertical": 69.9,
+     "at": [
+      79.9,
+      61.3,
+      12.9
+     ],
+     "extent": [
+      0.7,
+      8.4
+     ],
+     "bridge": true,
+     "bridge_span": 5.3
+    },
+    {
+     "face": 269,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      7.5,
+      52.2,
+      35.3
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 273,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      3.0,
+      52.2,
+      35.3
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 277,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -0.0,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 281,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -4.4,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 285,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -8.8,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 289,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -13.2,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 293,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -17.6,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 297,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -22.0,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 301,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -26.4,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 305,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -30.8,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 309,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -35.2,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 313,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -39.6,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 317,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -19.2,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 321,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -23.6,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 325,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -28.0,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 329,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -32.4,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 333,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -36.8,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 337,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -41.2,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 341,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -44.0,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 345,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -48.4,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 349,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -52.8,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 353,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -57.2,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 357,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -61.6,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 359,
+     "area_mm2": 1.82,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -79.9,
+      43.9,
+      60.8
+     ],
+     "extent": [
+      0.7,
+      8.4
+     ],
+     "bridge": true,
+     "bridge_span": 5.3
+    },
+    {
+     "face": 362,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -66.0,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 366,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -70.4,
+      44.0,
+      57.8
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 370,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -45.6,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 374,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -50.0,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 378,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -54.4,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 382,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -58.8,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 386,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -63.2,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 390,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -67.6,
+      51.4,
+      37.6
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 394,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -1.5,
+      52.2,
+      35.3
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 398,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -6.0,
+      52.2,
+      35.3
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 402,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -10.5,
+      52.2,
+      35.3
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 406,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -74.8,
+      52.2,
+      35.3
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 410,
+     "area_mm2": 3.23,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -79.2,
+      52.2,
+      35.3
+     ],
+     "extent": [
+      1.5,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 1.1
+    },
+    {
+     "face": 412,
+     "area_mm2": 1.82,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -79.9,
+      61.3,
+      12.9
+     ],
+     "extent": [
+      0.7,
+      8.4
+     ],
+     "bridge": true,
+     "bridge_span": 5.3
+    },
+    {
+     "face": 418,
+     "area_mm2": 0.27,
+     "worst_from_vertical": 87.9,
+     "at": [
+      86.8,
+      17.5,
+      26.8
+     ],
+     "extent": [
+      0.2,
+      1.2
+     ],
+     "bridge": true,
+     "bridge_span": 13.7
+    },
+    {
+     "face": 419,
+     "area_mm2": 15.96,
+     "worst_from_vertical": 90.0,
+     "at": [
+      86.8,
+      24.3,
+      26.8
+     ],
+     "extent": [
+      1.6,
+      13.3
+     ],
+     "bridge": true,
+     "bridge_span": 13.6
+    },
+    {
+     "face": 420,
+     "area_mm2": 0.27,
+     "worst_from_vertical": 87.9,
+     "at": [
+      86.8,
+      31.1,
+      26.8
+     ],
+     "extent": [
+      0.2,
+      1.2
+     ],
+     "bridge": true,
+     "bridge_span": 13.7
+    },
+    {
+     "face": 2197,
+     "area_mm2": 0.05,
+     "worst_from_vertical": 45.6,
+     "at": [
+      -82.5,
+      46.8,
+      0.1
+     ],
+     "extent": [
+      0.2,
+      2.4
+     ],
+     "bridge": true,
+     "bridge_span": 2.3
+    },
+    {
+     "face": 2199,
+     "area_mm2": 0.05,
+     "worst_from_vertical": 45.6,
+     "at": [
+      82.5,
+      46.8,
+      0.1
+     ],
+     "extent": [
+      0.2,
+      2.4
+     ],
+     "bridge": true,
+     "bridge_span": 2.3
+    },
+    {
+     "face": 2201,
+     "area_mm2": 0.05,
+     "worst_from_vertical": 45.6,
+     "at": [
+      82.5,
+      -52.8,
+      0.1
+     ],
+     "extent": [
+      0.2,
+      2.4
+     ],
+     "bridge": true,
+     "bridge_span": 2.3
+    },
+    {
+     "face": 2203,
+     "area_mm2": 0.05,
+     "worst_from_vertical": 45.6,
+     "at": [
+      -82.5,
+      -52.8,
+      0.1
+     ],
+     "extent": [
+      0.2,
+      2.4
+     ],
+     "bridge": true,
+     "bridge_span": 2.3
+    },
+    {
+     "face": 2225,
+     "area_mm2": 1.77,
+     "worst_from_vertical": 90.0,
+     "at": [
+      -47.7,
+      58.3,
+      0.4
+     ],
+     "extent": [
+      1.4,
+      1.7
+     ],
+     "bridge": true,
+     "bridge_span": 1.4
+    },
+    {
+     "face": 2226,
+     "area_mm2": 13.42,
+     "worst_from_vertical": 90.0,
+     "at": [
+      -51.1,
+      56.6,
+      0.4
+     ],
+     "extent": [
+      4.3,
+      5.8
+     ],
+     "bridge": true,
+     "bridge_span": 0.8
+    },
+    {
+     "face": 2227,
+     "area_mm2": 11.6,
+     "worst_from_vertical": 90.0,
+     "at": [
+      -55.3,
+      56.1,
+      0.4
+     ],
+     "extent": [
+      3.8,
+      6.3
+     ],
+     "bridge": true,
+     "bridge_span": 1.3
+    },
+    {
+     "face": 2228,
+     "area_mm2": 11.76,
+     "worst_from_vertical": 90.0,
+     "at": [
+      -58.9,
+      55.8,
+      0.4
+     ],
+     "extent": [
+      2.9,
+      7.3
+     ],
+     "bridge": true,
+     "bridge_span": 1.3
+    },
+    {
+     "face": 2229,
+     "area_mm2": 17.67,
+     "worst_from_vertical": 90.0,
+     "at": [
+      -63.6,
+      57.2,
+      0.4
+     ],
+     "extent": [
+      4.8,
+      8.7
+     ],
+     "bridge": true,
+     "bridge_span": 2.8
+    },
+    {
+     "face": 2230,
+     "area_mm2": 27.15,
+     "worst_from_vertical": 90.0,
+     "at": [
+      -70.9,
+      56.4,
+      0.4
+     ],
+     "extent": [
+      5.9,
+      9.1
+     ],
+     "bridge": true,
+     "bridge_span": 5.0
+    },
+    {
+     "face": 2231,
+     "area_mm2": 20.6,
+     "worst_from_vertical": 90.0,
+     "at": [
+      -78.1,
+      55.7,
+      0.4
+     ],
+     "extent": [
+      5.5,
+      8.9
+     ],
+     "bridge": true,
+     "bridge_span": 5.0
+    },
+    {
+     "face": 2281,
+     "area_mm2": 12.8,
+     "worst_from_vertical": 90.0,
+     "at": [
+      85.8,
+      24.3,
+      27.9
+     ],
+     "extent": [
+      1.1,
+      16.0
+     ],
+     "bridge": false,
+     "bridge_span": null
+    },
+    {
+     "face": 2405,
+     "area_mm2": 24.0,
+     "worst_from_vertical": 90.0,
+     "at": [
+      -74.0,
+      54.7,
+      6.6
+     ],
+     "extent": [
+      2.7,
+      12.1
+     ],
+     "bridge": false,
+     "bridge_span": null
+    },
+    {
+     "face": 2406,
+     "area_mm2": 24.0,
+     "worst_from_vertical": 90.0,
+     "at": [
+      74.0,
+      54.7,
+      6.6
+     ],
+     "extent": [
+      2.7,
+      12.1
+     ],
+     "bridge": false,
+     "bridge_span": null
+    }
+   ]
+  },
+  "rear_plate": {
+   "stl": "stl/p2-rear-plate.stl",
+   "bed_mm": [
+    172.4,
+    114.33,
+    26.3
+   ],
+   "fits_175": true,
+   "volume_cm3": 43.9,
+   "petg_g": 55.8,
+   "watertight": {
+    "watertight": true,
+    "winding_consistent": true,
+    "manifold_ok": true,
+    "solids": 1,
+    "ok": true
+   },
+   "min_wall": {
+    "mm": 0.6,
+    "at": [
+     30.8,
+     82.8,
+     0.4
+    ],
+    "samples": 853,
+    "frame": "unit (assembly position)"
+   },
+   "overhangs": [
+    {
+     "face": 424,
+     "area_mm2": 19.18,
+     "worst_from_vertical": 90.0,
+     "at": [
+      -80.9,
+      -51.4,
+      1.8
+     ],
+     "extent": [
+      6.0,
+      6.0
+     ],
+     "bridge": true,
+     "bridge_span": 6.0
+    },
+    {
+     "face": 430,
+     "area_mm2": 19.18,
+     "worst_from_vertical": 90.0,
+     "at": [
+      80.9,
+      -51.4,
+      1.8
+     ],
+     "extent": [
+      6.0,
+      6.0
+     ],
+     "bridge": true,
+     "bridge_span": 6.0
+    },
+    {
+     "face": 431,
+     "area_mm2": 19.18,
+     "worst_from_vertical": 90.0,
+     "at": [
+      -80.9,
+      51.6,
+      1.8
+     ],
+     "extent": [
+      6.0,
+      6.0
+     ],
+     "bridge": true,
+     "bridge_span": 6.0
+    },
+    {
+     "face": 432,
+     "area_mm2": 41.96,
+     "worst_from_vertical": 90.0,
+     "at": [
+      4.4,
+      3.1,
+      0.4
+     ],
+     "extent": [
+      2.5,
+      18.0
+     ],
+     "bridge": true,
+     "bridge_span": 2.4
+    },
+    {
+     "face": 433,
+     "area_mm2": 41.96,
+     "worst_from_vertical": 90.0,
+     "at": [
+      8.8,
+      3.1,
+      0.4
+     ],
+     "extent": [
+      2.5,
+      18.0
+     ],
+     "bridge": true,
+     "bridge_span": 2.4
+    },
+    {
+     "face": 434,
+     "area_mm2": 14.4,
+     "worst_from_vertical": 90.0,
+     "at": [
+      26.4,
+      21.4,
+      0.4
+     ],
+     "extent": [
+      2.4,
+      7.2
+     ],
+     "bridge": true,
+     "bridge_span": 2.4
+    },
+    {
+     "face": 435,
+     "area_mm2": 14.4,
+     "worst_from_vertical": 90.0,
+     "at": [
+      30.8,
+      21.4,
+      0.4
+     ],
+     "extent": [
+      2.4,
+      7.2
+     ],
+     "bridge": true,
+     "bridge_span": 2.4
+    },
+    {
+     "face": 436,
+     "area_mm2": 14.4,
+     "worst_from_vertical": 90.0,
+     "at": [
+      35.2,
+      21.4,
+      0.4
+     ],
+     "extent": [
+      2.5,
+      7.2
+     ],
+     "bridge": true,
+     "bridge_span": 2.4
+    },
+    {
+     "face": 437,
+     "area_mm2": 14.4,
+     "worst_from_vertical": 90.0,
+     "at": [
+      39.6,
+      21.4,
+      0.4
+     ],
+     "extent": [
+      2.5,
+      7.2
+     ],
+     "bridge": true,
+     "bridge_span": 2.4
+    },
+    {
+     "face": 438,
+     "area_mm2": 14.4,
+     "worst_from_vertical": 90.0,
+     "at": [
+      44.0,
+      21.4,
+      0.4
+     ],
+     "extent": [
+      2.5,
+      7.2
+     ],
+     "bridge": true,
+     "bridge_span": 2.4
+    },
+    {
+     "face": 439,
+     "area_mm2": 14.4,
+     "worst_from_vertical": 90.0,
+     "at": [
+      48.4,
+      21.4,
+      0.4
+     ],
+     "extent": [
+      2.5,
+      7.2
+     ],
+     "bridge": true,
+     "bridge_span": 2.4
+    },
+    {
+     "face": 440,
+     "area_mm2": 14.4,
+     "worst_from_vertical": 90.0,
+     "at": [
+      52.8,
+      21.4,
+      0.4
+     ],
+     "extent": [
+      2.5,
+      7.2
+     ],
+     "bridge": true,
+     "bridge_span": 2.4
+    },
+    {
+     "face": 441,
+     "area_mm2": 14.4,
+     "worst_from_vertical": 90.0,
+     "at": [
+      57.2,
+      21.4,
+      0.4
+     ],
+     "extent": [
+      2.5,
+      7.2
+     ],
+     "bridge": true,
+     "bridge_span": 2.4
+    },
+    {
+     "face": 442,
+     "area_mm2": 14.4,
+     "worst_from_vertical": 90.0,
+     "at": [
+      61.6,
+      21.4,
+      0.4
+     ],
+     "extent": [
+      2.5,
+      7.2
+     ],
+     "bridge": true,
+     "bridge_span": 2.4
+    },
+    {
+     "face": 443,
+     "area_mm2": 14.4,
+     "worst_from_vertical": 90.0,
+     "at": [
+      66.0,
+      21.4,
+      0.4
+     ],
+     "extent": [
+      2.5,
+      7.2
+     ],
+     "bridge": true,
+     "bridge_span": 2.4
+    },
+    {
+     "face": 444,
+     "area_mm2": 19.18,
+     "worst_from_vertical": 90.0,
+     "at": [
+      80.9,
+      51.6,
+      1.8
+     ],
+     "extent": [
+      6.0,
+      6.0
+     ],
+     "bridge": true,
+     "bridge_span": 6.0
+    },
+    {
+     "face": 450,
+     "area_mm2": 132.3,
+     "worst_from_vertical": 90.0,
+     "at": [
+      57.8,
+      -47.6,
+      24.7
+     ],
+     "extent": [
+      15.5,
+      16.2
+     ],
+     "bridge": true,
+     "bridge_span": 14.6
+    }
+   ],
+   "min_wall_reported": {
+    "mm": 0.6,
+    "at": [
+     39.2,
+     80.2,
+     0.4
+    ],
+    "where": "the skin where band A's 0.4 outer recesses overlap the 1.0 header recess (y 80-84)",
+    "accepted": "by the lead: three layers, not load-bearing; exempt from the web check"
+   }
+  },
+  "backer": {
+   "stl": "stl/p3-backer.stl",
+   "bed_mm": [
+    170.2,
+    111.5,
+    4.0
+   ],
+   "fits_175": true,
+   "volume_cm3": 46.23,
+   "petg_g": 58.7,
+   "watertight": {
+    "watertight": true,
+    "winding_consistent": true,
+    "manifold_ok": true,
+    "solids": 1,
+    "ok": true
+   },
+   "min_wall": {
+    "mm": 1.0,
+    "at": [
+     -19.9,
+     30.2,
+     51.0
+    ],
+    "samples": 110,
+    "frame": "unit (assembly position)"
+   },
+   "overhangs": []
+  },
+  "key_carrier": {
+   "stl": "stl/p4-key-carrier.stl",
+   "bed_mm": [
+    24.0,
+    28.0,
+    3.2
+   ],
+   "fits_175": true,
+   "volume_cm3": 1.94,
+   "petg_g": 2.5,
+   "watertight": {
+    "watertight": true,
+    "winding_consistent": true,
+    "manifold_ok": true,
+    "solids": 1,
+    "ok": true
+   },
+   "min_wall": {
+    "mm": 0.2,
+    "at": [
+     85.0,
+     32.3,
+     41.0
+    ],
+    "samples": 188,
+    "frame": "unit (assembly position)"
+   },
+   "overhangs": []
+  },
+  "fit_gauge": {
+   "stl": "stl/p5-fit-gauge.stl",
+   "bed_mm": [
+    174.8,
+    115.8,
+    2.4
+   ],
+   "fits_175": true,
+   "volume_cm3": 5.23,
+   "petg_g": 6.6,
+   "watertight": {
+    "watertight": true,
+    "winding_consistent": true,
+    "manifold_ok": true,
+    "solids": 1,
+    "ok": true
+   },
+   "min_wall": {
+    "mm": 0.99,
+    "at": [
+     -27.2,
+     -111.4,
+     0.0
+    ],
+    "samples": 54,
+    "frame": "bed"
+   },
+   "overhangs": []
+  },
+  "fit_gauge_choc": {
+   "stl": "stl/p5b-choc-coupon.stl",
+   "bed_mm": [
+    26.0,
+    10.0,
+    26.0
+   ],
+   "fits_175": true,
+   "volume_cm3": 1.17,
+   "petg_g": 1.5,
+   "watertight": {
+    "watertight": true,
+    "winding_consistent": true,
+    "manifold_ok": true,
+    "solids": 1,
+    "ok": true
+   },
+   "min_wall": {
+    "mm": 1.2,
+    "at": [
+     -44.3,
+     -44.3,
+     0.0
+    ],
+    "samples": 47,
+    "frame": "bed"
+   },
+   "overhangs": [
+    {
+     "face": 8,
+     "area_mm2": 0.27,
+     "worst_from_vertical": 87.9,
+     "at": [
+      -46.8,
+      7.5,
+      19.9
+     ],
+     "extent": [
+      0.2,
+      1.2
+     ],
+     "bridge": true,
+     "bridge_span": 13.7
+    },
+    {
+     "face": 9,
+     "area_mm2": 15.96,
+     "worst_from_vertical": 90.0,
+     "at": [
+      -40.0,
+      7.5,
+      19.9
+     ],
+     "extent": [
+      1.6,
+      13.3
+     ],
+     "bridge": true,
+     "bridge_span": 13.6
+    },
+    {
+     "face": 10,
+     "area_mm2": 0.27,
+     "worst_from_vertical": 87.9,
+     "at": [
+      -33.2,
+      7.5,
+      19.9
+     ],
+     "extent": [
+      0.2,
+      1.2
+     ],
+     "bridge": true,
+     "bridge_span": 13.7
+    },
+    {
+     "face": 17,
+     "area_mm2": 12.8,
+     "worst_from_vertical": 90.0,
+     "at": [
+      -40.0,
+      8.5,
+      21.0
+     ],
+     "extent": [
+      1.1,
+      16.0
+     ],
+     "bridge": false,
+     "bridge_span": null
+    }
+   ]
+  },
+  "fit_gauge_usbc": {
+   "stl": "stl/p5c-usbc-coupon.stl",
+   "bed_mm": [
+    30.0,
+    22.0,
+    2.0
+   ],
+   "fits_175": true,
+   "volume_cm3": 1.0,
+   "petg_g": 1.3,
+   "watertight": {
+    "watertight": true,
+    "winding_consistent": true,
+    "manifold_ok": true,
+    "solids": 1,
+    "ok": true
+   },
+   "min_wall": {
+    "mm": 2.0,
+    "at": [
+     33.2,
+     -59.2,
+     2.0
+    ],
+    "samples": 28,
+    "frame": "bed"
+   },
+   "overhangs": []
+  },
+  "fit_gauge_vent": {
+   "stl": "stl/p5d-vent-coupon.stl",
+   "bed_mm": [
+    16.5,
+    8.0,
+    8.46
+   ],
+   "fits_175": true,
+   "volume_cm3": 0.36,
+   "petg_g": 0.5,
+   "watertight": {
+    "watertight": true,
+    "winding_consistent": true,
+    "manifold_ok": true,
+    "solids": 1,
+    "ok": true
+   },
+   "min_wall": {
+    "mm": 1.2,
+    "at": [
+     -2.8,
+     -51.3,
+     0.0
+    ],
+    "samples": 28,
+    "frame": "bed"
+   },
+   "overhangs": [
+    {
+     "face": 10,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      4.3,
+      7.5,
+      5.4
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 9.1
+    },
+    {
+     "face": 11,
+     "area_mm2": 15.4,
+     "worst_from_vertical": 70.0,
+     "at": [
+      0.0,
+      7.4,
+      5.5
+     ],
+     "extent": [
+      2.5,
+      7.8
+     ],
+     "bridge": true,
+     "bridge_span": 6.2
+    },
+    {
+     "face": 12,
+     "area_mm2": 1.88,
+     "worst_from_vertical": 69.9,
+     "at": [
+      -4.3,
+      7.5,
+      5.4
+     ],
+     "extent": [
+      0.9,
+      2.0
+     ],
+     "bridge": true,
+     "bridge_span": 8.9
+    }
+   ]
+  },
+  "key_shoe": {
+   "stl": "stl/p6-key-shoe.stl",
+   "bed_mm": [
+    6.0,
+    5.0,
+    2.0
+   ],
+   "fits_175": true,
+   "volume_cm3": 0.03,
+   "petg_g": 0.0,
+   "watertight": {
+    "watertight": true,
+    "winding_consistent": true,
+    "manifold_ok": true,
+    "solids": 1,
+    "ok": true
+   },
+   "min_wall": {
+    "mm": 0.83,
+    "at": [
+     1.2,
+     -0.2,
+     0.3
+    ],
+    "samples": 22,
+    "frame": "bed"
+   },
+   "overhangs": []
+  }
+ },
+ "interference": {
+  "threshold_mm3": 0.05,
+  "pairs_checked": 741,
+  "listed": [
+   {
+    "a": "panel_glass",
+    "b": "foam",
+    "mm3": 96.0,
+    "intended": true,
+    "why": "foam preload: 1.0 pads compressed to 0.8 (\u00a73.1)"
+   },
+   {
+    "a": "pi_pins",
+    "b": "dupont",
+    "mm3": 22.118,
+    "intended": true,
+    "why": "Dupont housings on the header pins (\u00a73.4)"
+   },
+   {
+    "a": "rear_plate",
+    "b": "screws_pi",
+    "mm3": 18.569,
+    "intended": true,
+    "why": "M2.5 thread-forming screws in the \u00d82.2 pilots"
+   },
+   {
+    "a": "panel_tail",
+    "b": "hat_parts",
+    "mm3": 13.875,
+    "intended": true,
+    "why": "panel tail inserted 3.7 into the FPC socket (\u00a73.2)"
+   },
+   {
+    "a": "j2_pins",
+    "b": "j2_housing",
+    "mm3": 4.915,
+    "intended": true,
+    "why": "Dupont housing on the J2 pins"
+   },
+   {
+    "a": "rear_plate",
+    "b": "backer",
+    "mm3": 4.853,
+    "intended": true,
+    "why": "post preload, 0.1 into the backer (S6)"
+   },
+   {
+    "a": "key_carrier",
+    "b": "screws_key",
+    "mm3": 4.286,
+    "intended": true,
+    "why": "M2 thread-forming screws in the \u00d81.7 pilots (F4)"
+   },
+   {
+    "a": "key_switch",
+    "b": "key_socket",
+    "mm3": 2.1,
+    "intended": true,
+    "why": "Choc pins in the hot-swap sleeves, 1.4 deep (F5)"
+   },
+   {
+    "a": "pi_pcb",
+    "b": "j2_pins",
+    "mm3": 1.311,
+    "intended": true,
+    "why": "press-fit pins in J2 (\u00a74 option A)"
+   },
+   {
+    "a": "key_shoes",
+    "b": "j2_leads",
+    "mm3": 0.33,
+    "intended": true,
+    "why": "the shoe's nose crushes the 0.6 stripped wire end onto the tab by 0.2 (item 6, the clamp)"
+   }
+  ],
+  "note": "psu_plug_envelope is a check-only solid (item 7), not drawn in the viewer"
+ },
+ "key_numbers": {
+  "overall": {
+   "W": 174.8,
+   "D": 65.86,
+   "H_from_desk": 120.23,
+   "W_with_key": 180.1,
+   "note": "D is the shell; the M3 heads sit in P2's counterbores, inside its outer face (item 5)"
+  },
+  "depth_stack_y76_x40": {
+   "rear_plate": [
+    0.0,
+    1.0
+   ],
+   "pi_pcb": [
+    21.5,
+    23.1
+   ],
+   "backer": [
+    32.73,
+    35.4
+   ],
+   "panel_glass": [
+    36.25,
+    37.45
+   ],
+   "panel_face": [
+    37.45,
+    37.5
+   ]
+  },
+  "depth_stack_y76_x84.5_through_the_side_bezel": {
+   "rear_plate": [
+    0.0,
+    2.0
+   ],
+   "backer": [
+    32.73,
+    35.4
+   ],
+   "panel_glass": [
+    36.25,
+    37.45
+   ],
+   "panel_face": [
+    37.45,
+    37.5
+   ],
+   "shell": [
+    37.5,
+    39.63
+   ]
+  },
+  "cold_gap": {
+   "pcb_front_z": 23.1,
+   "backer_rear_z": 32.73,
+   "gap_after_2.0_underside": 7.63,
+   "spec": 7.62
+  },
+  "window_front_n0.002": {
+   "width": 166.6,
+   "s_from": 18.5,
+   "s_to": 119.82
+  },
+  "window_panel_side_n1.6": {
+   "width": 164.2,
+   "s_from": 19.7,
+   "s_to": 118.62
+  },
+  "active_area": {
+   "width": 163.2,
+   "s_from": 20.2,
+   "s_to": 118.12,
+   "y_on_face_plane": [
+    22.48,
+    114.5
+   ]
+  },
+  "bezels": {
+   "side": 4.1,
+   "top": 4.4,
+   "chin": 18.5,
+   "window_vs_active_margin": {
+    "x": 0.5,
+    "bottom": 0.5,
+    "top": 0.5
+   }
+  },
+  "key": {
+   "centre_y": 36.0,
+   "centre_z": 33.0,
+   "centre_s": 41.83,
+   "centre_n": 19.89,
+   "proud": 5.3,
+   "cut_s": 13.9,
+   "cut_n": 13.9,
+   "cap_front_edge_behind_face": 11.14,
+   "cap_lowest_y": 25.26
+  },
+  "hat_header_to_pi_underside_allowance": 5.23,
+  "saddle_to_j2_housing": 1.03,
+  "key_wire_clamp": {
+   "tab_A": {
+    "at_ds_dn": [
+     -5.9,
+     -3.6
+    ],
+    "nose_to_tab_gap": 0.4,
+    "wire_d": 0.6,
+    "crush": 0.2,
+    "proxy_overlap_with_nose": 0.21,
+    "proxy_above_tab": 0.01
+   },
+   "tab_B": {
+    "at_ds_dn": [
+     -3.7,
+     8.6
+    ],
+    "nose_to_tab_gap": 0.4,
+    "wire_d": 0.6,
+    "crush": 0.2,
+    "proxy_overlap_with_nose": 0.21,
+    "proxy_above_tab": 0.01
+   }
+  }
+ },
+ "design_checks": {
+  "webs_between_through_openings": {
+   "limit_mm": 1.2,
+   "walls": [
+    {
+     "part": "rear_plate",
+     "wall": "plate",
+     "through_openings": 95,
+     "open_area_mm2": 2972.8,
+     "narrowest_web": {
+      "mm": 2.0,
+      "at": [
+       41.8,
+       15.8,
+       1.0
+      ]
+     },
+     "under_limit": [],
+     "ok": true
+    },
+    {
+     "part": "shell",
+     "wall": "floor",
+     "through_openings": 63,
+     "open_area_mm2": 1887.5,
+     "narrowest_web": {
+      "mm": 2.0,
+      "at": [
+       77.0,
+       4.5,
+       29.2
+      ]
+     },
+     "under_limit": [],
+     "ok": true
+    },
+    {
+     "part": "shell",
+     "wall": "top land",
+     "through_openings": 36,
+     "open_area_mm2": 997.6,
+     "narrowest_web": {
+      "mm": 1.8,
+      "at": [
+       73.6,
+       119.2,
+       12.3
+      ]
+     },
+     "under_limit": [],
+     "ok": true
+    }
+   ],
+   "note": "through-openings only (option A): slots, windows, holes, the USB-A cutout and its ears. The face (window) and the right flank (key cutout) carry one opening each. Recesses are under skins.",
+   "ok": true
+  },
+  "skins_under_recesses": {
+   "limit_mm": 0.6,
+   "recesses": [
+    {
+     "part": "rear_plate",
+     "recess": "header recess, inner face, 1.0 deep",
+     "rule": "skin",
+     "samples": 2872,
+     "skin_min_mm": 0.6,
+     "at": [
+      39.2,
+      80.2,
+      0.4
+     ],
+     "skins_mm": {
+      "0.60": 302,
+      "1.00": 2570
+     },
+     "ok": true
+    },
+    {
+     "part": "rear_plate",
+     "recess": "J2 recess, inner face, 1.0 deep",
+     "rule": "skin",
+     "samples": 478,
+     "skin_min_mm": 1.0,
+     "at": [
+      49.2,
+      21.2,
+      0.0
+     ],
+     "skins_mm": {
+      "1.00": 478
+     },
+     "ok": true
+    },
+    {
+     "part": "rear_plate",
+     "recess": "band A outer recesses, 0.4 deep, y 80-86 (i 24-33)",
+     "rule": "skin",
+     "samples": 230,
+     "skin_min_mm": 0.6,
+     "at": [
+      35.2,
+      80.3,
+      0.4
+     ],
+     "skins_mm": {
+      "0.60": 135,
+      "1.60": 95
+     },
+     "ok": true
+    },
+    {
+     "part": "rear_plate",
+     "recess": "band B outer recesses, 0.4 deep, x 4.4 and 8.8",
+     "rule": "skin",
+     "samples": 140,
+     "skin_min_mm": 1.6,
+     "at": [
+      4.4,
+      56.5,
+      0.4
+     ],
+     "skins_mm": {
+      "1.60": 104,
+      "1.61": 1,
+      "1.63": 1,
+      "1.64": 1,
+      "1.67": 1,
+      "1.71": 1,
+      "1.72": 1,
+      "1.78": 1,
+      "1.83": 1,
+      "1.85": 1,
+      "1.92": 1,
+      "1.96": 1,
+      "1.99": 1,
+      "2.00": 1,
+      "2.03": 1,
+      "2.05": 1,
+      "2.08": 1,
+      "2.10": 1,
+      "2.12": 1,
+      "2.13": 1,
+      "2.14": 1,
+      "2.28": 1,
+      "2.83": 1,
+      "21.10": 14
+     },
+     "ok": true
+    },
+    {
+     "part": "rear_plate",
+     "recess": "screw counterbores, 6.0 x 1.8 from outside",
+     "rule": "skin",
+     "samples": 96,
+     "skin_min_mm": 1.7,
+     "at": [
+      -82.6,
+      8.8,
+      1.8
+     ],
+     "skins_mm": {
+      "1.70": 96
+     },
+     "ok": true
+    },
+    {
+     "part": "shell",
+     "recess": "foot locators, 13.5 x 0.2 in the floor underside",
+     "rule": "skin",
+     "samples": 560,
+     "skin_min_mm": 0.8,
+     "at": [
+      -79.9,
+      3.7,
+      0.9
+     ],
+     "skins_mm": {
+      "0.80": 16,
+      "1.80": 136,
+      "2.27": 2,
+      "2.89": 4,
+      "3.92": 2,
+      "4.48": 4,
+      "4.70": 4,
+      "4.80": 4,
+      "4.81": 2,
+      "4.82": 8,
+      "4.85": 4,
+      "4.86": 4,
+      "4.90": 4,
+      "5.07": 54,
+      "5.14": 4,
+      "5.24": 2,
+      "5.36": 4,
+      "5.60": 4,
+      "5.83": 4,
+      "5.88": 2,
+      "6.13": 4,
+      "6.17": 4,
+      "6.80": 2,
+      "6.85": 2,
+      "6.87": 1,
+      "7.29": 1,
+      "7.54": 2,
+      "7.58": 4,
+      "7.59": 2,
+      "7.61": 6,
+      "7.63": 4,
+      "7.69": 4,
+      "7.70": 4,
+      "7.74": 4,
+      "7.77": 4,
+      "7.80": 2,
+      "7.88": 4,
+      "7.89": 4,
+      "7.91": 2,
+      "7.96": 2,
+      "8.02": 4,
+      "8.04": 1,
+      "8.16": 64,
+      "8.30": 4,
+      "8.43": 4,
+      "8.44": 4,
+      "8.46": 3,
+      "8.55": 8,
+      "8.58": 4,
+      "8.62": 1,
+      "8.63": 4,
+      "8.69": 4,
+      "8.70": 6,
+      "8.72": 2,
+      "8.73": 4,
+      "8.75": 4,
+      "8.78": 2,
+      "8.80": 2,
+      "8.97": 2,
+      "8.99": 4,
+      "9.05": 2,
+      "9.13": 2,
+      "9.19": 2,
+      "9.29": 2,
+      "9.30": 4,
+      "9.56": 4,
+      "9.70": 3,
+      "9.79": 2,
+      "9.88": 2,
+      "9.92": 6,
+      "9.96": 4,
+      "10.00": 2,
+      "10.02": 2,
+      "10.07": 4,
+      "10.15": 2,
+      "10.17": 1,
+      "10.23": 4,
+      "10.28": 2,
+      "10.53": 2,
+      "10.70": 2,
+      "10.77": 2,
+      "10.99": 1,
+      "11.27": 1,
+      "11.34": 3,
+      "11.66": 4,
+      "12.10": 1,
+      "12.16": 5,
+      "12.44": 3,
+      "13.27": 3,
+      "14.22": 4,
+      "14.58": 4,
+      "15.71": 2,
+      "16.14": 2,
+      "20.41": 4,
+      "24.67": 2,
+      "25.10": 2,
+      "29.47": 2
+     },
+     "ok": true
+    },
+    {
+     "part": "shell",
+     "recess": "wordmark, 0.4 deep in the face",
+     "rule": "own rule (item 2: layer-1 slice)",
+     "samples": 1148,
+     "skin_min_mm": 1.6,
+     "at": [
+      -52.5,
+      11.5,
+      62.7
+     ],
+     "skins_mm": {
+      "1.60": 724,
+      "6.08": 135,
+      "7.68": 283,
+      "14.30": 1,
+      "15.12": 2,
+      "15.95": 2,
+      "16.77": 1
+     },
+     "ok": true
+    },
+    {
+     "part": "shell",
+     "recess": "key counterbore, 16.0 x 0.8 from the flank's inner face",
+     "rule": "skin",
+     "samples": 44,
+     "skin_min_mm": 1.2,
+     "at": [
+      87.4,
+      34.9,
+      25.5
+     ],
+     "skins_mm": {
+      "1.20": 44
+     },
+     "ok": true
+    },
+    {
+     "part": "shell",
+     "recess": "insert holes, 4.0 x 6.5 from the boss face (blind)",
+     "rule": "skin",
+     "samples": 4,
+     "skin_min_mm": 7.13,
+     "at": [
+      80.9,
+      113.5,
+      10.0
+     ],
+     "skins_mm": {
+      "7.13": 2,
+      "8.78": 2
+     },
+     "ok": true
+    }
+   ],
+   "ok": true
+  },
+  "wordmark_layer1": {
+   "slice_n": 0.1,
+   "recess_area_mm2": 103.98,
+   "recess_parts": 7,
+   "recess_x": [
+    -81.17,
+    -46.98
+   ],
+   "recess_s": [
+    4.95,
+    14.05
+   ],
+   "recess_features_under_0.6": [],
+   "face_slivers_under_0.6": [],
+   "counters": [
+    {
+     "area_mm2": 2.27,
+     "at_x_s": [
+      -50.72,
+      10.6
+     ]
+    }
+   ],
+   "narrowest_face_between_parts": {
+    "mm": 0.57,
+    "at": [
+     -53.6,
+     11.3,
+     63.2
+    ]
+   },
+   "ok": true
+  },
+  "rear_closure_pads": {
+   "pads": [
+    {
+     "pad_xy": [
+      -80.9,
+      10.5
+     ],
+     "to_P1_below_boss_face_mm": 0.75,
+     "boss_face_on_pad_top_z": 3.5,
+     "to_nearest_through_opening_mm": 5.55,
+     "opening_at": [
+      -71.6,
+      10.5
+     ],
+     "to_nearest_P2_feature_at_pad_height_mm": 80.79,
+     "feature_at": [
+      -80.9,
+      95.0
+     ],
+     "ok": true
+    },
+    {
+     "pad_xy": [
+      80.9,
+      10.5
+     ],
+     "to_P1_below_boss_face_mm": 0.75,
+     "boss_face_on_pad_top_z": 3.5,
+     "to_nearest_through_opening_mm": 5.55,
+     "opening_at": [
+      71.6,
+      10.5
+     ],
+     "to_nearest_P2_feature_at_pad_height_mm": 12.98,
+     "feature_at": [
+      65.7,
+      17.5
+     ],
+     "ok": true
+    },
+    {
+     "pad_xy": [
+      -80.9,
+      113.5
+     ],
+     "to_P1_below_boss_face_mm": 0.75,
+     "boss_face_on_pad_top_z": 3.5,
+     "to_nearest_through_opening_mm": 15.82,
+     "opening_at": [
+      -79.3,
+      94.0
+     ],
+     "to_nearest_P2_feature_at_pad_height_mm": 12.58,
+     "feature_at": [
+      -80.9,
+      97.2
+     ],
+     "ok": true
+    },
+    {
+     "pad_xy": [
+      80.9,
+      113.5
+     ],
+     "to_P1_below_boss_face_mm": 0.75,
+     "boss_face_on_pad_top_z": 3.5,
+     "to_nearest_through_opening_mm": 15.82,
+     "opening_at": [
+      79.3,
+      94.0
+     ],
+     "to_nearest_P2_feature_at_pad_height_mm": 12.58,
+     "feature_at": [
+      80.9,
+      97.2
+     ],
+     "ok": true
+    }
+   ],
+   "ok": true
+  },
+  "rear_screws": {
+   "screw": "M3 \u00d7 6 button head (ISO 7380)",
+   "head_z": [
+    0.15,
+    1.8
+   ],
+   "head_below_outer_face": 0.15,
+   "under_head_P2": 1.7,
+   "tip_z": 7.8,
+   "insert_hole_end_z": 10.0,
+   "tip_short_of_hole_end": 2.2,
+   "insert_z": [
+    3.5,
+    9.2
+   ],
+   "engagement_in_insert": 4.3,
+   "ok": true
+  },
+  "psu_plug_envelope": {
+   "envelope": {
+    "x": 57.8,
+    "y": 12.0,
+    "w": 14.0,
+    "h": 10.0,
+    "r": 1.5,
+    "z": [
+     -20.0,
+     14.5
+    ]
+   },
+   "overlap_with_P2_mm3": 0.0,
+   "clearance_to_P2_mm": 0.15,
+   "ok": true
+  },
+  "foam_pads": {
+   "bottom_pads": [
+    {
+     "x": [
+      -82.0,
+      -72.0
+     ],
+     "s": [
+      10.5,
+      19.5
+     ]
+    },
+    {
+     "x": [
+      -35.0,
+      -25.0
+     ],
+     "s": [
+      10.5,
+      19.5
+     ]
+    },
+    {
+     "x": [
+      25.0,
+      35.0
+     ],
+     "s": [
+      10.5,
+      19.5
+     ]
+    },
+    {
+     "x": [
+      72.0,
+      82.0
+     ],
+     "s": [
+      10.5,
+      19.5
+     ]
+    }
+   ],
+   "top_pads": [
+    {
+     "x": [
+      -82.0,
+      -72.0
+     ],
+     "s": [
+      118.62,
+      121.62
+     ]
+    },
+    {
+     "x": [
+      -35.0,
+      -25.0
+     ],
+     "s": [
+      118.62,
+      121.62
+     ]
+    },
+    {
+     "x": [
+      25.0,
+      35.0
+     ],
+     "s": [
+      118.62,
+      121.62
+     ]
+    },
+    {
+     "x": [
+      72.0,
+      82.0
+     ],
+     "s": [
+      118.62,
+      121.62
+     ]
+    }
+   ],
+   "window_panel_side_s": [
+    19.7,
+    118.62
+   ],
+   "bottom_margin_to_window": 0.2,
+   "top_margin_to_window": 0.0,
+   "ok": true
+  }
+ },
+ "vent_areas_mm2": {
+  "method": "slot area w\u00b7L \u2212 (1 \u2212 \u03c0/4)\u00b7w\u00b2 (S1); orifices in series combine as 1/A\u00b2 = \u03a3 1/A\u1d62\u00b2 (\u00a75.2); band B counts the slots behind the port block at half (the spec's convention)",
+  "floor_H": 1078.0,
+  "floor_C1_C4": 810.0,
+  "under_case_gap": 1517.0,
+  "floor_in_series_with_gap": {
+   "total": 1182.0,
+   "hot": 675.0,
+   "cold": 507.0
+  },
+  "rear_low_band": {
+   "slots": 28,
+   "area": 637.0,
+   "note": "item 1: the slot at x 48.4 is dropped"
+  },
+  "band_A": 1053.0,
+  "band_B": {
+   "slots": 22,
+   "gross": 923.0,
+   "open": 818.0,
+   "half_counted_x": [
+    -17.6,
+    -13.2,
+    -8.8,
+    -4.4,
+    0.0
+   ]
+  },
+  "hot_intake": 1313.0,
+  "hot_exhaust": 1872.0,
+  "hot_channel_effective": 1075.0,
+  "top_land": {
+   "slots": 36,
+   "slot_w_L": [
+    2.8,
+    10.5
+   ],
+   "rows_z": [
+    5.4,
+    10.0,
+    14.6
+   ],
+   "x_centres": [
+    -69.75,
+    69.75
+   ],
+   "area": 998.0,
+   "note": "item 3: crosswise, three rows in z 4-16, x within \u00b175"
+  },
+  "cold_intake": 507.0,
+  "cold_channel_effective": 452.0,
+  "measured_through_area_mm2": {
+   "rear_plate plate": 2972.8,
+   "shell floor": 1887.5,
+   "shell top land": 997.6
+  }
+ },
+ "fasteners": [
+  {
+   "qty": 4,
+   "part": "M3 \u00d7 6 button head (ISO 7380)",
+   "where": "P2 to P1",
+   "note": "heads in \u00d86 \u00d7 1.8 counterbores from outside, 1.7 of P2 under the head (plate and \u00d87.5 pad)"
+  },
+  {
+   "qty": 4,
+   "part": "M3 heat-set insert, for a \u00d84 hole, 5.7 long",
+   "where": "P1 bosses",
+   "note": "hole \u00d84 \u00d7 6.5 from the boss face at z 3.5"
+  },
+  {
+   "qty": 4,
+   "part": "M2.5 \u00d7 6 pan head, thread-forming for plastics",
+   "where": "Pi to standoffs",
+   "note": "\u00d82.2 pilots"
+  },
+  {
+   "qty": 2,
+   "part": "M2 \u00d7 4 pan head, thread-forming, plus 2 M2 washers (DIN 125, OD 5)",
+   "where": "key tab clamps (P6 shoes)",
+   "note": "\u00d81.7 pilots"
+  },
+  {
+   "qty": 2,
+   "part": "supplied with the USB-A lead (provisional: M3 \u00d7 8 + M3 nuts)",
+   "where": "USB-A socket",
+   "note": "PROVISIONAL"
+  }
+ ],
+ "meta": {
+  "W": 174.8,
+  "D": 65.86,
+  "H": 120.23,
+  "key": {
+   "pos": [
+    87.4,
+    36.0,
+    33.0
+   ],
+   "y": 36.0,
+   "z": 33.0,
+   "from_rear": 33.0,
+   "proud": 5.3,
+   "cut": 13.9,
+   "plate": 1.2
+  },
+  "bezel": {
+   "side": 4.1,
+   "top": 4.4,
+   "chin": 18.5
+  }
+ },
+ "sections": {
+  "section-x0": [
+   "shell",
+   "rear_plate",
+   "backer",
+   "panel_face",
+   "panel_glass",
+   "panel_tail",
+   "hat_pcb",
+   "hat_header",
+   "hat_parts",
+   "pi_pcb",
+   "pi_metal",
+   "pi_black",
+   "gh_lead"
+  ],
+  "section-x-40": [
+   "shell",
+   "rear_plate",
+   "backer",
+   "panel_face",
+   "panel_glass",
+   "usba_socket",
+   "usba_lead",
+   "bars"
+  ],
+  "section-x60-pi": [
+   "shell",
+   "rear_plate",
+   "backer",
+   "panel_face",
+   "panel_glass",
+   "pi_pcb",
+   "pi_metal",
+   "pi_black",
+   "dupont",
+   "gh_lead",
+   "j2_leads",
+   "usbc_adapter",
+   "bars"
+  ],
+  "section-x84-key": [
+   "shell",
+   "rear_plate",
+   "backer",
+   "key_carrier",
+   "panel_face",
+   "panel_glass",
+   "key_switch",
+   "screws_key",
+   "feet"
+  ],
+  "section-y36": [
+   "shell",
+   "rear_plate",
+   "backer",
+   "key_carrier",
+   "panel_face",
+   "panel_glass",
+   "hat_pcb",
+   "pi_pcb",
+   "pi_metal",
+   "pi_black",
+   "heatsink",
+   "usba_socket",
+   "usba_lead",
+   "key_switch",
+   "key_stem",
+   "keycap"
+  ]
+ },
+ "notes": [
+  "Overhang locations are in bed coordinates (print orientation); min-wall locations are in the unit frame for P1\u2013P4 and in bed coordinates for P5, P5b, P5c and P6.",
+  "P5 is delivered as four STLs that share one bed frame (frame, Choc coupon, USB-C coupon, top-land vent coupon), so each STL is a single solid; load them together to print the spec's one plate, or print P5b or P5d on its own.",
+  "PROVISIONAL, set from the parts you buy: the USB-C saddle and adapter allowance (S3), the USB-A cutout and ear holes, the heatsink, the HAT parts and header position, the Pi port blocks."
+ ]
+}
