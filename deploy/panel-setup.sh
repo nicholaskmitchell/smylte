@@ -66,6 +66,7 @@ UPDATE_RUN=/run/smylte-panel-update
 RESULT=$UPDATE_RUN/result
 SETUP_LOCK=/run/smylte-panel-setup.lock
 PY=/usr/bin/python3
+PWRKEY=/usr/bin/pwrkey
 FILES="panel.py epd7in5_v2.py"
 
 die() { echo "panel-setup: $*" >&2; exit 1; }
@@ -150,6 +151,19 @@ check_settings() {
   return "$bad"
 }
 
+# The desktop images act on the power key whatever logind says: labwc runs
+# pwrkey on release, and a second press while its dialog is open shuts down.
+# Only the key being on matters, and only a desktop that starts at boot is
+# refused.
+check_desktop() {
+  [ "$(setting SMYLTE_PANEL_KEY auto)" != off ] && [ -x "$PWRKEY" ] || return 0
+  if [ "$(systemctl get-default 2>/dev/null || true)" = graphical.target ]; then
+    echo "  ✗ a desktop is installed and starts at boot: its labwc runs pwrkey on the power key (a press opens Shutdown options, a second press shuts down) whatever logind says — use Raspberry Pi OS Lite"
+    return 1
+  fi
+  echo "  ! a desktop is installed but not started at boot; starting it makes a second press of the key shut down"
+}
+
 preflight() {
   local bad=0 v
   if [ ! -x "$PY" ]; then
@@ -191,6 +205,7 @@ preflight() {
     echo "  ? gpiodetect not installed (sudo apt install gpiod) — chip not checked"
   fi
   check_settings || bad=1
+  check_desktop || bad=1
   return "$bad"
 }
 

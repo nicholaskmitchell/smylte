@@ -163,7 +163,7 @@ run on hardware**.
 | | |
 | --- | --- |
 | Board | Raspberry Pi 5. 2 GB is enough for the server plus the panel |
-| OS | Raspberry Pi OS Lite (64-bit) 2026-10-06 or later. That is Debian 13 "Trixie" with Python 3.13. Not the "Legacy" Bookworm image, whose Python 3.11 `setup.sh` refuses |
+| OS | Raspberry Pi OS Lite (64-bit) 2026-10-06 or later. That is Debian 13 "Trixie" with Python 3.13. Not the "Legacy" Bookworm image, whose Python 3.11 `setup.sh` refuses. Not the desktop image either: its labwc binds the power key to `pwrkey`, which logind's drop-in cannot stop |
 | Panel | The **Waveshare e-Paper Driver HAT (Rev2.3 or later)** with the 7.5" V2 panel, seated on the 40-pin header. The jumpered Pico-ePaper-7.5 module is the alternative (see "Pico module instead of the HAT") |
 | Key | One momentary key, wired across the Pi 5's J2 pads (the power-button breakout). The onboard power button is the same signal, so you can test before the case exists |
 | Leads | Female-female jumper leads, 20 cm or shorter, for the Pico module only |
@@ -244,8 +244,10 @@ seated Pico would boot and fight the Pi on the same wires.
 | Wait 10 s | "Shut down?" or "Update?" goes away and the view comes back. If the service has drawn nothing since it started (a restart onto an unchanged view), the glass goes white instead, and the view follows once the 3-minute floor allows |
 | Press while the Pi is off | The Pi boots, and the service draws Today |
 
-**Let go after about a second. Never hold the key to wait for the screen: at
-about 5 s the Pi cuts its own power, and that is not a clean shutdown.**
+**Let go after about a second. Never hold the key to wait for the screen: after
+a few seconds the Pi cuts its own power, and that is not a clean shutdown.
+Raspberry Pi gives no figure. About 5 s is reported elsewhere, not measured on
+this unit.**
 
 - A press let go between 0.6 s and 1 s does nothing, and neither does one
   shorter than 0.03 s.
@@ -273,8 +275,8 @@ about 5 s the Pi cuts its own power, and that is not a clean shutdown.**
   screen with no power. A press boots it again. It takes a few minutes: the
   panel draws Today as soon as the server answers.
 - logind is told to ignore the key, so **while the service is not running the
-  key does nothing**. Shut down over SSH, or hold the key for about 5 s for the
-  hardware cut, which is not clean.
+  key does nothing**. Shut down over SSH, or hold the key for a few seconds
+  for the hardware cut, which is not clean (the time is unmeasured).
 
 ### Updating from the key
 
@@ -331,7 +333,8 @@ What runs, as root, once you tap "Update?":
   "Updated", even if nothing new has arrived since.
 - **While "Updating…" is up the key does nothing**, for at most 35 min
   (`UPDATE_MAX_S`). A tap or a hold is ignored. **Don't unplug the box, and
-  don't hold the key: at about 5 s the Pi cuts its own power.** If the updater
+  don't hold the key: after a few seconds the Pi cuts its own power
+  (unmeasured; about 5 s is reported elsewhere).** If the updater
   never answers, the panel gives up after 60 s (`UPDATE_START_S`). If an
   earlier update ended less than 150 s before (it may still be watching the
   panel), the wait runs to 60 s after that 150 s, and the message says how long
@@ -472,7 +475,7 @@ last frame`.
 
 | The journal says | It means | Do this |
 | --- | --- | --- |
-| (nothing: the key does nothing) | The service is not running, and logind ignores the key meanwhile | `systemctl status smylte-panel`. Power off over SSH, or hold the key for about 5 s (the hardware cut, not clean) |
+| (nothing: the key does nothing) | The service is not running, and logind ignores the key meanwhile | `systemctl status smylte-panel`. Power off over SSH, or hold the key for a few seconds (the hardware cut, not clean; the time is unmeasured) |
 | No journal line. `--keytest` says `no pwr_button input device (is gpio_keys loaded?)`, and `--status` says `no pwr_button input device (gpio_keys not loaded?)`. The journal may say `key: cannot open …` | The Pi has no `pwr_button` input device, or the unit cannot read it. The service looks again every 10 s | Check the key's wiring. `panel-setup.sh --status` shows the node and its group; re-run `panel-setup.sh` to install the udev rule |
 | `desk key off: turn on Desk key for this display in Settings → Displays` (the Status line ends `· desk key off: …`) | The server answered 422 `views-off`. The panel shows the display's stored view, and taps do nothing | Turn on Desk key for the display in Settings → Displays. The panel asks again at its next fetch at least 15 min after the last check (later with a refresh interval over 15 min), or at once after `sudo systemctl restart smylte-panel` |
 | `desk key off: smylted is too old for the desk key — update it` | The server does not know the `mode` parameter | Pull and restart smylte |
@@ -549,7 +552,14 @@ Do these once, at bring-up.
     paint, within 150 s. A tap, or 60 s, and it draws Today. `panel-setup.sh
     --status` shows no drift.
 - With `POWER_OFF_ON_HALT=1` in the bootloader config (`sudo rpi-eeprom-config`),
-  check that a press still boots the halted Pi.
+  check that a press still boots the halted Pi. It should: on the Pi 5 the
+  button boots it either way, `WAKE_ON_GPIO` does not matter, and the setting
+  cuts the halted draw from about 1–1.4 W to about 0.01 W.
+- Hold the key with a stopwatch until the Pi cuts power, and note the time. It
+  must be well above 1 s.
+- After a key shutdown, with the Pi halted, measure the panel's 3V3 (on the HAT,
+  the panel side of its switch), with `POWER_OFF_ON_HALT=0` and `=1`. Near 0 V
+  is right.
 - `systemd-analyze security smylte-panel.service`.
 - If the first start fails on the sandbox rather than the hardware, relax
   `MemoryDenyWriteExecute` first, then `SystemCallFilter`, with

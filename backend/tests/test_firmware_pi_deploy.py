@@ -793,6 +793,59 @@ def test_preflight_accepts_a_pwr_pin_exactly_when_the_client_does(
     assert out.rstrip().endswith("rc=0" if client_accepts else "rc=1"), (value, out)
 
 
+_FAKE_SYSTEMCTL_DEFAULT = """#!/bin/bash
+if [ "$1" = get-default ]; then echo "$FAKE_TARGET"; fi
+exit 0
+"""
+
+
+def _check_desktop(tmp_path, script, *, pwrkey, target, content=""):
+    env = tmp_path / "panel.env"
+    env.write_text(content)
+    key = tmp_path / "pwrkey"
+    if pwrkey:
+        key.write_text("#!/bin/sh\n")
+        key.chmod(0o755)
+    program = (f"PANEL_ENV={env}\nPWRKEY={key}\n" + _function(script, "setting")
+               + _function(script, "check_desktop")
+               + 'rc=0; check_desktop || rc=$?\necho "rc=$rc"\n')
+    result, _ = _run_fake(tmp_path, program, env={"FAKE_TARGET": target},
+                          fakes={"systemctl": _FAKE_SYSTEMCTL_DEFAULT})
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+@pytest.mark.parametrize("target", ["graphical.target", "multi-user.target"])
+def test_no_desktop_is_no_complaint(tmp_path, script, target):
+    out = _check_desktop(tmp_path, script, pwrkey=False, target=target)
+    assert out == "rc=0\n"
+
+
+def test_a_desktop_that_starts_at_boot_is_refused(tmp_path, script):
+    out = _check_desktop(tmp_path, script, pwrkey=True, target="graphical.target")
+    assert out.rstrip().endswith("rc=1"), out
+    assert any(l.startswith("  ✗") and "pwrkey" in l and "Lite" in l for l in out.splitlines()), out
+
+
+def test_a_desktop_that_does_not_start_at_boot_is_a_warning(tmp_path, script):
+    out = _check_desktop(tmp_path, script, pwrkey=True, target="multi-user.target")
+    assert out.rstrip().endswith("rc=0"), out
+    assert "✗" not in out
+    assert any(l.startswith("  ! a desktop is installed but not started at boot") for l in out.splitlines()), out
+
+
+@pytest.mark.parametrize("target", ["graphical.target", "multi-user.target"])
+def test_a_desktop_is_not_mentioned_when_the_key_is_off(tmp_path, script, target):
+    out = _check_desktop(tmp_path, script, pwrkey=True, target=target,
+                         content="SMYLTE_PANEL_KEY=off\n")
+    assert out == "rc=0\n"
+
+
+def test_preflight_checks_for_a_desktop(script):
+    # The refusal must count: a bare call, or one followed by `|| true`, would warn and carry on.
+    assert "check_desktop || bad=1" in _function(script, "preflight")
+
+
 def test_the_script_names_the_settings_the_client_reads(script):
     for const in (P.PWR_PIN_ENV, P.REFRESH_ENV, P.IDLE_ENV, P.KEY_ENV):
         assert const in _function(script, "check_settings") or const in _function(script, "pwr_setting")
